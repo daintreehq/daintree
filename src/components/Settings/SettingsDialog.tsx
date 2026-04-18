@@ -654,902 +654,906 @@ export function SettingsDialog({
       maxHeight="h-[75vh]"
       className="settings-shell min-h-[500px] max-h-[800px]"
     >
-      <div className="flex h-full overflow-hidden">
-        <div className="settings-sidebar w-52 border-r border-daintree-border p-3 flex flex-col shrink-0">
-          <div className="flex items-center justify-between mb-3 pl-2">
-            <h2 className="text-sm font-semibold text-daintree-text">Settings</h2>
-            {hasProject && (
-              <div className="relative flex items-center">
-                <select
-                  value={activeScope}
-                  aria-label="Settings scope"
-                  onChange={(e) => {
-                    handleScopeSwitch(e.target.value as SettingsScope);
-                    e.target.blur();
+      <SettingsValidationProvider>
+        <div className="flex h-full overflow-hidden">
+          <div className="settings-sidebar w-52 border-r border-daintree-border p-3 flex flex-col shrink-0">
+            <div className="flex items-center justify-between mb-3 pl-2">
+              <h2 className="text-sm font-semibold text-daintree-text">Settings</h2>
+              {hasProject && (
+                <div className="relative flex items-center">
+                  <select
+                    value={activeScope}
+                    aria-label="Settings scope"
+                    onChange={(e) => {
+                      handleScopeSwitch(e.target.value as SettingsScope);
+                      e.target.blur();
+                    }}
+                    className="appearance-none text-xs py-1 pl-2 pr-6 rounded-[var(--radius-md)] bg-transparent border border-border-strong text-text-secondary hover:text-daintree-text hover:border-daintree-text/30 focus:border-daintree-accent focus:ring-1 focus:ring-daintree-accent/20 outline-none cursor-pointer transition-colors"
+                  >
+                    <option value="global">Global</option>
+                    <option value="project">Project</option>
+                  </select>
+                  <ChevronDown
+                    size={12}
+                    className="pointer-events-none absolute right-1.5 text-text-secondary"
+                  />
+                </div>
+              )}
+            </div>
+
+            <div
+              className={cn(
+                "flex items-center gap-1.5 px-2 py-1.5 mb-3 rounded-[var(--radius-md)]",
+                "settings-search border border-border-strong",
+                "focus-within:border-daintree-accent focus-within:ring-1 focus-within:ring-daintree-accent/20"
+              )}
+            >
+              <Search
+                className="settings-search-icon w-3.5 h-3.5 shrink-0 pointer-events-none"
+                aria-hidden="true"
+              />
+              <input
+                ref={searchInputRef}
+                type="text"
+                placeholder="Search…"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                onKeyDown={handleSearchKeyDown}
+                aria-label="Search settings"
+                className="settings-search-input flex-1 min-w-0 text-xs bg-transparent text-daintree-text focus:outline-none"
+              />
+              {searchQuery && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSearchQuery("");
+                    searchInputRef.current?.focus();
                   }}
-                  className="appearance-none text-xs py-1 pl-2 pr-6 rounded-[var(--radius-md)] bg-transparent border border-border-strong text-text-secondary hover:text-daintree-text hover:border-daintree-text/30 focus:border-daintree-accent focus:ring-1 focus:ring-daintree-accent/20 outline-none cursor-pointer transition-colors"
+                  aria-label="Clear search"
+                  className="flex items-center justify-center w-5 h-5 rounded shrink-0 text-daintree-text/40 hover:text-daintree-text"
                 >
-                  <option value="global">Global</option>
-                  <option value="project">Project</option>
-                </select>
-                <ChevronDown
-                  size={12}
-                  className="pointer-events-none absolute right-1.5 text-text-secondary"
-                />
-              </div>
-            )}
-          </div>
+                  <X className="w-3 h-3" />
+                </button>
+              )}
+            </div>
 
-          <div
-            className={cn(
-              "flex items-center gap-1.5 px-2 py-1.5 mb-3 rounded-[var(--radius-md)]",
-              "settings-search border border-border-strong",
-              "focus-within:border-daintree-accent focus-within:ring-1 focus-within:ring-daintree-accent/20"
+            {isSearching && (
+              <p aria-live="polite" className="sr-only">
+                {searchResults.length === 0
+                  ? "No results found"
+                  : `${searchResults.length} result${searchResults.length === 1 ? "" : "s"} found`}
+              </p>
             )}
-          >
-            <Search
-              className="settings-search-icon w-3.5 h-3.5 shrink-0 pointer-events-none"
-              aria-hidden="true"
-            />
-            <input
-              ref={searchInputRef}
-              type="text"
-              placeholder="Search…"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              onKeyDown={handleSearchKeyDown}
-              aria-label="Search settings"
-              className="settings-search-input flex-1 min-w-0 text-xs bg-transparent text-daintree-text focus:outline-none"
-            />
-            {searchQuery && (
-              <button
-                type="button"
-                onClick={() => {
-                  setSearchQuery("");
-                  searchInputRef.current?.focus();
-                }}
-                aria-label="Clear search"
-                className="flex items-center justify-center w-5 h-5 rounded shrink-0 text-daintree-text/40 hover:text-daintree-text"
-              >
-                <X className="w-3 h-3" />
-              </button>
-            )}
-          </div>
 
-          {isSearching && (
-            <p aria-live="polite" className="sr-only">
-              {searchResults.length === 0
-                ? "No results found"
-                : `${searchResults.length} result${searchResults.length === 1 ? "" : "s"} found`}
-            </p>
-          )}
+            <ScrollShadow
+              className="flex-1 min-h-0"
+              scrollClassName="space-y-3"
+              ref={tablistRef}
+              role="tablist"
+              aria-orientation="vertical"
+              aria-label="Settings sections"
+              onKeyDown={handleTablistKeyDown}
+            >
+              {activeScope === "global" ? (
+                <>
+                  <NavGroup label="General">
+                    <NavItem
+                      tab="general"
+                      icon={<Settings2 className="w-4 h-4" />}
+                      label="General"
+                      activeTab={activeTab}
+                      isSearching={isSearching}
+                      matchCount={matchCounts.general}
+                      modified={modifiedTabs.has("general")}
+                      hasError={tabsWithErrors.has("general")}
+                      onSelect={handleNavSelect}
+                    />
+                    <NavItem
+                      tab="terminalAppearance"
+                      icon={<SquareTerminal className="w-4 h-4" />}
+                      label="Appearance"
+                      activeTab={activeTab}
+                      isSearching={isSearching}
+                      matchCount={matchCounts.terminalAppearance}
+                      modified={modifiedTabs.has("terminalAppearance")}
+                      hasError={tabsWithErrors.has("terminalAppearance")}
+                      onSelect={handleNavSelect}
+                    />
+                    <NavItem
+                      tab="keyboard"
+                      icon={<Keyboard className="w-4 h-4" />}
+                      label="Keyboard"
+                      activeTab={activeTab}
+                      isSearching={isSearching}
+                      matchCount={matchCounts.keyboard}
+                      hasError={tabsWithErrors.has("keyboard")}
+                      onSelect={handleNavSelect}
+                    />
+                    <NavItem
+                      tab="notifications"
+                      icon={<Bell className="w-4 h-4" />}
+                      label="Notifications"
+                      activeTab={activeTab}
+                      isSearching={isSearching}
+                      matchCount={matchCounts.notifications}
+                      hasError={tabsWithErrors.has("notifications")}
+                      onSelect={handleNavSelect}
+                    />
+                    <NavItem
+                      tab="privacy"
+                      icon={<Shield className="w-4 h-4" />}
+                      label="Privacy & Data"
+                      activeTab={activeTab}
+                      isSearching={isSearching}
+                      matchCount={matchCounts.privacy}
+                      hasError={tabsWithErrors.has("privacy")}
+                      onSelect={handleNavSelect}
+                    />
+                  </NavGroup>
+                  <NavGroup label="Terminal">
+                    <NavItem
+                      tab="terminal"
+                      icon={<LayoutGrid className="w-4 h-4" />}
+                      label="Panel Grid"
+                      activeTab={activeTab}
+                      isSearching={isSearching}
+                      matchCount={matchCounts.terminal}
+                      modified={modifiedTabs.has("terminal")}
+                      hasError={tabsWithErrors.has("terminal")}
+                      onSelect={handleNavSelect}
+                    />
+                    <NavItem
+                      tab="worktree"
+                      icon={<WorktreeIcon className="w-4 h-4" />}
+                      label="Worktree"
+                      activeTab={activeTab}
+                      isSearching={isSearching}
+                      matchCount={matchCounts.worktree}
+                      hasError={tabsWithErrors.has("worktree")}
+                      onSelect={handleNavSelect}
+                    />
+                    <NavItem
+                      tab="toolbar"
+                      icon={<SettingsIcon className="w-4 h-4" />}
+                      label="Toolbar"
+                      activeTab={activeTab}
+                      isSearching={isSearching}
+                      matchCount={matchCounts.toolbar}
+                      hasError={tabsWithErrors.has("toolbar")}
+                      onSelect={handleNavSelect}
+                    />
+                    <NavItem
+                      tab="environment"
+                      icon={<KeyRound className="w-4 h-4" />}
+                      label="Environment"
+                      activeTab={activeTab}
+                      isSearching={isSearching}
+                      matchCount={matchCounts.environment}
+                      hasError={tabsWithErrors.has("environment")}
+                      onSelect={handleNavSelect}
+                    />
+                  </NavGroup>
+                  <NavGroup label="Integrations">
+                    <NavItem
+                      tab="agents"
+                      icon={<DaintreeAgentIcon className="w-4 h-4" />}
+                      label="CLI Agents"
+                      activeTab={activeTab}
+                      isSearching={isSearching}
+                      matchCount={matchCounts.agents}
+                      hasError={tabsWithErrors.has("agents")}
+                      onSelect={handleNavSelect}
+                    />
+                    <NavItem
+                      tab="github"
+                      icon={<Github className="w-4 h-4" />}
+                      label="GitHub"
+                      activeTab={activeTab}
+                      isSearching={isSearching}
+                      matchCount={matchCounts.github}
+                      hasError={tabsWithErrors.has("github")}
+                      onSelect={handleNavSelect}
+                    />
+                    <NavItem
+                      tab="integrations"
+                      icon={<Blocks className="w-4 h-4" />}
+                      label="Integrations"
+                      activeTab={activeTab}
+                      isSearching={isSearching}
+                      matchCount={matchCounts.integrations}
+                      hasError={tabsWithErrors.has("integrations")}
+                      onSelect={handleNavSelect}
+                    />
+                    <NavItem
+                      tab="voice"
+                      icon={<Mic className="w-4 h-4" />}
+                      label="Voice Input"
+                      activeTab={activeTab}
+                      isSearching={isSearching}
+                      matchCount={matchCounts.voice}
+                      hasError={tabsWithErrors.has("voice")}
+                      onSelect={handleNavSelect}
+                    />
+                    <NavItem
+                      tab="portal"
+                      icon={<PanelRight className="w-4 h-4" />}
+                      label="Portal"
+                      activeTab={activeTab}
+                      isSearching={isSearching}
+                      matchCount={matchCounts.portal}
+                      hasError={tabsWithErrors.has("portal")}
+                      onSelect={handleNavSelect}
+                    />
+                    <NavItem
+                      tab="mcp"
+                      icon={<McpServerIcon className="w-4 h-4" />}
+                      label="MCP Server"
+                      activeTab={activeTab}
+                      isSearching={isSearching}
+                      matchCount={matchCounts.mcp}
+                      hasError={tabsWithErrors.has("mcp")}
+                      onSelect={handleNavSelect}
+                    />
+                  </NavGroup>
 
-          <ScrollShadow
-            className="flex-1 min-h-0"
-            scrollClassName="space-y-3"
-            ref={tablistRef}
-            role="tablist"
-            aria-orientation="vertical"
-            aria-label="Settings sections"
-            onKeyDown={handleTablistKeyDown}
-          >
-            {activeScope === "global" ? (
-              <>
-                <NavGroup label="General">
+                  <NavGroup label="Support">
+                    <NavItem
+                      tab="troubleshooting"
+                      icon={<LifeBuoy className="w-4 h-4" />}
+                      label="Troubleshooting"
+                      activeTab={activeTab}
+                      isSearching={isSearching}
+                      matchCount={matchCounts.troubleshooting}
+                      hasError={tabsWithErrors.has("troubleshooting")}
+                      onSelect={handleNavSelect}
+                    />
+                  </NavGroup>
+                </>
+              ) : (
+                <NavGroup label="Project">
                   <NavItem
-                    tab="general"
-                    icon={<Settings2 className="w-4 h-4" />}
+                    tab="project:general"
+                    icon={<SettingsIcon className="w-4 h-4" />}
                     label="General"
                     activeTab={activeTab}
                     isSearching={isSearching}
-                    matchCount={matchCounts.general}
-                    modified={modifiedTabs.has("general")}
-                    hasError={tabsWithErrors.has("general")}
+                    matchCount={matchCounts["project:general"]}
+                    hasError={tabsWithErrors.has("project:general")}
                     onSelect={handleNavSelect}
                   />
                   <NavItem
-                    tab="terminalAppearance"
-                    icon={<SquareTerminal className="w-4 h-4" />}
-                    label="Appearance"
+                    tab="project:context"
+                    icon={<FileCode className="w-4 h-4" />}
+                    label="Context"
                     activeTab={activeTab}
                     isSearching={isSearching}
-                    matchCount={matchCounts.terminalAppearance}
-                    modified={modifiedTabs.has("terminalAppearance")}
-                    hasError={tabsWithErrors.has("terminalAppearance")}
+                    matchCount={matchCounts["project:context"]}
+                    hasError={tabsWithErrors.has("project:context")}
                     onSelect={handleNavSelect}
                   />
                   <NavItem
-                    tab="keyboard"
-                    icon={<Keyboard className="w-4 h-4" />}
-                    label="Keyboard"
+                    tab="project:variables"
+                    icon={<KeyRound className="w-4 h-4" />}
+                    label="Variables"
                     activeTab={activeTab}
                     isSearching={isSearching}
-                    matchCount={matchCounts.keyboard}
-                    hasError={tabsWithErrors.has("keyboard")}
+                    matchCount={matchCounts["project:variables"]}
+                    hasError={tabsWithErrors.has("project:variables")}
                     onSelect={handleNavSelect}
                   />
                   <NavItem
-                    tab="notifications"
+                    tab="project:automation"
+                    icon={<GitBranch className="w-4 h-4" />}
+                    label="Worktree Setup"
+                    activeTab={activeTab}
+                    isSearching={isSearching}
+                    matchCount={matchCounts["project:automation"]}
+                    hasError={tabsWithErrors.has("project:automation")}
+                    onSelect={handleNavSelect}
+                  />
+                  <NavItem
+                    tab="project:recipes"
+                    icon={<TerminalRecipeIcon className="w-4 h-4" />}
+                    label="Recipes"
+                    activeTab={activeTab}
+                    isSearching={isSearching}
+                    matchCount={matchCounts["project:recipes"]}
+                    hasError={tabsWithErrors.has("project:recipes")}
+                    onSelect={handleNavSelect}
+                  />
+                  <NavItem
+                    tab="project:commands"
+                    icon={<Command className="w-4 h-4" />}
+                    label="Commands"
+                    activeTab={activeTab}
+                    isSearching={isSearching}
+                    matchCount={matchCounts["project:commands"]}
+                    hasError={tabsWithErrors.has("project:commands")}
+                    onSelect={handleNavSelect}
+                  />
+                  <NavItem
+                    tab="project:notifications"
                     icon={<Bell className="w-4 h-4" />}
                     label="Notifications"
                     activeTab={activeTab}
                     isSearching={isSearching}
-                    matchCount={matchCounts.notifications}
-                    hasError={tabsWithErrors.has("notifications")}
+                    matchCount={matchCounts["project:notifications"]}
+                    hasError={tabsWithErrors.has("project:notifications")}
                     onSelect={handleNavSelect}
                   />
                   <NavItem
-                    tab="privacy"
-                    icon={<Shield className="w-4 h-4" />}
-                    label="Privacy & Data"
-                    activeTab={activeTab}
-                    isSearching={isSearching}
-                    matchCount={matchCounts.privacy}
-                    hasError={tabsWithErrors.has("privacy")}
-                    onSelect={handleNavSelect}
-                  />
-                </NavGroup>
-                <NavGroup label="Terminal">
-                  <NavItem
-                    tab="terminal"
-                    icon={<LayoutGrid className="w-4 h-4" />}
-                    label="Panel Grid"
-                    activeTab={activeTab}
-                    isSearching={isSearching}
-                    matchCount={matchCounts.terminal}
-                    modified={modifiedTabs.has("terminal")}
-                    hasError={tabsWithErrors.has("terminal")}
-                    onSelect={handleNavSelect}
-                  />
-                  <NavItem
-                    tab="worktree"
-                    icon={<WorktreeIcon className="w-4 h-4" />}
-                    label="Worktree"
-                    activeTab={activeTab}
-                    isSearching={isSearching}
-                    matchCount={matchCounts.worktree}
-                    hasError={tabsWithErrors.has("worktree")}
-                    onSelect={handleNavSelect}
-                  />
-                  <NavItem
-                    tab="toolbar"
-                    icon={<SettingsIcon className="w-4 h-4" />}
-                    label="Toolbar"
-                    activeTab={activeTab}
-                    isSearching={isSearching}
-                    matchCount={matchCounts.toolbar}
-                    hasError={tabsWithErrors.has("toolbar")}
-                    onSelect={handleNavSelect}
-                  />
-                  <NavItem
-                    tab="environment"
-                    icon={<KeyRound className="w-4 h-4" />}
-                    label="Environment"
-                    activeTab={activeTab}
-                    isSearching={isSearching}
-                    matchCount={matchCounts.environment}
-                    hasError={tabsWithErrors.has("environment")}
-                    onSelect={handleNavSelect}
-                  />
-                </NavGroup>
-                <NavGroup label="Integrations">
-                  <NavItem
-                    tab="agents"
-                    icon={<DaintreeAgentIcon className="w-4 h-4" />}
-                    label="CLI Agents"
-                    activeTab={activeTab}
-                    isSearching={isSearching}
-                    matchCount={matchCounts.agents}
-                    hasError={tabsWithErrors.has("agents")}
-                    onSelect={handleNavSelect}
-                  />
-                  <NavItem
-                    tab="github"
+                    tab="project:github"
                     icon={<Github className="w-4 h-4" />}
                     label="GitHub"
                     activeTab={activeTab}
                     isSearching={isSearching}
-                    matchCount={matchCounts.github}
-                    hasError={tabsWithErrors.has("github")}
-                    onSelect={handleNavSelect}
-                  />
-                  <NavItem
-                    tab="integrations"
-                    icon={<Blocks className="w-4 h-4" />}
-                    label="Integrations"
-                    activeTab={activeTab}
-                    isSearching={isSearching}
-                    matchCount={matchCounts.integrations}
-                    hasError={tabsWithErrors.has("integrations")}
-                    onSelect={handleNavSelect}
-                  />
-                  <NavItem
-                    tab="voice"
-                    icon={<Mic className="w-4 h-4" />}
-                    label="Voice Input"
-                    activeTab={activeTab}
-                    isSearching={isSearching}
-                    matchCount={matchCounts.voice}
-                    hasError={tabsWithErrors.has("voice")}
-                    onSelect={handleNavSelect}
-                  />
-                  <NavItem
-                    tab="portal"
-                    icon={<PanelRight className="w-4 h-4" />}
-                    label="Portal"
-                    activeTab={activeTab}
-                    isSearching={isSearching}
-                    matchCount={matchCounts.portal}
-                    hasError={tabsWithErrors.has("portal")}
-                    onSelect={handleNavSelect}
-                  />
-                  <NavItem
-                    tab="mcp"
-                    icon={<McpServerIcon className="w-4 h-4" />}
-                    label="MCP Server"
-                    activeTab={activeTab}
-                    isSearching={isSearching}
-                    matchCount={matchCounts.mcp}
-                    hasError={tabsWithErrors.has("mcp")}
+                    matchCount={matchCounts["project:github"]}
+                    hasError={tabsWithErrors.has("project:github")}
                     onSelect={handleNavSelect}
                   />
                 </NavGroup>
-
-                <NavGroup label="Support">
-                  <NavItem
-                    tab="troubleshooting"
-                    icon={<LifeBuoy className="w-4 h-4" />}
-                    label="Troubleshooting"
-                    activeTab={activeTab}
-                    isSearching={isSearching}
-                    matchCount={matchCounts.troubleshooting}
-                    hasError={tabsWithErrors.has("troubleshooting")}
-                    onSelect={handleNavSelect}
-                  />
-                </NavGroup>
-              </>
-            ) : (
-              <NavGroup label="Project">
-                <NavItem
-                  tab="project:general"
-                  icon={<SettingsIcon className="w-4 h-4" />}
-                  label="General"
-                  activeTab={activeTab}
-                  isSearching={isSearching}
-                  matchCount={matchCounts["project:general"]}
-                  hasError={tabsWithErrors.has("project:general")}
-                  onSelect={handleNavSelect}
-                />
-                <NavItem
-                  tab="project:context"
-                  icon={<FileCode className="w-4 h-4" />}
-                  label="Context"
-                  activeTab={activeTab}
-                  isSearching={isSearching}
-                  matchCount={matchCounts["project:context"]}
-                  hasError={tabsWithErrors.has("project:context")}
-                  onSelect={handleNavSelect}
-                />
-                <NavItem
-                  tab="project:variables"
-                  icon={<KeyRound className="w-4 h-4" />}
-                  label="Variables"
-                  activeTab={activeTab}
-                  isSearching={isSearching}
-                  matchCount={matchCounts["project:variables"]}
-                  hasError={tabsWithErrors.has("project:variables")}
-                  onSelect={handleNavSelect}
-                />
-                <NavItem
-                  tab="project:automation"
-                  icon={<GitBranch className="w-4 h-4" />}
-                  label="Worktree Setup"
-                  activeTab={activeTab}
-                  isSearching={isSearching}
-                  matchCount={matchCounts["project:automation"]}
-                  hasError={tabsWithErrors.has("project:automation")}
-                  onSelect={handleNavSelect}
-                />
-                <NavItem
-                  tab="project:recipes"
-                  icon={<TerminalRecipeIcon className="w-4 h-4" />}
-                  label="Recipes"
-                  activeTab={activeTab}
-                  isSearching={isSearching}
-                  matchCount={matchCounts["project:recipes"]}
-                  hasError={tabsWithErrors.has("project:recipes")}
-                  onSelect={handleNavSelect}
-                />
-                <NavItem
-                  tab="project:commands"
-                  icon={<Command className="w-4 h-4" />}
-                  label="Commands"
-                  activeTab={activeTab}
-                  isSearching={isSearching}
-                  matchCount={matchCounts["project:commands"]}
-                  hasError={tabsWithErrors.has("project:commands")}
-                  onSelect={handleNavSelect}
-                />
-                <NavItem
-                  tab="project:notifications"
-                  icon={<Bell className="w-4 h-4" />}
-                  label="Notifications"
-                  activeTab={activeTab}
-                  isSearching={isSearching}
-                  matchCount={matchCounts["project:notifications"]}
-                  hasError={tabsWithErrors.has("project:notifications")}
-                  onSelect={handleNavSelect}
-                />
-                <NavItem
-                  tab="project:github"
-                  icon={<Github className="w-4 h-4" />}
-                  label="GitHub"
-                  activeTab={activeTab}
-                  isSearching={isSearching}
-                  matchCount={matchCounts["project:github"]}
-                  hasError={tabsWithErrors.has("project:github")}
-                  onSelect={handleNavSelect}
-                />
-              </NavGroup>
-            )}
-          </ScrollShadow>
-
-          <div className="pt-2 mt-2 border-t border-daintree-border px-2">
-            <span className="settings-meta font-mono">{appVersion}</span>
-          </div>
-        </div>
-
-        <div className="settings-shell flex-1 flex flex-col min-w-0">
-          <div className="dialog-header flex items-center justify-between px-6 py-4 border-b border-daintree-border shrink-0">
-            <h3 className="text-lg font-medium text-daintree-text flex items-center gap-2">
-              {isSearching ? (
-                <>
-                  <Search className="w-5 h-5 text-text-secondary" />
-                  Search Results
-                </>
-              ) : (
-                <>
-                  {tabIcons[activeTab]}
-                  {tabTitles[activeTab]}
-                </>
               )}
-            </h3>
-            <button
-              onClick={handleClose}
-              className="text-daintree-text/60 hover:text-daintree-text transition-colors p-1 rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
-              aria-label="Close settings"
-            >
-              <X className="h-5 w-5" />
-            </button>
+            </ScrollShadow>
+
+            <div className="pt-2 mt-2 border-t border-daintree-border px-2">
+              <span className="settings-meta font-mono">{appVersion}</span>
+            </div>
           </div>
 
-          <ScrollShadow className="flex-1" scrollClassName="p-6">
-            {isSearching ? (
-              <div role="region" aria-label="Search results">
-                <SearchResults
-                  results={searchResults}
-                  query={deferredQuery}
-                  cleanQuery={cleanSearchQuery}
-                  onResultClick={handleResultClick}
-                  activeIndex={activeResultIndex}
-                />
-              </div>
-            ) : (
-              <SettingsValidationProvider>
-                {hiddenSettingBanner && (
-                  <div
-                    className="text-sm text-status-warning bg-status-warning/10 border border-status-warning/20 rounded-[var(--radius-md)] p-3 mb-4 flex items-start justify-between gap-3"
-                    role="alert"
-                  >
-                    <div className="flex items-start gap-2">
-                      <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
-                      <span>
-                        This setting is only visible when{" "}
-                        <button
-                          className="underline font-medium hover:opacity-80"
-                          onClick={() => {
-                            const parent = SETTINGS_SEARCH_INDEX.find(
-                              (e) => e.id === hiddenSettingBanner.settingId
-                            );
-                            if (parent) {
-                              handleResultClick(
-                                {
-                                  tab: parent.tab,
-                                  subtab: parent.subtab,
-                                  sectionId: parent.id,
-                                },
-                                parent.requiresEnabled
-                              );
-                            }
-                          }}
-                        >
-                          {hiddenSettingBanner.label}
-                        </button>{" "}
-                        is enabled.
-                      </span>
-                    </div>
-                    <button
-                      aria-label="Dismiss"
-                      onClick={() => setHiddenSettingBanner(null)}
-                      className="shrink-0 opacity-60 hover:opacity-100"
-                    >
-                      <X className="w-4 h-4" />
-                    </button>
-                  </div>
-                )}
-                <div
-                  role="tabpanel"
-                  id="settings-panel-general"
-                  aria-labelledby="settings-tab-general"
-                  tabIndex={0}
-                  className={activeTab === "general" ? "" : "hidden"}
-                >
-                  <GeneralTab
-                    appVersion={appVersion}
-                    onNavigateToAgents={(agentId?: string) => {
-                      markTabVisited("agents");
-                      if (agentId) {
-                        setActiveSubtabs((prev) => ({ ...prev, agents: agentId }));
-                      }
-                      startTransition(() => setActiveTab("agents"));
-                    }}
-                    activeSubtab={activeSubtabs["general"] ?? null}
-                    onSubtabChange={(id) => setActiveSubtabs((prev) => ({ ...prev, general: id }))}
-                  />
-                </div>
-
-                <div
-                  role="tabpanel"
-                  id="settings-panel-keyboard"
-                  aria-labelledby="settings-tab-keyboard"
-                  tabIndex={0}
-                  className={activeTab === "keyboard" ? "" : "hidden"}
-                >
-                  {visitedTabs.has("keyboard") && (
-                    <Suspense fallback={null}>
-                      <LazyKeyboardShortcutsTab />
-                    </Suspense>
-                  )}
-                </div>
-
-                <div
-                  role="tabpanel"
-                  id="settings-panel-terminal"
-                  aria-labelledby="settings-tab-terminal"
-                  tabIndex={0}
-                  className={activeTab === "terminal" ? "" : "hidden"}
-                >
-                  {visitedTabs.has("terminal") && (
-                    <Suspense fallback={null}>
-                      <LazyTerminalSettingsTab
-                        activeSubtab={activeSubtabs["terminal"] ?? null}
-                        onSubtabChange={(id) =>
-                          setActiveSubtabs((prev) => ({ ...prev, terminal: id }))
-                        }
-                      />
-                    </Suspense>
-                  )}
-                </div>
-
-                <div
-                  role="tabpanel"
-                  id="settings-panel-terminalAppearance"
-                  aria-labelledby="settings-tab-terminalAppearance"
-                  tabIndex={0}
-                  className={activeTab === "terminalAppearance" ? "" : "hidden"}
-                >
-                  {visitedTabs.has("terminalAppearance") && (
-                    <Suspense fallback={null}>
-                      <LazyTerminalAppearanceTab
-                        activeSubtab={activeSubtabs["terminalAppearance"] ?? null}
-                        onSubtabChange={(id) =>
-                          setActiveSubtabs((prev) => ({ ...prev, terminalAppearance: id }))
-                        }
-                      />
-                    </Suspense>
-                  )}
-                </div>
-
-                <div
-                  role="tabpanel"
-                  id="settings-panel-worktree"
-                  aria-labelledby="settings-tab-worktree"
-                  tabIndex={0}
-                  className={activeTab === "worktree" ? "" : "hidden"}
-                >
-                  {visitedTabs.has("worktree") && (
-                    <Suspense fallback={null}>
-                      <LazyWorktreeSettingsTab />
-                    </Suspense>
-                  )}
-                </div>
-
-                <div
-                  role="tabpanel"
-                  id="settings-panel-agents"
-                  aria-labelledby="settings-tab-agents"
-                  tabIndex={0}
-                  className={activeTab === "agents" ? "" : "hidden"}
-                >
-                  {visitedTabs.has("agents") && (
-                    <Suspense fallback={null}>
-                      <LazyAgentSettings
-                        activeSubtab={activeSubtabs["agents"] ?? null}
-                        onSubtabChange={(id) =>
-                          setActiveSubtabs((prev) => ({ ...prev, agents: id }))
-                        }
-                        onSettingsChange={onSettingsChange}
-                      />
-                    </Suspense>
-                  )}
-                </div>
-
-                <div
-                  role="tabpanel"
-                  id="settings-panel-github"
-                  aria-labelledby="settings-tab-github"
-                  tabIndex={0}
-                  className={activeTab === "github" ? "" : "hidden"}
-                >
-                  {visitedTabs.has("github") && (
-                    <Suspense fallback={null}>
-                      <LazyGitHubSettingsTab />
-                    </Suspense>
-                  )}
-                </div>
-
-                <div
-                  role="tabpanel"
-                  id="settings-panel-portal"
-                  aria-labelledby="settings-tab-portal"
-                  tabIndex={0}
-                  className={activeTab === "portal" ? "" : "hidden"}
-                >
-                  {visitedTabs.has("portal") && (
-                    <Suspense fallback={null}>
-                      <LazyPortalSettingsTab />
-                    </Suspense>
-                  )}
-                </div>
-
-                <div
-                  role="tabpanel"
-                  id="settings-panel-toolbar"
-                  aria-labelledby="settings-tab-toolbar"
-                  tabIndex={0}
-                  className={activeTab === "toolbar" ? "" : "hidden"}
-                >
-                  {visitedTabs.has("toolbar") && (
-                    <Suspense fallback={null}>
-                      <LazyToolbarSettingsTab />
-                    </Suspense>
-                  )}
-                </div>
-
-                <div
-                  role="tabpanel"
-                  id="settings-panel-notifications"
-                  aria-labelledby="settings-tab-notifications"
-                  tabIndex={0}
-                  className={activeTab === "notifications" ? "" : "hidden"}
-                >
-                  {visitedTabs.has("notifications") && (
-                    <Suspense fallback={null}>
-                      <LazyNotificationSettingsTab />
-                    </Suspense>
-                  )}
-                </div>
-
-                <div
-                  role="tabpanel"
-                  id="settings-panel-integrations"
-                  aria-labelledby="settings-tab-integrations"
-                  tabIndex={0}
-                  className={activeTab === "integrations" ? "" : "hidden"}
-                >
-                  {visitedTabs.has("integrations") && (
-                    <Suspense fallback={null}>
-                      <LazyIntegrationsTab />
-                    </Suspense>
-                  )}
-                </div>
-
-                <div
-                  role="tabpanel"
-                  id="settings-panel-voice"
-                  aria-labelledby="settings-tab-voice"
-                  tabIndex={0}
-                  className={activeTab === "voice" ? "" : "hidden"}
-                >
-                  {visitedTabs.has("voice") && (
-                    <Suspense fallback={null}>
-                      <LazyVoiceInputSettingsTab />
-                    </Suspense>
-                  )}
-                </div>
-
-                <div
-                  role="tabpanel"
-                  id="settings-panel-mcp"
-                  aria-labelledby="settings-tab-mcp"
-                  tabIndex={0}
-                  className={activeTab === "mcp" ? "" : "hidden"}
-                >
-                  {visitedTabs.has("mcp") && (
-                    <Suspense fallback={null}>
-                      <LazyMcpServerSettingsTab />
-                    </Suspense>
-                  )}
-                </div>
-
-                <div
-                  role="tabpanel"
-                  id="settings-panel-environment"
-                  aria-labelledby="settings-tab-environment"
-                  tabIndex={0}
-                  className={activeTab === "environment" ? "" : "hidden"}
-                >
-                  {visitedTabs.has("environment") && (
-                    <Suspense fallback={null}>
-                      <LazyEnvironmentSettingsTab />
-                    </Suspense>
-                  )}
-                </div>
-
-                <div
-                  role="tabpanel"
-                  id="settings-panel-privacy"
-                  aria-labelledby="settings-tab-privacy"
-                  tabIndex={0}
-                  className={activeTab === "privacy" ? "" : "hidden"}
-                >
-                  {visitedTabs.has("privacy") && (
-                    <Suspense fallback={null}>
-                      <LazyPrivacyDataTab
-                        activeSubtab={activeSubtabs["privacy"] ?? null}
-                        onSubtabChange={(id) =>
-                          setActiveSubtabs((prev) => ({ ...prev, privacy: id }))
-                        }
-                      />
-                    </Suspense>
-                  )}
-                </div>
-
-                <div
-                  role="tabpanel"
-                  id="settings-panel-troubleshooting"
-                  aria-labelledby="settings-tab-troubleshooting"
-                  tabIndex={0}
-                  className={activeTab === "troubleshooting" ? "" : "hidden"}
-                >
-                  {visitedTabs.has("troubleshooting") && (
-                    <Suspense fallback={null}>
-                      <LazyTroubleshootingTab />
-                    </Suspense>
-                  )}
-                </div>
-
-                {/* Project settings panels */}
-                {activeScope === "project" && projectId && (
+          <div className="settings-shell flex-1 flex flex-col min-w-0">
+            <div className="dialog-header flex items-center justify-between px-6 py-4 border-b border-daintree-border shrink-0">
+              <h3 className="text-lg font-medium text-daintree-text flex items-center gap-2">
+                {isSearching ? (
                   <>
-                    {projectForm.projectIsLoading && (
-                      <div className="text-sm text-daintree-text/60 text-center py-8">
-                        Loading settings...
-                      </div>
-                    )}
-                    {projectForm.projectError && (
-                      <div
-                        className="text-sm text-status-error bg-status-error/10 border border-status-error/20 rounded p-3 mb-4"
-                        role="alert"
-                      >
-                        Failed to load settings: {projectForm.projectError}
-                      </div>
-                    )}
-                    {projectForm.projectAutoSaveError && (
-                      <div
-                        className="text-sm text-status-error bg-status-error/10 border border-status-error/20 rounded p-3 mb-4"
-                        role="alert"
-                      >
-                        {projectForm.projectAutoSaveError}
-                      </div>
-                    )}
-                    {!projectForm.projectIsLoading && !projectForm.projectError && (
-                      <>
-                        <div
-                          role="tabpanel"
-                          id="settings-panel-project:general"
-                          aria-labelledby="settings-tab-project:general"
-                          tabIndex={0}
-                          className={activeTab === "project:general" ? "" : "hidden"}
-                        >
-                          {visitedTabs.has("project:general") && (
-                            <ProjectGeneralTab
-                              currentProject={projectForm.currentProject}
-                              name={projectForm.projectName}
-                              onNameChange={projectForm.setProjectName}
-                              emoji={projectForm.projectEmoji}
-                              onEmojiChange={projectForm.setProjectEmoji}
-                              color={projectForm.projectColor}
-                              onColorChange={projectForm.setProjectColor}
-                              devServerCommand={projectForm.devServerCommand}
-                              onDevServerCommandChange={projectForm.setDevServerCommand}
-                              devServerLoadTimeout={projectForm.devServerLoadTimeout}
-                              onDevServerLoadTimeoutChange={projectForm.setDevServerLoadTimeout}
-                              turbopackEnabled={projectForm.turbopackEnabled}
-                              onTurbopackEnabledChange={projectForm.setTurbopackEnabled}
-                              projectIconSvg={projectForm.projectIconSvg}
-                              onProjectIconSvgChange={projectForm.setProjectIconSvg}
-                              enableInRepoSettings={projectForm.enableInRepoSettings}
-                              disableInRepoSettings={projectForm.disableInRepoSettings}
-                              projectId={projectId}
-                              isOpen={isOpen}
-                            />
-                          )}
-                        </div>
-
-                        <div
-                          role="tabpanel"
-                          id="settings-panel-project:context"
-                          aria-labelledby="settings-tab-project:context"
-                          tabIndex={0}
-                          className={activeTab === "project:context" ? "" : "hidden"}
-                        >
-                          {visitedTabs.has("project:context") && (
-                            <ProjectContextTab
-                              excludedPaths={projectForm.excludedPaths}
-                              onExcludedPathsChange={projectForm.setExcludedPaths}
-                              copyTreeSettings={projectForm.copyTreeSettings}
-                              onCopyTreeSettingsChange={projectForm.setCopyTreeSettings}
-                              worktrees={projectForm.worktrees}
-                              isOpen={isOpen}
-                            />
-                          )}
-                        </div>
-
-                        <div
-                          role="tabpanel"
-                          id="settings-panel-project:variables"
-                          aria-labelledby="settings-tab-project:variables"
-                          tabIndex={0}
-                          className={activeTab === "project:variables" ? "" : "hidden"}
-                        >
-                          {visitedTabs.has("project:variables") && (
-                            <EnvironmentVariablesEditor
-                              environmentVariables={projectForm.environmentVariables}
-                              onEnvironmentVariablesChange={projectForm.setEnvironmentVariables}
-                              settings={projectForm.projectSettings}
-                              isOpen={isOpen}
-                              onFlush={projectForm.flush}
-                              projectLabel={projectLabel}
-                              globalEnvironmentVariables={globalEnvVars}
-                            />
-                          )}
-                        </div>
-
-                        <div
-                          role="tabpanel"
-                          id="settings-panel-project:automation"
-                          aria-labelledby="settings-tab-project:automation"
-                          tabIndex={0}
-                          className={activeTab === "project:automation" ? "" : "hidden"}
-                        >
-                          {visitedTabs.has("project:automation") && (
-                            <ProjectAutomationTab
-                              currentProject={projectForm.currentProject}
-                              runCommands={projectForm.runCommands}
-                              onRunCommandsChange={projectForm.setRunCommands}
-                              defaultWorktreeRecipeId={projectForm.defaultWorktreeRecipeId}
-                              onDefaultWorktreeRecipeIdChange={
-                                projectForm.setDefaultWorktreeRecipeId
-                              }
-                              branchPrefixMode={projectForm.branchPrefixMode}
-                              onBranchPrefixModeChange={projectForm.setBranchPrefixMode}
-                              branchPrefixCustom={projectForm.branchPrefixCustom}
-                              onBranchPrefixCustomChange={projectForm.setBranchPrefixCustom}
-                              worktreePathPattern={projectForm.worktreePathPattern}
-                              onWorktreePathPatternChange={projectForm.setWorktreePathPattern}
-                              terminalShell={projectForm.terminalShell}
-                              onTerminalShellChange={projectForm.setTerminalShell}
-                              terminalShellArgs={projectForm.terminalShellArgs}
-                              onTerminalShellArgsChange={projectForm.setTerminalShellArgs}
-                              terminalDefaultCwd={projectForm.terminalDefaultCwd}
-                              onTerminalDefaultCwdChange={projectForm.setTerminalDefaultCwd}
-                              terminalScrollback={projectForm.terminalScrollback}
-                              onTerminalScrollbackChange={projectForm.setTerminalScrollback}
-                              recipes={projectForm.recipes}
-                              recipesLoading={projectForm.recipesLoading}
-                              onNavigateToRecipes={() => {
-                                markTabVisited("project:recipes");
-                                startTransition(() => setActiveTab("project:recipes"));
-                              }}
-                              resourceEnvironments={projectForm.resourceEnvironments}
-                              onResourceEnvironmentsChange={projectForm.setResourceEnvironments}
-                              activeResourceEnvironment={projectForm.activeResourceEnvironment}
-                              onActiveResourceEnvironmentChange={
-                                projectForm.setActiveResourceEnvironment
-                              }
-                              defaultWorktreeMode={projectForm.defaultWorktreeMode}
-                              onDefaultWorktreeModeChange={projectForm.setDefaultWorktreeMode}
-                              isOpen={isOpen}
-                            />
-                          )}
-                        </div>
-
-                        <div
-                          role="tabpanel"
-                          id="settings-panel-project:recipes"
-                          aria-labelledby="settings-tab-project:recipes"
-                          tabIndex={0}
-                          className={activeTab === "project:recipes" ? "" : "hidden"}
-                        >
-                          {visitedTabs.has("project:recipes") && (
-                            <ProjectRecipesTab
-                              projectId={projectId}
-                              defaultWorktreeRecipeId={projectForm.defaultWorktreeRecipeId}
-                              onDefaultWorktreeRecipeIdChange={
-                                projectForm.setDefaultWorktreeRecipeId
-                              }
-                              worktreeMap={projectForm.worktreeMap}
-                              isOpen={isOpen}
-                            />
-                          )}
-                        </div>
-
-                        <div
-                          role="tabpanel"
-                          id="settings-panel-project:commands"
-                          aria-labelledby="settings-tab-project:commands"
-                          tabIndex={0}
-                          className={activeTab === "project:commands" ? "" : "hidden"}
-                        >
-                          {visitedTabs.has("project:commands") && (
-                            <CommandOverridesTab
-                              projectId={projectId}
-                              overrides={projectForm.commandOverrides}
-                              onChange={projectForm.setCommandOverrides}
-                            />
-                          )}
-                        </div>
-
-                        <div
-                          role="tabpanel"
-                          id="settings-panel-project:notifications"
-                          aria-labelledby="settings-tab-project:notifications"
-                          tabIndex={0}
-                          className={activeTab === "project:notifications" ? "" : "hidden"}
-                        >
-                          {visitedTabs.has("project:notifications") && (
-                            <ProjectNotificationsTab
-                              overrides={projectForm.notificationOverrides}
-                              onChange={projectForm.setNotificationOverrides}
-                            />
-                          )}
-                        </div>
-
-                        <div
-                          role="tabpanel"
-                          id="settings-panel-project:github"
-                          aria-labelledby="settings-tab-project:github"
-                          tabIndex={0}
-                          className={activeTab === "project:github" ? "" : "hidden"}
-                        >
-                          {visitedTabs.has("project:github") && projectForm.currentProject && (
-                            <ProjectGitHubTab
-                              githubRemote={projectForm.githubRemote}
-                              onGithubRemoteChange={projectForm.setGithubRemote}
-                              projectPath={projectForm.currentProject.path}
-                            />
-                          )}
-                        </div>
-                      </>
-                    )}
+                    <Search className="w-5 h-5 text-text-secondary" />
+                    Search Results
+                  </>
+                ) : (
+                  <>
+                    {tabIcons[activeTab]}
+                    {tabTitles[activeTab]}
                   </>
                 )}
-              </SettingsValidationProvider>
-            )}
-          </ScrollShadow>
+              </h3>
+              <button
+                onClick={handleClose}
+                className="text-daintree-text/60 hover:text-daintree-text transition-colors p-1 rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+                aria-label="Close settings"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <ScrollShadow className="flex-1" scrollClassName="p-6">
+              {isSearching ? (
+                <div role="region" aria-label="Search results">
+                  <SearchResults
+                    results={searchResults}
+                    query={deferredQuery}
+                    cleanQuery={cleanSearchQuery}
+                    onResultClick={handleResultClick}
+                    activeIndex={activeResultIndex}
+                  />
+                </div>
+              ) : (
+                <>
+                  {hiddenSettingBanner && (
+                    <div
+                      className="text-sm text-status-warning bg-status-warning/10 border border-status-warning/20 rounded-[var(--radius-md)] p-3 mb-4 flex items-start justify-between gap-3"
+                      role="alert"
+                    >
+                      <div className="flex items-start gap-2">
+                        <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
+                        <span>
+                          This setting is only visible when{" "}
+                          <button
+                            className="underline font-medium hover:opacity-80"
+                            onClick={() => {
+                              const parent = SETTINGS_SEARCH_INDEX.find(
+                                (e) => e.id === hiddenSettingBanner.settingId
+                              );
+                              if (parent) {
+                                handleResultClick(
+                                  {
+                                    tab: parent.tab,
+                                    subtab: parent.subtab,
+                                    sectionId: parent.id,
+                                  },
+                                  parent.requiresEnabled
+                                );
+                              }
+                            }}
+                          >
+                            {hiddenSettingBanner.label}
+                          </button>{" "}
+                          is enabled.
+                        </span>
+                      </div>
+                      <button
+                        aria-label="Dismiss"
+                        onClick={() => setHiddenSettingBanner(null)}
+                        className="shrink-0 opacity-60 hover:opacity-100"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
+                  )}
+                  <div
+                    role="tabpanel"
+                    id="settings-panel-general"
+                    aria-labelledby="settings-tab-general"
+                    tabIndex={0}
+                    className={activeTab === "general" ? "" : "hidden"}
+                  >
+                    <GeneralTab
+                      appVersion={appVersion}
+                      onNavigateToAgents={(agentId?: string) => {
+                        markTabVisited("agents");
+                        if (agentId) {
+                          setActiveSubtabs((prev) => ({ ...prev, agents: agentId }));
+                        }
+                        startTransition(() => setActiveTab("agents"));
+                      }}
+                      activeSubtab={activeSubtabs["general"] ?? null}
+                      onSubtabChange={(id) =>
+                        setActiveSubtabs((prev) => ({ ...prev, general: id }))
+                      }
+                    />
+                  </div>
+
+                  <div
+                    role="tabpanel"
+                    id="settings-panel-keyboard"
+                    aria-labelledby="settings-tab-keyboard"
+                    tabIndex={0}
+                    className={activeTab === "keyboard" ? "" : "hidden"}
+                  >
+                    {visitedTabs.has("keyboard") && (
+                      <Suspense fallback={null}>
+                        <LazyKeyboardShortcutsTab />
+                      </Suspense>
+                    )}
+                  </div>
+
+                  <div
+                    role="tabpanel"
+                    id="settings-panel-terminal"
+                    aria-labelledby="settings-tab-terminal"
+                    tabIndex={0}
+                    className={activeTab === "terminal" ? "" : "hidden"}
+                  >
+                    {visitedTabs.has("terminal") && (
+                      <Suspense fallback={null}>
+                        <LazyTerminalSettingsTab
+                          activeSubtab={activeSubtabs["terminal"] ?? null}
+                          onSubtabChange={(id) =>
+                            setActiveSubtabs((prev) => ({ ...prev, terminal: id }))
+                          }
+                        />
+                      </Suspense>
+                    )}
+                  </div>
+
+                  <div
+                    role="tabpanel"
+                    id="settings-panel-terminalAppearance"
+                    aria-labelledby="settings-tab-terminalAppearance"
+                    tabIndex={0}
+                    className={activeTab === "terminalAppearance" ? "" : "hidden"}
+                  >
+                    {visitedTabs.has("terminalAppearance") && (
+                      <Suspense fallback={null}>
+                        <LazyTerminalAppearanceTab
+                          activeSubtab={activeSubtabs["terminalAppearance"] ?? null}
+                          onSubtabChange={(id) =>
+                            setActiveSubtabs((prev) => ({ ...prev, terminalAppearance: id }))
+                          }
+                        />
+                      </Suspense>
+                    )}
+                  </div>
+
+                  <div
+                    role="tabpanel"
+                    id="settings-panel-worktree"
+                    aria-labelledby="settings-tab-worktree"
+                    tabIndex={0}
+                    className={activeTab === "worktree" ? "" : "hidden"}
+                  >
+                    {visitedTabs.has("worktree") && (
+                      <Suspense fallback={null}>
+                        <LazyWorktreeSettingsTab />
+                      </Suspense>
+                    )}
+                  </div>
+
+                  <div
+                    role="tabpanel"
+                    id="settings-panel-agents"
+                    aria-labelledby="settings-tab-agents"
+                    tabIndex={0}
+                    className={activeTab === "agents" ? "" : "hidden"}
+                  >
+                    {visitedTabs.has("agents") && (
+                      <Suspense fallback={null}>
+                        <LazyAgentSettings
+                          activeSubtab={activeSubtabs["agents"] ?? null}
+                          onSubtabChange={(id) =>
+                            setActiveSubtabs((prev) => ({ ...prev, agents: id }))
+                          }
+                          onSettingsChange={onSettingsChange}
+                        />
+                      </Suspense>
+                    )}
+                  </div>
+
+                  <div
+                    role="tabpanel"
+                    id="settings-panel-github"
+                    aria-labelledby="settings-tab-github"
+                    tabIndex={0}
+                    className={activeTab === "github" ? "" : "hidden"}
+                  >
+                    {visitedTabs.has("github") && (
+                      <Suspense fallback={null}>
+                        <LazyGitHubSettingsTab />
+                      </Suspense>
+                    )}
+                  </div>
+
+                  <div
+                    role="tabpanel"
+                    id="settings-panel-portal"
+                    aria-labelledby="settings-tab-portal"
+                    tabIndex={0}
+                    className={activeTab === "portal" ? "" : "hidden"}
+                  >
+                    {visitedTabs.has("portal") && (
+                      <Suspense fallback={null}>
+                        <LazyPortalSettingsTab />
+                      </Suspense>
+                    )}
+                  </div>
+
+                  <div
+                    role="tabpanel"
+                    id="settings-panel-toolbar"
+                    aria-labelledby="settings-tab-toolbar"
+                    tabIndex={0}
+                    className={activeTab === "toolbar" ? "" : "hidden"}
+                  >
+                    {visitedTabs.has("toolbar") && (
+                      <Suspense fallback={null}>
+                        <LazyToolbarSettingsTab />
+                      </Suspense>
+                    )}
+                  </div>
+
+                  <div
+                    role="tabpanel"
+                    id="settings-panel-notifications"
+                    aria-labelledby="settings-tab-notifications"
+                    tabIndex={0}
+                    className={activeTab === "notifications" ? "" : "hidden"}
+                  >
+                    {visitedTabs.has("notifications") && (
+                      <Suspense fallback={null}>
+                        <LazyNotificationSettingsTab />
+                      </Suspense>
+                    )}
+                  </div>
+
+                  <div
+                    role="tabpanel"
+                    id="settings-panel-integrations"
+                    aria-labelledby="settings-tab-integrations"
+                    tabIndex={0}
+                    className={activeTab === "integrations" ? "" : "hidden"}
+                  >
+                    {visitedTabs.has("integrations") && (
+                      <Suspense fallback={null}>
+                        <LazyIntegrationsTab />
+                      </Suspense>
+                    )}
+                  </div>
+
+                  <div
+                    role="tabpanel"
+                    id="settings-panel-voice"
+                    aria-labelledby="settings-tab-voice"
+                    tabIndex={0}
+                    className={activeTab === "voice" ? "" : "hidden"}
+                  >
+                    {visitedTabs.has("voice") && (
+                      <Suspense fallback={null}>
+                        <LazyVoiceInputSettingsTab />
+                      </Suspense>
+                    )}
+                  </div>
+
+                  <div
+                    role="tabpanel"
+                    id="settings-panel-mcp"
+                    aria-labelledby="settings-tab-mcp"
+                    tabIndex={0}
+                    className={activeTab === "mcp" ? "" : "hidden"}
+                  >
+                    {visitedTabs.has("mcp") && (
+                      <Suspense fallback={null}>
+                        <LazyMcpServerSettingsTab />
+                      </Suspense>
+                    )}
+                  </div>
+
+                  <div
+                    role="tabpanel"
+                    id="settings-panel-environment"
+                    aria-labelledby="settings-tab-environment"
+                    tabIndex={0}
+                    className={activeTab === "environment" ? "" : "hidden"}
+                  >
+                    {visitedTabs.has("environment") && (
+                      <Suspense fallback={null}>
+                        <LazyEnvironmentSettingsTab />
+                      </Suspense>
+                    )}
+                  </div>
+
+                  <div
+                    role="tabpanel"
+                    id="settings-panel-privacy"
+                    aria-labelledby="settings-tab-privacy"
+                    tabIndex={0}
+                    className={activeTab === "privacy" ? "" : "hidden"}
+                  >
+                    {visitedTabs.has("privacy") && (
+                      <Suspense fallback={null}>
+                        <LazyPrivacyDataTab
+                          activeSubtab={activeSubtabs["privacy"] ?? null}
+                          onSubtabChange={(id) =>
+                            setActiveSubtabs((prev) => ({ ...prev, privacy: id }))
+                          }
+                        />
+                      </Suspense>
+                    )}
+                  </div>
+
+                  <div
+                    role="tabpanel"
+                    id="settings-panel-troubleshooting"
+                    aria-labelledby="settings-tab-troubleshooting"
+                    tabIndex={0}
+                    className={activeTab === "troubleshooting" ? "" : "hidden"}
+                  >
+                    {visitedTabs.has("troubleshooting") && (
+                      <Suspense fallback={null}>
+                        <LazyTroubleshootingTab />
+                      </Suspense>
+                    )}
+                  </div>
+
+                  {/* Project settings panels */}
+                  {activeScope === "project" && projectId && (
+                    <>
+                      {projectForm.projectIsLoading && (
+                        <div className="text-sm text-daintree-text/60 text-center py-8">
+                          Loading settings...
+                        </div>
+                      )}
+                      {projectForm.projectError && (
+                        <div
+                          className="text-sm text-status-error bg-status-error/10 border border-status-error/20 rounded p-3 mb-4"
+                          role="alert"
+                        >
+                          Failed to load settings: {projectForm.projectError}
+                        </div>
+                      )}
+                      {projectForm.projectAutoSaveError && (
+                        <div
+                          className="text-sm text-status-error bg-status-error/10 border border-status-error/20 rounded p-3 mb-4"
+                          role="alert"
+                        >
+                          {projectForm.projectAutoSaveError}
+                        </div>
+                      )}
+                      {!projectForm.projectIsLoading && !projectForm.projectError && (
+                        <>
+                          <div
+                            role="tabpanel"
+                            id="settings-panel-project:general"
+                            aria-labelledby="settings-tab-project:general"
+                            tabIndex={0}
+                            className={activeTab === "project:general" ? "" : "hidden"}
+                          >
+                            {visitedTabs.has("project:general") && (
+                              <ProjectGeneralTab
+                                currentProject={projectForm.currentProject}
+                                name={projectForm.projectName}
+                                onNameChange={projectForm.setProjectName}
+                                emoji={projectForm.projectEmoji}
+                                onEmojiChange={projectForm.setProjectEmoji}
+                                color={projectForm.projectColor}
+                                onColorChange={projectForm.setProjectColor}
+                                devServerCommand={projectForm.devServerCommand}
+                                onDevServerCommandChange={projectForm.setDevServerCommand}
+                                devServerLoadTimeout={projectForm.devServerLoadTimeout}
+                                onDevServerLoadTimeoutChange={projectForm.setDevServerLoadTimeout}
+                                turbopackEnabled={projectForm.turbopackEnabled}
+                                onTurbopackEnabledChange={projectForm.setTurbopackEnabled}
+                                projectIconSvg={projectForm.projectIconSvg}
+                                onProjectIconSvgChange={projectForm.setProjectIconSvg}
+                                enableInRepoSettings={projectForm.enableInRepoSettings}
+                                disableInRepoSettings={projectForm.disableInRepoSettings}
+                                projectId={projectId}
+                                isOpen={isOpen}
+                              />
+                            )}
+                          </div>
+
+                          <div
+                            role="tabpanel"
+                            id="settings-panel-project:context"
+                            aria-labelledby="settings-tab-project:context"
+                            tabIndex={0}
+                            className={activeTab === "project:context" ? "" : "hidden"}
+                          >
+                            {visitedTabs.has("project:context") && (
+                              <ProjectContextTab
+                                excludedPaths={projectForm.excludedPaths}
+                                onExcludedPathsChange={projectForm.setExcludedPaths}
+                                copyTreeSettings={projectForm.copyTreeSettings}
+                                onCopyTreeSettingsChange={projectForm.setCopyTreeSettings}
+                                worktrees={projectForm.worktrees}
+                                isOpen={isOpen}
+                              />
+                            )}
+                          </div>
+
+                          <div
+                            role="tabpanel"
+                            id="settings-panel-project:variables"
+                            aria-labelledby="settings-tab-project:variables"
+                            tabIndex={0}
+                            className={activeTab === "project:variables" ? "" : "hidden"}
+                          >
+                            {visitedTabs.has("project:variables") && (
+                              <EnvironmentVariablesEditor
+                                environmentVariables={projectForm.environmentVariables}
+                                onEnvironmentVariablesChange={projectForm.setEnvironmentVariables}
+                                settings={projectForm.projectSettings}
+                                isOpen={isOpen}
+                                onFlush={projectForm.flush}
+                                projectLabel={projectLabel}
+                                globalEnvironmentVariables={globalEnvVars}
+                              />
+                            )}
+                          </div>
+
+                          <div
+                            role="tabpanel"
+                            id="settings-panel-project:automation"
+                            aria-labelledby="settings-tab-project:automation"
+                            tabIndex={0}
+                            className={activeTab === "project:automation" ? "" : "hidden"}
+                          >
+                            {visitedTabs.has("project:automation") && (
+                              <ProjectAutomationTab
+                                currentProject={projectForm.currentProject}
+                                runCommands={projectForm.runCommands}
+                                onRunCommandsChange={projectForm.setRunCommands}
+                                defaultWorktreeRecipeId={projectForm.defaultWorktreeRecipeId}
+                                onDefaultWorktreeRecipeIdChange={
+                                  projectForm.setDefaultWorktreeRecipeId
+                                }
+                                branchPrefixMode={projectForm.branchPrefixMode}
+                                onBranchPrefixModeChange={projectForm.setBranchPrefixMode}
+                                branchPrefixCustom={projectForm.branchPrefixCustom}
+                                onBranchPrefixCustomChange={projectForm.setBranchPrefixCustom}
+                                worktreePathPattern={projectForm.worktreePathPattern}
+                                onWorktreePathPatternChange={projectForm.setWorktreePathPattern}
+                                terminalShell={projectForm.terminalShell}
+                                onTerminalShellChange={projectForm.setTerminalShell}
+                                terminalShellArgs={projectForm.terminalShellArgs}
+                                onTerminalShellArgsChange={projectForm.setTerminalShellArgs}
+                                terminalDefaultCwd={projectForm.terminalDefaultCwd}
+                                onTerminalDefaultCwdChange={projectForm.setTerminalDefaultCwd}
+                                terminalScrollback={projectForm.terminalScrollback}
+                                onTerminalScrollbackChange={projectForm.setTerminalScrollback}
+                                recipes={projectForm.recipes}
+                                recipesLoading={projectForm.recipesLoading}
+                                onNavigateToRecipes={() => {
+                                  markTabVisited("project:recipes");
+                                  startTransition(() => setActiveTab("project:recipes"));
+                                }}
+                                resourceEnvironments={projectForm.resourceEnvironments}
+                                onResourceEnvironmentsChange={projectForm.setResourceEnvironments}
+                                activeResourceEnvironment={projectForm.activeResourceEnvironment}
+                                onActiveResourceEnvironmentChange={
+                                  projectForm.setActiveResourceEnvironment
+                                }
+                                defaultWorktreeMode={projectForm.defaultWorktreeMode}
+                                onDefaultWorktreeModeChange={projectForm.setDefaultWorktreeMode}
+                                isOpen={isOpen}
+                              />
+                            )}
+                          </div>
+
+                          <div
+                            role="tabpanel"
+                            id="settings-panel-project:recipes"
+                            aria-labelledby="settings-tab-project:recipes"
+                            tabIndex={0}
+                            className={activeTab === "project:recipes" ? "" : "hidden"}
+                          >
+                            {visitedTabs.has("project:recipes") && (
+                              <ProjectRecipesTab
+                                projectId={projectId}
+                                defaultWorktreeRecipeId={projectForm.defaultWorktreeRecipeId}
+                                onDefaultWorktreeRecipeIdChange={
+                                  projectForm.setDefaultWorktreeRecipeId
+                                }
+                                worktreeMap={projectForm.worktreeMap}
+                                isOpen={isOpen}
+                              />
+                            )}
+                          </div>
+
+                          <div
+                            role="tabpanel"
+                            id="settings-panel-project:commands"
+                            aria-labelledby="settings-tab-project:commands"
+                            tabIndex={0}
+                            className={activeTab === "project:commands" ? "" : "hidden"}
+                          >
+                            {visitedTabs.has("project:commands") && (
+                              <CommandOverridesTab
+                                projectId={projectId}
+                                overrides={projectForm.commandOverrides}
+                                onChange={projectForm.setCommandOverrides}
+                              />
+                            )}
+                          </div>
+
+                          <div
+                            role="tabpanel"
+                            id="settings-panel-project:notifications"
+                            aria-labelledby="settings-tab-project:notifications"
+                            tabIndex={0}
+                            className={activeTab === "project:notifications" ? "" : "hidden"}
+                          >
+                            {visitedTabs.has("project:notifications") && (
+                              <ProjectNotificationsTab
+                                overrides={projectForm.notificationOverrides}
+                                onChange={projectForm.setNotificationOverrides}
+                              />
+                            )}
+                          </div>
+
+                          <div
+                            role="tabpanel"
+                            id="settings-panel-project:github"
+                            aria-labelledby="settings-tab-project:github"
+                            tabIndex={0}
+                            className={activeTab === "project:github" ? "" : "hidden"}
+                          >
+                            {visitedTabs.has("project:github") && projectForm.currentProject && (
+                              <ProjectGitHubTab
+                                githubRemote={projectForm.githubRemote}
+                                onGithubRemoteChange={projectForm.setGithubRemote}
+                                projectPath={projectForm.currentProject.path}
+                              />
+                            )}
+                          </div>
+                        </>
+                      )}
+                    </>
+                  )}
+                </>
+              )}
+            </ScrollShadow>
+          </div>
         </div>
-      </div>
+      </SettingsValidationProvider>
     </AppDialog>
   );
 }

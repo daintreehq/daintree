@@ -117,6 +117,11 @@ export function EnvironmentSettingsTab() {
       next.delete(id);
       return next;
     });
+    setRowErrors((prev) => {
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
     setIsDirty(true);
   }, []);
 

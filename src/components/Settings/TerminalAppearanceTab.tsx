@@ -55,8 +55,11 @@ export function TerminalAppearanceTab({
   const [fontSizeInput, setFontSizeInput] = useState<string>(String(fontSize));
   const [fontSizeError, setFontSizeError] = useState<string | null>(null);
 
-  // Report validation state to sidebar
-  useSettingsTabValidation("terminalAppearance", fontSizeError != null);
+  // Report validation state to sidebar (only when terminal subtab is active)
+  useSettingsTabValidation(
+    "terminalAppearance",
+    effectiveSubtab === "terminal" ? fontSizeError != null : false
+  );
 
   useEffect(() => {
     setFontSizeInput(String(fontSize));

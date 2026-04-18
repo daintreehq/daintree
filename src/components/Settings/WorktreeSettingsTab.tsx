@@ -91,8 +91,8 @@ export function WorktreeSettingsTab() {
     return validatePathPattern(pattern);
   }, [pattern]);
 
-  // Report validation state to sidebar
-  useSettingsTabValidation("worktree", !validation.valid);
+  // Report validation state to sidebar (only after loading completes)
+  useSettingsTabValidation("worktree", !isLoading && !validation.valid);
 
   const preview = useMemo(() => {
     if (!validation.valid) return null;
