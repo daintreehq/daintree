@@ -17,7 +17,7 @@ interface FrecencyEntry {
 function migrateLegacyList(legacyList: string[], nowMs: number): ActionFrecencyEntry[] {
   return legacyList.slice(0, MRU_MAX_SIZE).map((id, index) => ({
     id,
-    score: FRECENCY_COLD_START - index * FRECENCY_INCREMENT,
+    score: (MRU_MAX_SIZE - index) * FRECENCY_INCREMENT,
     lastAccessedAt: nowMs - index * 60_000,
   }));
 }
@@ -44,12 +44,16 @@ export const createActionMruSlice: StateCreator<ActionMruSlice, [], [], ActionMr
         ({ score: 0, lastAccessedAt: 0 } satisfies FrecencyEntry);
       const newScore = computeFrecencyScore(score, lastAccessedAt, nowMs);
 
-      const nextEntries = new Map(state.actionFrecencyEntries);
+      const nextEntries = new Map();
+      for (const [entryId, { score: s, lastAccessedAt: lat }] of state.actionFrecencyEntries) {
+        const decayedScore = computeFrecencyScore(s, lat, nowMs);
+        if (decayedScore >= SCORE_FLOOR) {
+          nextEntries.set(entryId, { score: decayedScore, lastAccessedAt: lat });
+        }
+      }
       nextEntries.set(id, { score: newScore, lastAccessedAt: nowMs });
 
       let entries = Array.from(nextEntries.entries());
-
-      entries = entries.filter(([, { score: s }]) => s >= SCORE_FLOOR);
 
       entries.sort(([, a], [, b]) => b.score - a.score);
 
@@ -76,7 +80,13 @@ export const createActionMruSlice: StateCreator<ActionMruSlice, [], [], ActionMr
       const isLegacy = list.length > 0 && typeof list[0] === "string";
       const entries = isLegacy
         ? migrateLegacyList(list as string[], nowMs)
-        : (list as ActionFrecencyEntry[]);
+        : (list as ActionFrecencyEntry[]).filter(
+            (e): e is ActionFrecencyEntry =>
+              e != null &&
+              typeof e.id === "string" &&
+              typeof e.score === "number" &&
+              typeof e.lastAccessedAt === "number"
+          );
 
       const trimmed = entries.slice(0, MRU_MAX_SIZE);
       const entryMap = new Map(

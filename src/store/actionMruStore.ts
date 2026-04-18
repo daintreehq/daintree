@@ -7,6 +7,7 @@ export const useActionMruStore = create<ActionMruSlice>()((...a) => ({
 }));
 
 let lastPersisted: ActionFrecencyEntry[] | null = null;
+let pendingPersist: ActionFrecencyEntry[] | null = null;
 
 useActionMruStore.subscribe((state) => {
   const list: ActionFrecencyEntry[] = Array.from(state.actionFrecencyEntries.entries()).map(
@@ -14,9 +15,18 @@ useActionMruStore.subscribe((state) => {
   );
 
   if (JSON.stringify(list) === JSON.stringify(lastPersisted)) return;
-  lastPersisted = list;
+
+  if (pendingPersist !== null) return;
+
+  pendingPersist = list;
 
   void import("@/clients/appClient")
     .then(({ appClient }) => appClient.setState({ actionMruList: list }))
-    .catch(() => {});
+    .then(() => {
+      lastPersisted = pendingPersist!;
+      pendingPersist = null;
+    })
+    .catch(() => {
+      pendingPersist = null;
+    });
 });

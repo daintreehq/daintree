@@ -436,6 +436,7 @@ export function registerAppStateHandlers(): () => void {
             score?: unknown;
             lastAccessedAt?: unknown;
           }>) {
+            if (entry == null) continue;
             const id = entry.id;
             const score = typeof entry.score === "number" ? entry.score : 0;
             const lastAccessedAt =
