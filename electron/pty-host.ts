@@ -905,6 +905,28 @@ port.on("message", async (rawMsg: any) => {
         ptyManager.submit(msg.id, msg.text);
         break;
 
+      case "batch-double-escape": {
+        // Fan out an ESC, 50ms per-PTY gap, then a second ESC. Scheduling the
+        // gap inside the utility-process event loop is load-bearing — doing
+        // it in the renderer or Main process lets IPC batching collapse the
+        // two writes into a single Meta-Escape on the receiving terminal.
+        const ESC = "\u001b";
+        const INTER_ESC_DELAY_MS = 50;
+        const ids: string[] = Array.isArray(msg.ids) ? msg.ids : [];
+        for (const id of ids) {
+          if (typeof id !== "string" || !id) continue;
+          const terminal = ptyManager.getTerminal(id);
+          if (!terminal || terminal.wasKilled || terminal.isExited) continue;
+          ptyManager.write(id, ESC);
+          setTimeout(() => {
+            const t = ptyManager.getTerminal(id);
+            if (!t || t.wasKilled || t.isExited) return;
+            ptyManager.write(id, ESC);
+          }, INTER_ESC_DELAY_MS);
+        }
+        break;
+      }
+
       case "resize":
         ptyManager.resize(msg.id, msg.cols, msg.rows);
         break;

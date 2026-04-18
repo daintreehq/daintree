@@ -341,6 +341,54 @@ export const DEFAULT_KEYBINDINGS: KeybindingConfig[] = [
     description: "Arm all eligible agents in the current worktree",
     category: "Terminal",
   },
+  // Fleet quick-actions. These are registered at priority 5 so they beat
+  // conflicting global bindings (panel.palette at Cmd+N) while the fleet
+  // ribbon is visible. When nothing is armed, each action either no-ops
+  // (accept/interrupt/restart/kill/trash) or falls through to the
+  // conflicting binding (reject → panel.palette) so the UI stays intact.
+  // fleet.interrupt has no combo here — it's driven by a custom Esc-Esc
+  // double-tap handler in FleetArmingRibbon that avoids the escape-stack
+  // LIFO collision a chord binding would cause.
+  {
+    actionId: "fleet.accept",
+    combo: "Cmd+Y",
+    scope: "global",
+    priority: 5,
+    description: "Accept all armed waiting agents",
+    category: "Fleet",
+  },
+  {
+    actionId: "fleet.reject",
+    combo: "Cmd+N",
+    scope: "global",
+    priority: 5,
+    description: "Reject all armed waiting agents",
+    category: "Fleet",
+  },
+  {
+    actionId: "fleet.restart",
+    combo: "Cmd+Shift+R",
+    scope: "global",
+    priority: 5,
+    description: "Restart all armed agents",
+    category: "Fleet",
+  },
+  {
+    actionId: "fleet.kill",
+    combo: "Cmd+Shift+K",
+    scope: "global",
+    priority: 5,
+    description: "Kill all armed terminals",
+    category: "Fleet",
+  },
+  {
+    actionId: "fleet.trash",
+    combo: "Cmd+Shift+Backspace",
+    scope: "global",
+    priority: 5,
+    description: "Trash all armed terminals",
+    category: "Fleet",
+  },
   {
     actionId: "terminal.bulkCommand",
     combo: "Cmd+Alt+Shift+B",

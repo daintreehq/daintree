@@ -282,7 +282,13 @@ export type BuiltInActionId =
   | "terminal.disarmAll"
   | "terminal.armByState"
   | "terminal.armAll"
-  | "terminal.armDefault";
+  | "terminal.armDefault"
+  | "fleet.accept"
+  | "fleet.reject"
+  | "fleet.interrupt"
+  | "fleet.restart"
+  | "fleet.kill"
+  | "fleet.trash";
 
 export type ActionId = BuiltInActionId | (string & {});
 

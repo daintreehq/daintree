@@ -119,6 +119,14 @@ export type BuiltInKeyAction =
   | "terminal.armDefault"
   | "terminal.disarmAll"
 
+  // Fleet quick-actions (scoped to "fleet ribbon visible" at dispatch time)
+  | "fleet.accept"
+  | "fleet.reject"
+  | "fleet.interrupt"
+  | "fleet.restart"
+  | "fleet.kill"
+  | "fleet.trash"
+
   // Agent spawning
   | "agent.palette"
   | AgentKeyAction
@@ -291,6 +299,12 @@ export const KEY_ACTION_VALUES: ReadonlySet<string> = new Set<string>([
   "terminal.bulkCommand",
   "terminal.armDefault",
   "terminal.disarmAll",
+  "fleet.accept",
+  "fleet.reject",
+  "fleet.interrupt",
+  "fleet.restart",
+  "fleet.kill",
+  "fleet.trash",
   "agent.palette",
   ...BUILT_IN_AGENT_KEY_ACTIONS,
   "agent.terminal",

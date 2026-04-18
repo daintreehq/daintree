@@ -1,9 +1,17 @@
 import { useEffect, useMemo, useRef, type ReactElement } from "react";
 import { X } from "lucide-react";
+import { useShallow } from "zustand/react/shallow";
 import { cn } from "@/lib/utils";
 import { useEscapeStack } from "@/hooks";
 import { useFleetArmingStore, type FleetArmStatePreset } from "@/store/fleetArmingStore";
+import {
+  useFleetPendingActionStore,
+  type FleetPendingActionKind,
+} from "@/store/fleetPendingActionStore";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
+import { usePanelStore } from "@/store/panelStore";
+import { actionService } from "@/services/ActionService";
+import { keybindingService } from "@/services/KeybindingService";
 
 interface PresetOption {
   value: FleetArmStatePreset;
@@ -16,12 +24,108 @@ const PRESETS: PresetOption[] = [
   { value: "finished", label: "Finished" },
 ];
 
+interface ArmedCounts {
+  live: number;
+  waiting: number;
+  workingOrRunning: number;
+  sessionLoss: number;
+}
+
+const DOUBLE_ESC_WINDOW_MS = 350;
+
+function useArmedCounts(): ArmedCounts {
+  return usePanelStore(
+    useShallow((state) => {
+      const armedIds = useFleetArmingStore.getState().armedIds;
+      let live = 0;
+      let waiting = 0;
+      let workingOrRunning = 0;
+      let sessionLoss = 0;
+      for (const id of armedIds) {
+        const t = state.panelsById[id];
+        if (!t) continue;
+        if (t.location === "trash" || t.location === "background") continue;
+        if (t.hasPty === false) continue;
+        live++;
+        if (t.agentState === "waiting") waiting++;
+        if (t.agentState === "working" || t.agentState === "running") workingOrRunning++;
+        if (t.agentSessionId) sessionLoss++;
+      }
+      return { live, waiting, workingOrRunning, sessionLoss };
+    })
+  );
+}
+
+type QuickActionId =
+  | "fleet.accept"
+  | "fleet.reject"
+  | "fleet.interrupt"
+  | "fleet.restart"
+  | "fleet.kill"
+  | "fleet.trash";
+
+interface QuickAction {
+  id: QuickActionId;
+  label: string;
+  chordOverride?: string;
+}
+
+const QUICK_ACTIONS: QuickAction[] = [
+  { id: "fleet.accept", label: "Accept" },
+  { id: "fleet.reject", label: "Reject" },
+  { id: "fleet.interrupt", label: "Interrupt", chordOverride: "⌘⎋⎋" },
+  { id: "fleet.restart", label: "Restart" },
+  { id: "fleet.kill", label: "Kill" },
+  { id: "fleet.trash", label: "Trash" },
+];
+
+function buildConfirmMessage(
+  kind: FleetPendingActionKind,
+  count: number,
+  sessionLoss: number
+): string {
+  switch (kind) {
+    case "reject":
+      return `Reject ${count} ${count === 1 ? "prompt" : "prompts"}?`;
+    case "interrupt":
+      return `Interrupt ${count} ${count === 1 ? "agent" : "agents"}?`;
+    case "restart": {
+      const base = `Restart ${count} ${count === 1 ? "agent" : "agents"}?`;
+      if (sessionLoss > 0) {
+        const noun = sessionLoss === 1 ? "agent will lose its" : "agents will lose their";
+        return `${base} ${sessionLoss} ${noun} session.`;
+      }
+      return base;
+    }
+    case "kill":
+      return `Kill ${count} ${count === 1 ? "terminal" : "terminals"}?`;
+    case "trash":
+      return `Trash ${count} ${count === 1 ? "worktree" : "worktrees"}?`;
+  }
+}
+
 export function FleetArmingRibbon(): ReactElement | null {
   const armedCount = useFleetArmingStore((s) => s.armedIds.size);
   const clear = useFleetArmingStore((s) => s.clear);
   const armByState = useFleetArmingStore((s) => s.armByState);
+  const counts = useArmedCounts();
+  const pending = useFleetPendingActionStore((s) => s.pending);
+  const clearPending = useFleetPendingActionStore((s) => s.clear);
 
-  useEscapeStack(armedCount > 0, clear);
+  // Escape stack: confirmation cancel sits above the fleet-disarm entry, so
+  // the first Escape while confirming clears the pending action and a
+  // second Escape disarms the fleet.
+  useEscapeStack(pending !== null, clearPending);
+  useEscapeStack(armedCount > 0 && pending === null, clear);
+
+  // If the armed set drains while a confirmation is pending (e.g., all
+  // armed agents exit), collapse the confirmation so it can't execute
+  // against zero targets.
+  useEffect(() => {
+    if (armedCount === 0 && pending !== null) {
+      clearPending();
+    }
+  }, [armedCount, pending, clearPending]);
 
   const lastAnnouncedCount = useRef<number>(0);
   useEffect(() => {
@@ -35,11 +139,141 @@ export function FleetArmingRibbon(): ReactElement | null {
     lastAnnouncedCount.current = armedCount;
   }, [armedCount]);
 
+  // Enter confirms a pending destructive action. Bound locally so that
+  // `fleet.*` actions can be re-dispatched with `{ confirmed: true }` to
+  // bypass the threshold check on the second pass.
+  useEffect(() => {
+    if (pending === null) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key !== "Enter") return;
+      const rawTarget = e.target;
+      const target =
+        rawTarget && typeof (rawTarget as HTMLElement).closest === "function"
+          ? (rawTarget as HTMLElement)
+          : null;
+      if (
+        target &&
+        (target.tagName === "INPUT" ||
+          target.tagName === "TEXTAREA" ||
+          target.isContentEditable ||
+          target.closest(".xterm") !== null)
+      ) {
+        return;
+      }
+      e.preventDefault();
+      e.stopPropagation();
+      const actionId: QuickActionId =
+        pending.kind === "reject"
+          ? "fleet.reject"
+          : pending.kind === "interrupt"
+            ? "fleet.interrupt"
+            : pending.kind === "restart"
+              ? "fleet.restart"
+              : pending.kind === "kill"
+                ? "fleet.kill"
+                : "fleet.trash";
+      void actionService.dispatch(actionId, { confirmed: true }, { source: "keybinding" });
+    };
+    window.addEventListener("keydown", handler, true);
+    return () => window.removeEventListener("keydown", handler, true);
+  }, [pending]);
+
+  // Cmd+Esc Esc double-tap → fleet.interrupt. The Cmd modifier is what
+  // separates this from the plain-Escape escape-stack LIFO used elsewhere
+  // in the app: bare Escape continues to dismiss confirmations / disarm
+  // the fleet without poisoning the double-tap timer. (An earlier
+  // bare-Escape version had a race where cancelling a confirmation with
+  // Escape then pressing Escape again to disarm fired fleet.interrupt.)
+  const lastEscapeMsRef = useRef<number>(0);
+  useEffect(() => {
+    if (armedCount === 0) {
+      lastEscapeMsRef.current = 0;
+      return;
+    }
+    const handler = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      // Cmd on macOS, Ctrl on other platforms — keybindingService
+      // normalizes the two, but for a raw listener we accept either.
+      if (!e.metaKey && !e.ctrlKey) return;
+      const rawTarget = e.target;
+      const target =
+        rawTarget && typeof (rawTarget as HTMLElement).closest === "function"
+          ? (rawTarget as HTMLElement)
+          : null;
+      if (
+        target &&
+        (target.tagName === "INPUT" ||
+          target.tagName === "TEXTAREA" ||
+          target.isContentEditable ||
+          target.closest(".xterm") !== null)
+      ) {
+        return;
+      }
+      const now = Date.now();
+      const prev = lastEscapeMsRef.current;
+      lastEscapeMsRef.current = now;
+      if (prev === 0 || now - prev > DOUBLE_ESC_WINDOW_MS) return;
+      lastEscapeMsRef.current = 0;
+      e.stopPropagation();
+      e.preventDefault();
+      void actionService.dispatch("fleet.interrupt", undefined, { source: "keybinding" });
+    };
+    window.addEventListener("keydown", handler, true);
+    return () => window.removeEventListener("keydown", handler, true);
+  }, [armedCount]);
+
   const hint = useMemo(() => {
-    return "Esc to disarm · Shift-click to extend · Cmd-click to toggle";
+    return "Esc to disarm · ⌘Esc Esc to interrupt · Shift-click to extend";
   }, []);
 
   if (armedCount === 0) return null;
+
+  if (pending !== null) {
+    const message = buildConfirmMessage(
+      pending.kind,
+      pending.targetCount,
+      pending.sessionLossCount
+    );
+    return (
+      <div
+        role="status"
+        aria-live="polite"
+        className="flex items-center gap-3 border-b border-daintree-accent/40 bg-daintree-accent/10 px-3 py-1.5 text-[12px] text-daintree-text"
+        data-testid="fleet-arming-ribbon"
+        data-pending-action={pending.kind}
+      >
+        <span className="font-medium text-daintree-accent">{message}</span>
+        <div className="ml-auto flex items-center gap-2 text-[11px] text-daintree-text/70">
+          <span>
+            <kbd className="rounded border border-daintree-text/20 bg-tint/[0.08] px-1 py-0.5 font-mono text-[10px]">
+              Enter
+            </kbd>{" "}
+            to confirm
+          </span>
+          <span>
+            <kbd className="rounded border border-daintree-text/20 bg-tint/[0.08] px-1 py-0.5 font-mono text-[10px]">
+              Esc
+            </kbd>{" "}
+            to cancel
+          </span>
+        </div>
+      </div>
+    );
+  }
+
+  const isEligible = (id: QuickActionId): boolean => {
+    switch (id) {
+      case "fleet.accept":
+      case "fleet.reject":
+        return counts.waiting > 0;
+      case "fleet.interrupt":
+        return counts.workingOrRunning > 0 || counts.waiting > 0;
+      case "fleet.restart":
+      case "fleet.kill":
+      case "fleet.trash":
+        return counts.live > 0;
+    }
+  };
 
   return (
     <div
@@ -68,6 +302,37 @@ export function FleetArmingRibbon(): ReactElement | null {
             {preset.label}
           </button>
         ))}
+      </div>
+      <div className="flex items-center gap-1" role="toolbar" aria-label="Fleet quick actions">
+        {QUICK_ACTIONS.map((action) => {
+          const eligible = isEligible(action.id);
+          const chord = action.chordOverride ?? keybindingService.getDisplayCombo(action.id) ?? "";
+          return (
+            <button
+              key={action.id}
+              type="button"
+              disabled={!eligible}
+              onClick={() => {
+                void actionService.dispatch(action.id, undefined, { source: "user" });
+              }}
+              className={cn(
+                "inline-flex items-center gap-1 rounded px-2 py-0.5 text-[11px] transition-colors",
+                eligible
+                  ? "bg-tint/[0.08] text-daintree-text/80 hover:bg-tint/[0.14] hover:text-daintree-text"
+                  : "cursor-not-allowed bg-tint/[0.04] text-daintree-text/30"
+              )}
+              aria-label={`${action.label} armed agents (${chord})`}
+              data-testid={`fleet-quick-${action.id.replace("fleet.", "")}`}
+            >
+              <span>{action.label}</span>
+              {chord ? (
+                <kbd className="rounded border border-daintree-text/20 bg-tint/[0.06] px-1 font-mono text-[10px] leading-tight">
+                  {chord}
+                </kbd>
+              ) : null}
+            </button>
+          );
+        })}
       </div>
       <span className="ml-auto text-[11px] text-daintree-text/50">{hint}</span>
       <button

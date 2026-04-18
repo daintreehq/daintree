@@ -540,6 +540,7 @@ const CHANNELS = {
   TERMINAL_BACKEND_CRASHED: "terminal:backend-crashed",
   TERMINAL_BACKEND_READY: "terminal:backend-ready",
   TERMINAL_SEND_KEY: "terminal:send-key",
+  TERMINAL_BATCH_DOUBLE_ESCAPE: "terminal:batch-double-escape",
   TERMINAL_AGENT_TITLE_STATE: "terminal:agent-title-state",
   TERMINAL_UPDATE_OBSERVED_TITLE: "terminal:update-observed-title",
   TERMINAL_REDUCE_SCROLLBACK: "terminal:reduce-scrollback",
@@ -1343,6 +1344,9 @@ const api: ElectronAPI = {
     },
 
     sendKey: (id: string, key: string) => ipcRenderer.send(CHANNELS.TERMINAL_SEND_KEY, id, key),
+
+    batchDoubleEscape: (ids: string[]) =>
+      ipcRenderer.send(CHANNELS.TERMINAL_BATCH_DOUBLE_ESCAPE, ids),
 
     reportTitleState: (id: string, state: "working" | "waiting") =>
       ipcRenderer.send(CHANNELS.TERMINAL_AGENT_TITLE_STATE, { id, state }),

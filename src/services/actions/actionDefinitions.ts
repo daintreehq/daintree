@@ -23,6 +23,7 @@ import { registerTerminalNavigationActions } from "./definitions/terminalNavigat
 import { registerTerminalLayoutActions } from "./definitions/terminalLayoutActions";
 import { registerTerminalInputActions } from "./definitions/terminalInputActions";
 import { registerTerminalWorktreeActions } from "./definitions/terminalWorktreeActions";
+import { registerFleetActions } from "./definitions/fleetActions";
 import { registerVoiceActions } from "./definitions/voiceActions";
 import { registerWorktreeActions } from "./definitions/worktreeActions";
 import { registerWorktreeSessionActions } from "./definitions/worktreeSessionActions";
@@ -40,6 +41,7 @@ export function createActionDefinitions(callbacks: ActionCallbacks): ActionRegis
   registerTerminalLayoutActions(actions, callbacks);
   registerTerminalInputActions(actions, callbacks);
   registerTerminalWorktreeActions(actions, callbacks);
+  registerFleetActions(actions);
   registerAgentActions(actions, callbacks);
   registerPanelActions(actions, callbacks);
   registerWorktreeActions(actions, callbacks);

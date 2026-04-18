@@ -47,6 +47,7 @@ export type PtyHostRequest =
   | { type: "resize"; id: string; cols: number; rows: number }
   | { type: "write"; id: string; data: string; traceId?: string }
   | { type: "submit"; id: string; text: string }
+  | { type: "batch-double-escape"; ids: string[] }
   | { type: "kill"; id: string; reason?: string }
   | { type: "trash"; id: string }
   | { type: "restore"; id: string }

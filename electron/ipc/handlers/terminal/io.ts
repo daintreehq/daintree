@@ -46,6 +46,24 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
   ipcMain.on(CHANNELS.TERMINAL_SEND_KEY, handleTerminalSendKey);
   handlers.push(() => ipcMain.removeListener(CHANNELS.TERMINAL_SEND_KEY, handleTerminalSendKey));
 
+  const handleTerminalBatchDoubleEscape = (_event: Electron.IpcMainEvent, ids: unknown) => {
+    try {
+      if (!Array.isArray(ids)) {
+        console.error("Invalid terminal batchDoubleEscape parameters: expected string[]");
+        return;
+      }
+      const validIds = ids.filter((id): id is string => typeof id === "string" && id.length > 0);
+      if (validIds.length === 0) return;
+      ptyClient.batchDoubleEscape(validIds);
+    } catch (error) {
+      console.error("Error sending batch double escape to terminals:", error);
+    }
+  };
+  ipcMain.on(CHANNELS.TERMINAL_BATCH_DOUBLE_ESCAPE, handleTerminalBatchDoubleEscape);
+  handlers.push(() =>
+    ipcMain.removeListener(CHANNELS.TERMINAL_BATCH_DOUBLE_ESCAPE, handleTerminalBatchDoubleEscape)
+  );
+
   const handleTerminalSubmit = async (id: string, text: string) => {
     try {
       if (typeof id !== "string" || typeof text !== "string") {

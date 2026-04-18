@@ -170,6 +170,17 @@ export const terminalClient = {
     window.electron.terminal.sendKey(id, key);
   },
 
+  /**
+   * Send a double-Escape to each terminal in the batch, with a per-PTY delay
+   * scheduled inside the PTY host utility process. Used by fleet.interrupt to
+   * drop each armed agent out of sub-menus/dialogs without the sub-10ms
+   * timing collapse that renderer-side setTimeout exhibits under IPC jitter.
+   */
+  batchDoubleEscape: (ids: string[]): void => {
+    if (ids.length === 0) return;
+    window.electron.terminal.batchDoubleEscape(ids);
+  },
+
   resize: (id: string, cols: number, rows: number): void => {
     if (messagePort) {
       try {

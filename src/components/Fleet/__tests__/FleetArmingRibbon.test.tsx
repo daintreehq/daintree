@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { render, fireEvent, screen, act } from "@testing-library/react";
 import { FleetArmingRibbon } from "../FleetArmingRibbon";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
+import { useFleetPendingActionStore } from "@/store/fleetPendingActionStore";
 import { usePanelStore } from "@/store/panelStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
@@ -15,6 +16,7 @@ function resetStores() {
     armOrderById: {},
     lastArmedId: null,
   });
+  useFleetPendingActionStore.setState({ pending: null });
   usePanelStore.setState({ panelsById: {}, panelIds: [] });
   useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-1" });
   useAnnouncerStore.setState({ polite: null, assertive: null });
@@ -120,5 +122,89 @@ describe("FleetArmingRibbon", () => {
       useFleetArmingStore.getState().clear();
     });
     expect(useAnnouncerStore.getState().polite?.msg).toBe("Fleet disarmed");
+  });
+
+  it("renders confirmation view when a pending action is set", () => {
+    useFleetArmingStore.getState().armIds(["a", "b", "c"]);
+    useFleetPendingActionStore.setState({
+      pending: { kind: "restart", targetCount: 3, sessionLossCount: 2 },
+    });
+    render(<FleetArmingRibbon />);
+    const ribbon = screen.getByTestId("fleet-arming-ribbon");
+    expect(ribbon.getAttribute("data-pending-action")).toBe("restart");
+    expect(screen.getByText(/Restart 3 agents\?/)).toBeTruthy();
+    expect(screen.getByText(/2 agents will lose their session/)).toBeTruthy();
+  });
+
+  it("collapses pending confirmation when the armed set drains", () => {
+    useFleetArmingStore.getState().armIds(["a", "b"]);
+    useFleetPendingActionStore.setState({
+      pending: { kind: "kill", targetCount: 2, sessionLossCount: 0 },
+    });
+    render(<FleetArmingRibbon />);
+    expect(useFleetPendingActionStore.getState().pending).not.toBeNull();
+    act(() => {
+      useFleetArmingStore.getState().clear();
+    });
+    expect(useFleetPendingActionStore.getState().pending).toBeNull();
+  });
+
+  it("disables quick-action buttons that have no eligible targets", () => {
+    seed([makeAgent("t1", "completed")]);
+    useFleetArmingStore.getState().armIds(["t1"]);
+    render(<FleetArmingRibbon />);
+    // No waiting agents armed → Accept/Reject disabled
+    const accept = screen.getByTestId("fleet-quick-accept") as HTMLButtonElement;
+    expect(accept.disabled).toBe(true);
+    const reject = screen.getByTestId("fleet-quick-reject") as HTMLButtonElement;
+    expect(reject.disabled).toBe(true);
+    // Completed agent is still "live" → Restart/Kill/Trash enabled
+    const kill = screen.getByTestId("fleet-quick-kill") as HTMLButtonElement;
+    expect(kill.disabled).toBe(false);
+    // Completed agent is NOT a valid interrupt target → Interrupt disabled
+    const interrupt = screen.getByTestId("fleet-quick-interrupt") as HTMLButtonElement;
+    expect(interrupt.disabled).toBe(true);
+  });
+
+  it("Cmd+Esc pressed twice within 350ms dispatches fleet.interrupt", async () => {
+    seed([makeAgent("t1", "working"), makeAgent("t2", "working")]);
+    useFleetArmingStore.getState().armIds(["t1", "t2"]);
+    const actionServiceModule = await import("@/services/ActionService");
+    const dispatchSpy = vi.spyOn(actionServiceModule.actionService, "dispatch");
+    render(<FleetArmingRibbon />);
+    // First Cmd+Esc — stamps the ref, no dispatch
+    fireEvent.keyDown(window, { key: "Escape", metaKey: true });
+    expect(dispatchSpy.mock.calls.some((c) => c[0] === "fleet.interrupt")).toBe(false);
+    // Second Cmd+Esc within the window → dispatch
+    fireEvent.keyDown(window, { key: "Escape", metaKey: true });
+    expect(dispatchSpy.mock.calls.some((c) => c[0] === "fleet.interrupt")).toBe(true);
+    dispatchSpy.mockRestore();
+  });
+
+  it("bare Escape Escape does NOT dispatch fleet.interrupt (no Cmd modifier)", async () => {
+    seed([makeAgent("t1", "working"), makeAgent("t2", "working")]);
+    useFleetArmingStore.getState().armIds(["t1", "t2"]);
+    const actionServiceModule = await import("@/services/ActionService");
+    const dispatchSpy = vi.spyOn(actionServiceModule.actionService, "dispatch");
+    render(<FleetArmingRibbon />);
+    fireEvent.keyDown(window, { key: "Escape" });
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(dispatchSpy.mock.calls.some((c) => c[0] === "fleet.interrupt")).toBe(false);
+    dispatchSpy.mockRestore();
+  });
+
+  it("Enter while a pending action is open re-dispatches the action with confirmed:true", async () => {
+    useFleetArmingStore.getState().armIds(["a", "b", "c"]);
+    useFleetPendingActionStore.setState({
+      pending: { kind: "restart", targetCount: 3, sessionLossCount: 0 },
+    });
+    const actionServiceModule = await import("@/services/ActionService");
+    const dispatchSpy = vi.spyOn(actionServiceModule.actionService, "dispatch");
+    render(<FleetArmingRibbon />);
+    fireEvent.keyDown(window, { key: "Enter" });
+    const match = dispatchSpy.mock.calls.find((c) => c[0] === "fleet.restart");
+    expect(match).toBeDefined();
+    expect(match?.[1]).toEqual({ confirmed: true });
+    dispatchSpy.mockRestore();
   });
 });

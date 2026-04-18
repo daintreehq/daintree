@@ -16,8 +16,12 @@ export interface TerminalBulkActionsSlice {
   bulkCloseByWorktree: (worktreeId: string, state?: AgentState) => void;
   bulkCloseAll: () => void;
   bulkTrashAll: () => void;
+  bulkTrashSet: (ids: Iterable<string>) => void;
+  bulkKillSet: (ids: Iterable<string>) => void;
   bulkRestartAll: () => Promise<void>;
+  bulkRestartSet: (ids: Iterable<string>) => Promise<void>;
   bulkRestartPreflightCheck: () => Promise<BulkRestartValidation>;
+  bulkRestartPreflightCheckSet: (ids: Iterable<string>) => Promise<BulkRestartValidation>;
   bulkMoveToDockByWorktree: (worktreeId: string) => void;
   bulkMoveToGridByWorktree: (worktreeId: string) => void;
   bulkTrashByWorktree: (worktreeId: string) => void;
@@ -85,15 +89,69 @@ export const createTerminalBulkActionsSlice = (
       activeTerminals.forEach((t) => trashPanel(t.id));
     },
 
+    bulkTrashSet: (ids) => {
+      const idSet = ids instanceof Set ? ids : new Set(ids);
+      if (idSet.size === 0) return;
+      const terminals = getTerminals();
+      const toTrash = terminals.filter((t) => idSet.has(t.id) && t.location !== "trash");
+      toTrash.forEach((t) => trashPanel(t.id));
+    },
+
+    bulkKillSet: (ids) => {
+      const idSet = ids instanceof Set ? ids : new Set(ids);
+      if (idSet.size === 0) return;
+      const terminals = getTerminals();
+      const toKill = terminals.filter((t) => idSet.has(t.id));
+      toKill.forEach((t) => removePanel(t.id));
+    },
+
     bulkRestartAll: async () => {
       const terminals = getTerminals();
       const activeTerminals = terminals.filter((t) => t.location !== "trash");
       await restartTerminals(activeTerminals);
     },
 
+    bulkRestartSet: async (ids) => {
+      const idSet = ids instanceof Set ? ids : new Set(ids);
+      if (idSet.size === 0) return;
+      const terminals = getTerminals();
+      const activeTerminals = terminals.filter((t) => idSet.has(t.id) && t.location !== "trash");
+      if (activeTerminals.length === 0) return;
+      try {
+        const validationResults = await validateTerminals(activeTerminals);
+        const valid = activeTerminals.filter((t) => !validationResults.get(t.id));
+        await restartTerminals(valid);
+      } catch (error) {
+        console.error("Failed to validate terminals for restart:", error);
+        await restartTerminals(activeTerminals);
+      }
+    },
+
     bulkRestartPreflightCheck: async () => {
       const terminals = getTerminals();
       const activeTerminals = terminals.filter((t) => t.location !== "trash");
+
+      const validationResults = await validateTerminals(activeTerminals);
+
+      const valid: TerminalInstance[] = [];
+      const invalid: Array<{ terminal: TerminalInstance; errors: ValidationResult }> = [];
+
+      for (const terminal of activeTerminals) {
+        const result = validationResults.get(terminal.id);
+        if (result) {
+          invalid.push({ terminal, errors: result });
+        } else {
+          valid.push(terminal);
+        }
+      }
+
+      return { valid, invalid };
+    },
+
+    bulkRestartPreflightCheckSet: async (ids) => {
+      const idSet = ids instanceof Set ? ids : new Set(ids);
+      const terminals = getTerminals();
+      const activeTerminals = terminals.filter((t) => idSet.has(t.id) && t.location !== "trash");
 
       const validationResults = await validateTerminals(activeTerminals);
 

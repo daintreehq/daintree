@@ -1094,6 +1094,19 @@ export class PtyClient extends EventEmitter {
     this.write(id, sequence);
   }
 
+  /**
+   * Fan out a double-Escape to each terminal. The per-PTY inter-escape
+   * delay is scheduled inside the PTY host utility process so the 50ms
+   * gap survives main-process IPC jitter (which can otherwise collapse two
+   * sub-10ms writes into a single Meta-Escape).
+   */
+  batchDoubleEscape(ids: string[]): void {
+    if (!Array.isArray(ids) || ids.length === 0) return;
+    const validIds = ids.filter((id) => typeof id === "string" && id.length > 0);
+    if (validIds.length === 0) return;
+    this.send({ type: "batch-double-escape", ids: validIds });
+  }
+
   resize(id: string, cols: number, rows: number): void {
     this.send({ type: "resize", id, cols, rows });
   }
