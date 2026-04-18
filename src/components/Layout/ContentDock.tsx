@@ -17,6 +17,7 @@ import { TrashContainer } from "./TrashContainer";
 import { WaitingContainer } from "./WaitingContainer";
 import { BackgroundContainer } from "./BackgroundContainer";
 import { HelpAgentDockButton } from "./HelpAgentDockButton";
+import { ClusterAttentionPill } from "@/components/Fleet";
 import {
   SortableDockItem,
   SortableDockPlaceholder,
@@ -267,9 +268,10 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
             <div className="w-px h-5 bg-[var(--dock-border)] mx-1 shrink-0" />
           )}
 
-          {/* Action containers: Background + Waiting + Trash */}
+          {/* Action containers: Background + ClusterAttentionPill + Waiting + Trash */}
           <div className="shrink-0 pl-1 flex items-center gap-2">
             <BackgroundContainer compact={isCompact} />
+            <ClusterAttentionPill />
             <WaitingContainer compact={isCompact} />
             <TrashContainer trashedTerminals={trashedItems} compact={isCompact} />
           </div>
