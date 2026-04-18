@@ -24,6 +24,7 @@ export type {
 export { MAX_GRID_TERMINALS, deriveRuntimeStatus, getDefaultTitle } from "./helpers";
 export { flushPanelPersistence } from "./persistence";
 export { selectOrderedTerminals } from "./selectors";
+export { isHydrationBatchActive } from "./core";
 
 export const createPanelRegistrySlice =
   (

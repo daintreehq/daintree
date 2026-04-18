@@ -12,6 +12,7 @@ import {
   createTerminalMruSlice,
   createWatchedPanelsSlice,
   flushPanelPersistence,
+  isHydrationBatchActive,
   selectOrderedTerminals,
   type PanelRegistrySlice,
   type TerminalFocusSlice,
@@ -147,7 +148,12 @@ export const usePanelStore = create<PanelGridState>()((set, get, api) => {
     addPanel: async (options: AddPanelOptions) => {
       const id = await registrySlice.addPanel(options);
       if (id === null) return null;
-      if (!options.location || options.location === "grid") {
+      // Skip the per-panel focus mutation while a hydration batch is collecting panels:
+      // firing `set({ focusedId })` here would schedule one extra render per panel and
+      // defeat the batch's single-render guarantee. The arbitrary "last panel added"
+      // focus also isn't meaningful during restore — focus is resolved elsewhere once
+      // the active worktree is set.
+      if ((!options.location || options.location === "grid") && !isHydrationBatchActive()) {
         set({ focusedId: id });
       }
       return id;
