@@ -78,6 +78,9 @@ export class WorkspaceService {
   private _shutdownController = new AbortController();
   private resourceActionQueues = new Map<string, PQueue>();
   private resourceActionAbortControllers = new Map<string, AbortController>();
+  /** Session-scoped guard so we notify the user about Linux inotify limits
+   *  only once, even if many worktrees hit ENOSPC concurrently. */
+  private inotifyLimitNotified = false;
 
   constructor(private readonly sendEvent: (event: WorkspaceHostEvent) => void) {
     this.prService = new PRIntegrationService(pullRequestService, events, {
@@ -379,6 +382,7 @@ export class WorkspaceService {
             { origin: "auto-poll" }
           );
         },
+        onInotifyLimitReached: () => this.handleInotifyLimitReached(),
       },
       this.mainBranch,
       this.pollQueue
@@ -498,6 +502,13 @@ export class WorkspaceService {
       worktree: snapshot,
     });
     events.emit("sys:worktree:update", snapshot as any);
+  }
+
+  private handleInotifyLimitReached(): void {
+    if (process.platform !== "linux") return;
+    if (this.inotifyLimitNotified) return;
+    this.inotifyLimitNotified = true;
+    this.sendEvent({ type: "inotify-limit-reached" });
   }
 
   private handleExternalWorktreeRemoval(worktreeId: string): void {

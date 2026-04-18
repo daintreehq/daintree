@@ -25,6 +25,9 @@ export interface GitFileWatcherOptions {
   worktreeMaxWaitMs?: number;
   /** Called when the recursive worktree watcher fails at runtime (error or startup). */
   onWatcherFailed?: () => void;
+  /** Called when the recursive worktree watcher fails specifically because of
+   *  the Linux inotify watch limit (ENOSPC). Fires in addition to `onWatcherFailed`. */
+  onInotifyLimitReached?: () => void;
 }
 
 export class GitFileWatcher {
@@ -44,6 +47,7 @@ export class GitFileWatcher {
   private readonly worktreeDebounceRampMs = 10;
   private readonly onChange: () => void;
   private readonly onWatcherFailed: (() => void) | undefined;
+  private readonly onInotifyLimitReached: (() => void) | undefined;
   private readonly watchWorktree: boolean;
   private currentBranch?: string;
 
@@ -55,6 +59,7 @@ export class GitFileWatcher {
     this.worktreeMaxWaitMs = options.worktreeMaxWaitMs;
     this.onChange = options.onChange;
     this.onWatcherFailed = options.onWatcherFailed;
+    this.onInotifyLimitReached = options.onInotifyLimitReached;
     this.currentBranch = options.branch;
     this.watchWorktree = options.watchWorktree ?? false;
   }
@@ -91,7 +96,13 @@ export class GitFileWatcher {
       }
 
       if (this.watchWorktree) {
-        this.startWorktreeWatcher(gitDir);
+        const worktreeWatcherStarted = this.startWorktreeWatcher(gitDir);
+        // Surface startup failure of the recursive watcher (e.g. Linux
+        // ENOSPC) so WorktreeMonitor routes into its retry branch instead
+        // of treating the watcher as healthy and disabling the retry loop.
+        if (!worktreeWatcherStarted) {
+          return false;
+        }
       }
 
       return true;
@@ -147,7 +158,7 @@ export class GitFileWatcher {
     }
   }
 
-  private startWorktreeWatcher(_gitDir: string): void {
+  private startWorktreeWatcher(_gitDir: string): boolean {
     try {
       // Always filter ".git" — for linked worktrees the gitDir resolves to the
       // main repo's .git/worktrees/<name>, but the worktree root still has a
@@ -203,6 +214,7 @@ export class GitFileWatcher {
           } catch {
             // Ignore close errors on already-broken watcher
           }
+          this.onInotifyLimitReached?.();
           this.onWatcherFailed?.();
         } else {
           logWarn("Worktree recursive watcher error", {
@@ -213,6 +225,7 @@ export class GitFileWatcher {
       });
 
       this.watchers.push(watcher);
+      return true;
     } catch (error) {
       const errno = error as NodeJS.ErrnoException;
       if (process.platform === "linux" && errno.code === "ENOSPC") {
@@ -222,12 +235,15 @@ export class GitFileWatcher {
             "Permanent fix: echo 'fs.inotify.max_user_watches=524288' | sudo tee /etc/sysctl.d/99-inotify.conf && sudo sysctl --system",
           { path: this.worktreePath }
         );
+        this.onInotifyLimitReached?.();
+        this.onWatcherFailed?.();
       } else {
         logWarn("Failed to start recursive worktree watcher", {
           path: this.worktreePath,
           error: errno.message,
         });
       }
+      return false;
     }
   }
 

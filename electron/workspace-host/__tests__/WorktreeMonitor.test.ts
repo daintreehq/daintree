@@ -38,17 +38,34 @@ vi.mock("../../utils/gitUtils.js", () => ({
 }));
 
 let mockWatcherStartResult = false;
+/** When true, the stub's `start()` synchronously invokes `onWatcherFailed`
+ *  before returning — mirroring the real startup-ENOSPC catch path. */
+let mockWatcherStartFiresFailure = false;
 let capturedOnWatcherFailed: (() => void) | undefined;
+let capturedOnInotifyLimitReached: (() => void) | undefined;
 let capturedWatcherOptions: Record<string, unknown> | undefined;
+let watcherStartCallCount = 0;
 
 vi.mock("../../utils/gitFileWatcher.js", () => {
   return {
     GitFileWatcher: class {
-      constructor(opts: { onWatcherFailed?: () => void } & Record<string, unknown>) {
+      private readonly onWatcherFailed?: () => void;
+      constructor(
+        opts: {
+          onWatcherFailed?: () => void;
+          onInotifyLimitReached?: () => void;
+        } & Record<string, unknown>
+      ) {
+        this.onWatcherFailed = opts.onWatcherFailed;
         capturedOnWatcherFailed = opts.onWatcherFailed;
+        capturedOnInotifyLimitReached = opts.onInotifyLimitReached;
         capturedWatcherOptions = opts;
       }
       start() {
+        watcherStartCallCount++;
+        if (mockWatcherStartFiresFailure && !mockWatcherStartResult) {
+          this.onWatcherFailed?.();
+        }
         return mockWatcherStartResult;
       }
       dispose() {}
@@ -110,7 +127,10 @@ describe("WorktreeMonitor", () => {
     vi.useFakeTimers();
     vi.clearAllMocks();
     mockWatcherStartResult = false;
+    mockWatcherStartFiresFailure = false;
+    watcherStartCallCount = 0;
     capturedOnWatcherFailed = undefined;
+    capturedOnInotifyLimitReached = undefined;
     capturedWatcherOptions = undefined;
   });
 
@@ -475,6 +495,73 @@ describe("WorktreeMonitor", () => {
 
       // After retry interval, watcher should restart
       await vi.advanceTimersByTimeAsync(30_000);
+      expect(monitor.hasWatcher).toBe(true);
+
+      monitor.stop();
+    });
+
+    it("forwards inotify-limit signal to callbacks with the worktree id", async () => {
+      mockWatcherStartResult = true;
+      mockGetWorktreeChangesWithStats.mockResolvedValue({
+        worktreeId: "/test/worktree",
+        rootPath: "/test",
+        changes: [],
+        changedFileCount: 0,
+        lastUpdated: Date.now(),
+      });
+
+      const onInotifyLimitReached = vi.fn();
+      const callbacks = makeCallbacks({ onInotifyLimitReached });
+      const monitor = new WorktreeMonitor(TEST_WORKTREE, WATCH_CONFIG, callbacks, "main");
+      await monitor.start();
+
+      expect(capturedOnInotifyLimitReached).toBeDefined();
+      capturedOnInotifyLimitReached?.();
+      expect(onInotifyLimitReached).toHaveBeenCalledWith(TEST_WORKTREE.id);
+      expect(onInotifyLimitReached).toHaveBeenCalledTimes(1);
+
+      monitor.stop();
+    });
+
+    it("startup ENOSPC that fires onWatcherFailed AND returns false schedules exactly one retry", async () => {
+      // Regression guard for the startup-ENOSPC retry fix. Before the fix,
+      // GitFileWatcher.start() returned undefined (coerced to true), so
+      // WorktreeMonitor assigned gitWatcher and reset watcherRetryCount = 0,
+      // neutralizing the retry scheduled from inside the synchronous
+      // onWatcherFailed callback.
+      //
+      // Now start() returns false AND onWatcherFailed fires inside it, so
+      // WorktreeMonitor's handleWatcherFailed runs scheduleWatcherRetry
+      // first, then the else branch of startWatcher() runs it again. This
+      // test proves the two calls collapse onto a single retry via the
+      // `watcherRetryTimer` guard — regressing that guard would fire the
+      // retry twice (watcherStartCallCount would reach 3, not 2).
+      mockWatcherStartResult = false;
+      mockWatcherStartFiresFailure = true;
+      mockGetWorktreeChangesWithStats.mockResolvedValue({
+        worktreeId: "/test/worktree",
+        rootPath: "/test",
+        changes: [],
+        changedFileCount: 0,
+        lastUpdated: Date.now(),
+      });
+
+      const callbacks = makeCallbacks();
+      const monitor = new WorktreeMonitor(TEST_WORKTREE, WATCH_CONFIG, callbacks, "main");
+      await monitor.start();
+
+      // Initial start failed → no active watcher, exactly one start attempt.
+      expect(monitor.hasWatcher).toBe(false);
+      expect(watcherStartCallCount).toBe(1);
+
+      // Flip to success for the retry attempt.
+      mockWatcherStartFiresFailure = false;
+      mockWatcherStartResult = true;
+      await vi.advanceTimersByTimeAsync(30_000);
+
+      // Only ONE retry fires — 2 total start() calls, not 3. A regression
+      // that removed the watcherRetryTimer guard would produce 3.
+      expect(watcherStartCallCount).toBe(2);
       expect(monitor.hasWatcher).toBe(true);
 
       monitor.stop();

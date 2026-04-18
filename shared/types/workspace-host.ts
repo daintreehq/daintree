@@ -322,6 +322,9 @@ export type WorkspaceHostEvent =
   // Spontaneous updates (no requestId - these are pushed events)
   | { type: "worktree-update"; worktree: WorktreeSnapshot }
   | { type: "worktree-removed"; worktreeId: string }
+  // Linux-only: fired once per host-process lifetime when the recursive file
+  // watcher hits the inotify watch limit (ENOSPC).
+  | { type: "inotify-limit-reached" }
   // PR events
   | {
       type: "pr-detected";

@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const clipboardMock = vi.hoisted(() => ({
   writeImage: vi.fn(),
   readImage: vi.fn(),
+  writeText: vi.fn(),
 }));
 
 const nativeImageMock = vi.hoisted(() => ({
@@ -118,5 +119,58 @@ describe("clipboard:write-image handler", () => {
     cleanup();
     const removedChannels = vi.mocked(ipcMain.removeHandler).mock.calls.map(([ch]) => ch);
     expect(removedChannels).toContain("clipboard:write-image");
+  });
+});
+
+describe("clipboard:write-text handler", () => {
+  let cleanup: () => void;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    cleanup = registerClipboardHandlers();
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("registers the clipboard:write-text handler", () => {
+    const channels = vi.mocked(ipcMain.handle).mock.calls.map(([ch]) => ch);
+    expect(channels).toContain("clipboard:write-text");
+  });
+
+  it("writes text to the clipboard and returns ok", async () => {
+    const handler = getHandler("clipboard:write-text");
+    const result = await handler(fakeEvent, "sudo sysctl fs.inotify.max_user_watches=524288");
+
+    expect(clipboardMock.writeText).toHaveBeenCalledWith(
+      "sudo sysctl fs.inotify.max_user_watches=524288"
+    );
+    expect(result).toEqual({ ok: true });
+  });
+
+  it("rejects non-string input without calling clipboard", async () => {
+    const handler = getHandler("clipboard:write-text");
+    const result = await handler(fakeEvent, 42 as unknown as string);
+
+    expect(clipboardMock.writeText).not.toHaveBeenCalled();
+    expect(result).toEqual({ ok: false, error: "Text must be a string" });
+  });
+
+  it("returns error when clipboard.writeText throws", async () => {
+    clipboardMock.writeText.mockImplementationOnce(() => {
+      throw new Error("clipboard unavailable");
+    });
+
+    const handler = getHandler("clipboard:write-text");
+    const result = await handler(fakeEvent, "hello");
+
+    expect(result).toEqual({ ok: false, error: "clipboard unavailable" });
+  });
+
+  it("cleanup removes the clipboard:write-text handler", () => {
+    cleanup();
+    const removedChannels = vi.mocked(ipcMain.removeHandler).mock.calls.map(([ch]) => ch);
+    expect(removedChannels).toContain("clipboard:write-text");
   });
 });

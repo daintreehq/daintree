@@ -650,6 +650,190 @@ describe("GitFileWatcher", () => {
     Object.defineProperty(process, "platform", { value: origPlatform, configurable: true });
   });
 
+  it("onInotifyLimitReached fires alongside onWatcherFailed on Linux ENOSPC at runtime", () => {
+    const onChange = vi.fn();
+    const onWatcherFailed = vi.fn();
+    const onInotifyLimitReached = vi.fn();
+    let errorHandler: ((error: NodeJS.ErrnoException) => void) | undefined;
+
+    const origPlatform = process.platform;
+    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+
+    vi.mocked(watch).mockImplementation(((
+      _path: string,
+      opts: Record<string, unknown>,
+      _cb?: unknown
+    ) => {
+      const w = createMockWatcher();
+      if (opts?.recursive) {
+        vi.mocked(w.on).mockImplementation(((event: string, handler: unknown) => {
+          if (event === "error") {
+            errorHandler = handler as (error: NodeJS.ErrnoException) => void;
+          }
+          return w;
+        }) as unknown as typeof w.on);
+      }
+      return w;
+    }) as unknown as typeof watch);
+
+    const gitWatcher = new GitFileWatcher({
+      worktreePath: "/repo",
+      branch: "main",
+      debounceMs: 300,
+      onChange,
+      watchWorktree: true,
+      onWatcherFailed,
+      onInotifyLimitReached,
+    });
+
+    gitWatcher.start();
+    const enospcError = new Error("ENOSPC") as NodeJS.ErrnoException;
+    enospcError.code = "ENOSPC";
+    errorHandler?.(enospcError);
+
+    expect(onInotifyLimitReached).toHaveBeenCalledTimes(1);
+    expect(onWatcherFailed).toHaveBeenCalledTimes(1);
+
+    Object.defineProperty(process, "platform", { value: origPlatform, configurable: true });
+  });
+
+  it("does not call onInotifyLimitReached for non-ENOSPC runtime errors on Linux", () => {
+    const onChange = vi.fn();
+    const onWatcherFailed = vi.fn();
+    const onInotifyLimitReached = vi.fn();
+    let errorHandler: ((error: NodeJS.ErrnoException) => void) | undefined;
+
+    const origPlatform = process.platform;
+    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+
+    vi.mocked(watch).mockImplementation(((
+      _path: string,
+      opts: Record<string, unknown>,
+      _cb?: unknown
+    ) => {
+      const w = createMockWatcher();
+      if (opts?.recursive) {
+        vi.mocked(w.on).mockImplementation(((event: string, handler: unknown) => {
+          if (event === "error") {
+            errorHandler = handler as (error: NodeJS.ErrnoException) => void;
+          }
+          return w;
+        }) as unknown as typeof w.on);
+      }
+      return w;
+    }) as unknown as typeof watch);
+
+    const gitWatcher = new GitFileWatcher({
+      worktreePath: "/repo",
+      branch: "main",
+      debounceMs: 300,
+      onChange,
+      watchWorktree: true,
+      onWatcherFailed,
+      onInotifyLimitReached,
+    });
+
+    gitWatcher.start();
+    const otherError = new Error("permission denied") as NodeJS.ErrnoException;
+    otherError.code = "EACCES";
+    errorHandler?.(otherError);
+
+    expect(onInotifyLimitReached).not.toHaveBeenCalled();
+    expect(onWatcherFailed).not.toHaveBeenCalled();
+
+    Object.defineProperty(process, "platform", { value: origPlatform, configurable: true });
+  });
+
+  it("startup ENOSPC on Linux calls both onInotifyLimitReached and onWatcherFailed", () => {
+    const onChange = vi.fn();
+    const onWatcherFailed = vi.fn();
+    const onInotifyLimitReached = vi.fn();
+
+    const origPlatform = process.platform;
+    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+
+    // Only the recursive watcher throws on construction; the non-recursive
+    // git-internal watchers constructed earlier in start() succeed.
+    vi.mocked(watch).mockImplementation(((
+      _path: string,
+      opts: Record<string, unknown>,
+      _cb?: unknown
+    ) => {
+      if (opts?.recursive) {
+        const err = new Error("ENOSPC") as NodeJS.ErrnoException;
+        err.code = "ENOSPC";
+        throw err;
+      }
+      return createMockWatcher();
+    }) as unknown as typeof watch);
+
+    const gitWatcher = new GitFileWatcher({
+      worktreePath: "/repo",
+      branch: "main",
+      debounceMs: 300,
+      onChange,
+      watchWorktree: true,
+      onWatcherFailed,
+      onInotifyLimitReached,
+    });
+
+    // start() reports the recursive watcher failure via `false` so the
+    // monitor takes its retry branch (instead of treating the watcher as
+    // healthy and resetting the retry counter). Callbacks still fire exactly
+    // once so the toast dedup remains correct.
+    expect(gitWatcher.start()).toBe(false);
+    expect(onInotifyLimitReached).toHaveBeenCalledTimes(1);
+    expect(onWatcherFailed).toHaveBeenCalledTimes(1);
+
+    Object.defineProperty(process, "platform", { value: origPlatform, configurable: true });
+  });
+
+  it("does not signal inotify-limit on non-Linux platforms for ENOSPC", () => {
+    const onChange = vi.fn();
+    const onWatcherFailed = vi.fn();
+    const onInotifyLimitReached = vi.fn();
+    let errorHandler: ((error: NodeJS.ErrnoException) => void) | undefined;
+
+    const origPlatform = process.platform;
+    Object.defineProperty(process, "platform", { value: "darwin", configurable: true });
+
+    vi.mocked(watch).mockImplementation(((
+      _path: string,
+      opts: Record<string, unknown>,
+      _cb?: unknown
+    ) => {
+      const w = createMockWatcher();
+      if (opts?.recursive) {
+        vi.mocked(w.on).mockImplementation(((event: string, handler: unknown) => {
+          if (event === "error") {
+            errorHandler = handler as (error: NodeJS.ErrnoException) => void;
+          }
+          return w;
+        }) as unknown as typeof w.on);
+      }
+      return w;
+    }) as unknown as typeof watch);
+
+    const gitWatcher = new GitFileWatcher({
+      worktreePath: "/repo",
+      branch: "main",
+      debounceMs: 300,
+      onChange,
+      watchWorktree: true,
+      onWatcherFailed,
+      onInotifyLimitReached,
+    });
+
+    gitWatcher.start();
+    const enospcError = new Error("ENOSPC") as NodeJS.ErrnoException;
+    enospcError.code = "ENOSPC";
+    errorHandler?.(enospcError);
+
+    expect(onInotifyLimitReached).not.toHaveBeenCalled();
+
+    Object.defineProperty(process, "platform", { value: origPlatform, configurable: true });
+  });
+
   it("detects commits via branch ref changes", async () => {
     const gitDir = pathJoin("/repo", ".git");
     const onChange = vi.fn();

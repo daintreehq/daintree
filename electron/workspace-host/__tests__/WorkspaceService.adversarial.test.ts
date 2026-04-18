@@ -301,4 +301,40 @@ describe("WorkspaceService adversarial", () => {
       expect(argv).not.toContain("--track");
     }
   });
+
+  describe("handleInotifyLimitReached", () => {
+    const setPlatform = (value: NodeJS.Platform) => {
+      Object.defineProperty(process, "platform", { value, configurable: true });
+    };
+
+    it("sends a single inotify-limit-reached event on Linux even when called many times", () => {
+      const origPlatform = process.platform;
+      setPlatform("linux");
+      try {
+        const privateService = service as unknown as { handleInotifyLimitReached: () => void };
+        privateService.handleInotifyLimitReached();
+        privateService.handleInotifyLimitReached();
+        privateService.handleInotifyLimitReached();
+
+        const inotifyEvents = sentEvents.filter((e) => e.type === "inotify-limit-reached");
+        expect(inotifyEvents).toHaveLength(1);
+      } finally {
+        setPlatform(origPlatform);
+      }
+    });
+
+    it("does not emit on non-Linux platforms", () => {
+      const origPlatform = process.platform;
+      setPlatform("darwin");
+      try {
+        const privateService = service as unknown as { handleInotifyLimitReached: () => void };
+        privateService.handleInotifyLimitReached();
+
+        const inotifyEvents = sentEvents.filter((e) => e.type === "inotify-limit-reached");
+        expect(inotifyEvents).toHaveLength(0);
+      } finally {
+        setPlatform(origPlatform);
+      }
+    });
+  });
 });

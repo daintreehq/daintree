@@ -135,13 +135,31 @@ export function registerClipboardHandlers(): () => void {
     }
   };
 
+  const handleWriteText = (
+    _event: Electron.IpcMainInvokeEvent,
+    text: string
+  ): { ok: true } | { ok: false; error: string } => {
+    try {
+      if (typeof text !== "string") {
+        return { ok: false, error: "Text must be a string" };
+      }
+      clipboard.writeText(text);
+      return { ok: true };
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      return { ok: false, error: message };
+    }
+  };
+
   ipcMain.handle(CHANNELS.CLIPBOARD_SAVE_IMAGE, handleSaveImage);
   ipcMain.handle(CHANNELS.CLIPBOARD_THUMBNAIL_FROM_PATH, handleThumbnailFromPath);
   ipcMain.handle(CHANNELS.CLIPBOARD_WRITE_IMAGE, handleWriteImage);
+  ipcMain.handle(CHANNELS.CLIPBOARD_WRITE_TEXT, handleWriteText);
 
   return () => {
     ipcMain.removeHandler(CHANNELS.CLIPBOARD_SAVE_IMAGE);
     ipcMain.removeHandler(CHANNELS.CLIPBOARD_THUMBNAIL_FROM_PATH);
     ipcMain.removeHandler(CHANNELS.CLIPBOARD_WRITE_IMAGE);
+    ipcMain.removeHandler(CHANNELS.CLIPBOARD_WRITE_TEXT);
   };
 }

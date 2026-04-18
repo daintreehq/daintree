@@ -46,6 +46,7 @@ export interface WorktreeMonitorCallbacks {
   onBranchChanged?: (worktreeId: string, newBranch: string) => void;
   onExternalRemoval?: (worktreeId: string) => void;
   onResourceStatusPoll?: (worktreeId: string) => Promise<unknown> | void;
+  onInotifyLimitReached?: (worktreeId: string) => void;
 }
 
 export class WorktreeMonitor {
@@ -668,6 +669,7 @@ export class WorktreeMonitor {
       worktreeMaxDebounceMs: WATCHER_WORKTREE_MAX_DEBOUNCE_MS,
       worktreeMaxWaitMs: WATCHER_WORKTREE_MAX_WAIT_MS,
       onWatcherFailed: () => this.handleWatcherFailed(),
+      onInotifyLimitReached: () => this.callbacks.onInotifyLimitReached?.(this.id),
     });
 
     const started = watcher.start();

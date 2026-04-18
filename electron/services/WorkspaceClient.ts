@@ -12,6 +12,7 @@ import path from "path";
 import crypto from "crypto";
 import { events } from "./events.js";
 import { CHANNELS } from "../ipc/channels.js";
+import { broadcastToRenderer } from "../ipc/utils.js";
 import { store } from "../store.js";
 
 import { WorkspaceHostProcess } from "./WorkspaceHostProcess.js";
@@ -266,6 +267,24 @@ export class WorkspaceClient extends EventEmitter {
       case "copytree:progress": {
         const callback = this.copyTreeProgressCallbacks.get(event.operationId);
         callback?.(event.progress);
+        break;
+      }
+
+      case "inotify-limit-reached": {
+        // System-wide Linux condition — notify every active window, not just
+        // this entry's project views. Each host fires this once per lifetime,
+        // so broadcasting is cheap.
+        broadcastToRenderer(CHANNELS.NOTIFICATION_SHOW_TOAST, {
+          type: "warning",
+          title: "File watching degraded",
+          message:
+            "Linux inotify watch limit reached. Some files may not auto-refresh until you raise it.",
+          action: {
+            label: "Copy fix command",
+            ipcChannel: CHANNELS.CLIPBOARD_WRITE_TEXT,
+            data: "sudo sysctl fs.inotify.max_user_watches=524288",
+          },
+        });
         break;
       }
     }

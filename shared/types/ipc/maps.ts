@@ -198,6 +198,9 @@ export interface MainProcessToastPayload {
     label: string;
     /** IPC channel to invoke when the action button is clicked */
     ipcChannel: string;
+    /** Optional payload passed to the renderer-side action handler
+     *  (e.g. the text to copy for a "clipboard:write-text" action). */
+    data?: string;
   };
 }
 
@@ -1387,6 +1390,10 @@ export interface IpcInvokeMap {
   };
   "clipboard:write-image": {
     args: [pngData: Uint8Array];
+    result: { ok: true } | { ok: false; error: string };
+  };
+  "clipboard:write-text": {
+    args: [text: string];
     result: { ok: true } | { ok: false; error: string };
   };
 

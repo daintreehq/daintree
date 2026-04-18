@@ -962,6 +962,7 @@ const CHANNELS = {
   CLIPBOARD_SAVE_IMAGE: "clipboard:save-image",
   CLIPBOARD_THUMBNAIL_FROM_PATH: "clipboard:thumbnail-from-path",
   CLIPBOARD_WRITE_IMAGE: "clipboard:write-image",
+  CLIPBOARD_WRITE_TEXT: "clipboard:write-text",
 
   // App Theme channels
   APP_THEME_GET: "app-theme:get",
@@ -2464,7 +2465,7 @@ const api: ElectronAPI = {
         type: "success" | "error" | "info" | "warning";
         title?: string;
         message: string;
-        action?: { label: string; ipcChannel: string };
+        action?: { label: string; ipcChannel: string; data?: string };
       }) => void
     ) => _typedOn(CHANNELS.NOTIFICATION_SHOW_TOAST, callback),
   },
@@ -2654,6 +2655,7 @@ const api: ElectronAPI = {
     thumbnailFromPath: (filePath: string) =>
       _unwrappingInvoke(CHANNELS.CLIPBOARD_THUMBNAIL_FROM_PATH, filePath),
     writeImage: (pngData: Uint8Array) => _unwrappingInvoke(CHANNELS.CLIPBOARD_WRITE_IMAGE, pngData),
+    writeText: (text: string) => _unwrappingInvoke(CHANNELS.CLIPBOARD_WRITE_TEXT, text),
   },
 
   // Web Utils API
