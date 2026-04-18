@@ -170,7 +170,7 @@ interface BasePanelData {
   // Note: Tab membership is now stored in TabGroup objects, not on panels
 }
 
-interface PtyPanelData extends BasePanelData {
+export interface PtyPanelData extends BasePanelData {
   kind: "terminal" | "agent";
   /**
    * Legacy field retained for persistence; new code should prefer `kind`.
@@ -260,7 +260,7 @@ interface PtyPanelData extends BasePanelData {
   exitCode?: number;
 }
 
-interface BrowserPanelData extends BasePanelData {
+export interface BrowserPanelData extends BasePanelData {
   kind: "browser";
   /** Current URL for browser panes */
   browserUrl?: string;
@@ -272,7 +272,7 @@ interface BrowserPanelData extends BasePanelData {
   browserConsoleOpen?: boolean;
 }
 
-interface NotesPanelData extends BasePanelData {
+export interface NotesPanelData extends BasePanelData {
   kind: "notes";
   /** Path to the note file (relative to project root) */
   notePath: string;
@@ -284,7 +284,7 @@ interface NotesPanelData extends BasePanelData {
   createdAt: number;
 }
 
-interface DevPreviewPanelData extends BasePanelData {
+export interface DevPreviewPanelData extends BasePanelData {
   kind: "dev-preview";
   /** Current working directory for the dev server */
   cwd: string;
@@ -298,6 +298,14 @@ interface DevPreviewPanelData extends BasePanelData {
   browserZoom?: number;
   /** Whether the console drawer is open */
   devPreviewConsoleOpen?: boolean;
+  /** Dev server status */
+  devServerStatus?: "stopped" | "starting" | "installing" | "running" | "error";
+  /** Dev server URL */
+  devServerUrl?: string;
+  /** Dev server error */
+  devServerError?: { type: string; message: string };
+  /** Terminal ID associated with dev server */
+  devServerTerminalId?: string;
   /** Behavior when dev server exits */
   exitBehavior?: PanelExitBehavior;
 }

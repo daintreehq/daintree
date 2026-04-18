@@ -1,11 +1,11 @@
-import type { TerminalInstance } from "@shared/types/panel";
-import type { AddPanelOptions } from "@shared/types/addPanelOptions";
+import type { NotesPanelData } from "@shared/types/panel";
+import type { NotesPanelOptions } from "@shared/types/addPanelOptions";
 
-export function createNotesDefaults(options: AddPanelOptions): Partial<TerminalInstance> {
+export function createNotesDefaults(options: NotesPanelOptions): Partial<NotesPanelData> {
   return {
-    notePath: ("notePath" in options ? options.notePath : undefined) ?? "",
-    noteId: ("noteId" in options ? options.noteId : undefined) ?? "",
-    scope: ("scope" in options ? options.scope : undefined) ?? "project",
-    createdAt: ("createdAt" in options ? options.createdAt : undefined) ?? Date.now(),
+    notePath: options.notePath ?? "",
+    noteId: options.noteId ?? "",
+    scope: options.scope ?? "project",
+    createdAt: options.createdAt ?? Date.now(),
   };
 }

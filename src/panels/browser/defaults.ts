@@ -1,12 +1,11 @@
-import type { TerminalInstance } from "@shared/types/panel";
-import type { AddPanelOptions } from "@shared/types/addPanelOptions";
+import type { BrowserPanelData } from "@shared/types/panel";
+import type { BrowserPanelOptions } from "@shared/types/addPanelOptions";
 
-export function createBrowserDefaults(options: AddPanelOptions): Partial<TerminalInstance> {
+export function createBrowserDefaults(options: BrowserPanelOptions): Partial<BrowserPanelData> {
   return {
-    browserUrl:
-      ("browserUrl" in options ? options.browserUrl : undefined) || "http://localhost:3000",
-    browserHistory: "browserHistory" in options ? options.browserHistory : undefined,
-    browserZoom: "browserZoom" in options ? options.browserZoom : undefined,
-    browserConsoleOpen: "browserConsoleOpen" in options ? options.browserConsoleOpen : undefined,
+    browserUrl: options.browserUrl || "http://localhost:3000",
+    browserHistory: options.browserHistory,
+    browserZoom: options.browserZoom,
+    browserConsoleOpen: options.browserConsoleOpen,
   };
 }

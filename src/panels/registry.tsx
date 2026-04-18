@@ -1,6 +1,21 @@
 import { Suspense, lazy, type ComponentType } from "react";
 import type { PanelKindConfig } from "@shared/config/panelKindRegistry";
 import { getPanelKindConfig } from "@shared/config/panelKindRegistry";
+import type {
+  PtyPanelData,
+  BrowserPanelData,
+  NotesPanelData,
+  DevPreviewPanelData,
+  TerminalType,
+} from "@shared/types/panel";
+import type {
+  TerminalPanelOptions,
+  AgentPanelOptions,
+  BrowserPanelOptions,
+  NotesPanelOptions,
+  DevPreviewPanelOptions,
+} from "@shared/types/addPanelOptions";
+import type { PanelSnapshot } from "@shared/types/project";
 import { TerminalPane } from "@/components/Terminal/TerminalPane";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { BrowserPaneSkeleton } from "@/components/Browser/BrowserPaneSkeleton";
@@ -83,29 +98,56 @@ function DevPreviewPaneWrapper(props: any) {
   );
 }
 
-const BUILT_IN_SERIALIZE_DEFAULTS: Record<
-  string,
-  {
-    serialize: NonNullable<PanelKindConfig["serialize"]>;
-    createDefaults: NonNullable<PanelKindConfig["createDefaults"]>;
-  }
-> = {
+/**
+ * Maps each built-in panel kind to its panel data variant. Terminal/agent share
+ * `PtyPanelData`; dev-preview carries an optional `type` that originates from
+ * the legacy `TerminalInstance` shape. `createdAt` is intentionally widened on
+ * the PTY and dev-preview entries so serializers can read the legacy field
+ * without modifying the shared variant interfaces.
+ */
+interface BuiltInPanelMap {
+  terminal: PtyPanelData & { createdAt?: number };
+  agent: PtyPanelData & { createdAt?: number };
+  browser: BrowserPanelData;
+  notes: NotesPanelData;
+  "dev-preview": DevPreviewPanelData & { createdAt?: number; type?: TerminalType };
+}
+
+interface BuiltInPanelOptionsMap {
+  terminal: TerminalPanelOptions;
+  agent: AgentPanelOptions;
+  browser: BrowserPanelOptions;
+  notes: NotesPanelOptions;
+  "dev-preview": DevPreviewPanelOptions;
+}
+
+type BuiltInSerializeDefaults = {
+  [K in keyof BuiltInPanelMap]: {
+    serialize: (panel: BuiltInPanelMap[K]) => Partial<PanelSnapshot>;
+    createDefaults: (options: BuiltInPanelOptionsMap[K]) => Partial<BuiltInPanelMap[K]>;
+  };
+};
+
+const BUILT_IN_SERIALIZE_DEFAULTS = {
   terminal: { serialize: serializePtyPanel, createDefaults: createTerminalDefaults },
   agent: { serialize: serializeAgent, createDefaults: createAgentDefaults },
   browser: { serialize: serializeBrowser, createDefaults: createBrowserDefaults },
   notes: { serialize: serializeNotes, createDefaults: createNotesDefaults },
   "dev-preview": { serialize: serializeDevPreview, createDefaults: createDevPreviewDefaults },
-};
+} satisfies BuiltInSerializeDefaults;
 
 export function initBuiltInPanelKinds(): void {
   for (const [kindId, hooks] of Object.entries(BUILT_IN_SERIALIZE_DEFAULTS)) {
     const existing = requirePanelKindConfig(kindId);
-    if (
-      existing.serialize !== hooks.serialize ||
-      existing.createDefaults !== hooks.createDefaults
-    ) {
-      existing.serialize = hooks.serialize;
-      existing.createDefaults = hooks.createDefaults;
+    // Narrow per-kind hooks are widened to the shared PanelKindConfig contract
+    // here — this is the single seam between the typed registry map above and
+    // the extension-friendly wide interface. Function parameter contravariance
+    // makes this cast necessary; it is intentionally isolated to this function.
+    const serialize = hooks.serialize as PanelKindConfig["serialize"];
+    const createDefaults = hooks.createDefaults as PanelKindConfig["createDefaults"];
+    if (existing.serialize !== serialize || existing.createDefaults !== createDefaults) {
+      existing.serialize = serialize;
+      existing.createDefaults = createDefaults;
     }
   }
 }
