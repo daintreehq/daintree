@@ -665,8 +665,8 @@ describe("ReviewHub", () => {
       render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={onClose} />);
       await waitFor(() => screen.getByText("index.ts"));
 
-      // Click the file row (div[role="button"]) to open its diff (sets selectedFile)
-      const fileRow = screen.getByTitle("src/index.ts").closest("[role='button']")!;
+      // Click the file row button to open its diff (sets selectedFile)
+      const fileRow = screen.getByTitle("src/index.ts");
       fireEvent.click(fileRow);
 
       // First Escape should clear selectedFile, not close modal

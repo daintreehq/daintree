@@ -79,32 +79,19 @@ export function FileStageRow({ file, isStaged, onToggle, onFileClick }: FileStag
     onFileClick(file.path, file.status);
   }, [onFileClick, file.path, file.status]);
 
-  const handleKeyDown = useCallback(
-    (e: React.KeyboardEvent) => {
-      if (e.key === "Enter" || e.key === " ") {
-        e.preventDefault();
-        onFileClick(file.path, file.status);
-      }
-    },
-    [onFileClick, file.path, file.status]
-  );
-
   return (
     <div
-      role="button"
-      tabIndex={0}
+      onClick={handleClick}
       className={cn(
-        "group/stagerow flex items-center text-xs rounded px-1.5 py-1.5 cursor-pointer transition-colors",
-        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-daintree-accent",
+        "group/stagerow flex items-center text-xs rounded px-1.5 py-1.5 transition-colors",
         isStaged ? "bg-status-success/[0.06] hover:bg-status-success/[0.10]" : "hover:bg-tint/5"
       )}
-      onClick={handleClick}
-      onKeyDown={handleKeyDown}
     >
       <TooltipProvider>
         <Tooltip>
           <TooltipTrigger asChild>
             <button
+              type="button"
               onClick={handleToggle}
               className={cn(
                 "w-5 h-5 flex items-center justify-center rounded shrink-0 mr-2 transition-colors",
@@ -123,19 +110,26 @@ export function FileStageRow({ file, isStaged, onToggle, onFileClick }: FileStag
         </Tooltip>
       </TooltipProvider>
 
-      <span
-        aria-hidden="true"
+      <button
+        type="button"
+        title={file.path}
+        aria-label={`View diff: ${file.path}`}
         className={cn(
-          "inline-flex items-center justify-center rounded-sm px-1 mr-2 shrink-0",
-          "text-[10px] font-medium leading-4 h-4 min-w-[16px]",
-          config.bg,
-          config.text
+          "flex min-w-0 flex-1 items-baseline rounded text-left",
+          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-daintree-accent"
         )}
       >
-        {config.label}
-      </span>
-
-      <div className="flex-1 min-w-0 flex items-baseline" title={file.path}>
+        <span
+          aria-hidden="true"
+          className={cn(
+            "inline-flex items-center justify-center rounded-sm px-1 mr-2 shrink-0",
+            "text-[10px] font-medium leading-4 h-4 min-w-[16px]",
+            config.bg,
+            config.text
+          )}
+        >
+          {config.label}
+        </span>
         {dir && (
           <span className="shrink truncate text-daintree-text/50 group-hover/stagerow:text-daintree-text/70 font-mono text-[11px] transition-colors">
             {dir}/
@@ -144,7 +138,7 @@ export function FileStageRow({ file, isStaged, onToggle, onFileClick }: FileStag
         <span className="shrink truncate text-daintree-text group-hover/stagerow:text-daintree-text font-medium font-mono text-[11px] transition-colors">
           {base}
         </span>
-      </div>
+      </button>
     </div>
   );
 }

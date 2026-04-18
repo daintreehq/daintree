@@ -229,9 +229,6 @@ export const WorktreeCard = React.memo(function WorktreeCard({
   const handleDoubleClick = useCallback(
     (e: React.MouseEvent) => {
       if (!canCollapse) return;
-      // Don't toggle when double-clicking interactive elements
-      const target = e.target as HTMLElement;
-      if (target.closest("button, a, [role='menuitem'], input, textarea, select")) return;
       e.stopPropagation();
       toggleWorktreeCollapsed(worktree.id);
     },
@@ -664,27 +661,29 @@ export const WorktreeCard = React.memo(function WorktreeCard({
               "bg-[var(--sidebar-hover-bg,var(--theme-overlay-hover))]",
             isOver &&
               !isActive &&
-              "ring-2 ring-accent-primary bg-accent-primary/10 border-accent-primary/50 transition-colors duration-200",
-            "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
+              "ring-2 ring-accent-primary bg-accent-primary/10 border-accent-primary/50 transition-colors duration-200"
           )}
           data-active={isActive && variant === "sidebar" ? "true" : undefined}
           data-hoverable={!isActive && variant === "sidebar" ? "true" : undefined}
           data-hovered={isFocused && !isActive && variant === "sidebar" ? "true" : undefined}
-          onClick={onSelect}
-          onDoubleClick={handleDoubleClick}
-          onKeyDown={(e) => {
-            if ((e.key === "Enter" || e.key === " ") && e.target === e.currentTarget) {
-              e.preventDefault();
-              onSelect();
-            }
-          }}
-          tabIndex={0}
-          role="button"
           data-worktree-branch={branchLabel}
           data-worktree-is-main={isMainWorktree ? "true" : undefined}
           data-resource-status={resourceStatusLabel ?? undefined}
+          role="group"
           aria-label={`Worktree: ${worktree.issueTitle ?? branchLabel}${worktree.issueTitle ? ` (${branchLabel})` : ""}${isActive ? " (selected)" : ""}${worktree.isCurrent ? " (current)" : ""}, Status: ${spineState}${hasChanges ? ", has uncommitted changes" : ""}`}
+          onClick={onSelect}
+          onDoubleClick={handleDoubleClick}
         >
+          <button
+            type="button"
+            className={cn(
+              "absolute inset-0 z-0",
+              variant === "grid" && "rounded-lg",
+              "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2",
+              (isDraggingSort || isWorktreeSortDragging) && "pointer-events-none"
+            )}
+            aria-label={`Select worktree: ${worktree.issueTitle ?? branchLabel}${worktree.issueTitle ? ` (${branchLabel})` : ""}`}
+          />
           {isOver && !isActive && (
             <div
               className={cn(
@@ -727,7 +726,7 @@ export const WorktreeCard = React.memo(function WorktreeCard({
               </TooltipContent>
             </Tooltip>
           )}
-          <div className="flex">
+          <div className="relative z-10 flex">
             {dragHandleListeners && (
               <div
                 ref={dragHandleActivatorRef}

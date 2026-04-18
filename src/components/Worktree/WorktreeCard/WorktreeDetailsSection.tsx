@@ -140,26 +140,28 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
         <div className="-m-3 flex items-stretch">
           <div
             onClick={onToggleExpand}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" || e.key === " ") {
-                e.preventDefault();
-                onToggleExpand(e as unknown as React.MouseEvent);
-              }
-            }}
-            role="button"
-            tabIndex={0}
-            aria-expanded={false}
-            aria-controls={detailsPanelId}
             className={cn(
-              "worktree-section-button flex min-w-0 flex-1 items-center justify-between px-3 py-2.5 text-left transition-colors",
-              "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-[-2px]",
+              "worktree-section-button relative flex min-w-0 flex-1 items-center justify-between px-3 py-2.5 text-left transition-colors",
               onOpenReviewHub && hasChanges
                 ? "rounded-l-[var(--radius-lg)]"
                 : "rounded-[var(--radius-lg)]"
             )}
-            id={`${detailsId}-button`}
           >
-            <span className="text-xs truncate min-w-0 flex-1">
+            <button
+              type="button"
+              aria-expanded={false}
+              aria-controls={detailsPanelId}
+              id={`${detailsId}-button`}
+              aria-label="Show details"
+              className={cn(
+                "absolute inset-0",
+                onOpenReviewHub && hasChanges
+                  ? "rounded-l-[var(--radius-lg)]"
+                  : "rounded-[var(--radius-lg)]",
+                "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-[-2px]"
+              )}
+            />
+            <span className="relative z-10 text-xs truncate min-w-0 flex-1 pointer-events-none">
               {isLifecycleRunning && lifecycleLabel ? (
                 <span className="flex items-center gap-1.5 text-text-secondary">
                   <Spinner size="xs" className="shrink-0" />
@@ -255,7 +257,7 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
 
             {hasResourceConfig &&
               (showResourceResume || showResourcePause || showResourceConnect) && (
-                <span className="ml-1 inline-flex shrink-0 items-center gap-0.5">
+                <span className="relative z-10 ml-1 inline-flex shrink-0 items-center gap-0.5">
                   {showResourceResume && onResourceResume && (
                     <Tooltip>
                       <TooltipTrigger asChild>
@@ -312,7 +314,7 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
 
             <Tooltip>
               <TooltipTrigger asChild>
-                <div className="ml-3 flex shrink-0 items-center gap-1.5 text-xs text-text-muted">
+                <div className="relative z-10 ml-3 flex shrink-0 items-center gap-1.5 text-xs text-text-muted">
                   <ActivityLight
                     lastActivityTimestamp={worktree.lastActivityTimestamp}
                     className="w-1.5 h-1.5"
