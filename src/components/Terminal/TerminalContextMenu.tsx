@@ -394,6 +394,22 @@ export function TerminalContextMenu({
     [terminal, terminalId, selectionText, worktrees]
   );
 
+  const currentAgentId =
+    terminal?.agentId ?? (terminal?.type !== "terminal" ? terminal?.type : null);
+  const isPlainTerminal = terminal?.type === "terminal" || terminal?.kind === "terminal";
+
+  const visibleAgentIds = useMemo(() => {
+    const filtered = computeGridSelectedAgentIds(hasRealData, availability, AGENT_IDS);
+    if (!currentAgentId || filtered === undefined) return filtered;
+    return new Set([...filtered, currentAgentId]);
+  }, [hasRealData, availability, currentAgentId]);
+
+  const showConvertTo =
+    !isPlainTerminal ||
+    !!currentAgentId ||
+    hasRealData === false ||
+    (visibleAgentIds?.size ?? 0) > 0;
+
   if (!terminal) {
     return <div className="contents">{children}</div>;
   }
@@ -402,9 +418,6 @@ export function TerminalContextMenu({
   const isNotes = terminal.kind === "notes";
   const isDevPreview = terminal.kind === "dev-preview";
   const hasPty = terminal.kind ? panelKindHasPty(terminal.kind) : true;
-
-  const currentAgentId = terminal.agentId ?? (terminal.type !== "terminal" ? terminal.type : null);
-  const isPlainTerminal = terminal.type === "terminal" || terminal.kind === "terminal";
 
   const layoutSection = (
     <>
@@ -618,18 +631,6 @@ export function TerminalContextMenu({
     );
   }
 
-  const visibleAgentIds = useMemo(() => {
-    const filtered = computeGridSelectedAgentIds(hasRealData, availability, AGENT_IDS);
-    if (!currentAgentId || filtered === undefined) return filtered;
-    return new Set([...filtered, currentAgentId]);
-  }, [hasRealData, availability, currentAgentId]);
-
-  const showConvertTo =
-    !isPlainTerminal ||
-    !!currentAgentId ||
-    hasRealData === false ||
-    (visibleAgentIds?.size ?? 0) > 0;
-
   const convertToItems = (
     <>
       {(!isPlainTerminal || !!currentAgentId) && (
@@ -638,7 +639,7 @@ export function TerminalContextMenu({
           Terminal
         </ContextMenuItem>
       )}
-      {(visibleAgentIds ?? AGENT_IDS).map((agentId) => {
+      {[...(visibleAgentIds ?? AGENT_IDS)].map((agentId) => {
         const config = getAgentConfig(agentId);
         if (!config) return null;
         const isCurrent = currentAgentId === agentId;
