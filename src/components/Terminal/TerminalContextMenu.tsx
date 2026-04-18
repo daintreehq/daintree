@@ -11,6 +11,8 @@ import { isValidBrowserUrl } from "@/components/Browser/browserUtils";
 import { actionService } from "@/services/ActionService";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
+import { computeGridSelectedAgentIds } from "./contentGridAgentFilter";
 import {
   ArrowDownFromLine,
   Bell,
@@ -159,6 +161,9 @@ export function TerminalContextMenu({
   const { worktrees } = useWorktrees();
 
   const isWatched = usePanelStore((state) => state.watchedPanels.has(terminalId));
+
+  const availability = useCliAvailabilityStore((s) => s.availability);
+  const isAvailabilityInitialized = useCliAvailabilityStore((s) => s.isInitialized);
 
   const [hasSelection, setHasSelection] = useState(false);
   const [selectionText, setSelectionText] = useState("");
@@ -613,7 +618,17 @@ export function TerminalContextMenu({
     );
   }
 
-  const showConvertTo = !isPlainTerminal || !!currentAgentId || AGENT_IDS.length > 0;
+  const visibleAgentIds = useMemo(() => {
+    const filtered = computeGridSelectedAgentIds(
+      isAvailabilityInitialized,
+      availability,
+      AGENT_IDS
+    );
+    if (!currentAgentId || filtered === undefined) return filtered;
+    return new Set([...filtered, currentAgentId]);
+  }, [isAvailabilityInitialized, availability, currentAgentId]);
+
+  const showConvertTo = !isPlainTerminal || !!currentAgentId || (visibleAgentIds?.size ?? 0) > 0;
 
   const convertToItems = (
     <>
@@ -623,7 +638,7 @@ export function TerminalContextMenu({
           Terminal
         </ContextMenuItem>
       )}
-      {AGENT_IDS.map((agentId) => {
+      {(visibleAgentIds ?? AGENT_IDS).map((agentId) => {
         const config = getAgentConfig(agentId);
         if (!config) return null;
         const isCurrent = currentAgentId === agentId;
