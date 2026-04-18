@@ -32,6 +32,7 @@ import { useQuickSwitcher } from "./hooks/useQuickSwitcher";
 import { useWorktreePalette } from "./hooks/useWorktreePalette";
 import { useQuickCreatePalette } from "./hooks/useQuickCreatePalette";
 import { useDoubleShift } from "./hooks/useDoubleShift";
+import { useProjectMruSwitcher } from "./hooks/useProjectMruSwitcher";
 import { useMcpBridge } from "./hooks/useMcpBridge";
 import { useFileDropGuard } from "./hooks/useFileDropGuard";
 import { useSoundPlaybackListener } from "./hooks/useSoundPlaybackListener";
@@ -85,6 +86,7 @@ import { VoiceRecordingAnnouncer } from "./components/Terminal/VoiceRecordingAnn
 import { AccessibilityAnnouncer } from "./components/Accessibility/AccessibilityAnnouncer";
 import { CreateProjectFolderDialog } from "./components/Project/CreateProjectFolderDialog";
 import { ProjectSwitcherPalette } from "./components/Project/ProjectSwitcherPalette";
+import { ProjectMruSwitcherOverlay } from "./components/Project/ProjectMruSwitcherOverlay";
 import { ActionPalette } from "./components/ActionPalette";
 import { QuickSwitcher } from "./components/QuickSwitcher";
 import { SendToAgentPalette } from "./components/Terminal/SendToAgentPalette";
@@ -208,6 +210,7 @@ function App() {
   const quickSwitcher = useQuickSwitcher();
   const sendToAgentPalette = useSendToAgentPalette();
   useDoubleShift(actionPalette.toggle);
+  const mruSwitcher = useProjectMruSwitcher();
   const currentProject = useProjectStore((state) => state.currentProject);
   const gitInitDialogOpen = useProjectStore((state) => state.gitInitDialogOpen);
   const gitInitDirectoryPath = useProjectStore((state) => state.gitInitDirectoryPath);
@@ -648,6 +651,11 @@ function App() {
           }
         }}
         onClose={panelPalette.close}
+      />
+      <ProjectMruSwitcherOverlay
+        isVisible={mruSwitcher.isVisible}
+        projects={mruSwitcher.projects}
+        selectedIndex={mruSwitcher.selectedIndex}
       />
       <ProjectSwitcherPalette
         isOpen={projectSwitcherPalette.isOpen && projectSwitcherPalette.mode === "modal"}

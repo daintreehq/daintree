@@ -2,6 +2,34 @@ import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import { z } from "zod";
 import { projectClient } from "@/clients";
 import { useProjectStore } from "@/store/projectStore";
+import { getMruProjects } from "@/lib/projectMru";
+import { notify } from "@/lib/notify";
+
+async function runMruFallbackSwitch(direction: "older" | "newer"): Promise<void> {
+  const state = useProjectStore.getState();
+  const currentId = state.currentProject?.id ?? null;
+  const sorted = getMruProjects(state.projects);
+  const otherProjects = sorted.filter((p) => p.id !== currentId);
+  if (otherProjects.length === 0) return;
+
+  const target = direction === "older" ? otherProjects[0] : otherProjects[otherProjects.length - 1];
+  if (!target) return;
+
+  try {
+    if (target.status === "background") {
+      await state.reopenProject(target.id);
+    } else {
+      await state.switchProject(target.id);
+    }
+  } catch (error) {
+    notify({
+      type: "error",
+      title: "Failed to switch project",
+      message: error instanceof Error ? error.message : "Unknown error",
+      duration: 5000,
+    });
+  }
+}
 
 export function registerProjectActions(actions: ActionRegistry, callbacks: ActionCallbacks): void {
   actions.set("project.switcherPalette", () => ({
@@ -15,6 +43,28 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
     run: async () => {
       callbacks.onOpenProjectSwitcherPalette();
     },
+  }));
+
+  actions.set("project.mruCycleOlder", () => ({
+    id: "project.mruCycleOlder",
+    title: "Switch to Previous Project (Older)",
+    description: "Switch to the most recent other project; hold to scrub older",
+    category: "project",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    run: () => runMruFallbackSwitch("older"),
+  }));
+
+  actions.set("project.mruCycleNewer", () => ({
+    id: "project.mruCycleNewer",
+    title: "Switch to Oldest Project (Newer)",
+    description: "Switch to the oldest other project; hold to scrub newer",
+    category: "project",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    run: () => runMruFallbackSwitch("newer"),
   }));
 
   actions.set("project.add", () => ({

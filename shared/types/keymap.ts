@@ -160,6 +160,8 @@ export type BuiltInKeyAction =
 
   // Project actions
   | "project.switcherPalette"
+  | "project.mruCycleOlder"
+  | "project.mruCycleNewer"
 
   // Help/Settings
   | "help.shortcuts"
@@ -315,6 +317,8 @@ export const KEY_ACTION_VALUES: ReadonlySet<string> = new Set<string>([
   "action.palette",
   "action.palette.open",
   "project.switcherPalette",
+  "project.mruCycleOlder",
+  "project.mruCycleNewer",
   "help.shortcuts",
   "help.shortcutsAlt",
   "help.launchAgent",
