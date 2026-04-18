@@ -516,26 +516,25 @@ export function NewWorktreeDialog({
   }, [isOpen, loading, newBranchInputRef]);
 
   // --- Form dirty check and dismiss guard ---
-  const isFormDirty = useMemo(
-    () => {
-      if (selectedExistingBranch !== null) return true;
-      if (branchInputTouchedRef.current && branchInput.trim()) return true;
-      if (issueTouchedRef.current && selectedIssue !== null) return true;
-      if (recipeSelectionTouchedRef.current) return true;
-      if (pathTouchedRef.current && worktreePath.trim()) return true;
-      if (worktreeMode !== "local") return true;
-      return false;
-    },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [
-      branchInput,
-      worktreePath,
-      selectedIssue,
-      selectedRecipeId,
-      selectedExistingBranch,
-      worktreeMode,
-    ]
-  );
+  const isFormDirty = useMemo(() => {
+    // selectedRecipeId is a trigger dep (the memo reads recipeSelectionTouchedRef
+    // which flips when selection changes).
+    void selectedRecipeId;
+    if (selectedExistingBranch !== null) return true;
+    if (branchInputTouchedRef.current && branchInput.trim()) return true;
+    if (issueTouchedRef.current && selectedIssue !== null) return true;
+    if (recipeSelectionTouchedRef.current) return true;
+    if (pathTouchedRef.current && worktreePath.trim()) return true;
+    if (worktreeMode !== "local") return true;
+    return false;
+  }, [
+    branchInput,
+    worktreePath,
+    selectedIssue,
+    selectedRecipeId,
+    selectedExistingBranch,
+    worktreeMode,
+  ]);
 
   const handleBeforeClose = useCallback((): boolean => {
     if (!isFormDirty) return true;

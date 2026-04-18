@@ -60,8 +60,11 @@ export function EventsContent({ className }: EventsContentProps) {
     };
   }, [addEvents, setEvents]);
 
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  const filteredEvents = useMemo(() => getFilteredEvents(), [events, filters, getFilteredEvents]);
+  const filteredEvents = useMemo(() => {
+    void events;
+    void filters;
+    return getFilteredEvents();
+  }, [events, filters, getFilteredEvents]);
   const deferredFilteredEvents = useDeferredValue(filteredEvents);
   const selectedEvent = selectedEventId
     ? events.find((e) => e.id === selectedEventId) || null

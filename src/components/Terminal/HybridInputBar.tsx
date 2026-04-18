@@ -71,6 +71,7 @@ import {
   selectionChipField,
   createSelectionChipTooltip,
   createAutoSize,
+  createCustomKeymap,
 } from "./inputEditorExtensions";
 import { AppDialog } from "@/components/ui/AppDialog";
 import {
@@ -391,31 +392,33 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       isCommandsLoading,
     });
 
-    latestRef.current = {
-      terminalId,
-      projectId,
-      disabled,
-      isInitializing,
-      isInHistoryMode,
-      activeMode,
-      isAutocompleteOpen,
-      autocompleteItems,
-      selectedIndex,
-      value,
-      atContext,
-      slashContext,
-      diffContext,
-      terminalContext,
-      selectionContext,
-      onSend,
-      onSendKey,
-      addToHistory,
-      resetHistoryIndex,
-      clearDraftInput,
-      navigateHistory,
-      isVoiceActiveForPanel,
-      isExpanded,
-    };
+    useEffect(() => {
+      latestRef.current = {
+        terminalId,
+        projectId,
+        disabled,
+        isInitializing,
+        isInHistoryMode,
+        activeMode,
+        isAutocompleteOpen,
+        autocompleteItems,
+        selectedIndex,
+        value,
+        atContext,
+        slashContext,
+        diffContext,
+        terminalContext,
+        selectionContext,
+        onSend,
+        onSendKey,
+        addToHistory,
+        resetHistoryIndex,
+        clearDraftInput,
+        navigateHistory,
+        isVoiceActiveForPanel,
+        isExpanded,
+      };
+    });
 
     useLayoutEffect(() => {
       if (!isAutocompleteOpen) return;
@@ -818,7 +821,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       [focusEditor, focusEditorWithCursorAtEnd]
     );
 
-    const { editorUpdateListener } = useContextDetection({
+    const { handleUpdateRef: contextUpdateRef } = useContextDetection({
       latestRef,
       applyDocChange: (next) => {
         if (next === lastEmittedValueRef.current) return false;
@@ -838,7 +841,11 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       setSelectionContext,
     });
 
-    const { keymapExtension, handleStash, handlePopStash } = useEditorKeymap({
+    const {
+      handlersRef: keymapHandlersRef,
+      handleStash,
+      handlePopStash,
+    } = useEditorKeymap({
       latestRef,
       editorViewRef,
       isComposingRef,
@@ -859,102 +866,100 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       setSelectedIndex,
     });
 
-    const domEventHandlers = useMemo(
-      () =>
-        EditorView.domEventHandlers({
-          beforeinput: (event) => {
-            const latest = latestRef.current;
-            if (!latest) return false;
-            if (latest.disabled) {
-              event.preventDefault();
-              return true;
-            }
-            const nativeEvent = event as InputEvent;
-            if (!isEnterLikeLineBreakInputEvent(nativeEvent)) return false;
-            if (handledEnterRef.current) {
-              handledEnterRef.current = false;
-              event.preventDefault();
-              return true;
-            }
-            if (lastEnterKeydownNewlineRef.current) return false;
-            if (latest.isAutocompleteOpen && latest.autocompleteItems[latest.selectedIndex]) {
-              event.preventDefault();
-              const action = latest.activeMode === "command" ? "execute" : "insert";
-              applyAutocompleteSelection(action);
-              return true;
-            }
-            event.preventDefault();
-            if (nativeEvent.isComposing) {
-              submitAfterCompositionRef.current = true;
-              return true;
-            }
-            if (useTerminalInputStore.getState().isVoiceSubmitting(latest.terminalId)) {
-              event.preventDefault();
-              return true;
-            }
-            const text = editorViewRef.current?.state.doc.toString() ?? latest.value;
-            if (text.trim().length === 0) {
-              if (latest.onSendKey) latest.onSendKey("enter");
-              return true;
-            }
-            sendFromEditor();
-            return true;
-          },
-          compositionstart: () => {
-            isComposingRef.current = true;
-            submitAfterCompositionRef.current = false;
-            lastEnterKeydownNewlineRef.current = false;
-            return false;
-          },
-          compositionend: () => {
-            isComposingRef.current = false;
-            if (!submitAfterCompositionRef.current) return false;
-            submitAfterCompositionRef.current = false;
-            const latest = latestRef.current;
-            if (latest && useTerminalInputStore.getState().isVoiceSubmitting(latest.terminalId)) {
-              return false;
-            }
-            setTimeout(sendFromEditor, 0);
-            return false;
-          },
-          keydown: (event) => {
-            const isEnter =
-              event.key === "Enter" ||
-              event.key === "Return" ||
-              event.code === "Enter" ||
-              event.code === "NumpadEnter";
-            if (isEnter) lastEnterKeydownNewlineRef.current = event.shiftKey || event.altKey;
-            if (event.isComposing) {
-              if (isEnter && !event.shiftKey && !event.altKey) {
-                submitAfterCompositionRef.current = true;
-              }
-              return false;
-            }
-            return false;
-          },
-          blur: (event) => {
-            const nextTarget = event.relatedTarget as HTMLElement | null;
-            const root = rootRef.current;
-            if (root && nextTarget && root.contains(nextTarget)) return false;
-            if (latestRef.current?.isExpanded) return false;
-            setAtContext(null);
-            setSlashContext(null);
-            setDiffContext(null);
-            lastEnterKeydownNewlineRef.current = false;
-            handledEnterRef.current = false;
-            submitAfterCompositionRef.current = false;
-            return false;
-          },
-        }),
-      [applyAutocompleteSelection, sendFromEditor]
-    );
-
     // --- Editor lifecycle ---
 
     // Editor is constructed once per terminalId from non-reactive props (compartments
     // handle live updates). Wrapping in useEffectEvent keeps the construction body
     // out of the dependency array so the React Compiler can memoize this component.
+    // DOM event handlers are defined inline here so the React Compiler sees their
+    // ref accesses as happening outside render.
     const createEditor = useEffectEvent((host: HTMLDivElement) => {
+      const domEventHandlers = EditorView.domEventHandlers({
+        beforeinput: (event) => {
+          const latest = latestRef.current;
+          if (!latest) return false;
+          if (latest.disabled) {
+            event.preventDefault();
+            return true;
+          }
+          const nativeEvent = event as InputEvent;
+          if (!isEnterLikeLineBreakInputEvent(nativeEvent)) return false;
+          if (handledEnterRef.current) {
+            handledEnterRef.current = false;
+            event.preventDefault();
+            return true;
+          }
+          if (lastEnterKeydownNewlineRef.current) return false;
+          if (latest.isAutocompleteOpen && latest.autocompleteItems[latest.selectedIndex]) {
+            event.preventDefault();
+            const action = latest.activeMode === "command" ? "execute" : "insert";
+            applyAutocompleteSelection(action);
+            return true;
+          }
+          event.preventDefault();
+          if (nativeEvent.isComposing) {
+            submitAfterCompositionRef.current = true;
+            return true;
+          }
+          if (useTerminalInputStore.getState().isVoiceSubmitting(latest.terminalId)) {
+            event.preventDefault();
+            return true;
+          }
+          const text = editorViewRef.current?.state.doc.toString() ?? latest.value;
+          if (text.trim().length === 0) {
+            if (latest.onSendKey) latest.onSendKey("enter");
+            return true;
+          }
+          sendFromEditor();
+          return true;
+        },
+        compositionstart: () => {
+          isComposingRef.current = true;
+          submitAfterCompositionRef.current = false;
+          lastEnterKeydownNewlineRef.current = false;
+          return false;
+        },
+        compositionend: () => {
+          isComposingRef.current = false;
+          if (!submitAfterCompositionRef.current) return false;
+          submitAfterCompositionRef.current = false;
+          const latest = latestRef.current;
+          if (latest && useTerminalInputStore.getState().isVoiceSubmitting(latest.terminalId)) {
+            return false;
+          }
+          setTimeout(sendFromEditor, 0);
+          return false;
+        },
+        keydown: (event) => {
+          const isEnter =
+            event.key === "Enter" ||
+            event.key === "Return" ||
+            event.code === "Enter" ||
+            event.code === "NumpadEnter";
+          if (isEnter) lastEnterKeydownNewlineRef.current = event.shiftKey || event.altKey;
+          if (event.isComposing) {
+            if (isEnter && !event.shiftKey && !event.altKey) {
+              submitAfterCompositionRef.current = true;
+            }
+            return false;
+          }
+          return false;
+        },
+        blur: (event) => {
+          const nextTarget = event.relatedTarget as HTMLElement | null;
+          const root = rootRef.current;
+          if (root && nextTarget && root.contains(nextTarget)) return false;
+          if (latestRef.current?.isExpanded) return false;
+          setAtContext(null);
+          setSlashContext(null);
+          setDiffContext(null);
+          lastEnterKeydownNewlineRef.current = false;
+          handledEnterRef.current = false;
+          submitAfterCompositionRef.current = false;
+          return false;
+        },
+      });
+
       const state = EditorState.create({
         doc: value,
         extensions: [
@@ -987,8 +992,23 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
           ),
           interimMarkField,
           pendingAIField,
-          keymapCompartmentRef.current.of(keymapExtension),
-          editorUpdateListener,
+          EditorView.updateListener.of((update) => contextUpdateRef.current(update)),
+          keymapCompartmentRef.current.of(
+            createCustomKeymap({
+              onEnter: () => keymapHandlersRef.current?.onEnter() ?? false,
+              onEscape: () => keymapHandlersRef.current?.onEscape() ?? false,
+              onArrowUp: () => keymapHandlersRef.current?.onArrowUp() ?? false,
+              onArrowDown: () => keymapHandlersRef.current?.onArrowDown() ?? false,
+              onArrowLeft: () => keymapHandlersRef.current?.onArrowLeft() ?? false,
+              onArrowRight: () => keymapHandlersRef.current?.onArrowRight() ?? false,
+              onTab: () => keymapHandlersRef.current?.onTab() ?? false,
+              onCtrlC: (hasSelection) => keymapHandlersRef.current?.onCtrlC(hasSelection) ?? false,
+              onStash: () => keymapHandlersRef.current?.onStash() ?? false,
+              onPopStash: () => keymapHandlersRef.current?.onPopStash() ?? false,
+              onExpand: () => keymapHandlersRef.current?.onExpand() ?? false,
+              onHistorySearch: () => keymapHandlersRef.current?.onHistorySearch() ?? false,
+            })
+          ),
           domEventHandlers,
           imagePasteExtension,
           filePasteExtension,

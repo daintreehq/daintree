@@ -1,4 +1,4 @@
-import { useEffect, useCallback, useState, useRef, useMemo } from "react";
+import { useEffect, useEffectEvent, useCallback, useState, useRef, useMemo } from "react";
 import type { ViewType } from "react-diff-view";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { DiffViewer } from "@/components/Worktree/DiffViewer";
@@ -102,7 +102,9 @@ export function FileViewerModal({
     };
   }, []);
 
-  useEffect(() => {
+  // Non-reactive: reads defaultMode/hasDiff/initialLine/imageFile/svgFile at call
+  // time so the effect only re-runs on isOpen/filePath/effectiveRootPath changes.
+  const loadFile = useEffectEvent(() => {
     if (!isOpen) {
       setContent(null);
       setLoadState("loading");
@@ -154,7 +156,12 @@ export function FileViewerModal({
         setErrorCode("INVALID_PATH");
         setLoadState("error");
       });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+  });
+  useEffect(() => {
+    void isOpen;
+    void filePath;
+    void effectiveRootPath;
+    loadFile();
   }, [isOpen, filePath, effectiveRootPath]);
 
   // When diff arrives after mount (FileDiffModal async pattern), switch to diff mode once

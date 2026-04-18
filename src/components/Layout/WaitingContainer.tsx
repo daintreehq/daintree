@@ -12,7 +12,6 @@ const waitingConfig: StatusContainerConfig = {
   statusAriaLabel: "Waiting for input",
   contentAriaLabel: "Waiting terminals",
   contentId: "waiting-container-popover",
-  useTerminals: useWaitingTerminals,
 };
 
 interface WaitingContainerProps {
@@ -20,5 +19,6 @@ interface WaitingContainerProps {
 }
 
 export function WaitingContainer({ compact = false }: WaitingContainerProps) {
-  return <StatusContainer config={waitingConfig} compact={compact} />;
+  const terminals = useWaitingTerminals();
+  return <StatusContainer config={waitingConfig} terminals={terminals} compact={compact} />;
 }

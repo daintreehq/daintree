@@ -197,7 +197,7 @@ export function WorktreeTerminalSection({
   const terminalsId = `worktree-${worktreeId}-terminals`;
   const terminalsPanelId = `worktree-${worktreeId}-terminals-panel`;
 
-  const topTerminalState = useMemo((): { state: AgentState; count: number } | null => {
+  const topTerminalState = ((): { state: AgentState; count: number } | null => {
     for (const state of STATE_PRIORITY) {
       const count = counts.byState[state];
       if (count > 0) {
@@ -205,7 +205,7 @@ export function WorktreeTerminalSection({
       }
     }
     return null;
-  }, [counts.byState]);
+  })();
 
   const SummaryIcon = useMemo(() => {
     if (terminals.length === 0) return null;
@@ -221,8 +221,10 @@ export function WorktreeTerminalSection({
   }, [terminals]);
 
   const orderedWorktreeTerminals = terminals;
-  const eligibleTerminalsRef = useRef<TerminalInstance[]>([]);
-  eligibleTerminalsRef.current = orderedWorktreeTerminals.filter(isFleetArmEligible);
+  const eligibleTerminals = useMemo(
+    () => orderedWorktreeTerminals.filter(isFleetArmEligible),
+    [orderedWorktreeTerminals]
+  );
 
   const handleTerminalClick = useCallback(
     (term: TerminalInstance, e: React.MouseEvent) => {
@@ -232,13 +234,13 @@ export function WorktreeTerminalSection({
       }
       const store = useFleetArmingStore.getState();
       if (e.shiftKey) {
-        const orderedEligibleIds = eligibleTerminalsRef.current.map((t) => t.id);
+        const orderedEligibleIds = eligibleTerminals.map((t) => t.id);
         store.extendTo(term.id, orderedEligibleIds);
       } else {
         store.toggleId(term.id);
       }
     },
-    [onTerminalSelect]
+    [onTerminalSelect, eligibleTerminals]
   );
 
   // Marquee starts potential on pointerdown (no capture yet). We only upgrade
@@ -321,7 +323,7 @@ export function WorktreeTerminalSection({
         hits.push(id);
       }
       if (hits.length > 0) {
-        const eligible = new Set(eligibleTerminalsRef.current.map((t) => t.id));
+        const eligible = new Set(eligibleTerminals.map((t) => t.id));
         const orderedHits = orderedWorktreeTerminals
           .map((t) => t.id)
           .filter((id) => hits.includes(id) && eligible.has(id));
@@ -330,7 +332,7 @@ export function WorktreeTerminalSection({
         }
       }
     },
-    [orderedWorktreeTerminals]
+    [orderedWorktreeTerminals, eligibleTerminals]
   );
 
   const handlePointerUp = useCallback(

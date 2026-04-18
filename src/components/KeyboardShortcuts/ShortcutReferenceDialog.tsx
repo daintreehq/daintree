@@ -106,11 +106,10 @@ export function ShortcutReferenceDialog({ isOpen, onClose }: ShortcutReferenceDi
     return unsubscribe;
   }, []);
 
-  const allBindings = useMemo(
-    () => keybindingService.getAllBindingsWithEffectiveCombos(),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [bindingsVersion]
-  );
+  const allBindings = useMemo(() => {
+    void bindingsVersion;
+    return keybindingService.getAllBindingsWithEffectiveCombos();
+  }, [bindingsVersion]);
 
   const searchItems = useMemo<ShortcutSearchItem[]>(() => {
     return allBindings.map((binding) => {

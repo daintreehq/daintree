@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, type ReactNode } from "react";
+import { useState, useCallback, useEffect, useRef, type ReactNode } from "react";
 import { Toolbar } from "./Toolbar";
 import { Sidebar } from "./Sidebar";
 import { TerminalDockRegion } from "./TerminalDockRegion";
@@ -67,14 +67,14 @@ export function AppLayout({
     }
   }, [layout.performanceMode]);
 
-  const handleToggleProblems = useCallback(() => {
+  const handleToggleProblems = () => {
     const dock = useDiagnosticsStore.getState();
     if (!dock.isOpen || dock.activeTab !== "problems") {
       layout.openDiagnosticsDock("problems");
     } else {
       layout.setDiagnosticsOpen(false);
     }
-  }, [layout.openDiagnosticsDock, layout.setDiagnosticsOpen]);
+  };
 
   useEffect(() => {
     const restoreState = async () => {
@@ -154,7 +154,7 @@ export function AppLayout({
     return () => clearTimeout(timer);
   }, [layout.isFocusMode, layout.savedPanelState, currentProject?.id, isHydrated]);
 
-  const handleToggleFocusMode = useCallback(async () => {
+  const handleToggleFocusMode = async () => {
     if (layout.isFocusMode) {
       if (layout.savedPanelState) {
         setSidebarWidth((layout.savedPanelState as PanelState).sidebarWidth);
@@ -200,25 +200,23 @@ export function AppLayout({
         }
       }
     }
-  }, [
-    layout.isFocusMode,
-    layout.savedPanelState,
-    layout.toggleFocusMode,
-    layout.diagnosticsOpen,
-    sidebarWidth,
-    currentProject?.id,
-  ]);
+  };
+
+  const handleToggleFocusModeRef = useRef(handleToggleFocusMode);
+  useEffect(() => {
+    handleToggleFocusModeRef.current = handleToggleFocusMode;
+  });
 
   useEffect(() => {
     const handleFocusModeToggle = () => {
-      handleToggleFocusMode();
+      void handleToggleFocusModeRef.current();
     };
 
     window.addEventListener("daintree:toggle-focus-mode", handleFocusModeToggle);
     return () => {
       window.removeEventListener("daintree:toggle-focus-mode", handleFocusModeToggle);
     };
-  }, [handleToggleFocusMode]);
+  }, []);
 
   useEffect(() => {
     const handlePortalToggle = () => {

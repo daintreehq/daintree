@@ -80,6 +80,9 @@ export function FleetDeck(): ReactElement | null {
 
   const [isResizing, setIsResizing] = useState(false);
   const snapshotsRef = useRef<Map<string, string>>(new Map());
+  // Mirror into state so JSX doesn't read the ref during render (React Compiler).
+  // The ref remains the live accumulator; state snapshots it for render.
+  const [snapshots, setSnapshots] = useState<Map<string, string>>(() => new Map());
 
   const eligibleIds = useMemo(() => {
     // collectEligibleIds reads panelsById and panelIds from usePanelStore
@@ -126,14 +129,20 @@ export function FleetDeck(): ReactElement | null {
       }
     }
     if (snapshotsRef.current.size > 0) {
+      let changed = false;
       for (const id of Array.from(snapshotsRef.current.keys())) {
-        if (!validIds.has(id)) snapshotsRef.current.delete(id);
+        if (!validIds.has(id)) {
+          snapshotsRef.current.delete(id);
+          changed = true;
+        }
       }
+      if (changed) setSnapshots(new Map(snapshotsRef.current));
     }
   }, [eligibleIds, pinnedLiveIds, prunePins]);
 
   const handleCaptureSnapshot = useCallback((id: string, snapshot: string) => {
     snapshotsRef.current.set(id, snapshot);
+    setSnapshots(new Map(snapshotsRef.current));
   }, []);
 
   const handleArmFiltered = useCallback(() => {
@@ -357,7 +366,7 @@ export function FleetDeck(): ReactElement | null {
                 key={id}
                 terminalId={id}
                 isLive={liveIdSet.has(id)}
-                initialSnapshot={snapshotsRef.current.get(id)}
+                initialSnapshot={snapshots.get(id)}
                 onCaptureSnapshot={handleCaptureSnapshot}
               />
             ))}

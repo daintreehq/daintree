@@ -10,6 +10,51 @@ export function useAgentWaitingNudge(isStateLoaded: boolean): void {
   const firedRef = useRef(false);
   const notificationIdRef = useRef<string | null>(null);
 
+  function fireNudge() {
+    if (firedRef.current) return;
+    firedRef.current = true;
+
+    void window.electron.onboarding.markWaitingNudgeSeen();
+
+    const id = notify({
+      type: "info",
+      placement: "grid-bar",
+      title: "Agent Waiting for Input",
+      message:
+        "Your agent is waiting for input. Enable notifications to get alerted when this happens.",
+      inboxMessage:
+        "Your agent is waiting for input. Enable notifications to get alerted when this happens.",
+      duration: 0,
+      actions: [
+        {
+          label: "Enable Notifications",
+          variant: "primary",
+          onClick: () => {
+            void window.electron.notification.setSettings({
+              waitingEnabled: true,
+            });
+            if (notificationIdRef.current) {
+              removeNotification(notificationIdRef.current);
+              notificationIdRef.current = null;
+            }
+          },
+        },
+        {
+          label: "No Thanks",
+          variant: "secondary",
+          onClick: () => {
+            if (notificationIdRef.current) {
+              removeNotification(notificationIdRef.current);
+              notificationIdRef.current = null;
+            }
+          },
+        },
+      ],
+    });
+
+    notificationIdRef.current = id || null;
+  }
+
   useEffect(() => {
     if (!isElectronAvailable() || !isStateLoaded) return;
 
@@ -84,49 +129,4 @@ export function useAgentWaitingNudge(isStateLoaded: boolean): void {
       }
     };
   }, [removeNotification]);
-
-  function fireNudge() {
-    if (firedRef.current) return;
-    firedRef.current = true;
-
-    void window.electron.onboarding.markWaitingNudgeSeen();
-
-    const id = notify({
-      type: "info",
-      placement: "grid-bar",
-      title: "Agent Waiting for Input",
-      message:
-        "Your agent is waiting for input. Enable notifications to get alerted when this happens.",
-      inboxMessage:
-        "Your agent is waiting for input. Enable notifications to get alerted when this happens.",
-      duration: 0,
-      actions: [
-        {
-          label: "Enable Notifications",
-          variant: "primary",
-          onClick: () => {
-            void window.electron.notification.setSettings({
-              waitingEnabled: true,
-            });
-            if (notificationIdRef.current) {
-              removeNotification(notificationIdRef.current);
-              notificationIdRef.current = null;
-            }
-          },
-        },
-        {
-          label: "No Thanks",
-          variant: "secondary",
-          onClick: () => {
-            if (notificationIdRef.current) {
-              removeNotification(notificationIdRef.current);
-              notificationIdRef.current = null;
-            }
-          },
-        },
-      ],
-    });
-
-    notificationIdRef.current = id || null;
-  }
 }

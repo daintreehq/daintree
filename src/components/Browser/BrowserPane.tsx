@@ -75,6 +75,8 @@ export function BrowserPane({
   const clearConsoleMessages = useConsoleCaptureStore((state) => state.clearMessages);
   const removePane = useConsoleCaptureStore((state) => state.removePane);
   const webContentsIdRef = useRef<number | null>(null);
+  // Mirror into state so JSX doesn't read the ref during render (React Compiler).
+  const [webContentsId, setWebContentsId] = useState<number | null>(null);
   const projectId = useProjectStore((state) => state.currentProject?.id);
   const devServerLoadTimeout = useProjectSettingsStore(
     (state) => state.settings?.devServerLoadTimeout
@@ -86,19 +88,29 @@ export function BrowserPane({
   );
   const setBrowserConsoleOpen = usePanelStore((state) => state.setBrowserConsoleOpen);
 
-  // Track whether the current load is the initial session-restored load (not a fresh panel)
-  const isInitialRestoredLoadRef = useRef(true);
-
-  // Initialize history from persisted state or initialUrl
-  const [history, setHistory] = useState<BrowserHistory>(() => {
+  // Initialize history from persisted state or initialUrl. Compute both
+  // `history` and `isRestoredLoad` in a single useState initializer so the ref
+  // below can be seeded without writing to a ref during the lazy-init closure
+  // (React Compiler bailout).
+  const [initialHistoryComputation] = useState<{
+    history: BrowserHistory;
+    isRestoredLoad: boolean;
+  }>(() => {
     const terminal = usePanelStore.getState().getTerminal(id);
     const saved = terminal?.browserHistory;
-    // Only treat this as a restored session load if we actually have persisted history
-    isInitialRestoredLoadRef.current = Boolean(saved?.present);
     const normalized = normalizeBrowserUrl(initialUrl);
     const fallbackPresent = terminal?.browserUrl || normalized.url || initialUrl;
-    return initializeBrowserHistory(saved, fallbackPresent);
+    return {
+      history: initializeBrowserHistory(saved, fallbackPresent),
+      // Only treat this as a restored session load if we actually have persisted history
+      isRestoredLoad: Boolean(saved?.present),
+    };
   });
+
+  // Track whether the current load is the initial session-restored load (not a fresh panel)
+  const isInitialRestoredLoadRef = useRef(initialHistoryComputation.isRestoredLoad);
+
+  const [history, setHistory] = useState<BrowserHistory>(initialHistoryComputation.history);
 
   // Initialize zoom factor from persisted state (default 1.0 = 100%)
   // Clamp to valid range [0.25, 2.0] to handle corrupt storage
@@ -201,6 +213,7 @@ export function BrowserPane({
       return;
     }
     webContentsIdRef.current = wcId;
+    setWebContentsId(wcId);
 
     // Subscribe to push events BEFORE starting capture to avoid missing early messages
     const cleanupMessage = window.electron.webview.onConsoleMessage((row: SerializedConsoleRow) => {
@@ -227,6 +240,7 @@ export function BrowserPane({
       cleanupMessage();
       cleanupContext();
       webContentsIdRef.current = null;
+      setWebContentsId(null);
     };
   }, [webviewElement, isWebviewReady, id, addStructuredMessage, markStale]);
 
@@ -869,11 +883,7 @@ export function BrowserPane({
               <WebviewDialog dialog={currentDialog} onRespond={handleDialogRespond} />
             </div>
             {isConsoleOpen && (
-              <ConsolePanel
-                paneId={id}
-                height={200}
-                webContentsId={webContentsIdRef.current ?? undefined}
-              />
+              <ConsolePanel paneId={id} height={200} webContentsId={webContentsId ?? undefined} />
             )}
           </>
         )}

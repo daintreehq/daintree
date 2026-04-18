@@ -470,8 +470,8 @@ export const WorktreeCard = React.memo(function WorktreeCard({
   const [showReviewHub, setShowReviewHub] = useState(false);
   const [showPlanViewer, setShowPlanViewer] = useState(false);
 
-  const onCloseReviewHub = useCallback(() => setShowReviewHub(false), []);
-  const onClosePlanViewer = useCallback(() => setShowPlanViewer(false), []);
+  const onCloseReviewHub = () => setShowReviewHub(false);
+  const onClosePlanViewer = () => setShowPlanViewer(false);
 
   const handleAttachIssue = useCallback(
     async (issue: GitHubIssue) => {

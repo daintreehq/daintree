@@ -44,6 +44,8 @@ export function LogsContent({ className, onSourcesChange }: LogsContentProps) {
 
   const virtuosoRef = useRef<VirtuosoHandle>(null);
   const sourcesRef = useRef<string[]>([]);
+  // Mirror into state so JSX doesn't read the ref during render (React Compiler).
+  const [sources, setSources] = useState<string[]>([]);
   const [atBottom, setAtBottom] = useState(true);
 
   useEffect(() => {
@@ -64,6 +66,7 @@ export function LogsContent({ className, onSourcesChange }: LogsContentProps) {
         .filter((source): source is string => !!source && !sourcesRef.current.includes(source));
       if (newSources.length > 0) {
         sourcesRef.current = [...sourcesRef.current, ...newSources].sort();
+        setSources(sourcesRef.current);
         onSourcesChange?.(sourcesRef.current);
       }
     });
@@ -90,6 +93,7 @@ export function LogsContent({ className, onSourcesChange }: LogsContentProps) {
         if (log.source) allSources.add(log.source);
       }
       sourcesRef.current = Array.from(allSources).sort();
+      setSources(sourcesRef.current);
       onSourcesChange?.(sourcesRef.current);
 
       hydrated = true;
@@ -126,7 +130,7 @@ export function LogsContent({ className, onSourcesChange }: LogsContentProps) {
         filters={filters}
         onFiltersChange={setFilters}
         onClear={clearFilters}
-        availableSources={sourcesRef.current}
+        availableSources={sources}
       />
 
       <div className="flex-1 relative">

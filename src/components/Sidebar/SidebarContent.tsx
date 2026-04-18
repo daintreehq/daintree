@@ -368,7 +368,9 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   const getWorktreeErrors = useErrorStore((state) => state.getWorktreeErrors);
 
   const scrollContainerRef = useRef<HTMLDivElement>(null);
-  const recipeManagerEditRef = useRef<import("@/types").TerminalRecipe | undefined>(undefined);
+  const [recipeManagerEdit, setRecipeManagerEdit] = useState<
+    import("@/types").TerminalRecipe | undefined
+  >(undefined);
   const scrollContentRef = useRef<HTMLDivElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const [hiddenAbove, setHiddenAbove] = useState(0);
@@ -710,7 +712,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
           setRecipeEditorWorktreeId(recipe.worktreeId);
           setRecipeEditorDefaultScope(recipe.projectId === undefined ? "global" : "project");
           setRecipeEditorInitialTerminals(undefined);
-          recipeManagerEditRef.current = recipe;
+          setRecipeManagerEdit(recipe);
           setIsRecipeEditorOpen(true);
           return;
         }
@@ -755,8 +757,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     setTimeout(() => {
       setIsRecipeEditorOpen(true);
     }, 100);
-    // Store the recipe to edit via a ref-like approach by setting it directly
-    recipeManagerEditRef.current = recipe;
+    setRecipeManagerEdit(recipe);
   }, []);
 
   const handleRecipeManagerCreate = useCallback((scope: "global" | "project") => {
@@ -764,7 +765,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     setRecipeEditorDefaultScope(scope);
     setRecipeEditorWorktreeId(undefined);
     setRecipeEditorInitialTerminals(undefined);
-    recipeManagerEditRef.current = undefined;
+    setRecipeManagerEdit(undefined);
     setTimeout(() => {
       setIsRecipeEditorOpen(true);
     }, 100);
@@ -779,7 +780,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     setRecipeEditorWorktreeId(undefined);
     setRecipeEditorInitialTerminals(undefined);
     setRecipeEditorDefaultScope(undefined);
-    recipeManagerEditRef.current = undefined;
+    setRecipeManagerEdit(undefined);
   }, []);
 
   const sortableIds = useMemo(
@@ -1082,7 +1083,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
         </div>
 
         <RecipeEditor
-          recipe={recipeManagerEditRef.current}
+          recipe={recipeManagerEdit}
           worktreeId={recipeEditorWorktreeId}
           initialTerminals={recipeEditorInitialTerminals}
           defaultScope={recipeEditorDefaultScope}

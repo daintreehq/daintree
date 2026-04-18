@@ -44,10 +44,6 @@ export function ThemeSelector<T extends { id: string }>({
   previewAnnouncement,
 }: ThemeSelectorProps<T>) {
   const [query, setQuery] = useState("");
-  const getNameRef = useRef(getName);
-  useEffect(() => {
-    getNameRef.current = getName;
-  }, [getName]);
 
   // Single rAF handle shared across all cards so rapid pointer moves between
   // cards cancel any pending revert before the next preview fires.
@@ -88,20 +84,18 @@ export function ThemeSelector<T extends { id: string }>({
     return groups
       .map((g) => ({
         ...g,
-        items: lq
-          ? g.items.filter((item) => getNameRef.current(item).toLowerCase().includes(lq))
-          : g.items,
+        items: lq ? g.items.filter((item) => getName(item).toLowerCase().includes(lq)) : g.items,
       }))
       .filter((g) => g.items.length > 0);
-  }, [groups, query]);
+  }, [groups, query, getName]);
 
   const filteredItems = useMemo(() => {
     if (groups) return null;
     const all = items ?? [];
     if (!query) return all;
     const lq = query.toLowerCase();
-    return all.filter((item) => getNameRef.current(item).toLowerCase().includes(lq));
-  }, [items, groups, query]);
+    return all.filter((item) => getName(item).toLowerCase().includes(lq));
+  }, [items, groups, query, getName]);
 
   const isEmpty = filteredGroups ? filteredGroups.length === 0 : (filteredItems?.length ?? 0) === 0;
 

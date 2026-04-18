@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, useCallback } from "react";
+import { useEffect, useEffectEvent, useMemo, useRef, useState, useCallback } from "react";
 import { getAgentIds, getAgentConfig, getMergedFlavors, type AgentFlavor } from "@/config/agents";
 import { useAgentSettingsStore, useCliAvailabilityStore, useAgentPreferencesStore } from "@/store";
 import { cliAvailabilityClient } from "@/clients";
@@ -132,7 +132,10 @@ export function AgentSettings({
   // Settings UI and the stored settings agree. useAgentLauncher.ts does this
   // cleanup on the next launch, but the UI otherwise shows vanilla with a
   // zombie flavorId in storage until the user launches the agent again.
-  useEffect(() => {
+  // updateAgent/onSettingsChange are stable Zustand actions / prop callbacks;
+  // calling them via useEffectEvent keeps them out of the deps array so the
+  // effect only reruns on activeAgentId/settings/ccrFlavorsByAgent changes.
+  const clearStaleFlavor = useEffectEvent(() => {
     if (!activeAgentId) return;
     const entry = settings?.agents?.[activeAgentId];
     if (!entry?.flavorId) return;
@@ -145,9 +148,12 @@ export function AgentSettings({
         onSettingsChange?.();
       })();
     }
-    // We intentionally omit updateAgent/onSettingsChange from deps — they're
-    // stable Zustand actions / prop callbacks and including them causes loops.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+  });
+  useEffect(() => {
+    void activeAgentId;
+    void settings;
+    void ccrFlavorsByAgent;
+    clearStaleFlavor();
   }, [activeAgentId, settings, ccrFlavorsByAgent]);
 
   const agentOptions = useMemo(

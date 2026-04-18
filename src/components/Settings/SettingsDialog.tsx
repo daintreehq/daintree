@@ -4,6 +4,7 @@ import {
   startTransition,
   useState,
   useEffect,
+  useEffectEvent,
   useDeferredValue,
   useMemo,
   useRef,
@@ -261,7 +262,9 @@ export function SettingsDialog({
 
   const [appVersion, setAppVersion] = useState<string>("Loading...");
 
-  useEffect(() => {
+  // activeTab is read non-reactively via useEffectEvent to avoid re-running
+  // this reset-on-open effect when the user changes tabs mid-session.
+  const handleOpenChange = useEffectEvent(() => {
     if (isOpen && defaultTab) {
       markTabVisited(defaultTab);
       if (defaultTab !== activeTab) {
@@ -285,7 +288,13 @@ export function SettingsDialog({
       setSearchQuery("");
       setHiddenSettingBanner(null);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+  });
+  useEffect(() => {
+    void isOpen;
+    void defaultTab;
+    void defaultSubtab;
+    void defaultSectionId;
+    handleOpenChange();
   }, [isOpen, defaultTab, defaultSubtab, defaultSectionId]);
 
   useEffect(() => {

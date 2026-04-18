@@ -226,9 +226,11 @@ export function ProjectResourceBadge() {
   const [open, setOpen] = useState(false);
   const [popoverData, setPopoverData] = useState<PopoverData | null>(null);
   const samplesRef = useRef<number[]>([]);
+  // Mirror into state so JSX doesn't read the ref during render (React Compiler).
+  const [samples, setSamples] = useState<number[]>([]);
 
   const memoryState = getMemoryState(stats.totalMemoryMB);
-  const trend = getTrendDirection(samplesRef.current);
+  const trend = getTrendDirection(samples);
   const projectIdsKey = useMemo(() => stats.projects.map((p) => p.id).join(","), [stats.projects]);
 
   const fetchStats = useCallback(async () => {
@@ -248,6 +250,7 @@ export function ProjectResourceBadge() {
         ...samplesRef.current.slice(-(MAX_SAMPLES - 1)),
         appMetrics.totalMemoryMB,
       ];
+      setSamples(samplesRef.current);
 
       return {
         runningProjects: running,
@@ -352,7 +355,7 @@ export function ProjectResourceBadge() {
               <DiagnosticsSection
                 diagnosticsInfo={popoverData.diagnosticsInfo}
                 trend={trend}
-                trendSamples={samplesRef.current}
+                trendSamples={samples}
               />
             </>
           ) : (

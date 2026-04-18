@@ -1,4 +1,4 @@
-import React, { useMemo, useCallback, useEffect, useRef, useState } from "react";
+import React, { useMemo, useCallback, useEffect, useEffectEvent, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { SortableContext, rectSortingStrategy } from "@dnd-kit/sortable";
 import { useDroppable } from "@dnd-kit/core";
@@ -450,8 +450,10 @@ export function ContentGrid({
 
   // Get tab groups for the active worktree
   const tabGroups = useMemo(() => {
+    void storeTerminalIds;
+    void panelsById;
+    void trashedTerminals;
     return getTabGroups("grid", activeWorktreeId ?? undefined);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- storeTerminalIds/panelsById/trashedTerminals are intentional trigger deps
   }, [getTabGroups, activeWorktreeId, storeTerminalIds, panelsById, trashedTerminals]);
 
   // Handler for adding a new tab to a single panel (creates a tab group)
@@ -695,17 +697,17 @@ export function ContentGrid({
     return ids;
   }, [tabGroups, showPlaceholder, placeholderIndex, placeholderInGrid]);
 
-  // Batch-fit grid terminals when layout (gridCols/count) changes
-  useEffect(() => {
+  // Batch-fit grid terminals when layout (gridCols/count) changes.
+  // gridTerminals is read via useEffectEvent so the effect doesn't re-run on
+  // worktree switch (which mutates gridTerminals without changing layout).
+  const startBatchFit = useEffectEvent((cancelRef: { cancelled: boolean }) => {
     const ids = gridTerminals.map((t) => t.id);
-    let cancelled = false;
-
-    const timeoutId = window.setTimeout(() => {
+    return window.setTimeout(() => {
       if (isDraggingRef.current) return;
 
       let index = 0;
       const processNext = () => {
-        if (cancelled || index >= ids.length) return;
+        if (cancelRef.cancelled || index >= ids.length) return;
         if (isDraggingRef.current) return;
 
         const id = ids[index++]!;
@@ -718,12 +720,17 @@ export function ContentGrid({
       };
       processNext();
     }, GRID_FIT_DELAY_MS);
+  });
+  useEffect(() => {
+    void gridCols;
+    void panelIds;
+    const cancelRef = { cancelled: false };
+    const timeoutId = startBatchFit(cancelRef);
 
     return () => {
-      cancelled = true;
+      cancelRef.cancelled = true;
       clearTimeout(timeoutId);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- gridTerminals intentionally excluded to prevent redundant fit cycles on worktree switch
   }, [gridCols, panelIds]);
 
   // Show "grid full" overlay when trying to drag from dock to a full grid

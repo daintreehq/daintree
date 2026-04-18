@@ -38,6 +38,9 @@ export function DockPanelOffscreenContainer({ children }: DockPanelOffscreenCont
   const offscreenSlotsRef = useRef<Map<string, HTMLElement>>(new Map());
   const offscreenContainerRef = useRef<HTMLDivElement>(null);
   const [, forceUpdate] = useState(0);
+  // Mirror into state so JSX doesn't read the ref during render (React Compiler).
+  // The ref remains the authoritative source; state snapshots it for render.
+  const [offscreenSlots, setOffscreenSlots] = useState<Map<string, HTMLElement>>(() => new Map());
 
   const activeWorktreeId = useWorktreeSelectionStore((s) => s.activeWorktreeId);
   const dockTerminals = usePanelStore(
@@ -145,6 +148,7 @@ export function DockPanelOffscreenContainer({ children }: DockPanelOffscreenCont
 
     // Force update to ensure portals render with new slots
     forceUpdate((n) => n + 1);
+    setOffscreenSlots(new Map(offscreenSlotsRef.current));
   }, [dockTerminals]);
 
   // Cleanup portal targets for removed terminals
@@ -211,7 +215,7 @@ export function DockPanelOffscreenContainer({ children }: DockPanelOffscreenCont
       {dockTerminals.map((terminal) => {
         // Use popover target if available, otherwise use offscreen slot
         const target = portalTargets.get(terminal.id);
-        const offscreenSlot = offscreenSlotsRef.current.get(terminal.id);
+        const offscreenSlot = offscreenSlots.get(terminal.id);
         const portalContainer = target || offscreenSlot;
 
         // Skip if no container yet (will render on next update after slots are created)

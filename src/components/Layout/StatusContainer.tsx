@@ -28,17 +28,16 @@ export interface StatusContainerConfig {
   statusAriaLabel: string;
   contentAriaLabel: string;
   contentId: string;
-  useTerminals: () => TerminalInstance[];
 }
 
 interface StatusContainerProps {
   config: StatusContainerConfig;
+  terminals: TerminalInstance[];
   compact?: boolean;
 }
 
-export function StatusContainer({ config, compact = false }: StatusContainerProps) {
+export function StatusContainer({ config, terminals, compact = false }: StatusContainerProps) {
   const [isOpen, setIsOpen] = useState(false);
-  const terminals = config.useTerminals();
   const { activateTerminal, pingTerminal } = usePanelStore(
     useShallow((state) => ({
       activateTerminal: state.activateTerminal,

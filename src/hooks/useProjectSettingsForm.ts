@@ -76,6 +76,19 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
     null
   );
   const prevProjectIdRef = useRef(projectId);
+  const projectPersistRef = useRef<() => Promise<void>>(undefined);
+  // Stable debounce instance initialized on mount. Uninitialized ref + mount
+  // effect keeps the render pure so the React Compiler can optimize this hook.
+  const debouncedProjectSaveRef = useRef<ReturnType<typeof debounce<[]>> | null>(null);
+  useEffect(() => {
+    debouncedProjectSaveRef.current = debounce(() => {
+      return projectPersistRef.current?.();
+    }, 500);
+    return () => {
+      debouncedProjectSaveRef.current?.cancel();
+      debouncedProjectSaveRef.current = null;
+    };
+  }, []);
 
   const { recipes, isLoading: recipesLoading } = useRecipeStore();
   const { worktreeMap, worktrees } = useWorktrees();
@@ -158,7 +171,7 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
 
   useEffect(() => {
     if (!isOpen) {
-      debouncedProjectSaveRef.current.cancel();
+      debouncedProjectSaveRef.current?.cancel();
       setProjectIsInitialized(false);
       setEnvironmentVariables([]);
       setProjectIconSvg(undefined);
@@ -287,8 +300,7 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
     setProjectIsInitialized(true);
   }, [projectSettings, isOpen, projectIsInitialized, currentProject, projectIsLoading, projectId]);
 
-  const projectPersistRef = useRef<() => Promise<void>>(undefined);
-  projectPersistRef.current = async () => {
+  const projectPersist = async () => {
     if (!projectSettings || !currentProject || !projectId) {
       return;
     }
@@ -396,11 +408,11 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
     }
   };
 
-  const debouncedProjectSaveRef = useRef(
-    debounce(() => {
-      return projectPersistRef.current?.();
-    }, 500)
-  );
+  // projectPersist is recreated each render; sync it to the ref so the
+  // debounced wrapper always calls the latest closure.
+  useEffect(() => {
+    projectPersistRef.current = projectPersist;
+  });
 
   useEffect(() => {
     if (!projectIsInitialized || !currentProjectSnapshot || !lastSavedSnapshotRef.current) {
@@ -408,19 +420,12 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
     }
     const equal = areSnapshotsEqual(lastSavedSnapshotRef.current, currentProjectSnapshot);
     if (equal) return;
-    debouncedProjectSaveRef.current();
+    debouncedProjectSaveRef.current?.();
   }, [currentProjectSnapshot, projectIsInitialized]);
-
-  useEffect(() => {
-    const save = debouncedProjectSaveRef.current;
-    return () => {
-      save.cancel();
-    };
-  }, []);
 
   const flush = async () => {
     // First try flushing any pending debounced save
-    await debouncedProjectSaveRef.current.flush();
+    await debouncedProjectSaveRef.current?.flush();
     // If no debounced save was pending (state changed but useEffect hasn't
     // scheduled it yet), force a direct save to avoid data loss on close
     if (projectIsInitialized && projectPersistRef.current) {

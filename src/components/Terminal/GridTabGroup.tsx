@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useEffect, useRef } from "react";
+import React, { useCallback, useMemo, useEffect, useEffectEvent, useRef } from "react";
 import { usePanelStore, type TerminalInstance } from "@/store";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { useCcrFlavorsStore } from "@/store/ccrFlavorsStore";
@@ -197,17 +197,23 @@ export const GridTabGroup = React.memo(function GridTabGroup({
     panelIdsRef.current = new Set(panels.map((p) => p.id));
   }, [panels]);
 
-  useEffect(() => {
-    if (prevActiveTabIdRef.current === activeTabId) return;
+  // isGroupFocused is read non-reactively — we only want to re-run when
+  // activeTabId changes, not when focus flickers.
+  const maybeScheduleFocus = useEffectEvent(() => {
+    if (prevActiveTabIdRef.current === activeTabId) return null;
     prevActiveTabIdRef.current = activeTabId;
-    if (!activeTabId || !isGroupFocused) return;
-    const rafId = requestAnimationFrame(() => {
+    if (!activeTabId || !isGroupFocused) return null;
+    return requestAnimationFrame(() => {
       const currentFocusedId = usePanelStore.getState().focusedId;
       if (!currentFocusedId || !panelIdsRef.current.has(currentFocusedId)) return;
       focusPanelInput(activeTabId);
     });
+  });
+  useEffect(() => {
+    void activeTabId;
+    const rafId = maybeScheduleFocus();
+    if (rafId == null) return;
     return () => cancelAnimationFrame(rafId);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTabId]);
 
   // Handle tab click - switch to that tab, only focus if group already focused
