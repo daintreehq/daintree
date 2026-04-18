@@ -124,6 +124,9 @@ export function LogsContent({ className, onSourcesChange }: LogsContentProps) {
 
   const filteredLogs = useMemo(() => filterLogs(logs, filters), [logs, filters]);
 
+  const previousSessionEntry = filteredLogs.find((log) => log.id === "previous-session-separator");
+  const mainLogs = filteredLogs.filter((log) => log.id !== "previous-session-separator");
+
   return (
     <div className={cn("flex flex-col h-full", className)}>
       <LogFilters
@@ -134,29 +137,42 @@ export function LogsContent({ className, onSourcesChange }: LogsContentProps) {
       />
 
       <div className="flex-1 relative">
-        {filteredLogs.length === 0 ? (
-          <div className="flex items-center justify-center h-full text-daintree-text/60 text-sm">
-            {logs.length === 0 ? "No logs yet" : "No logs match filters"}
-          </div>
-        ) : (
-          <Virtuoso
-            ref={virtuosoRef}
-            data={filteredLogs}
-            followOutput={autoScroll ? "smooth" : false}
-            atBottomStateChange={handleAtBottomChange}
-            itemContent={(_index, entry) => (
-              <LogEntry
-                key={entry.id}
-                entry={entry}
-                isExpanded={expandedIds.has(entry.id)}
-                onToggle={() => toggleExpanded(entry.id)}
-              />
-            )}
-            className="absolute inset-0 overflow-y-auto overflow-x-hidden font-mono"
-          />
-        )}
+        <div className="h-full overflow-y-auto overflow-x-hidden font-mono">
+          {previousSessionEntry && !filters?.search && (
+            <div className="border-b border-daintree-border bg-daintree-surface-secondary/50 p-3">
+              <div className="flex items-center gap-2 text-daintree-text-secondary text-xs font-medium mb-2">
+                <div className="w-2 h-2 rounded-full bg-daintree-text-secondary/40" />
+                <span>Previous session</span>
+              </div>
+              <pre className="text-xs text-daintree-text/70 whitespace-pre-wrap break-all font-mono">
+                {String(previousSessionEntry.context?.tail || "")}
+              </pre>
+            </div>
+          )}
+          {mainLogs.length === 0 && !previousSessionEntry ? (
+            <div className="flex items-center justify-center h-full text-daintree-text/60 text-sm">
+              {logs.length === 0 ? "No logs yet" : "No logs match filters"}
+            </div>
+          ) : (
+            <Virtuoso
+              ref={virtuosoRef}
+              data={mainLogs}
+              followOutput={autoScroll ? "smooth" : false}
+              atBottomStateChange={handleAtBottomChange}
+              itemContent={(_index, entry) => (
+                <LogEntry
+                  key={entry.id}
+                  entry={entry}
+                  isExpanded={expandedIds.has(entry.id)}
+                  onToggle={() => toggleExpanded(entry.id)}
+                />
+              )}
+              className="absolute inset-0 overflow-y-auto overflow-x-hidden font-mono"
+            />
+          )}
+        </div>
 
-        {!atBottom && filteredLogs.length > 0 && (
+        {!atBottom && mainLogs.length > 0 && (
           <Button
             variant="info"
             size="sm"
