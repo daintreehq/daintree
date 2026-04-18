@@ -135,6 +135,7 @@ describe("createHardenedGit", () => {
       "core.sshCommand=",
       "core.gitProxy=",
       "core.hooksPath=",
+      "core.quotepath=false",
     ];
     for (const key of expectedKeys) {
       expect(options.config).toContain(key);
@@ -318,6 +319,7 @@ describe("config constants", () => {
       "protocol.ext.allow=never",
       "core.gitProxy=",
       "core.hooksPath=",
+      "core.quotepath=false",
     ];
     for (const entry of securityEntries) {
       expect(HARDENED_GIT_CONFIG).toContain(entry);
