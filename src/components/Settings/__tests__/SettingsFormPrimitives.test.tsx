@@ -71,13 +71,10 @@ describe("SettingsInput", () => {
     const { container } = render(<SettingsInput label="Host" />);
     const input = screen.getByLabelText("Host");
     expect(input.className).toContain("bg-surface-input");
-    expect(input.className).toContain("focus-visible:ring-2");
-    expect(input.className).toContain("focus-visible:ring-ring");
-    expect(input.className).toContain("focus-visible:ring-offset-2");
-    expect(input.className).toContain("focus-visible:ring-offset-background");
-    expect(input.className).toContain("outline-2");
-    expect(input.className).toContain("outline-transparent");
-    expect(input.className).toContain("outline-offset-2");
+    expect(input.className).toContain("focus-visible:outline");
+    expect(input.className).toContain("focus-visible:outline-2");
+    expect(input.className).toContain("focus-visible:outline-daintree-accent");
+    expect(input.className).toContain("focus-visible:outline-offset-2");
   });
 
   it("uses semantic text tokens for label and description", () => {
@@ -168,13 +165,10 @@ describe("SettingsTextarea", () => {
     render(<SettingsTextarea label="Notes" />);
     const textarea = screen.getByLabelText("Notes");
     expect(textarea.className).toContain("bg-surface-input");
-    expect(textarea.className).toContain("focus-visible:ring-2");
-    expect(textarea.className).toContain("focus-visible:ring-ring");
-    expect(textarea.className).toContain("focus-visible:ring-offset-2");
-    expect(textarea.className).toContain("focus-visible:ring-offset-background");
-    expect(textarea.className).toContain("outline-2");
-    expect(textarea.className).toContain("outline-transparent");
-    expect(textarea.className).toContain("outline-offset-2");
+    expect(textarea.className).toContain("focus-visible:outline");
+    expect(textarea.className).toContain("focus-visible:outline-2");
+    expect(textarea.className).toContain("focus-visible:outline-daintree-accent");
+    expect(textarea.className).toContain("focus-visible:outline-offset-2");
     expect(textarea.className).toContain("font-mono");
     expect(textarea.className).toContain("resize-y");
   });

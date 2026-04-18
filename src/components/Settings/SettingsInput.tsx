@@ -4,7 +4,7 @@ import { RotateCcw } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const INPUT_CLASSES =
-  "w-full bg-surface-input border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-daintree-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background outline-2 outline-transparent outline-offset-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed";
+  "w-full bg-surface-input border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-daintree-text focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed";
 
 interface SettingsInputProps extends Omit<ComponentPropsWithoutRef<"input">, "id"> {
   label: string;

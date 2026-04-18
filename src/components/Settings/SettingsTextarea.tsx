@@ -4,7 +4,7 @@ import { RotateCcw } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const TEXTAREA_CLASSES =
-  "w-full bg-surface-input border border-border-strong rounded-[var(--radius-md)] px-3 py-2 text-xs font-mono text-daintree-text placeholder:text-text-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background outline-2 outline-transparent outline-offset-2 transition-colors resize-y disabled:opacity-50 disabled:cursor-not-allowed";
+  "w-full bg-surface-input border border-border-strong rounded-[var(--radius-md)] px-3 py-2 text-xs font-mono text-daintree-text placeholder:text-text-muted focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2 transition-colors resize-y disabled:opacity-50 disabled:cursor-not-allowed";
 
 interface SettingsTextareaProps extends Omit<ComponentPropsWithoutRef<"textarea">, "id"> {
   label: string;
