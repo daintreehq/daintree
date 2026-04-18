@@ -122,16 +122,21 @@ export class ActionService {
       return { ok: false, error };
     }
 
-    void this.emitActionDispatchedEvent({
-      actionId,
-      args: this.redactSensitiveArgs(args),
-      context,
-      source,
-      timestamp: Date.now(),
-    });
+    const startMs = Date.now();
 
     try {
       const result = await definition.run(validatedArgs, context);
+      const durationMs = Date.now() - startMs;
+      void this.emitActionDispatchedEvent({
+        actionId,
+        args: this.redactSensitiveArgs(args),
+        context,
+        source,
+        timestamp: startMs,
+        category: definition.category,
+        durationMs,
+        safeArgs: this.extractSafeBreadcrumbArgs(args, definition),
+      });
       this.emitShortcutHint(actionId, source);
       return { ok: true, result: result as Result };
     } catch (err) {
@@ -241,6 +246,32 @@ export class ActionService {
     return result;
   }
 
+  /**
+   * Extract the subset of top-level arg keys the action opts in to exposing
+   * in Sentry breadcrumbs. Returns undefined when no allowlist is declared
+   * or when args aren't a plain object. Listed keys are passed through
+   * verbatim — the allowlist is the policy.
+   */
+  private extractSafeBreadcrumbArgs(
+    args: unknown,
+    definition: AnyActionDefinition
+  ): Record<string, unknown> | undefined {
+    const allowlist = definition.safeBreadcrumbArgs;
+    if (!allowlist || allowlist.length === 0) return undefined;
+    if (args === null || typeof args !== "object" || Array.isArray(args)) return undefined;
+
+    const source = args as Record<string, unknown>;
+    const picked: Record<string, unknown> = {};
+    let hasAny = false;
+    for (const key of allowlist) {
+      if (Object.prototype.hasOwnProperty.call(source, key)) {
+        picked[key] = source[key];
+        hasAny = true;
+      }
+    }
+    return hasAny ? picked : undefined;
+  }
+
   private emitShortcutHint(actionId: ActionId, source: ActionSource): void {
     if (source !== "user") return;
     try {
@@ -264,6 +295,9 @@ export class ActionService {
     context: ActionContext;
     source: ActionSource;
     timestamp: number;
+    category: string;
+    durationMs: number;
+    safeArgs?: Record<string, unknown>;
   }): Promise<void> {
     if (!isElectronApiAvailable()) return;
 
@@ -274,6 +308,9 @@ export class ActionService {
         source: payload.source,
         context: payload.context,
         timestamp: payload.timestamp,
+        category: payload.category,
+        durationMs: payload.durationMs,
+        ...(payload.safeArgs ? { safeArgs: payload.safeArgs } : {}),
       });
     } catch (err) {
       logWarn("Failed to emit action:dispatched event", { error: err });

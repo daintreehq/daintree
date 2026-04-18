@@ -1,3 +1,16 @@
+export type ActionBreadcrumbSource = "user" | "keybinding" | "menu" | "agent" | "context-menu";
+
+export interface ActionBreadcrumb {
+  id: string;
+  actionId: string;
+  category: string;
+  source: ActionBreadcrumbSource;
+  durationMs: number;
+  timestamp: number;
+  args?: Record<string, unknown>;
+  count: number;
+}
+
 export interface CrashLogEntry {
   id: string;
   timestamp: number;
@@ -24,6 +37,7 @@ export interface CrashLogEntry {
   cpuCount?: number;
   gpuAccelerationDisabled?: boolean;
   processUptime?: number;
+  recentActions?: ActionBreadcrumb[];
 }
 
 export interface PanelSummary {

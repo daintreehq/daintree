@@ -330,6 +330,13 @@ export interface ActionDefinition<
   isEnabled?: (ctx: ActionContext) => boolean;
   disabledReason?: (ctx: ActionContext) => string | undefined;
   run: (args: InferActionArgs<S>, ctx: ActionContext) => Promise<Result>;
+  /**
+   * Opt-in allowlist of top-level arg keys that are safe to include in Sentry
+   * action breadcrumbs. Args are omitted by default — populate this only with
+   * keys whose values never carry secrets, file paths, or PII. Listed keys are
+   * copied verbatim (no further sanitization), so the allowlist is the policy.
+   */
+  safeBreadcrumbArgs?: readonly string[];
 }
 
 export interface ActionManifestEntry {

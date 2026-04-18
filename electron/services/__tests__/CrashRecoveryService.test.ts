@@ -31,6 +31,14 @@ vi.mock("../GpuCrashMonitorService.js", () => ({
   isGpuDisabledByFlag: vi.fn(() => false),
 }));
 
+const getRecentActionsMock = vi.hoisted(() => vi.fn(() => [] as unknown[]));
+
+vi.mock("../ActionBreadcrumbService.js", () => ({
+  getActionBreadcrumbService: () => ({
+    getRecentActions: getRecentActionsMock,
+  }),
+}));
+
 import { CrashRecoveryService } from "../CrashRecoveryService.js";
 
 function makeService(): CrashRecoveryService {
@@ -364,6 +372,57 @@ describe("CrashRecoveryService", () => {
       const files = fs.readdirSync(crashDir).filter((f) => f.endsWith(".json"));
       const entry = JSON.parse(fs.readFileSync(path.join(crashDir, files[0]), "utf8"));
       expect(entry.errorMessage).toBe("string error");
+    });
+
+    it("includes recentActions in crash entry when the ring has entries", () => {
+      const actions = [
+        {
+          id: "a1",
+          actionId: "panel.focus",
+          category: "panel",
+          source: "user",
+          durationMs: 2,
+          timestamp: 1_700_000_000_000,
+          count: 1,
+        },
+      ];
+      getRecentActionsMock.mockReturnValueOnce(actions);
+
+      const svc = makeService();
+      svc.initialize();
+      svc.recordCrash(new Error("boom"));
+
+      const crashDir = path.join(userData, "crashes");
+      const files = fs.readdirSync(crashDir).filter((f) => f.endsWith(".json"));
+      const entry = JSON.parse(fs.readFileSync(path.join(crashDir, files[0]), "utf8"));
+      expect(entry.recentActions).toEqual(actions);
+    });
+
+    it("omits recentActions when the ring is empty", () => {
+      getRecentActionsMock.mockReturnValueOnce([]);
+
+      const svc = makeService();
+      svc.initialize();
+      svc.recordCrash(new Error("boom"));
+
+      const crashDir = path.join(userData, "crashes");
+      const files = fs.readdirSync(crashDir).filter((f) => f.endsWith(".json"));
+      const entry = JSON.parse(fs.readFileSync(path.join(crashDir, files[0]), "utf8"));
+      expect(entry.recentActions).toBeUndefined();
+    });
+
+    it("still records crash when ActionBreadcrumbService throws", () => {
+      getRecentActionsMock.mockImplementationOnce(() => {
+        throw new Error("ring corrupted");
+      });
+
+      const svc = makeService();
+      svc.initialize();
+      expect(() => svc.recordCrash(new Error("boom"))).not.toThrow();
+
+      const crashDir = path.join(userData, "crashes");
+      const files = fs.readdirSync(crashDir).filter((f) => f.endsWith(".json"));
+      expect(files.length).toBe(1);
     });
   });
 

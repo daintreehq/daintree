@@ -5,6 +5,7 @@ const sentryInitMock = vi.hoisted(() => vi.fn());
 const captureEventMock = vi.hoisted(() => vi.fn(() => "mock-event-id"));
 const sentryCloseMock = vi.hoisted(() => vi.fn(() => Promise.resolve(true)));
 const sentrySetTagMock = vi.hoisted(() => vi.fn());
+const sentryAddBreadcrumbMock = vi.hoisted(() => vi.fn());
 
 const storeMock = vi.hoisted(() => {
   const data: Record<string, unknown> = {
@@ -30,6 +31,7 @@ vi.mock("@sentry/electron/main", () => ({
   captureEvent: captureEventMock,
   close: sentryCloseMock,
   setTag: sentrySetTagMock,
+  addBreadcrumb: sentryAddBreadcrumbMock,
 }));
 
 import {
@@ -560,5 +562,109 @@ describe("closeTelemetry", () => {
     expect(captureEventMock).not.toHaveBeenCalled();
 
     process.env.SENTRY_DSN = original;
+  });
+});
+
+describe("addActionBreadcrumb", () => {
+  async function loadFreshModule() {
+    vi.resetModules();
+    return await import("../TelemetryService.js");
+  }
+
+  const crumb = {
+    id: "abc",
+    actionId: "foo.bar",
+    category: "preferences",
+    source: "user" as const,
+    durationMs: 7,
+    timestamp: 1_700_000_000_000,
+    count: 1,
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    sentryAddBreadcrumbMock.mockReset();
+    setPrivacy({ telemetryLevel: "off", hasSeenPrompt: false });
+  });
+
+  it("is a no-op when telemetry is off (no Sentry call)", async () => {
+    const mod = await loadFreshModule();
+    mod.addActionBreadcrumb(crumb);
+    expect(sentryAddBreadcrumbMock).not.toHaveBeenCalled();
+  });
+
+  it("is a no-op when Sentry has not been initialized yet", async () => {
+    setPrivacy({ telemetryLevel: "errors" });
+    const mod = await loadFreshModule();
+    // No initializeTelemetry() call — sentryModule is null
+    mod.addActionBreadcrumb(crumb);
+    expect(sentryAddBreadcrumbMock).not.toHaveBeenCalled();
+  });
+
+  it("calls Sentry.addBreadcrumb with Unix seconds timestamp and dotted category once initialized", async () => {
+    setPrivacy({ telemetryLevel: "errors" });
+    const original = process.env.SENTRY_DSN;
+    process.env.SENTRY_DSN = "https://test@sentry.io/123";
+    try {
+      const mod = await loadFreshModule();
+      await mod.initializeTelemetry();
+      mod.addActionBreadcrumb(crumb);
+      expect(sentryAddBreadcrumbMock).toHaveBeenCalledTimes(1);
+      const arg = sentryAddBreadcrumbMock.mock.calls[0]![0];
+      expect(arg.category).toBe("action.preferences");
+      expect(arg.message).toBe("foo.bar");
+      expect(arg.timestamp).toBe(1_700_000_000); // seconds, not ms
+      expect(arg.level).toBe("info");
+      expect(arg.data).toMatchObject({ source: "user", durationMs: 7 });
+      expect(arg.data.count).toBeUndefined();
+    } finally {
+      process.env.SENTRY_DSN = original;
+    }
+  });
+
+  it("includes count only when greater than 1", async () => {
+    setPrivacy({ telemetryLevel: "errors" });
+    const original = process.env.SENTRY_DSN;
+    process.env.SENTRY_DSN = "https://test@sentry.io/123";
+    try {
+      const mod = await loadFreshModule();
+      await mod.initializeTelemetry();
+      mod.addActionBreadcrumb({ ...crumb, count: 3 });
+      const arg = sentryAddBreadcrumbMock.mock.calls[0]![0];
+      expect(arg.data.count).toBe(3);
+    } finally {
+      process.env.SENTRY_DSN = original;
+    }
+  });
+
+  it("includes args when present on the breadcrumb", async () => {
+    setPrivacy({ telemetryLevel: "errors" });
+    const original = process.env.SENTRY_DSN;
+    process.env.SENTRY_DSN = "https://test@sentry.io/123";
+    try {
+      const mod = await loadFreshModule();
+      await mod.initializeTelemetry();
+      mod.addActionBreadcrumb({ ...crumb, args: { show: true } });
+      const arg = sentryAddBreadcrumbMock.mock.calls[0]![0];
+      expect(arg.data.args).toEqual({ show: true });
+    } finally {
+      process.env.SENTRY_DSN = original;
+    }
+  });
+
+  it("swallows errors thrown by Sentry.addBreadcrumb", async () => {
+    setPrivacy({ telemetryLevel: "errors" });
+    const original = process.env.SENTRY_DSN;
+    process.env.SENTRY_DSN = "https://test@sentry.io/123";
+    try {
+      const mod = await loadFreshModule();
+      await mod.initializeTelemetry();
+      sentryAddBreadcrumbMock.mockImplementationOnce(() => {
+        throw new Error("transport failed");
+      });
+      expect(() => mod.addActionBreadcrumb(crumb)).not.toThrow();
+    } finally {
+      process.env.SENTRY_DSN = original;
+    }
   });
 });

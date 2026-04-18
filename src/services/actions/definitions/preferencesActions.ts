@@ -40,6 +40,7 @@ export function registerPreferencesActions(
     danger: "safe",
     scope: "renderer",
     argsSchema: z.object({ show: z.boolean() }),
+    safeBreadcrumbArgs: ["show"],
     run: async (args: unknown) => {
       const { show } = args as { show: boolean };
       usePreferencesStore.getState().setShowProjectPulse(show);
@@ -55,6 +56,7 @@ export function registerPreferencesActions(
     danger: "safe",
     scope: "renderer",
     argsSchema: z.object({ show: z.boolean() }),
+    safeBreadcrumbArgs: ["show"],
     run: async (args: unknown) => {
       const { show } = args as { show: boolean };
       usePreferencesStore.getState().setShowDeveloperTools(show);

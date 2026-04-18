@@ -17,6 +17,38 @@ function safeJsonSize(value: unknown): number | null {
   }
 }
 
+const RESERVED_KEYS = new Set(["__proto__", "constructor", "prototype"]);
+const SAFE_ARGS_MAX_BYTES = 1024;
+
+/**
+ * Strip a renderer-supplied `safeArgs` blob down to primitives-only with
+ * reserved keys removed. The renderer's `ActionService.extractSafeBreadcrumbArgs`
+ * already filters by the per-action allowlist; this is a main-process defense
+ * in depth — we don't trust the renderer and the main process has no registry
+ * to cross-check against.
+ */
+function sanitizeSafeArgs(value: unknown): Record<string, unknown> | undefined {
+  if (!isPlainObject(value)) return undefined;
+
+  const result: Record<string, unknown> = {};
+  for (const [key, raw] of Object.entries(value)) {
+    if (RESERVED_KEYS.has(key)) continue;
+    if (
+      raw === null ||
+      typeof raw === "string" ||
+      typeof raw === "number" ||
+      typeof raw === "boolean"
+    ) {
+      result[key] = raw;
+    }
+  }
+
+  if (Object.keys(result).length === 0) return undefined;
+  const size = safeJsonSize(result);
+  if (size === null || size > SAFE_ARGS_MAX_BYTES) return undefined;
+  return result;
+}
+
 function normalizeActionDispatchedPayload(
   payload: unknown
 ): DaintreeEventMap["action:dispatched"] | null {
@@ -63,12 +95,26 @@ function normalizeActionDispatchedPayload(
           ? { _redacted: "payload_too_large", size: argsSize }
           : args;
 
+  const categoryRaw = payload.category;
+  const category = typeof categoryRaw === "string" && categoryRaw.length <= 100 ? categoryRaw : "";
+
+  const durationRaw = payload.durationMs;
+  const durationMs =
+    typeof durationRaw === "number" && Number.isFinite(durationRaw) && durationRaw >= 0
+      ? durationRaw
+      : 0;
+
+  const safeBreadcrumbArgs = sanitizeSafeArgs(payload.safeArgs);
+
   return {
     actionId,
     args: safeArgs,
     source,
     context,
     timestamp,
+    category,
+    durationMs,
+    ...(safeBreadcrumbArgs ? { safeArgs: safeBreadcrumbArgs } : {}),
   };
 }
 
