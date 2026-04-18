@@ -4,7 +4,7 @@
  * Colors are read from CSS custom properties with hardcoded fallbacks.
  */
 
-const DECAY_DURATION = 90 * 1000;
+export const DECAY_DURATION = 90 * 1000;
 
 function getCSSColor(property: string, fallback: string): string {
   if (typeof document === "undefined") return fallback;

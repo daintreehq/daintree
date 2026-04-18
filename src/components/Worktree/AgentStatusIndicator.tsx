@@ -92,7 +92,7 @@ export function AgentStatusIndicator({ state, className }: AgentStatusIndicatorP
             config.pulse && "animate-agent-pulse",
             className
           )}
-          role="status"
+          role="img"
           aria-label={`Agent status: ${config.label}`}
         >
           {config.icon}

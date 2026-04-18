@@ -1,55 +1,43 @@
 import { useState, useEffect } from "react";
 import { cn } from "@/lib/utils";
-import { getActivityColor } from "@/utils/colorInterpolation";
-import { formatTimestampExact } from "@/utils/textParsing";
+import { DECAY_DURATION, getActivityColor } from "@/utils/colorInterpolation";
 import { useGlobalSecondTicker } from "@/hooks/useGlobalSecondTicker";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 interface ActivityLightProps {
   lastActivityTimestamp?: number | null;
   className?: string;
 }
 
-const GRAY_COLOR = "#52525b";
+function isActivelyWorking(timestamp: number | null | undefined): boolean {
+  if (timestamp == null || !Number.isFinite(timestamp)) return false;
+  return Date.now() - timestamp < DECAY_DURATION;
+}
 
 /**
- * Activity indicator that fades from green to gray over 90 seconds.
- * Uses a shared global ticker for efficiency.
+ * Activity indicator that fades from accent to idle over 90 seconds.
+ * Conveys state via both colour (fade) and shape (filled dot active,
+ * hollow ring idle) to satisfy WCAG 1.4.1. Decorative — usage sites
+ * always render adjacent `LiveTimeAgo` text, so it is `aria-hidden`.
  */
 export function ActivityLight({ lastActivityTimestamp, className }: ActivityLightProps) {
   const globalTick = useGlobalSecondTicker();
   const [color, setColor] = useState(() => getActivityColor(lastActivityTimestamp));
+  const [active, setActive] = useState(() => isActivelyWorking(lastActivityTimestamp));
 
   useEffect(() => {
-    if (lastActivityTimestamp == null) {
-      setColor(GRAY_COLOR);
-      return;
-    }
-
-    const newColor = getActivityColor(lastActivityTimestamp);
-    setColor(newColor);
-
-    if (newColor === GRAY_COLOR) {
-      return;
-    }
+    setColor(getActivityColor(lastActivityTimestamp));
+    setActive(isActivelyWorking(lastActivityTimestamp));
   }, [lastActivityTimestamp, globalTick]);
 
-  const tooltipText = formatTimestampExact(lastActivityTimestamp);
-
   return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <div
-          className={cn(
-            "w-2.5 h-2.5 rounded-full transition-colors duration-1000 ease-linear",
-            className
-          )}
-          style={{ backgroundColor: color }}
-          role="status"
-          aria-label={tooltipText}
-        />
-      </TooltipTrigger>
-      <TooltipContent side="bottom">{tooltipText}</TooltipContent>
-    </Tooltip>
+    <div
+      aria-hidden="true"
+      className={cn(
+        "w-2.5 h-2.5 rounded-full transition-colors duration-1000 ease-linear",
+        active ? "" : "border bg-transparent",
+        className
+      )}
+      style={active ? { backgroundColor: color } : { borderColor: color }}
+    />
   );
 }
