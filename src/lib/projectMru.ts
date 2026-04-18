@@ -33,5 +33,6 @@ export function advanceMruIndex(
     return next < 1 ? 1 : next;
   }
   if (currentIndex <= 1) return lastIndex;
+  if (currentIndex > lastIndex) return lastIndex;
   return currentIndex - 1;
 }

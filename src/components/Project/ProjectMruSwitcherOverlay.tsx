@@ -33,10 +33,10 @@ function ProjectMruSwitcherOverlayInner({
       tabIndex={-1}
     >
       <div
-        className="pointer-events-none min-w-[320px] max-w-[420px] rounded-lg border border-palette-border bg-palette-bg/95 p-2 shadow-xl backdrop-blur-md"
+        className="pointer-events-none min-w-[320px] max-w-[420px] rounded-[var(--radius-xl)] border border-[var(--border-overlay)] bg-daintree-bg/95 p-2 shadow-modal backdrop-blur-md"
         tabIndex={-1}
       >
-        <div className="px-2 pb-1 pt-1 text-[11px] font-medium uppercase tracking-wide text-palette-muted">
+        <div className="px-2 pb-1 pt-1 text-[11px] font-medium uppercase tracking-wide text-daintree-text/50">
           Recent projects
         </div>
         <ul className="flex flex-col gap-0.5">
@@ -48,10 +48,10 @@ function ProjectMruSwitcherOverlayInner({
               <li
                 key={project.id}
                 className={cn(
-                  "flex items-center gap-2 rounded px-2 py-1.5 text-sm",
+                  "flex items-center gap-2 rounded-[var(--radius-md)] px-2 py-1.5 text-sm",
                   isSelected
-                    ? "bg-palette-accent/15 ring-1 ring-inset ring-palette-accent text-palette-fg"
-                    : "text-palette-fg/80"
+                    ? "bg-overlay-soft ring-1 ring-inset ring-daintree-accent text-daintree-text"
+                    : "text-daintree-text/80"
                 )}
               >
                 <span
@@ -62,7 +62,7 @@ function ProjectMruSwitcherOverlayInner({
                 </span>
                 <span className="flex-1 truncate">{project.name}</span>
                 {isCurrent && (
-                  <span className="text-[10px] uppercase tracking-wide text-palette-muted">
+                  <span className="text-[10px] uppercase tracking-wide text-daintree-text/40">
                     current
                   </span>
                 )}

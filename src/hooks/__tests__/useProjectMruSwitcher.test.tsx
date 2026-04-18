@@ -442,6 +442,64 @@ describe("useProjectMruSwitcher", () => {
     expect(sp).toHaveBeenCalled();
   });
 
+  it("fires inside xterm helper textarea (common terminal focus state)", () => {
+    renderHook(() => useProjectMruSwitcher());
+
+    const term = document.createElement("div");
+    term.className = "xterm";
+    const helper = document.createElement("textarea");
+    helper.className = "xterm-helper-textarea";
+    term.appendChild(helper);
+    document.body.appendChild(term);
+
+    act(() => {
+      keyDown("Minus", { target: helper });
+    });
+    act(() => {
+      keyUp("Meta");
+    });
+
+    expect(switchProjectMock).toHaveBeenCalledWith("p-recent");
+    term.remove();
+  });
+
+  it("calls stopImmediatePropagation to block sibling capture listeners", () => {
+    renderHook(() => useProjectMruSwitcher());
+
+    const event = new KeyboardEvent("keydown", {
+      key: "–",
+      code: "Minus",
+      metaKey: true,
+      altKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    const sip = vi.spyOn(event, "stopImmediatePropagation");
+
+    act(() => {
+      window.dispatchEvent(event);
+    });
+
+    expect(sip).toHaveBeenCalled();
+  });
+
+  it("revalidates target against live store at commit time", () => {
+    renderHook(() => useProjectMruSwitcher());
+
+    act(() => {
+      keyDown("Minus");
+      vi.advanceTimersByTime(130);
+    });
+    // Mutate the store: remove the selected target (p-recent at index 1)
+    projectState.projects = projectState.projects.filter((p) => p.id !== "p-recent");
+
+    act(() => {
+      keyUp("Meta");
+    });
+
+    expect(switchProjectMock).not.toHaveBeenCalledWith("p-recent");
+  });
+
   it("ignores keydowns when modifiers are absent", () => {
     renderHook(() => useProjectMruSwitcher());
 

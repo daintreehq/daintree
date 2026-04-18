@@ -35,6 +35,7 @@ function createIdleSession(): SessionState {
 
 function isEditableTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
+  if (target.closest(".xterm") !== null) return false;
   if (target.tagName === "INPUT" || target.tagName === "TEXTAREA") return true;
   if (target.isContentEditable) return true;
   return false;
@@ -73,13 +74,15 @@ export function useProjectMruSwitcher(): UseProjectMruSwitcherReturn {
   }, []);
 
   const commitSelection = useCallback((session: SessionState) => {
-    const target = session.projects[session.selectedIndex];
-    if (!target) return;
+    const snapshotTarget = session.projects[session.selectedIndex];
+    if (!snapshotTarget) return;
     const state = useProjectStore.getState();
-    if (state.currentProject?.id === target.id) return;
+    const liveTarget = state.projects.find((p) => p.id === snapshotTarget.id);
+    if (!liveTarget) return;
+    if (state.currentProject?.id === liveTarget.id) return;
     const switchFn =
-      target.status === "background" ? state.reopenProject : state.switchProject;
-    Promise.resolve(switchFn(target.id)).catch((error) => {
+      liveTarget.status === "background" ? state.reopenProject : state.switchProject;
+    Promise.resolve(switchFn(liveTarget.id)).catch((error) => {
       notify({
         type: "error",
         title: "Failed to switch project",
@@ -118,6 +121,7 @@ export function useProjectMruSwitcher(): UseProjectMruSwitcherReturn {
 
       event.preventDefault();
       event.stopPropagation();
+      event.stopImmediatePropagation();
 
       const state = useProjectStore.getState();
       const currentId = state.currentProject?.id ?? null;

@@ -26,7 +26,7 @@ describe("getMruProjects", () => {
 
   it("treats missing lastOpened as 0", () => {
     const projects: Project[] = [
-      { id: "a", path: "/a", name: "A", emoji: "🌲" },
+      { id: "a", path: "/a", name: "A", emoji: "🌲" } as unknown as Project,
       make("b", 50),
     ];
     const sorted = getMruProjects(projects);
@@ -70,5 +70,13 @@ describe("advanceMruIndex", () => {
 
   it("clamps sub-1 index back to 1 on older", () => {
     expect(advanceMruIndex(0, "older", 5)).toBe(1);
+  });
+
+  it("clamps above-range index on newer (list shrank mid-session)", () => {
+    expect(advanceMruIndex(3, "newer", 2)).toBe(1);
+  });
+
+  it("wraps above-range index on older (list shrank mid-session)", () => {
+    expect(advanceMruIndex(5, "older", 3)).toBe(1);
   });
 });
