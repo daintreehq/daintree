@@ -324,11 +324,17 @@ export function typedHandle<K extends keyof IpcInvokeMap>(
   const captureEnabled = isPerformanceCaptureEnabled();
   let requestCounter = 0;
 
-  ipcMain.handle(channel as string, async (_event, ...args) => {
-    if (!captureEnabled) {
-      return await handler(...(args as IpcInvokeMap[K]["args"]));
-    }
+  // Fast path: when perf capture is disabled, skip the async wrapper so
+  // synchronous handlers stay synchronous (preserves existing behavior for
+  // handlers that returned values directly when registered via ipcMain.handle).
+  if (!captureEnabled) {
+    ipcMain.handle(channel as string, (_event, ...args) =>
+      handler(...(args as IpcInvokeMap[K]["args"]))
+    );
+    return () => ipcMain.removeHandler(channel as string);
+  }
 
+  ipcMain.handle(channel as string, async (_event, ...args) => {
     const traceId = `${String(channel)}-${Date.now().toString(36)}-${(++requestCounter).toString(36)}`;
     const startedAt = performance.now();
     markPerformance(PERF_MARKS.IPC_REQUEST_START, {
@@ -375,15 +381,22 @@ export function typedHandleWithContext<K extends keyof IpcInvokeMap>(
   const captureEnabled = isPerformanceCaptureEnabled();
   let requestCounter = 0;
 
+  if (!captureEnabled) {
+    ipcMain.handle(channel as string, (event, ...args) => {
+      const webContentsId = event.sender.id;
+      const senderWindow = getWindowForWebContents(event.sender);
+      const projectId = getProjectViewManager()?.getProjectIdForWebContents(webContentsId) ?? null;
+      const ctx: IpcContext = { event, webContentsId, senderWindow, projectId };
+      return handler(ctx, ...(args as IpcInvokeMap[K]["args"]));
+    });
+    return () => ipcMain.removeHandler(channel as string);
+  }
+
   ipcMain.handle(channel as string, async (event, ...args) => {
     const webContentsId = event.sender.id;
     const senderWindow = getWindowForWebContents(event.sender);
     const projectId = getProjectViewManager()?.getProjectIdForWebContents(webContentsId) ?? null;
     const ctx: IpcContext = { event, webContentsId, senderWindow, projectId };
-
-    if (!captureEnabled) {
-      return await handler(ctx, ...(args as IpcInvokeMap[K]["args"]));
-    }
 
     const traceId = `${String(channel)}-${Date.now().toString(36)}-${(++requestCounter).toString(36)}`;
     const startedAt = performance.now();

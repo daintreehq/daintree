@@ -1,6 +1,5 @@
-import { ipcMain } from "electron";
 import { CHANNELS } from "../channels.js";
-import { broadcastToRenderer } from "../utils.js";
+import { broadcastToRenderer, typedHandle } from "../utils.js";
 import type { HandlerDependencies } from "../types.js";
 import type {
   DevPreviewEnsureRequest,
@@ -19,50 +18,30 @@ export function registerDevPreviewHandlers(deps: HandlerDependencies): () => voi
     broadcastToRenderer(CHANNELS.DEV_PREVIEW_STATE_CHANGED, payload);
   });
 
-  const handleEnsure = async (
-    _event: Electron.IpcMainInvokeEvent,
-    request: DevPreviewEnsureRequest
-  ) => {
+  const handleEnsure = async (request: DevPreviewEnsureRequest) => {
     return sessionService.ensure(request);
   };
-  ipcMain.handle(CHANNELS.DEV_PREVIEW_ENSURE, handleEnsure);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.DEV_PREVIEW_ENSURE));
+  handlers.push(typedHandle(CHANNELS.DEV_PREVIEW_ENSURE, handleEnsure));
 
-  const handleRestart = async (
-    _event: Electron.IpcMainInvokeEvent,
-    request: DevPreviewSessionRequest
-  ) => {
+  const handleRestart = async (request: DevPreviewSessionRequest) => {
     return sessionService.restart(request);
   };
-  ipcMain.handle(CHANNELS.DEV_PREVIEW_RESTART, handleRestart);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.DEV_PREVIEW_RESTART));
+  handlers.push(typedHandle(CHANNELS.DEV_PREVIEW_RESTART, handleRestart));
 
-  const handleStop = async (
-    _event: Electron.IpcMainInvokeEvent,
-    request: DevPreviewSessionRequest
-  ) => {
+  const handleStop = async (request: DevPreviewSessionRequest) => {
     return sessionService.stop(request);
   };
-  ipcMain.handle(CHANNELS.DEV_PREVIEW_STOP, handleStop);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.DEV_PREVIEW_STOP));
+  handlers.push(typedHandle(CHANNELS.DEV_PREVIEW_STOP, handleStop));
 
-  const handleStopByPanel = async (
-    _event: Electron.IpcMainInvokeEvent,
-    request: DevPreviewStopByPanelRequest
-  ) => {
+  const handleStopByPanel = async (request: DevPreviewStopByPanelRequest) => {
     await sessionService.stopByPanel(request);
   };
-  ipcMain.handle(CHANNELS.DEV_PREVIEW_STOP_BY_PANEL, handleStopByPanel);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.DEV_PREVIEW_STOP_BY_PANEL));
+  handlers.push(typedHandle(CHANNELS.DEV_PREVIEW_STOP_BY_PANEL, handleStopByPanel));
 
-  const handleGetState = async (
-    _event: Electron.IpcMainInvokeEvent,
-    request: DevPreviewSessionRequest
-  ) => {
+  const handleGetState = async (request: DevPreviewSessionRequest) => {
     return sessionService.getState(request);
   };
-  ipcMain.handle(CHANNELS.DEV_PREVIEW_GET_STATE, handleGetState);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.DEV_PREVIEW_GET_STATE));
+  handlers.push(typedHandle(CHANNELS.DEV_PREVIEW_GET_STATE, handleGetState));
 
   const unsubHibernation = getHibernationService().onProjectHibernated((projectId) => {
     sessionService.stopByProject(projectId).catch((err) => {

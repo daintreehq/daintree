@@ -1,8 +1,8 @@
-import { ipcMain } from "electron";
 import { CHANNELS } from "../channels.js";
 import { getIdleTerminalNotificationService } from "../../services/IdleTerminalNotificationService.js";
 import type { IdleTerminalNotifyConfig } from "../../../shared/types/ipc/idleTerminals.js";
 import type { HandlerDependencies } from "../types.js";
+import { typedHandle } from "../utils.js";
 
 export function registerIdleTerminalHandlers(_deps: HandlerDependencies): () => void {
   const handlers: Array<() => void> = [];
@@ -11,11 +11,9 @@ export function registerIdleTerminalHandlers(_deps: HandlerDependencies): () => 
   const handleGetConfig = async (): Promise<IdleTerminalNotifyConfig> => {
     return service.getConfig();
   };
-  ipcMain.handle(CHANNELS.IDLE_TERMINAL_GET_CONFIG, handleGetConfig);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.IDLE_TERMINAL_GET_CONFIG));
+  handlers.push(typedHandle(CHANNELS.IDLE_TERMINAL_GET_CONFIG, handleGetConfig));
 
   const handleUpdateConfig = async (
-    _event: Electron.IpcMainInvokeEvent,
     config: Partial<IdleTerminalNotifyConfig>
   ): Promise<IdleTerminalNotifyConfig> => {
     if (typeof config !== "object" || config === null || Array.isArray(config)) {
@@ -38,32 +36,23 @@ export function registerIdleTerminalHandlers(_deps: HandlerDependencies): () => 
     }
     return service.updateConfig(config);
   };
-  ipcMain.handle(CHANNELS.IDLE_TERMINAL_UPDATE_CONFIG, handleUpdateConfig);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.IDLE_TERMINAL_UPDATE_CONFIG));
+  handlers.push(typedHandle(CHANNELS.IDLE_TERMINAL_UPDATE_CONFIG, handleUpdateConfig));
 
-  const handleCloseProject = async (
-    _event: Electron.IpcMainInvokeEvent,
-    projectId: unknown
-  ): Promise<void> => {
+  const handleCloseProject = async (projectId: unknown): Promise<void> => {
     if (typeof projectId !== "string" || projectId.trim() === "") {
       throw new Error("projectId must be a non-empty string");
     }
     await service.closeProject(projectId);
   };
-  ipcMain.handle(CHANNELS.IDLE_TERMINAL_CLOSE_PROJECT, handleCloseProject);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.IDLE_TERMINAL_CLOSE_PROJECT));
+  handlers.push(typedHandle(CHANNELS.IDLE_TERMINAL_CLOSE_PROJECT, handleCloseProject));
 
-  const handleDismissProject = async (
-    _event: Electron.IpcMainInvokeEvent,
-    projectId: unknown
-  ): Promise<void> => {
+  const handleDismissProject = async (projectId: unknown): Promise<void> => {
     if (typeof projectId !== "string" || projectId.trim() === "") {
       throw new Error("projectId must be a non-empty string");
     }
     service.dismissProject(projectId);
   };
-  ipcMain.handle(CHANNELS.IDLE_TERMINAL_DISMISS_PROJECT, handleDismissProject);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.IDLE_TERMINAL_DISMISS_PROJECT));
+  handlers.push(typedHandle(CHANNELS.IDLE_TERMINAL_DISMISS_PROJECT, handleDismissProject));
 
   return () => handlers.forEach((cleanup) => cleanup());
 }

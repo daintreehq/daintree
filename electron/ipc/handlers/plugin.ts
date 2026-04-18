@@ -9,6 +9,7 @@ import { getPluginMenuItems } from "../../services/pluginMenuRegistry.js";
 import { isTrustedRendererUrl } from "../../../shared/utils/trustedRenderer.js";
 import type { LoadedPluginInfo, PluginIpcHandler } from "../../../shared/types/plugin.js";
 import type { ToolbarButtonConfig } from "../../../shared/config/toolbarButtonRegistry.js";
+import { typedHandle } from "../utils.js";
 
 let hasValidatedActionIds = false;
 
@@ -30,10 +31,7 @@ export function registerPluginHandlers(): () => void {
     return getPluginMenuItems();
   };
 
-  const handleValidateActionIds = async (
-    _event: Electron.IpcMainInvokeEvent,
-    actionIds: unknown
-  ): Promise<void> => {
+  const handleValidateActionIds = async (actionIds: string[]): Promise<void> => {
     if (hasValidatedActionIds) return;
     if (!Array.isArray(actionIds)) return;
     hasValidatedActionIds = true;
@@ -59,9 +57,12 @@ export function registerPluginHandlers(): () => void {
     }
   };
 
-  ipcMain.handle(CHANNELS.PLUGIN_LIST, handleList);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.PLUGIN_LIST));
+  handlers.push(typedHandle(CHANNELS.PLUGIN_LIST, handleList));
 
+  // plugin:invoke intentionally stays on raw ipcMain.handle: its variadic
+  // `...args: unknown[]` signature and senderFrame.url trust check can't be
+  // expressed through IpcInvokeMap without widening types to `unknown[]`,
+  // which would silently defeat the compile-time safety the migration is for.
   ipcMain.handle(
     CHANNELS.PLUGIN_INVOKE,
     async (event, pluginId: string, channel: string, ...args: unknown[]) => {
@@ -74,14 +75,9 @@ export function registerPluginHandlers(): () => void {
   );
   handlers.push(() => ipcMain.removeHandler(CHANNELS.PLUGIN_INVOKE));
 
-  ipcMain.handle(CHANNELS.PLUGIN_TOOLBAR_BUTTONS, handleToolbarButtons);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.PLUGIN_TOOLBAR_BUTTONS));
-
-  ipcMain.handle(CHANNELS.PLUGIN_MENU_ITEMS, handleMenuItems);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.PLUGIN_MENU_ITEMS));
-
-  ipcMain.handle(CHANNELS.PLUGIN_VALIDATE_ACTION_IDS, handleValidateActionIds);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.PLUGIN_VALIDATE_ACTION_IDS));
+  handlers.push(typedHandle(CHANNELS.PLUGIN_TOOLBAR_BUTTONS, handleToolbarButtons));
+  handlers.push(typedHandle(CHANNELS.PLUGIN_MENU_ITEMS, handleMenuItems));
+  handlers.push(typedHandle(CHANNELS.PLUGIN_VALIDATE_ACTION_IDS, handleValidateActionIds));
 
   return () => handlers.forEach((cleanup) => cleanup());
 }

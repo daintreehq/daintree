@@ -12,6 +12,7 @@ vi.mock("electron", () => ({
   ipcMain: ipcMainMock,
   systemPreferences: { getMediaAccessStatus: vi.fn(() => "granted") },
   shell: { openExternal: vi.fn() },
+  BrowserWindow: { fromWebContents: vi.fn(() => null) },
 }));
 
 // ── Shared state container for mocks ───────────────────────────────────────

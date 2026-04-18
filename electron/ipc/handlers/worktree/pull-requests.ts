@@ -1,4 +1,3 @@
-import { ipcMain } from "electron";
 import { CHANNELS } from "../../channels.js";
 import { store } from "../../../store.js";
 import type { HandlerDependencies } from "../../types.js";
@@ -7,6 +6,7 @@ import type {
   DetachIssuePayload,
   IssueAssociation,
 } from "../../../../shared/types/ipc/worktree.js";
+import { typedHandle } from "../../utils.js";
 
 export function registerWorktreePullRequestHandlers(deps: HandlerDependencies): () => void {
   const handlers: Array<() => void> = [];
@@ -17,8 +17,7 @@ export function registerWorktreePullRequestHandlers(deps: HandlerDependencies): 
     }
     await deps.worktreeService.refreshPullRequests();
   };
-  ipcMain.handle(CHANNELS.WORKTREE_PR_REFRESH, handleWorktreePRRefresh);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.WORKTREE_PR_REFRESH));
+  handlers.push(typedHandle(CHANNELS.WORKTREE_PR_REFRESH, handleWorktreePRRefresh));
 
   const handleWorktreePRStatus = async () => {
     if (!deps.worktreeService) {
@@ -26,13 +25,9 @@ export function registerWorktreePullRequestHandlers(deps: HandlerDependencies): 
     }
     return await deps.worktreeService.getPRStatus();
   };
-  ipcMain.handle(CHANNELS.WORKTREE_PR_STATUS, handleWorktreePRStatus);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.WORKTREE_PR_STATUS));
+  handlers.push(typedHandle(CHANNELS.WORKTREE_PR_STATUS, handleWorktreePRStatus));
 
-  const handleWorktreeAttachIssue = async (
-    _event: Electron.IpcMainInvokeEvent,
-    payload: AttachIssuePayload
-  ): Promise<void> => {
+  const handleWorktreeAttachIssue = async (payload: AttachIssuePayload): Promise<void> => {
     if (!payload || typeof payload !== "object") {
       throw new Error("Invalid payload for worktree:attach-issue");
     }
@@ -65,13 +60,9 @@ export function registerWorktreePullRequestHandlers(deps: HandlerDependencies): 
     const currentMap = store.get("worktreeIssueMap") ?? {};
     store.set("worktreeIssueMap", { ...currentMap, [worktreeId]: association });
   };
-  ipcMain.handle(CHANNELS.WORKTREE_ATTACH_ISSUE, handleWorktreeAttachIssue);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.WORKTREE_ATTACH_ISSUE));
+  handlers.push(typedHandle(CHANNELS.WORKTREE_ATTACH_ISSUE, handleWorktreeAttachIssue));
 
-  const handleWorktreeDetachIssue = async (
-    _event: Electron.IpcMainInvokeEvent,
-    payload: DetachIssuePayload
-  ): Promise<void> => {
+  const handleWorktreeDetachIssue = async (payload: DetachIssuePayload): Promise<void> => {
     if (!payload || typeof payload !== "object") {
       throw new Error("Invalid payload for worktree:detach-issue");
     }
@@ -86,11 +77,9 @@ export function registerWorktreePullRequestHandlers(deps: HandlerDependencies): 
     const { [worktreeId]: _removed, ...rest } = currentMap;
     store.set("worktreeIssueMap", rest);
   };
-  ipcMain.handle(CHANNELS.WORKTREE_DETACH_ISSUE, handleWorktreeDetachIssue);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.WORKTREE_DETACH_ISSUE));
+  handlers.push(typedHandle(CHANNELS.WORKTREE_DETACH_ISSUE, handleWorktreeDetachIssue));
 
   const handleWorktreeGetIssueAssociation = async (
-    _event: Electron.IpcMainInvokeEvent,
     worktreeId: string
   ): Promise<IssueAssociation | null> => {
     if (typeof worktreeId !== "string" || !worktreeId.trim()) {
@@ -100,19 +89,18 @@ export function registerWorktreePullRequestHandlers(deps: HandlerDependencies): 
     const currentMap = store.get("worktreeIssueMap") ?? {};
     return currentMap[worktreeId] ?? null;
   };
-  ipcMain.handle(CHANNELS.WORKTREE_GET_ISSUE_ASSOCIATION, handleWorktreeGetIssueAssociation);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.WORKTREE_GET_ISSUE_ASSOCIATION));
+  handlers.push(
+    typedHandle(CHANNELS.WORKTREE_GET_ISSUE_ASSOCIATION, handleWorktreeGetIssueAssociation)
+  );
 
   const handleWorktreeGetAllIssueAssociations = async (): Promise<
     Record<string, IssueAssociation>
   > => {
     return store.get("worktreeIssueMap") ?? {};
   };
-  ipcMain.handle(
-    CHANNELS.WORKTREE_GET_ALL_ISSUE_ASSOCIATIONS,
-    handleWorktreeGetAllIssueAssociations
+  handlers.push(
+    typedHandle(CHANNELS.WORKTREE_GET_ALL_ISSUE_ASSOCIATIONS, handleWorktreeGetAllIssueAssociations)
   );
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.WORKTREE_GET_ALL_ISSUE_ASSOCIATIONS));
 
   return () => handlers.forEach((cleanup) => cleanup());
 }

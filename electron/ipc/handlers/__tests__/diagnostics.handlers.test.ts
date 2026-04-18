@@ -52,6 +52,10 @@ vi.mock("node:v8", () => ({
 }));
 
 vi.mock("node:perf_hooks", () => ({
+  performance: {
+    now: () => Date.now(),
+    timeOrigin: Date.now(),
+  },
   monitorEventLoopDelay: () => ({
     enable: vi.fn(),
     disable: vi.fn(),

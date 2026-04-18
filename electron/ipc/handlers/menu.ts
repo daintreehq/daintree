@@ -1,8 +1,8 @@
-import { Menu, ipcMain } from "electron";
-import { getWindowForWebContents } from "../../window/webContentsRegistry.js";
+import { Menu } from "electron";
 import { CHANNELS } from "../channels.js";
 import type { HandlerDependencies } from "../types.js";
 import type { MenuItemOption, ShowContextMenuPayload } from "../../../shared/types/menu.js";
+import { typedHandleWithContext } from "../utils.js";
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
@@ -89,14 +89,11 @@ function sanitizeShowContextMenuPayload(value: unknown): ShowContextMenuPayload 
 }
 
 export function registerMenuHandlers(_deps: HandlerDependencies): () => void {
-  const handleShowContext = async (
-    event: Electron.IpcMainInvokeEvent,
-    payload: ShowContextMenuPayload
-  ): Promise<string | null> => {
+  return typedHandleWithContext(CHANNELS.MENU_SHOW_CONTEXT, async (ctx, payload) => {
     const sanitized = sanitizeShowContextMenuPayload(payload);
     if (!sanitized || sanitized.template.length === 0) return null;
 
-    const win = getWindowForWebContents(event.sender);
+    const win = ctx.senderWindow;
     if (!win || win.isDestroyed()) return null;
 
     return new Promise((resolve) => {
@@ -139,8 +136,5 @@ export function registerMenuHandlers(_deps: HandlerDependencies): () => void {
         callback: () => resolveOnce(null),
       });
     });
-  };
-
-  ipcMain.handle(CHANNELS.MENU_SHOW_CONTEXT, handleShowContext);
-  return () => ipcMain.removeHandler(CHANNELS.MENU_SHOW_CONTEXT);
+  });
 }

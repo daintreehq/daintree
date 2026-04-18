@@ -1,8 +1,7 @@
-import { ipcMain } from "electron";
 import path from "path";
 import fs from "fs/promises";
 import { CHANNELS } from "../channels.js";
-import { checkRateLimit } from "../utils.js";
+import { checkRateLimit, typedHandle } from "../utils.js";
 import { fileSearchService } from "../../services/FileSearchService.js";
 import { FileSearchPayloadSchema, FileReadPayloadSchema } from "../../schemas/ipc.js";
 
@@ -11,10 +10,7 @@ const FILE_SIZE_LIMIT = 512 * 1024; // 500 KB
 export function registerFilesHandlers(): () => void {
   const handlers: Array<() => void> = [];
 
-  const handleSearch = async (
-    _event: Electron.IpcMainInvokeEvent,
-    payload: unknown
-  ): Promise<{ files: string[] }> => {
+  const handleSearch = async (payload: unknown): Promise<{ files: string[] }> => {
     checkRateLimit(CHANNELS.FILES_SEARCH, 20, 10_000);
 
     const parsed = FileSearchPayloadSchema.safeParse(payload);
@@ -38,11 +34,9 @@ export function registerFilesHandlers(): () => void {
     }
   };
 
-  ipcMain.handle(CHANNELS.FILES_SEARCH, handleSearch);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.FILES_SEARCH));
+  handlers.push(typedHandle(CHANNELS.FILES_SEARCH, handleSearch));
 
   const handleRead = async (
-    _event: Electron.IpcMainInvokeEvent,
     payload: unknown
   ): Promise<
     | { ok: true; content: string }
@@ -101,8 +95,7 @@ export function registerFilesHandlers(): () => void {
     }
   };
 
-  ipcMain.handle(CHANNELS.FILES_READ, handleRead);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.FILES_READ));
+  handlers.push(typedHandle(CHANNELS.FILES_READ, handleRead));
 
   return () => handlers.forEach((cleanup) => cleanup());
 }

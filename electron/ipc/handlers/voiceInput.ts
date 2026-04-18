@@ -8,13 +8,14 @@ import {
   type CorrectionWord,
 } from "../../services/VoiceTranscriptionService.js";
 import { VoiceCorrectionService } from "../../services/VoiceCorrectionService.js";
-import type { HandlerDependencies } from "../types.js";
+import type { HandlerDependencies, IpcContext } from "../types.js";
 import type { VoiceInputSettings } from "../../../shared/types/ipc/api.js";
 import { CONFIDENCE_TAG_THRESHOLD } from "../../../shared/config/voiceCorrection.js";
 import { logDebug, logWarn } from "../../utils/logger.js";
 import { assembleKeyterms } from "../../services/voiceContextKeyterms.js";
 import { getAppWebContents } from "../../window/webContentsRegistry.js";
 import { voiceFileLinkResolver } from "../../services/VoiceFileLinkResolver.js";
+import { typedHandle, typedHandleWithContext } from "../utils.js";
 
 let service: VoiceTranscriptionService | null = null;
 let activeEventUnsubscribe: (() => void) | null = null;
@@ -441,15 +442,12 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     return getVoiceSettings();
   };
 
-  const handleSetSettings = async (
-    _event: Electron.IpcMainInvokeEvent,
-    patch: Partial<VoiceInputSettings>
-  ) => {
+  const handleSetSettings = async (patch: Partial<VoiceInputSettings>) => {
     const current = getVoiceSettings();
     store.set("voiceInput", { ...current, ...patch });
   };
 
-  const handleStart = async (event: Electron.IpcMainInvokeEvent) => {
+  const handleStart = async (ctx: IpcContext) => {
     const svc = getService();
     // Snapshot transcription settings at session start (model, language, API key).
     // Correction settings are read live from store per-event so mid-session changes apply.
@@ -573,8 +571,8 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       unsubscribe();
       service?.stop();
     };
-    event.sender.once("destroyed", onDestroyed);
-    activeDestroyListener = { sender: event.sender, fn: onDestroyed };
+    ctx.event.sender.once("destroyed", onDestroyed);
+    activeDestroyListener = { sender: ctx.event.sender, fn: onDestroyed };
 
     const result = await svc.start(sessionSettings);
     if (!result.ok) {
@@ -583,7 +581,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
         activeEventUnsubscribe = null;
       }
       unsubscribe();
-      event.sender.removeListener("destroyed", onDestroyed);
+      ctx.event.sender.removeListener("destroyed", onDestroyed);
       activeDestroyListener = null;
     }
     return result;
@@ -627,7 +625,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     return { rawText: null, correctionId: null };
   };
 
-  const handleAudioChunk = (_event: Electron.IpcMainInvokeEvent, chunk: ArrayBuffer) => {
+  const handleAudioChunk = (_event: Electron.IpcMainEvent, chunk: ArrayBuffer) => {
     service?.sendAudioChunk(chunk);
   };
 
@@ -643,41 +641,33 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     openMicSettings();
   };
 
-  const handleValidateApiKey = async (_event: Electron.IpcMainInvokeEvent, apiKey: string) => {
+  const handleValidateApiKey = async (apiKey: string) => {
     return validateDeepgramKey(apiKey);
   };
 
-  const handleValidateCorrectionApiKey = async (
-    _event: Electron.IpcMainInvokeEvent,
-    apiKey: string
-  ) => {
+  const handleValidateCorrectionApiKey = async (apiKey: string) => {
     return validateOpenAIKey(apiKey);
   };
 
-  ipcMain.handle(CHANNELS.VOICE_INPUT_GET_SETTINGS, handleGetSettings);
-  ipcMain.handle(CHANNELS.VOICE_INPUT_SET_SETTINGS, handleSetSettings);
-  ipcMain.handle(CHANNELS.VOICE_INPUT_START, handleStart);
-  ipcMain.handle(CHANNELS.VOICE_INPUT_STOP, handleStop);
+  const cleanups: Array<() => void> = [
+    typedHandle(CHANNELS.VOICE_INPUT_GET_SETTINGS, handleGetSettings),
+    typedHandle(CHANNELS.VOICE_INPUT_SET_SETTINGS, handleSetSettings),
+    typedHandleWithContext(CHANNELS.VOICE_INPUT_START, handleStart),
+    typedHandle(CHANNELS.VOICE_INPUT_STOP, handleStop),
+    typedHandle(CHANNELS.VOICE_INPUT_CHECK_MIC_PERMISSION, handleCheckMicPermission),
+    typedHandle(CHANNELS.VOICE_INPUT_REQUEST_MIC_PERMISSION, handleRequestMicPermission),
+    typedHandle(CHANNELS.VOICE_INPUT_OPEN_MIC_SETTINGS, handleOpenMicSettings),
+    typedHandle(CHANNELS.VOICE_INPUT_VALIDATE_API_KEY, handleValidateApiKey),
+    typedHandle(CHANNELS.VOICE_INPUT_VALIDATE_CORRECTION_API_KEY, handleValidateCorrectionApiKey),
+    typedHandle(CHANNELS.VOICE_INPUT_FLUSH_PARAGRAPH, handleFlushParagraph),
+  ];
+
+  // Fire-and-forget audio-chunk stream stays on ipcMain.on.
   ipcMain.on(CHANNELS.VOICE_INPUT_AUDIO_CHUNK, handleAudioChunk);
-  ipcMain.handle(CHANNELS.VOICE_INPUT_CHECK_MIC_PERMISSION, handleCheckMicPermission);
-  ipcMain.handle(CHANNELS.VOICE_INPUT_REQUEST_MIC_PERMISSION, handleRequestMicPermission);
-  ipcMain.handle(CHANNELS.VOICE_INPUT_OPEN_MIC_SETTINGS, handleOpenMicSettings);
-  ipcMain.handle(CHANNELS.VOICE_INPUT_VALIDATE_API_KEY, handleValidateApiKey);
-  ipcMain.handle(CHANNELS.VOICE_INPUT_VALIDATE_CORRECTION_API_KEY, handleValidateCorrectionApiKey);
-  ipcMain.handle(CHANNELS.VOICE_INPUT_FLUSH_PARAGRAPH, handleFlushParagraph);
 
   return () => {
-    ipcMain.removeHandler(CHANNELS.VOICE_INPUT_GET_SETTINGS);
-    ipcMain.removeHandler(CHANNELS.VOICE_INPUT_SET_SETTINGS);
-    ipcMain.removeHandler(CHANNELS.VOICE_INPUT_START);
-    ipcMain.removeHandler(CHANNELS.VOICE_INPUT_STOP);
+    for (const cleanup of cleanups) cleanup();
     ipcMain.removeListener(CHANNELS.VOICE_INPUT_AUDIO_CHUNK, handleAudioChunk);
-    ipcMain.removeHandler(CHANNELS.VOICE_INPUT_CHECK_MIC_PERMISSION);
-    ipcMain.removeHandler(CHANNELS.VOICE_INPUT_REQUEST_MIC_PERMISSION);
-    ipcMain.removeHandler(CHANNELS.VOICE_INPUT_OPEN_MIC_SETTINGS);
-    ipcMain.removeHandler(CHANNELS.VOICE_INPUT_VALIDATE_API_KEY);
-    ipcMain.removeHandler(CHANNELS.VOICE_INPUT_VALIDATE_CORRECTION_API_KEY);
-    ipcMain.removeHandler(CHANNELS.VOICE_INPUT_FLUSH_PARAGRAPH);
     cleanupActiveSubscription();
     service?.destroy();
     service = null;

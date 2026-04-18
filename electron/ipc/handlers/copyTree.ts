@@ -1,10 +1,15 @@
-import { ipcMain, clipboard } from "electron";
-import { getWindowForWebContents } from "../../window/webContentsRegistry.js";
+import { clipboard } from "electron";
 import crypto from "crypto";
 import path from "path";
 import { pathToFileURL } from "url";
 import { CHANNELS } from "../channels.js";
-import { broadcastToRenderer, checkRateLimit, sendToRenderer } from "../utils.js";
+import {
+  broadcastToRenderer,
+  checkRateLimit,
+  sendToRenderer,
+  typedHandle,
+  typedHandleWithContext,
+} from "../utils.js";
 import type { HandlerDependencies } from "../types.js";
 import type {
   CopyTreeGeneratePayload,
@@ -175,12 +180,12 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
   const handlers: Array<() => void> = [];
 
   const handleCopyTreeGenerate = async (
-    event: Electron.IpcMainInvokeEvent,
+    ctx: import("../types.js").IpcContext,
     payload: CopyTreeGeneratePayload
   ): Promise<CopyTreeResult> => {
     checkRateLimit(CHANNELS.COPYTREE_GENERATE, 5, 10_000);
     const traceId = crypto.randomUUID();
-    const senderWindow = getWindowForWebContents(event.sender);
+    const senderWindow = ctx.senderWindow;
     const requestedWorktreeId = getStringField(payload, "worktreeId") ?? "unknown";
     console.log(`[${traceId}] CopyTree generate started for worktree ${requestedWorktreeId}`);
 
@@ -230,16 +235,15 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
 
     return deps.worktreeService.generateContext(worktree.path, mergedOptions, onProgress);
   };
-  ipcMain.handle(CHANNELS.COPYTREE_GENERATE, handleCopyTreeGenerate);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.COPYTREE_GENERATE));
+  handlers.push(typedHandleWithContext(CHANNELS.COPYTREE_GENERATE, handleCopyTreeGenerate));
 
   const handleCopyTreeGenerateAndCopyFile = async (
-    event: Electron.IpcMainInvokeEvent,
+    ctx: import("../types.js").IpcContext,
     payload: CopyTreeGenerateAndCopyFilePayload
   ): Promise<CopyTreeResult> => {
     checkRateLimit(CHANNELS.COPYTREE_GENERATE_AND_COPY_FILE, 5, 10_000);
     const traceId = crypto.randomUUID();
-    const senderWindow = getWindowForWebContents(event.sender);
+    const senderWindow = ctx.senderWindow;
     const requestedWorktreeId = getStringField(payload, "worktreeId") ?? "unknown";
     console.log(
       `[${traceId}] CopyTree generate-and-copy-file started for worktree ${requestedWorktreeId}`
@@ -361,16 +365,20 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
       };
     }
   };
-  ipcMain.handle(CHANNELS.COPYTREE_GENERATE_AND_COPY_FILE, handleCopyTreeGenerateAndCopyFile);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.COPYTREE_GENERATE_AND_COPY_FILE));
+  handlers.push(
+    typedHandleWithContext(
+      CHANNELS.COPYTREE_GENERATE_AND_COPY_FILE,
+      handleCopyTreeGenerateAndCopyFile
+    )
+  );
 
   const handleCopyTreeInject = async (
-    event: Electron.IpcMainInvokeEvent,
+    ctx: import("../types.js").IpcContext,
     payload: CopyTreeInjectPayload
   ): Promise<CopyTreeResult> => {
     checkRateLimit(CHANNELS.COPYTREE_INJECT, 5, 10_000);
     const traceId = crypto.randomUUID();
-    const senderWindow = getWindowForWebContents(event.sender);
+    const senderWindow = ctx.senderWindow;
     const requestedTerminalId = getStringField(payload, "terminalId") ?? "unknown";
     const requestedWorktreeId = getStringField(payload, "worktreeId") ?? "unknown";
     console.log(
@@ -486,19 +494,14 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
       contextInjectionTracker.finishInjection(validated.terminalId, injectionId);
     }
   };
-  ipcMain.handle(CHANNELS.COPYTREE_INJECT, handleCopyTreeInject);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.COPYTREE_INJECT));
+  handlers.push(typedHandleWithContext(CHANNELS.COPYTREE_INJECT, handleCopyTreeInject));
 
   const handleCopyTreeAvailable = async (): Promise<boolean> => {
     return !!deps.worktreeService && deps.worktreeService.isReady();
   };
-  ipcMain.handle(CHANNELS.COPYTREE_AVAILABLE, handleCopyTreeAvailable);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.COPYTREE_AVAILABLE));
+  handlers.push(typedHandle(CHANNELS.COPYTREE_AVAILABLE, handleCopyTreeAvailable));
 
-  const handleCopyTreeCancel = async (
-    _event: Electron.IpcMainInvokeEvent,
-    payload?: CopyTreeCancelPayload
-  ): Promise<void> => {
+  const handleCopyTreeCancel = async (payload?: CopyTreeCancelPayload): Promise<void> => {
     const parseResult = CopyTreeCancelPayloadSchema.safeParse(payload ?? {});
     if (!parseResult.success) {
       console.warn("Invalid cancel payload, ignoring");
@@ -524,11 +527,9 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
       console.log(`[cancel] Marked all ${count} active injections for cancellation`);
     }
   };
-  ipcMain.handle(CHANNELS.COPYTREE_CANCEL, handleCopyTreeCancel);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.COPYTREE_CANCEL));
+  handlers.push(typedHandle(CHANNELS.COPYTREE_CANCEL, handleCopyTreeCancel));
 
   const handleCopyTreeGetFileTree = async (
-    _event: Electron.IpcMainInvokeEvent,
     payload: CopyTreeGetFileTreePayload
   ): Promise<FileTreeNode[]> => {
     checkRateLimit(CHANNELS.COPYTREE_GET_FILE_TREE, 5, 10_000);
@@ -561,11 +562,10 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
 
     return deps.worktreeService.getFileTree(monitor.path, validated.dirPath);
   };
-  ipcMain.handle(CHANNELS.COPYTREE_GET_FILE_TREE, handleCopyTreeGetFileTree);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.COPYTREE_GET_FILE_TREE));
+  handlers.push(typedHandle(CHANNELS.COPYTREE_GET_FILE_TREE, handleCopyTreeGetFileTree));
 
   const handleCopyTreeTestConfig = async (
-    event: Electron.IpcMainInvokeEvent,
+    ctx: import("../types.js").IpcContext,
     payload: import("../../types/index.js").CopyTreeTestConfigPayload
   ): Promise<import("../../types/index.js").CopyTreeTestConfigResult> => {
     checkRateLimit(CHANNELS.COPYTREE_TEST_CONFIG, 5, 10_000);
@@ -599,7 +599,7 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
       };
     }
 
-    const senderWindowTestConfig = getWindowForWebContents(event.sender);
+    const senderWindowTestConfig = ctx.senderWindow;
     const states = await deps.worktreeService.getAllStatesAsync(senderWindowTestConfig?.id);
     const worktree = states.find((wt) => wt.id === validated.worktreeId);
 
@@ -618,8 +618,7 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
 
     return deps.worktreeService.testConfig(worktree.path, mergedOptions);
   };
-  ipcMain.handle(CHANNELS.COPYTREE_TEST_CONFIG, handleCopyTreeTestConfig);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.COPYTREE_TEST_CONFIG));
+  handlers.push(typedHandleWithContext(CHANNELS.COPYTREE_TEST_CONFIG, handleCopyTreeTestConfig));
 
   return () => handlers.forEach((cleanup) => cleanup());
 }

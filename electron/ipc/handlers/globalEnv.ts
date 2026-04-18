@@ -1,7 +1,7 @@
-import { ipcMain } from "electron";
 import { CHANNELS } from "../channels.js";
 import { store } from "../../store.js";
 import type { HandlerDependencies } from "../types.js";
+import { typedHandle } from "../utils.js";
 
 export function registerGlobalEnvHandlers(_deps: HandlerDependencies): () => void {
   const handlers: Array<() => void> = [];
@@ -9,13 +9,9 @@ export function registerGlobalEnvHandlers(_deps: HandlerDependencies): () => voi
   const handleGetEnv = async (): Promise<Record<string, string>> => {
     return store.get("globalEnvironmentVariables") ?? {};
   };
-  ipcMain.handle(CHANNELS.GLOBAL_ENV_GET, handleGetEnv);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.GLOBAL_ENV_GET));
+  handlers.push(typedHandle(CHANNELS.GLOBAL_ENV_GET, handleGetEnv));
 
-  const handleSetEnv = async (
-    _event: Electron.IpcMainInvokeEvent,
-    payload: { variables: Record<string, string> }
-  ): Promise<void> => {
+  const handleSetEnv = async (payload: { variables: Record<string, string> }): Promise<void> => {
     if (!payload || typeof payload !== "object") {
       throw new Error("Invalid payload");
     }
@@ -30,8 +26,7 @@ export function registerGlobalEnvHandlers(_deps: HandlerDependencies): () => voi
     }
     return store.set("globalEnvironmentVariables", variables);
   };
-  ipcMain.handle(CHANNELS.GLOBAL_ENV_SET, handleSetEnv);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.GLOBAL_ENV_SET));
+  handlers.push(typedHandle(CHANNELS.GLOBAL_ENV_SET, handleSetEnv));
 
   return () => handlers.forEach((cleanup) => cleanup());
 }

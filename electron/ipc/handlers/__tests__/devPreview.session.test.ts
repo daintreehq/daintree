@@ -6,16 +6,38 @@ vi.mock("node:http", () => ({ default: { request: vi.fn() }, request: vi.fn() })
 vi.mock("node:https", () => ({ default: { request: vi.fn() }, request: vi.fn() }));
 
 const broadcastMock = vi.hoisted(() => vi.fn());
+const ipcMainMock = vi.hoisted(() => ({
+  handle: vi.fn(),
+  removeHandler: vi.fn(),
+}));
 
 vi.mock("../../utils.js", () => ({
   broadcastToRenderer: broadcastMock,
+  typedHandle: (channel: string, handler: unknown) => {
+    ipcMainMock.handle(channel, (_e: unknown, ...args: unknown[]) =>
+      (handler as (...a: unknown[]) => unknown)(...args)
+    );
+    return () => ipcMainMock.removeHandler(channel);
+  },
+  typedHandleWithContext: (channel: string, handler: unknown) => {
+    ipcMainMock.handle(
+      channel,
+      (event: { sender?: { id?: number } } | null | undefined, ...args: unknown[]) => {
+        const ctx = {
+          event: event as unknown,
+          webContentsId: event?.sender?.id ?? 0,
+          senderWindow: null,
+          projectId: null,
+        };
+        return (handler as (...a: unknown[]) => unknown)(ctx, ...args);
+      }
+    );
+    return () => ipcMainMock.removeHandler(channel);
+  },
 }));
 
 vi.mock("electron", () => ({
-  ipcMain: {
-    handle: vi.fn(),
-    removeHandler: vi.fn(),
-  },
+  ipcMain: ipcMainMock,
 }));
 
 const scanOutputMock = vi.fn();

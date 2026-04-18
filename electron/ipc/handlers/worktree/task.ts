@@ -1,4 +1,3 @@
-import { ipcMain } from "electron";
 import { getWindowForWebContents } from "../../../window/webContentsRegistry.js";
 import { CHANNELS } from "../../channels.js";
 import type { HandlerDependencies } from "../../types.js";
@@ -11,7 +10,12 @@ import { generateWorktreePath } from "../../../../shared/utils/pathPattern.js";
 import { projectStore } from "../../../services/ProjectStore.js";
 import { logDebug, logError } from "../../../utils/logger.js";
 import { fileSearchService } from "../../../services/FileSearchService.js";
-import { checkRateLimit, waitForRateLimitSlot } from "../../utils.js";
+import {
+  checkRateLimit,
+  waitForRateLimitSlot,
+  typedHandle,
+  typedHandleWithContext,
+} from "../../utils.js";
 import { resolveWorktreePattern } from "../../../utils/worktreePattern.js";
 import { taskWorktreeService } from "../../../services/TaskWorktreeService.js";
 import { WORKTREE_RATE_LIMIT_KEY, WORKTREE_RATE_LIMIT_INTERVAL_MS } from "./constants.js";
@@ -20,7 +24,7 @@ export function registerTaskWorktreeHandlers(deps: HandlerDependencies): () => v
   const handlers: Array<() => void> = [];
 
   const handleWorktreeCreateForTask = async (
-    event: Electron.IpcMainInvokeEvent,
+    ctx: import("../../types.js").IpcContext,
     payload: CreateForTaskPayload
   ): Promise<WorktreeState> => {
     await waitForRateLimitSlot(WORKTREE_RATE_LIMIT_KEY, WORKTREE_RATE_LIMIT_INTERVAL_MS);
@@ -48,7 +52,7 @@ export function registerTaskWorktreeHandlers(deps: HandlerDependencies): () => v
     const rootPath = project.path;
 
     // Get all states to find the main worktree and determine base branch
-    const senderWindowCreate = getWindowForWebContents(event.sender);
+    const senderWindowCreate = getWindowForWebContents(ctx.event.sender);
     const states = await deps.worktreeService.getAllStatesAsync(senderWindowCreate?.id);
     const mainWorktree = states.find((wt) => wt.isMainWorktree);
 
@@ -194,13 +198,11 @@ export function registerTaskWorktreeHandlers(deps: HandlerDependencies): () => v
       };
     }
   };
-  ipcMain.handle(CHANNELS.WORKTREE_CREATE_FOR_TASK, handleWorktreeCreateForTask);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.WORKTREE_CREATE_FOR_TASK));
+  handlers.push(
+    typedHandleWithContext(CHANNELS.WORKTREE_CREATE_FOR_TASK, handleWorktreeCreateForTask)
+  );
 
-  const handleWorktreeGetByTaskId = async (
-    _event: Electron.IpcMainInvokeEvent,
-    taskId: string
-  ): Promise<WorktreeState[]> => {
+  const handleWorktreeGetByTaskId = async (taskId: string): Promise<WorktreeState[]> => {
     if (!deps.worktreeService) {
       throw new Error("Workspace client not initialized");
     }
@@ -252,11 +254,10 @@ export function registerTaskWorktreeHandlers(deps: HandlerDependencies): () => v
 
     return results;
   };
-  ipcMain.handle(CHANNELS.WORKTREE_GET_BY_TASK_ID, handleWorktreeGetByTaskId);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.WORKTREE_GET_BY_TASK_ID));
+  handlers.push(typedHandle(CHANNELS.WORKTREE_GET_BY_TASK_ID, handleWorktreeGetByTaskId));
 
   const handleWorktreeCleanupTask = async (
-    event: Electron.IpcMainInvokeEvent,
+    ctx: import("../../types.js").IpcContext,
     taskId: string,
     options?: CleanupTaskOptions
   ): Promise<void> => {
@@ -296,7 +297,7 @@ export function registerTaskWorktreeHandlers(deps: HandlerDependencies): () => v
     const errors: string[] = [];
 
     // Fetch all worktree states once for efficient main-worktree checking
-    const senderWindowCleanup = getWindowForWebContents(event.sender);
+    const senderWindowCleanup = getWindowForWebContents(ctx.event.sender);
     let allStates: Awaited<ReturnType<typeof deps.worktreeService.getAllStatesAsync>> = [];
     try {
       allStates = await deps.worktreeService.getAllStatesAsync(senderWindowCleanup?.id);
@@ -370,8 +371,7 @@ export function registerTaskWorktreeHandlers(deps: HandlerDependencies): () => v
       throw new Error(`Failed to cleanup some worktrees: ${errors.join("; ")}`);
     }
   };
-  ipcMain.handle(CHANNELS.WORKTREE_CLEANUP_TASK, handleWorktreeCleanupTask);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.WORKTREE_CLEANUP_TASK));
+  handlers.push(typedHandleWithContext(CHANNELS.WORKTREE_CLEANUP_TASK, handleWorktreeCleanupTask));
 
   return () => handlers.forEach((cleanup) => cleanup());
 }

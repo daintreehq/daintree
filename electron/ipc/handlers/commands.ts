@@ -3,7 +3,6 @@
  * Exposes command registry and execution to the renderer process.
  */
 
-import { ipcMain } from "electron";
 import { CHANNELS } from "../channels.js";
 import { commandService } from "../../services/CommandService.js";
 import type {
@@ -14,23 +13,19 @@ import type {
   CommandResult,
   DaintreeCommand,
 } from "../../../shared/types/commands.js";
+import { typedHandle } from "../utils.js";
 
 export function registerCommandHandlers(): () => void {
   const handlers: Array<() => void> = [];
 
   // List all commands
-  const handleCommandsList = async (
-    _event: Electron.IpcMainInvokeEvent,
-    context?: CommandContext
-  ): Promise<CommandManifestEntry[]> => {
+  const handleCommandsList = async (context?: CommandContext): Promise<CommandManifestEntry[]> => {
     return await commandService.list(context);
   };
-  ipcMain.handle(CHANNELS.COMMANDS_LIST, handleCommandsList);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.COMMANDS_LIST));
+  handlers.push(typedHandle(CHANNELS.COMMANDS_LIST, handleCommandsList));
 
   // Get single command
   const handleCommandsGet = async (
-    _event: Electron.IpcMainInvokeEvent,
     payload: CommandGetPayload
   ): Promise<CommandManifestEntry | null> => {
     if (!payload || typeof payload.commandId !== "string") {
@@ -39,14 +34,10 @@ export function registerCommandHandlers(): () => void {
     }
     return (await commandService.getManifest(payload.commandId, payload.context)) ?? null;
   };
-  ipcMain.handle(CHANNELS.COMMANDS_GET, handleCommandsGet);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.COMMANDS_GET));
+  handlers.push(typedHandle(CHANNELS.COMMANDS_GET, handleCommandsGet));
 
   // Execute command
-  const handleCommandsExecute = async (
-    _event: Electron.IpcMainInvokeEvent,
-    payload: CommandExecutePayload
-  ): Promise<CommandResult> => {
+  const handleCommandsExecute = async (payload: CommandExecutePayload): Promise<CommandResult> => {
     if (!payload || typeof payload.commandId !== "string") {
       return {
         success: false,
@@ -83,12 +74,10 @@ export function registerCommandHandlers(): () => void {
 
     return commandService.execute(payload.commandId, context, args);
   };
-  ipcMain.handle(CHANNELS.COMMANDS_EXECUTE, handleCommandsExecute);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.COMMANDS_EXECUTE));
+  handlers.push(typedHandle(CHANNELS.COMMANDS_EXECUTE, handleCommandsExecute));
 
   // Get command builder
   const handleCommandsGetBuilder = async (
-    _event: Electron.IpcMainInvokeEvent,
     commandId: string
   ): Promise<DaintreeCommand["builder"] | null> => {
     if (typeof commandId !== "string") {
@@ -96,8 +85,7 @@ export function registerCommandHandlers(): () => void {
     }
     return commandService.getBuilder(commandId) ?? null;
   };
-  ipcMain.handle(CHANNELS.COMMANDS_GET_BUILDER, handleCommandsGetBuilder);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.COMMANDS_GET_BUILDER));
+  handlers.push(typedHandle(CHANNELS.COMMANDS_GET_BUILDER, handleCommandsGetBuilder));
 
   return () => handlers.forEach((cleanup) => cleanup());
 }

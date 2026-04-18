@@ -3,32 +3,28 @@
  * and folder provisioning for new projects.
  */
 
-import { ipcMain } from "electron";
 import path from "path";
 import { CHANNELS } from "../../channels.js";
 import { projectStore } from "../../../services/ProjectStore.js";
 import { runCommandDetector } from "../../../services/RunCommandDetector.js";
+import { typedHandle } from "../../utils.js";
 import type { ProjectSettings } from "../../../types/index.js";
 
 export function registerProjectSettingsHandlers(): () => void {
   const handlers: Array<() => void> = [];
 
-  const handleProjectGetSettings = async (
-    _event: Electron.IpcMainInvokeEvent,
-    projectId: string
-  ): Promise<ProjectSettings> => {
+  const handleProjectGetSettings = async (projectId: string): Promise<ProjectSettings> => {
     if (typeof projectId !== "string" || !projectId) {
       throw new Error("Invalid project ID");
     }
     return projectStore.getProjectSettings(projectId);
   };
-  ipcMain.handle(CHANNELS.PROJECT_GET_SETTINGS, handleProjectGetSettings);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.PROJECT_GET_SETTINGS));
+  handlers.push(typedHandle(CHANNELS.PROJECT_GET_SETTINGS, handleProjectGetSettings));
 
-  const handleProjectSaveSettings = async (
-    _event: Electron.IpcMainInvokeEvent,
-    payload: { projectId: string; settings: ProjectSettings }
-  ): Promise<void> => {
+  const handleProjectSaveSettings = async (payload: {
+    projectId: string;
+    settings: ProjectSettings;
+  }): Promise<void> => {
     if (!payload || typeof payload !== "object") {
       throw new Error("Invalid payload");
     }
@@ -50,13 +46,9 @@ export function registerProjectSettingsHandlers(): () => void {
       clearGitHubCaches();
     }
   };
-  ipcMain.handle(CHANNELS.PROJECT_SAVE_SETTINGS, handleProjectSaveSettings);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.PROJECT_SAVE_SETTINGS));
+  handlers.push(typedHandle(CHANNELS.PROJECT_SAVE_SETTINGS, handleProjectSaveSettings));
 
-  const handleProjectDetectRunners = async (
-    _event: Electron.IpcMainInvokeEvent,
-    projectId: string
-  ) => {
+  const handleProjectDetectRunners = async (projectId: string) => {
     if (typeof projectId !== "string" || !projectId) {
       console.warn("[IPC] Invalid project ID for detect runners:", projectId);
       return [];
@@ -70,13 +62,12 @@ export function registerProjectSettingsHandlers(): () => void {
 
     return await runCommandDetector.detect(project.path);
   };
-  ipcMain.handle(CHANNELS.PROJECT_DETECT_RUNNERS, handleProjectDetectRunners);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.PROJECT_DETECT_RUNNERS));
+  handlers.push(typedHandle(CHANNELS.PROJECT_DETECT_RUNNERS, handleProjectDetectRunners));
 
-  const handleProjectCreateFolder = async (
-    _event: Electron.IpcMainInvokeEvent,
-    payload: { parentPath: string; folderName: string }
-  ): Promise<string> => {
+  const handleProjectCreateFolder = async (payload: {
+    parentPath: string;
+    folderName: string;
+  }): Promise<string> => {
     if (!payload || typeof payload !== "object") {
       throw new Error("Invalid payload");
     }
@@ -137,8 +128,7 @@ export function registerProjectSettingsHandlers(): () => void {
     }
     return fullPath;
   };
-  ipcMain.handle(CHANNELS.PROJECT_CREATE_FOLDER, handleProjectCreateFolder);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.PROJECT_CREATE_FOLDER));
+  handlers.push(typedHandle(CHANNELS.PROJECT_CREATE_FOLDER, handleProjectCreateFolder));
 
   return () => handlers.forEach((cleanup) => cleanup());
 }

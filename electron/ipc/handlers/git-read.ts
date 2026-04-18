@@ -1,8 +1,7 @@
-import { ipcMain } from "electron";
 import path from "path";
 import { getWindowForWebContents } from "../../window/webContentsRegistry.js";
 import { CHANNELS } from "../channels.js";
-import { checkRateLimit } from "../utils.js";
+import { checkRateLimit, typedHandle, typedHandleWithContext } from "../utils.js";
 import type { HandlerDependencies } from "../types.js";
 import type { PulseRangeDays, ProjectPulse } from "../../../shared/types/pulse.js";
 import { taskWorktreeService } from "../../services/TaskWorktreeService.js";
@@ -10,16 +9,13 @@ import { taskWorktreeService } from "../../services/TaskWorktreeService.js";
 export function registerGitReadHandlers(deps: HandlerDependencies): () => void {
   const handlers: Array<() => void> = [];
 
-  const handleGitCompareWorktrees = async (
-    _event: Electron.IpcMainInvokeEvent,
-    payload: {
-      cwd: string;
-      branch1: string;
-      branch2: string;
-      filePath?: string;
-      useMergeBase?: boolean;
-    }
-  ) => {
+  const handleGitCompareWorktrees = async (payload: {
+    cwd: string;
+    branch1: string;
+    branch2: string;
+    filePath?: string;
+    useMergeBase?: boolean;
+  }) => {
     checkRateLimit(CHANNELS.GIT_COMPARE_WORKTREES, 20, 10_000);
     if (!payload || typeof payload !== "object") {
       throw new Error("Invalid payload");
@@ -46,13 +42,13 @@ export function registerGitReadHandlers(deps: HandlerDependencies): () => void {
     const gitService = taskWorktreeService.getGitService(cwd);
     return gitService.compareWorktrees(branch1, branch2, filePath, useMergeBase);
   };
-  ipcMain.handle(CHANNELS.GIT_COMPARE_WORKTREES, handleGitCompareWorktrees);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.GIT_COMPARE_WORKTREES));
+  handlers.push(typedHandle(CHANNELS.GIT_COMPARE_WORKTREES, handleGitCompareWorktrees));
 
-  const handleGitGetFileDiff = async (
-    _event: Electron.IpcMainInvokeEvent,
-    payload: { cwd: string; filePath: string; status: string }
-  ): Promise<string> => {
+  const handleGitGetFileDiff = async (payload: {
+    cwd: string;
+    filePath: string;
+    status: string;
+  }): Promise<string> => {
     checkRateLimit(CHANNELS.GIT_GET_FILE_DIFF, 10, 10_000);
     if (!payload || typeof payload !== "object") {
       throw new Error("Invalid payload");
@@ -82,11 +78,10 @@ export function registerGitReadHandlers(deps: HandlerDependencies): () => void {
       throw new Error(`Failed to get file diff: ${errorMessage}`, { cause: error });
     }
   };
-  ipcMain.handle(CHANNELS.GIT_GET_FILE_DIFF, handleGitGetFileDiff);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.GIT_GET_FILE_DIFF));
+  handlers.push(typedHandle(CHANNELS.GIT_GET_FILE_DIFF, handleGitGetFileDiff));
 
   const handleGitGetProjectPulse = async (
-    event: Electron.IpcMainInvokeEvent,
+    ctx: import("../types.js").IpcContext,
     payload: {
       worktreeId: string;
       rangeDays: PulseRangeDays;
@@ -131,7 +126,7 @@ export function registerGitReadHandlers(deps: HandlerDependencies): () => void {
       throw new Error(`Worktree not found: ${worktreeId}`);
     }
 
-    const senderWindowPulse = getWindowForWebContents(event.sender);
+    const senderWindowPulse = getWindowForWebContents(ctx.event.sender);
     const states = await deps.worktreeService.getAllStatesAsync(senderWindowPulse?.id);
     const mainWorktree = states.find((wt) => wt.isMainWorktree);
     const mainBranch = mainWorktree?.branch ?? "main";
@@ -142,19 +137,15 @@ export function registerGitReadHandlers(deps: HandlerDependencies): () => void {
       forceRefresh,
     });
   };
-  ipcMain.handle(CHANNELS.GIT_GET_PROJECT_PULSE, handleGitGetProjectPulse);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.GIT_GET_PROJECT_PULSE));
+  handlers.push(typedHandleWithContext(CHANNELS.GIT_GET_PROJECT_PULSE, handleGitGetProjectPulse));
 
-  const handleGitListCommits = async (
-    _event: Electron.IpcMainInvokeEvent,
-    payload: {
-      cwd: string;
-      search?: string;
-      branch?: string;
-      skip?: number;
-      limit?: number;
-    }
-  ) => {
+  const handleGitListCommits = async (payload: {
+    cwd: string;
+    search?: string;
+    branch?: string;
+    skip?: number;
+    limit?: number;
+  }) => {
     checkRateLimit(CHANNELS.GIT_LIST_COMMITS, 10, 10_000);
     if (!payload || typeof payload !== "object") {
       throw new Error("Invalid payload");
@@ -173,8 +164,7 @@ export function registerGitReadHandlers(deps: HandlerDependencies): () => void {
 
     return listCommits({ cwd, search, branch, skip, limit });
   };
-  ipcMain.handle(CHANNELS.GIT_LIST_COMMITS, handleGitListCommits);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.GIT_LIST_COMMITS));
+  handlers.push(typedHandle(CHANNELS.GIT_LIST_COMMITS, handleGitListCommits));
 
   return () => handlers.forEach((cleanup) => cleanup());
 }

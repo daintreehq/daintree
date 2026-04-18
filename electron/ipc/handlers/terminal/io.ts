@@ -9,6 +9,7 @@ import type { TerminalResizePayload } from "../../../types/index.js";
 import { TerminalResizePayloadSchema } from "../../../schemas/ipc.js";
 import type { PtyHostActivityTier } from "../../../../shared/types/pty-host.js";
 import { normalizeObservedTitle } from "../../../../shared/utils/isUselessTitle.js";
+import { typedHandle } from "../../utils.js";
 
 export function registerTerminalIOHandlers(deps: HandlerDependencies): () => void {
   const { ptyClient } = deps;
@@ -45,11 +46,7 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
   ipcMain.on(CHANNELS.TERMINAL_SEND_KEY, handleTerminalSendKey);
   handlers.push(() => ipcMain.removeListener(CHANNELS.TERMINAL_SEND_KEY, handleTerminalSendKey));
 
-  const handleTerminalSubmit = async (
-    _event: Electron.IpcMainInvokeEvent,
-    id: string,
-    text: string
-  ) => {
+  const handleTerminalSubmit = async (id: string, text: string) => {
     try {
       if (typeof id !== "string" || typeof text !== "string") {
         throw new Error("Invalid terminal submit parameters");
@@ -60,8 +57,7 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
       throw new Error(`Failed to submit to terminal: ${errorMessage}`);
     }
   };
-  ipcMain.handle(CHANNELS.TERMINAL_SUBMIT, handleTerminalSubmit);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.TERMINAL_SUBMIT));
+  handlers.push(typedHandle(CHANNELS.TERMINAL_SUBMIT, handleTerminalSubmit));
 
   const handleTerminalResize = (_event: Electron.IpcMainEvent, payload: TerminalResizePayload) => {
     try {
@@ -170,7 +166,6 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
   );
 
   const handleTerminalForceResume = async (
-    _event: Electron.IpcMainInvokeEvent,
     id: string
   ): Promise<{ success: boolean; error?: string }> => {
     try {
@@ -185,8 +180,7 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
       return { success: false, error: errorMessage };
     }
   };
-  ipcMain.handle(CHANNELS.TERMINAL_FORCE_RESUME, handleTerminalForceResume);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.TERMINAL_FORCE_RESUME));
+  handlers.push(typedHandle(CHANNELS.TERMINAL_FORCE_RESUME, handleTerminalForceResume));
 
   return () => handlers.forEach((cleanup) => cleanup());
 }

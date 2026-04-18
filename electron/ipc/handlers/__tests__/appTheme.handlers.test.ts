@@ -6,20 +6,24 @@ const nativeThemeMock = vi.hoisted(() => ({
   removeListener: vi.fn(),
 }));
 
+const ipcMainMock = vi.hoisted(() => ({
+  handle: vi.fn(),
+  removeHandler: vi.fn(),
+}));
+
+const browserWindowMock = vi.hoisted(() => ({
+  fromWebContents: vi.fn<(sender: unknown) => unknown>(),
+  getFocusedWindow: vi.fn(),
+  getAllWindows: vi.fn(() => []),
+}));
+
 vi.mock("electron", () => ({
-  ipcMain: {
-    handle: vi.fn(),
-    removeHandler: vi.fn(),
-  },
+  ipcMain: ipcMainMock,
   dialog: {
     showOpenDialog: vi.fn(),
     showSaveDialog: vi.fn(),
   },
-  BrowserWindow: {
-    fromWebContents: vi.fn(),
-    getFocusedWindow: vi.fn(),
-    getAllWindows: vi.fn(() => []),
-  },
+  BrowserWindow: browserWindowMock,
   nativeTheme: nativeThemeMock,
 }));
 
@@ -67,6 +71,27 @@ vi.mock("../../../../shared/theme/index.js", () => ({
 
 vi.mock("../../utils.js", () => ({
   typedSend: vi.fn(),
+  typedHandle: (channel: string, handler: unknown) => {
+    ipcMainMock.handle(channel, (_e: unknown, ...args: unknown[]) =>
+      (handler as (...a: unknown[]) => unknown)(...args)
+    );
+    return () => ipcMainMock.removeHandler(channel);
+  },
+  typedHandleWithContext: (channel: string, handler: unknown) => {
+    ipcMainMock.handle(
+      channel,
+      (event: { sender?: { id?: number } } | null | undefined, ...args: unknown[]) => {
+        const ctx = {
+          event: event as unknown,
+          webContentsId: event?.sender?.id ?? 0,
+          senderWindow: browserWindowMock.fromWebContents(event?.sender) ?? null,
+          projectId: null,
+        };
+        return (handler as (...a: unknown[]) => unknown)(ctx, ...args);
+      }
+    );
+    return () => ipcMainMock.removeHandler(channel);
+  },
 }));
 
 const fsMock = vi.hoisted(() => ({

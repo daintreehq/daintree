@@ -1,10 +1,10 @@
-import { ipcMain, dialog, BrowserWindow } from "electron";
-import { getWindowForWebContents } from "../../window/webContentsRegistry.js";
+import { dialog, BrowserWindow } from "electron";
 import { CHANNELS } from "../channels.js";
 import { store } from "../../store.js";
 import { parseColorSchemeFile } from "../../utils/colorSchemeImporter.js";
 import { effectiveCachedProjectViews } from "../../utils/cachedProjectViews.js";
 import type { HandlerDependencies } from "../types.js";
+import { typedHandle, typedHandleWithContext } from "../utils.js";
 
 function getTerminalConfigObject(): Record<string, unknown> {
   const config = store.get("terminalConfig");
@@ -17,20 +17,17 @@ function getTerminalConfigObject(): Record<string, unknown> {
 export function registerTerminalConfigHandlers(deps?: HandlerDependencies): () => void {
   const handlers: Array<() => void> = [];
 
-  const handleTerminalConfigGet = async () => {
-    const config = getTerminalConfigObject();
-    return {
-      ...config,
-      cachedProjectViews: effectiveCachedProjectViews(config.cachedProjectViews),
-    };
-  };
-  ipcMain.handle(CHANNELS.TERMINAL_CONFIG_GET, handleTerminalConfigGet);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.TERMINAL_CONFIG_GET));
+  handlers.push(
+    typedHandle(CHANNELS.TERMINAL_CONFIG_GET, async () => {
+      const config = getTerminalConfigObject();
+      return {
+        ...config,
+        cachedProjectViews: effectiveCachedProjectViews(config.cachedProjectViews),
+      } as import("../../../shared/types/ipc/config.js").TerminalConfig;
+    })
+  );
 
-  const handleTerminalConfigSetScrollback = async (
-    _event: Electron.IpcMainInvokeEvent,
-    scrollbackLines: number
-  ) => {
+  const handleTerminalConfigSetScrollback = async (scrollbackLines: number) => {
     if (!Number.isFinite(scrollbackLines) || !Number.isInteger(scrollbackLines)) {
       const error = `Invalid scrollback value (not a finite integer): ${scrollbackLines}`;
       console.warn(error);
@@ -44,13 +41,11 @@ export function registerTerminalConfigHandlers(deps?: HandlerDependencies): () =
     const currentConfig = getTerminalConfigObject();
     store.set("terminalConfig", { ...currentConfig, scrollbackLines });
   };
-  ipcMain.handle(CHANNELS.TERMINAL_CONFIG_SET_SCROLLBACK, handleTerminalConfigSetScrollback);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.TERMINAL_CONFIG_SET_SCROLLBACK));
+  handlers.push(
+    typedHandle(CHANNELS.TERMINAL_CONFIG_SET_SCROLLBACK, handleTerminalConfigSetScrollback)
+  );
 
-  const handleTerminalConfigSetPerformanceMode = async (
-    _event: Electron.IpcMainInvokeEvent,
-    performanceMode: boolean
-  ) => {
+  const handleTerminalConfigSetPerformanceMode = async (performanceMode: boolean) => {
     if (typeof performanceMode !== "boolean") {
       console.warn("Invalid terminal performanceMode:", performanceMode);
       return;
@@ -58,16 +53,14 @@ export function registerTerminalConfigHandlers(deps?: HandlerDependencies): () =
     const currentConfig = getTerminalConfigObject();
     store.set("terminalConfig", { ...currentConfig, performanceMode });
   };
-  ipcMain.handle(
-    CHANNELS.TERMINAL_CONFIG_SET_PERFORMANCE_MODE,
-    handleTerminalConfigSetPerformanceMode
+  handlers.push(
+    typedHandle(
+      CHANNELS.TERMINAL_CONFIG_SET_PERFORMANCE_MODE,
+      handleTerminalConfigSetPerformanceMode
+    )
   );
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.TERMINAL_CONFIG_SET_PERFORMANCE_MODE));
 
-  const handleTerminalConfigSetFontSize = async (
-    _event: Electron.IpcMainInvokeEvent,
-    fontSize: number
-  ) => {
+  const handleTerminalConfigSetFontSize = async (fontSize: number) => {
     if (!Number.isFinite(fontSize) || !Number.isInteger(fontSize)) {
       console.warn("Invalid terminal fontSize (not a finite integer):", fontSize);
       return;
@@ -79,13 +72,11 @@ export function registerTerminalConfigHandlers(deps?: HandlerDependencies): () =
     const currentConfig = getTerminalConfigObject();
     store.set("terminalConfig", { ...currentConfig, fontSize });
   };
-  ipcMain.handle(CHANNELS.TERMINAL_CONFIG_SET_FONT_SIZE, handleTerminalConfigSetFontSize);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.TERMINAL_CONFIG_SET_FONT_SIZE));
+  handlers.push(
+    typedHandle(CHANNELS.TERMINAL_CONFIG_SET_FONT_SIZE, handleTerminalConfigSetFontSize)
+  );
 
-  const handleTerminalConfigSetFontFamily = async (
-    _event: Electron.IpcMainInvokeEvent,
-    fontFamily: string
-  ) => {
+  const handleTerminalConfigSetFontFamily = async (fontFamily: string) => {
     if (typeof fontFamily !== "string" || !fontFamily.trim()) {
       console.warn("Invalid terminal fontFamily:", fontFamily);
       return;
@@ -94,13 +85,11 @@ export function registerTerminalConfigHandlers(deps?: HandlerDependencies): () =
     const currentConfig = getTerminalConfigObject();
     store.set("terminalConfig", { ...currentConfig, fontFamily: trimmedFontFamily });
   };
-  ipcMain.handle(CHANNELS.TERMINAL_CONFIG_SET_FONT_FAMILY, handleTerminalConfigSetFontFamily);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.TERMINAL_CONFIG_SET_FONT_FAMILY));
+  handlers.push(
+    typedHandle(CHANNELS.TERMINAL_CONFIG_SET_FONT_FAMILY, handleTerminalConfigSetFontFamily)
+  );
 
-  const handleTerminalConfigSetHybridInputEnabled = async (
-    _event: Electron.IpcMainInvokeEvent,
-    enabled: boolean
-  ) => {
+  const handleTerminalConfigSetHybridInputEnabled = async (enabled: boolean) => {
     if (typeof enabled !== "boolean") {
       console.warn("Invalid terminal hybridInputEnabled:", enabled);
       return;
@@ -108,16 +97,14 @@ export function registerTerminalConfigHandlers(deps?: HandlerDependencies): () =
     const currentConfig = getTerminalConfigObject();
     store.set("terminalConfig", { ...currentConfig, hybridInputEnabled: enabled });
   };
-  ipcMain.handle(
-    CHANNELS.TERMINAL_CONFIG_SET_HYBRID_INPUT_ENABLED,
-    handleTerminalConfigSetHybridInputEnabled
+  handlers.push(
+    typedHandle(
+      CHANNELS.TERMINAL_CONFIG_SET_HYBRID_INPUT_ENABLED,
+      handleTerminalConfigSetHybridInputEnabled
+    )
   );
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.TERMINAL_CONFIG_SET_HYBRID_INPUT_ENABLED));
 
-  const handleTerminalConfigSetHybridInputAutoFocus = async (
-    _event: Electron.IpcMainInvokeEvent,
-    enabled: boolean
-  ) => {
+  const handleTerminalConfigSetHybridInputAutoFocus = async (enabled: boolean) => {
     if (typeof enabled !== "boolean") {
       console.warn("Invalid terminal hybridInputAutoFocus:", enabled);
       return;
@@ -125,16 +112,14 @@ export function registerTerminalConfigHandlers(deps?: HandlerDependencies): () =
     const currentConfig = getTerminalConfigObject();
     store.set("terminalConfig", { ...currentConfig, hybridInputAutoFocus: enabled });
   };
-  ipcMain.handle(
-    CHANNELS.TERMINAL_CONFIG_SET_HYBRID_INPUT_AUTO_FOCUS,
-    handleTerminalConfigSetHybridInputAutoFocus
+  handlers.push(
+    typedHandle(
+      CHANNELS.TERMINAL_CONFIG_SET_HYBRID_INPUT_AUTO_FOCUS,
+      handleTerminalConfigSetHybridInputAutoFocus
+    )
   );
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.TERMINAL_CONFIG_SET_HYBRID_INPUT_AUTO_FOCUS));
 
-  const handleTerminalConfigSetColorScheme = async (
-    _event: Electron.IpcMainInvokeEvent,
-    schemeId: string
-  ) => {
+  const handleTerminalConfigSetColorScheme = async (schemeId: string) => {
     if (typeof schemeId !== "string" || !schemeId.trim()) {
       console.warn("Invalid terminal colorScheme:", schemeId);
       return;
@@ -142,13 +127,11 @@ export function registerTerminalConfigHandlers(deps?: HandlerDependencies): () =
     const currentConfig = getTerminalConfigObject();
     store.set("terminalConfig", { ...currentConfig, colorSchemeId: schemeId.trim() });
   };
-  ipcMain.handle(CHANNELS.TERMINAL_CONFIG_SET_COLOR_SCHEME, handleTerminalConfigSetColorScheme);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.TERMINAL_CONFIG_SET_COLOR_SCHEME));
+  handlers.push(
+    typedHandle(CHANNELS.TERMINAL_CONFIG_SET_COLOR_SCHEME, handleTerminalConfigSetColorScheme)
+  );
 
-  const handleTerminalConfigSetCustomSchemes = async (
-    _event: Electron.IpcMainInvokeEvent,
-    schemesJson: string
-  ) => {
+  const handleTerminalConfigSetCustomSchemes = async (schemesJson: string) => {
     if (typeof schemesJson !== "string") {
       console.warn("Invalid custom schemes:", schemesJson);
       return;
@@ -156,13 +139,11 @@ export function registerTerminalConfigHandlers(deps?: HandlerDependencies): () =
     const currentConfig = getTerminalConfigObject();
     store.set("terminalConfig", { ...currentConfig, customSchemes: schemesJson });
   };
-  ipcMain.handle(CHANNELS.TERMINAL_CONFIG_SET_CUSTOM_SCHEMES, handleTerminalConfigSetCustomSchemes);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.TERMINAL_CONFIG_SET_CUSTOM_SCHEMES));
+  handlers.push(
+    typedHandle(CHANNELS.TERMINAL_CONFIG_SET_CUSTOM_SCHEMES, handleTerminalConfigSetCustomSchemes)
+  );
 
-  const handleTerminalConfigSetRecentSchemeIds = async (
-    _event: Electron.IpcMainInvokeEvent,
-    ids: unknown
-  ) => {
+  const handleTerminalConfigSetRecentSchemeIds = async (ids: unknown) => {
     if (!Array.isArray(ids)) {
       console.warn("Invalid terminal recentSchemeIds:", ids);
       return;
@@ -174,16 +155,14 @@ export function registerTerminalConfigHandlers(deps?: HandlerDependencies): () =
     const currentConfig = getTerminalConfigObject();
     store.set("terminalConfig", { ...currentConfig, recentSchemeIds: sanitized });
   };
-  ipcMain.handle(
-    CHANNELS.TERMINAL_CONFIG_SET_RECENT_SCHEME_IDS,
-    handleTerminalConfigSetRecentSchemeIds
+  handlers.push(
+    typedHandle(
+      CHANNELS.TERMINAL_CONFIG_SET_RECENT_SCHEME_IDS,
+      handleTerminalConfigSetRecentSchemeIds
+    )
   );
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.TERMINAL_CONFIG_SET_RECENT_SCHEME_IDS));
 
-  const handleTerminalConfigSetScreenReaderMode = async (
-    _event: Electron.IpcMainInvokeEvent,
-    mode: string
-  ) => {
+  const handleTerminalConfigSetScreenReaderMode = async (mode: string) => {
     if (mode !== "auto" && mode !== "on" && mode !== "off") {
       console.warn("Invalid screen reader mode:", mode);
       return;
@@ -191,16 +170,14 @@ export function registerTerminalConfigHandlers(deps?: HandlerDependencies): () =
     const currentConfig = getTerminalConfigObject();
     store.set("terminalConfig", { ...currentConfig, screenReaderMode: mode });
   };
-  ipcMain.handle(
-    CHANNELS.TERMINAL_CONFIG_SET_SCREEN_READER_MODE,
-    handleTerminalConfigSetScreenReaderMode
+  handlers.push(
+    typedHandle(
+      CHANNELS.TERMINAL_CONFIG_SET_SCREEN_READER_MODE,
+      handleTerminalConfigSetScreenReaderMode
+    )
   );
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.TERMINAL_CONFIG_SET_SCREEN_READER_MODE));
 
-  const handleTerminalConfigSetResourceMonitoring = async (
-    _event: Electron.IpcMainInvokeEvent,
-    enabled: boolean
-  ) => {
+  const handleTerminalConfigSetResourceMonitoring = async (enabled: boolean) => {
     if (typeof enabled !== "boolean") {
       console.warn("Invalid terminal resourceMonitoringEnabled:", enabled);
       return;
@@ -209,16 +186,14 @@ export function registerTerminalConfigHandlers(deps?: HandlerDependencies): () =
     store.set("terminalConfig", { ...currentConfig, resourceMonitoringEnabled: enabled });
     deps?.ptyClient?.setResourceMonitoring(enabled);
   };
-  ipcMain.handle(
-    CHANNELS.TERMINAL_CONFIG_SET_RESOURCE_MONITORING,
-    handleTerminalConfigSetResourceMonitoring
+  handlers.push(
+    typedHandle(
+      CHANNELS.TERMINAL_CONFIG_SET_RESOURCE_MONITORING,
+      handleTerminalConfigSetResourceMonitoring
+    )
   );
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.TERMINAL_CONFIG_SET_RESOURCE_MONITORING));
 
-  const handleTerminalConfigSetMemoryLeakDetection = async (
-    _event: Electron.IpcMainInvokeEvent,
-    enabled: boolean
-  ) => {
+  const handleTerminalConfigSetMemoryLeakDetection = async (enabled: boolean) => {
     if (typeof enabled !== "boolean") {
       console.warn("Invalid terminal memoryLeakDetectionEnabled:", enabled);
       return;
@@ -226,16 +201,14 @@ export function registerTerminalConfigHandlers(deps?: HandlerDependencies): () =
     const currentConfig = getTerminalConfigObject();
     store.set("terminalConfig", { ...currentConfig, memoryLeakDetectionEnabled: enabled });
   };
-  ipcMain.handle(
-    CHANNELS.TERMINAL_CONFIG_SET_MEMORY_LEAK_DETECTION,
-    handleTerminalConfigSetMemoryLeakDetection
+  handlers.push(
+    typedHandle(
+      CHANNELS.TERMINAL_CONFIG_SET_MEMORY_LEAK_DETECTION,
+      handleTerminalConfigSetMemoryLeakDetection
+    )
   );
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.TERMINAL_CONFIG_SET_MEMORY_LEAK_DETECTION));
 
-  const handleTerminalConfigSetMemoryLeakAutoRestart = async (
-    _event: Electron.IpcMainInvokeEvent,
-    thresholdMb: number
-  ) => {
+  const handleTerminalConfigSetMemoryLeakAutoRestart = async (thresholdMb: number) => {
     if (!Number.isFinite(thresholdMb) || !Number.isInteger(thresholdMb)) {
       console.warn("Invalid memoryLeakAutoRestartThresholdMb (not a finite integer):", thresholdMb);
       return;
@@ -253,16 +226,14 @@ export function registerTerminalConfigHandlers(deps?: HandlerDependencies): () =
       memoryLeakAutoRestartThresholdMb: thresholdMb,
     });
   };
-  ipcMain.handle(
-    CHANNELS.TERMINAL_CONFIG_SET_MEMORY_LEAK_AUTO_RESTART,
-    handleTerminalConfigSetMemoryLeakAutoRestart
+  handlers.push(
+    typedHandle(
+      CHANNELS.TERMINAL_CONFIG_SET_MEMORY_LEAK_AUTO_RESTART,
+      handleTerminalConfigSetMemoryLeakAutoRestart
+    )
   );
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.TERMINAL_CONFIG_SET_MEMORY_LEAK_AUTO_RESTART));
 
-  const handleTerminalConfigSetCachedProjectViews = async (
-    _event: Electron.IpcMainInvokeEvent,
-    cachedProjectViews: number
-  ) => {
+  const handleTerminalConfigSetCachedProjectViews = async (cachedProjectViews: number) => {
     if (!Number.isFinite(cachedProjectViews) || !Number.isInteger(cachedProjectViews)) {
       const error = `Invalid cachedProjectViews value (not a finite integer): ${cachedProjectViews}`;
       console.warn(error);
@@ -277,37 +248,47 @@ export function registerTerminalConfigHandlers(deps?: HandlerDependencies): () =
     store.set("terminalConfig", { ...currentConfig, cachedProjectViews });
     deps?.projectViewManager?.setCachedViewLimit(cachedProjectViews);
   };
-  ipcMain.handle(
-    CHANNELS.TERMINAL_CONFIG_SET_CACHED_PROJECT_VIEWS,
-    handleTerminalConfigSetCachedProjectViews
+  handlers.push(
+    typedHandle(
+      CHANNELS.TERMINAL_CONFIG_SET_CACHED_PROJECT_VIEWS,
+      handleTerminalConfigSetCachedProjectViews
+    )
   );
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.TERMINAL_CONFIG_SET_CACHED_PROJECT_VIEWS));
 
-  const handleTerminalConfigImportColorScheme = async (event: Electron.IpcMainInvokeEvent) => {
-    const win = getWindowForWebContents(event.sender) ?? BrowserWindow.getFocusedWindow();
-    const dialogOptions = {
-      title: "Import Color Scheme",
-      filters: [
-        { name: "Color Schemes", extensions: ["itermcolors", "json"] },
-        { name: "All Files", extensions: ["*"] },
-      ],
-      properties: ["openFile" as const],
-    };
-    const result = win
-      ? await dialog.showOpenDialog(win, dialogOptions)
-      : await dialog.showOpenDialog(dialogOptions);
+  handlers.push(
+    typedHandleWithContext(CHANNELS.TERMINAL_CONFIG_IMPORT_COLOR_SCHEME, async (ctx) => {
+      const win = ctx.senderWindow ?? BrowserWindow.getFocusedWindow();
+      const dialogOptions = {
+        title: "Import Color Scheme",
+        filters: [
+          { name: "Color Schemes", extensions: ["itermcolors", "json"] },
+          { name: "All Files", extensions: ["*"] },
+        ],
+        properties: ["openFile" as const],
+      };
+      const result = win
+        ? await dialog.showOpenDialog(win, dialogOptions)
+        : await dialog.showOpenDialog(dialogOptions);
 
-    if (result.canceled || result.filePaths.length === 0) {
-      return { ok: false, errors: ["Import cancelled"] };
-    }
+      if (result.canceled || result.filePaths.length === 0) {
+        return { ok: false as const, errors: ["Import cancelled"] };
+      }
 
-    return parseColorSchemeFile(result.filePaths[0]);
-  };
-  ipcMain.handle(
-    CHANNELS.TERMINAL_CONFIG_IMPORT_COLOR_SCHEME,
-    handleTerminalConfigImportColorScheme
+      const parsed = await parseColorSchemeFile(result.filePaths[0]);
+      if (!parsed.ok) {
+        return parsed;
+      }
+      return {
+        ok: true as const,
+        scheme: {
+          id: parsed.scheme.id,
+          name: parsed.scheme.name,
+          type: parsed.scheme.type,
+          colors: { ...parsed.scheme.colors } as Record<string, string>,
+        },
+      };
+    })
   );
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.TERMINAL_CONFIG_IMPORT_COLOR_SCHEME));
 
   return () => handlers.forEach((cleanup) => cleanup());
 }

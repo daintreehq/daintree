@@ -2,11 +2,10 @@
  * Terminal lifecycle handlers - spawn, kill, trash, restore.
  */
 
-import { ipcMain } from "electron";
 import crypto from "crypto";
 import os from "os";
 import { CHANNELS } from "../../channels.js";
-import { waitForRateLimitSlot, consumeRestoreQuota } from "../../utils.js";
+import { waitForRateLimitSlot, consumeRestoreQuota, typedHandle } from "../../utils.js";
 import { projectStore } from "../../../services/ProjectStore.js";
 import type { HandlerDependencies } from "../../types.js";
 import type { TerminalSpawnOptions } from "../../../types/index.js";
@@ -26,10 +25,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
   }
   const handlers: Array<() => void> = [];
 
-  const handleTerminalSpawn = async (
-    _event: Electron.IpcMainInvokeEvent,
-    options: TerminalSpawnOptions
-  ): Promise<string> => {
+  const handleTerminalSpawn = async (options: TerminalSpawnOptions): Promise<string> => {
     const parseResult = TerminalSpawnOptionsSchema.safeParse(options);
     if (!parseResult.success) {
       console.error("[IPC] Invalid terminal spawn options:", parseResult.error.format());
@@ -228,10 +224,9 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       throw new Error(`Failed to spawn terminal: ${errorMessage}`);
     }
   };
-  ipcMain.handle(CHANNELS.TERMINAL_SPAWN, handleTerminalSpawn);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.TERMINAL_SPAWN));
+  handlers.push(typedHandle(CHANNELS.TERMINAL_SPAWN, handleTerminalSpawn));
 
-  const handleTerminalKill = async (_event: Electron.IpcMainInvokeEvent, id: string) => {
+  const handleTerminalKill = async (id: string) => {
     try {
       if (typeof id !== "string") {
         throw new Error("Invalid terminal ID: must be a string");
@@ -242,22 +237,17 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       throw new Error(`Failed to kill terminal: ${errorMessage}`);
     }
   };
-  ipcMain.handle(CHANNELS.TERMINAL_KILL, handleTerminalKill);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.TERMINAL_KILL));
+  handlers.push(typedHandle(CHANNELS.TERMINAL_KILL, handleTerminalKill));
 
-  const handleTerminalGracefulKill = async (
-    _event: Electron.IpcMainInvokeEvent,
-    id: string
-  ): Promise<string | null> => {
+  const handleTerminalGracefulKill = async (id: string): Promise<string | null> => {
     if (typeof id !== "string") {
       throw new Error("Invalid terminal ID: must be a string");
     }
     return ptyClient.gracefulKill(id);
   };
-  ipcMain.handle(CHANNELS.TERMINAL_GRACEFUL_KILL, handleTerminalGracefulKill);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.TERMINAL_GRACEFUL_KILL));
+  handlers.push(typedHandle(CHANNELS.TERMINAL_GRACEFUL_KILL, handleTerminalGracefulKill));
 
-  const handleTerminalTrash = async (_event: Electron.IpcMainInvokeEvent, id: string) => {
+  const handleTerminalTrash = async (id: string) => {
     try {
       if (typeof id !== "string") {
         throw new Error("Invalid terminal ID: must be a string");
@@ -268,13 +258,9 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       throw new Error(`Failed to trash terminal: ${errorMessage}`);
     }
   };
-  ipcMain.handle(CHANNELS.TERMINAL_TRASH, handleTerminalTrash);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.TERMINAL_TRASH));
+  handlers.push(typedHandle(CHANNELS.TERMINAL_TRASH, handleTerminalTrash));
 
-  const handleTerminalRestore = async (
-    _event: Electron.IpcMainInvokeEvent,
-    id: string
-  ): Promise<boolean> => {
+  const handleTerminalRestore = async (id: string): Promise<boolean> => {
     try {
       if (typeof id !== "string") {
         throw new Error("Invalid terminal ID: must be a string");
@@ -285,34 +271,24 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       throw new Error(`Failed to restore terminal: ${errorMessage}`);
     }
   };
-  ipcMain.handle(CHANNELS.TERMINAL_RESTORE, handleTerminalRestore);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.TERMINAL_RESTORE));
+  handlers.push(typedHandle(CHANNELS.TERMINAL_RESTORE, handleTerminalRestore));
 
   const handleTerminalRestartService = async () => {
     ptyClient.manualRestart();
   };
-  ipcMain.handle(CHANNELS.TERMINAL_RESTART_SERVICE, handleTerminalRestartService);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.TERMINAL_RESTART_SERVICE));
+  handlers.push(typedHandle(CHANNELS.TERMINAL_RESTART_SERVICE, handleTerminalRestartService));
 
-  const handleAgentSessionList = async (
-    _event: Electron.IpcMainInvokeEvent,
-    payload: { worktreeId?: string }
-  ) => {
+  const handleAgentSessionList = async (payload: { worktreeId?: string }) => {
     const { app } = await import("electron");
     return listAgentSessions(payload?.worktreeId, app.getPath("userData"));
   };
-  ipcMain.handle(CHANNELS.AGENT_SESSION_LIST, handleAgentSessionList);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.AGENT_SESSION_LIST));
+  handlers.push(typedHandle(CHANNELS.AGENT_SESSION_LIST, handleAgentSessionList));
 
-  const handleAgentSessionClear = async (
-    _event: Electron.IpcMainInvokeEvent,
-    payload: { worktreeId?: string }
-  ) => {
+  const handleAgentSessionClear = async (payload: { worktreeId?: string }) => {
     const { app } = await import("electron");
     await clearAgentSessions(payload?.worktreeId, app.getPath("userData"));
   };
-  ipcMain.handle(CHANNELS.AGENT_SESSION_CLEAR, handleAgentSessionClear);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.AGENT_SESSION_CLEAR));
+  handlers.push(typedHandle(CHANNELS.AGENT_SESSION_CLEAR, handleAgentSessionClear));
 
   return () => handlers.forEach((cleanup) => cleanup());
 }

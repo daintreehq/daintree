@@ -1,4 +1,4 @@
-import { ipcMain, shell } from "electron";
+import { shell } from "electron";
 import { CHANNELS } from "../channels.js";
 import { logBuffer } from "../../services/LogBuffer.js";
 import {
@@ -12,33 +12,28 @@ import {
   type LogLevel,
 } from "../../utils/logger.js";
 import type { FilterOptions as LogFilterOptions } from "../../services/LogBuffer.js";
+import { typedHandle } from "../utils.js";
 
 export function registerLogsHandlers(): () => void {
   const handlers: Array<() => void> = [];
 
-  const handleLogsGetAll = async (
-    _event: Electron.IpcMainInvokeEvent,
-    filters?: LogFilterOptions
-  ) => {
+  const handleLogsGetAll = async (filters?: LogFilterOptions) => {
     if (filters) {
       return logBuffer.getFiltered(filters);
     }
     return logBuffer.getAll();
   };
-  ipcMain.handle(CHANNELS.LOGS_GET_ALL, handleLogsGetAll);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.LOGS_GET_ALL));
+  handlers.push(typedHandle(CHANNELS.LOGS_GET_ALL, handleLogsGetAll));
 
   const handleLogsGetSources = async () => {
     return logBuffer.getSources();
   };
-  ipcMain.handle(CHANNELS.LOGS_GET_SOURCES, handleLogsGetSources);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.LOGS_GET_SOURCES));
+  handlers.push(typedHandle(CHANNELS.LOGS_GET_SOURCES, handleLogsGetSources));
 
   const handleLogsClear = async () => {
     logBuffer.clear();
   };
-  ipcMain.handle(CHANNELS.LOGS_CLEAR, handleLogsClear);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.LOGS_CLEAR));
+  handlers.push(typedHandle(CHANNELS.LOGS_CLEAR, handleLogsClear));
 
   const handleLogsOpenFile = async () => {
     const logFilePath = getLogFilePath();
@@ -71,10 +66,9 @@ export function registerLogsHandlers(): () => void {
       }
     }
   };
-  ipcMain.handle(CHANNELS.LOGS_OPEN_FILE, handleLogsOpenFile);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.LOGS_OPEN_FILE));
+  handlers.push(typedHandle(CHANNELS.LOGS_OPEN_FILE, handleLogsOpenFile));
 
-  const handleLogsSetVerbose = async (_event: Electron.IpcMainInvokeEvent, enabled: boolean) => {
+  const handleLogsSetVerbose = async (enabled: boolean) => {
     if (typeof enabled !== "boolean") {
       logError("Invalid verbose logging payload", undefined, { payload: enabled });
       return { success: false };
@@ -83,19 +77,18 @@ export function registerLogsHandlers(): () => void {
     logInfo(`Verbose logging ${enabled ? "enabled" : "disabled"} by user`);
     return { success: true };
   };
-  ipcMain.handle(CHANNELS.LOGS_SET_VERBOSE, handleLogsSetVerbose);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.LOGS_SET_VERBOSE));
+  handlers.push(typedHandle(CHANNELS.LOGS_SET_VERBOSE, handleLogsSetVerbose));
 
   const handleLogsGetVerbose = async () => {
     return isVerboseLogging();
   };
-  ipcMain.handle(CHANNELS.LOGS_GET_VERBOSE, handleLogsGetVerbose);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.LOGS_GET_VERBOSE));
+  handlers.push(typedHandle(CHANNELS.LOGS_GET_VERBOSE, handleLogsGetVerbose));
 
-  const handleLogsWrite = async (
-    _event: Electron.IpcMainInvokeEvent,
-    payload: { level: LogLevel; message: string; context?: Record<string, unknown> }
-  ) => {
+  const handleLogsWrite = async (payload: {
+    level: LogLevel;
+    message: string;
+    context?: Record<string, unknown>;
+  }) => {
     const { level, message, context } = payload;
     const contextWithSource = { ...context, source: "Renderer" };
     switch (level) {
@@ -113,8 +106,7 @@ export function registerLogsHandlers(): () => void {
         break;
     }
   };
-  ipcMain.handle(CHANNELS.LOGS_WRITE, handleLogsWrite);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.LOGS_WRITE));
+  handlers.push(typedHandle(CHANNELS.LOGS_WRITE, handleLogsWrite));
 
   return () => handlers.forEach((cleanup) => cleanup());
 }

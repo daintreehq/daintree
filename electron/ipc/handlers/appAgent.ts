@@ -1,9 +1,9 @@
-import { ipcMain } from "electron";
 import { CHANNELS } from "../channels.js";
 import type { HandlerDependencies } from "../types.js";
 import { appAgentService } from "../../services/AppAgentService.js";
 import type { AppAgentConfig } from "../../../shared/types/appAgent.js";
 import { AppAgentConfigSchema } from "../../../shared/types/appAgent.js";
+import { typedHandle } from "../utils.js";
 
 export function registerAppAgentHandlers(_deps: HandlerDependencies): () => void {
   const handlers: Array<() => void> = [];
@@ -11,13 +11,9 @@ export function registerAppAgentHandlers(_deps: HandlerDependencies): () => void
   const handleGetConfig = async () => {
     return appAgentService.getConfig();
   };
-  ipcMain.handle(CHANNELS.APP_AGENT_GET_CONFIG, handleGetConfig);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.APP_AGENT_GET_CONFIG));
+  handlers.push(typedHandle(CHANNELS.APP_AGENT_GET_CONFIG, handleGetConfig));
 
-  const handleSetConfig = async (
-    _event: Electron.IpcMainInvokeEvent,
-    config: Partial<AppAgentConfig>
-  ) => {
+  const handleSetConfig = async (config: Partial<AppAgentConfig>) => {
     if (!config || typeof config !== "object") {
       throw new Error("Invalid config");
     }
@@ -30,32 +26,28 @@ export function registerAppAgentHandlers(_deps: HandlerDependencies): () => void
     appAgentService.setConfig(configResult.data);
     return appAgentService.getConfig();
   };
-  ipcMain.handle(CHANNELS.APP_AGENT_SET_CONFIG, handleSetConfig);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.APP_AGENT_SET_CONFIG));
+  handlers.push(typedHandle(CHANNELS.APP_AGENT_SET_CONFIG, handleSetConfig));
 
   const handleHasApiKey = async () => {
     return appAgentService.hasApiKey();
   };
-  ipcMain.handle(CHANNELS.APP_AGENT_HAS_API_KEY, handleHasApiKey);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.APP_AGENT_HAS_API_KEY));
+  handlers.push(typedHandle(CHANNELS.APP_AGENT_HAS_API_KEY, handleHasApiKey));
 
-  const handleTestApiKey = async (_event: Electron.IpcMainInvokeEvent, apiKey: string) => {
+  const handleTestApiKey = async (apiKey: string) => {
     if (!apiKey || typeof apiKey !== "string") {
       throw new Error("Invalid API key");
     }
     return appAgentService.testApiKey(apiKey.trim());
   };
-  ipcMain.handle(CHANNELS.APP_AGENT_TEST_API_KEY, handleTestApiKey);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.APP_AGENT_TEST_API_KEY));
+  handlers.push(typedHandle(CHANNELS.APP_AGENT_TEST_API_KEY, handleTestApiKey));
 
-  const handleTestModel = async (_event: Electron.IpcMainInvokeEvent, model: string) => {
+  const handleTestModel = async (model: string) => {
     if (!model || typeof model !== "string") {
       throw new Error("Invalid model");
     }
     return appAgentService.testModel(model.trim());
   };
-  ipcMain.handle(CHANNELS.APP_AGENT_TEST_MODEL, handleTestModel);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.APP_AGENT_TEST_MODEL));
+  handlers.push(typedHandle(CHANNELS.APP_AGENT_TEST_MODEL, handleTestModel));
 
   return () => handlers.forEach((cleanup) => cleanup());
 }

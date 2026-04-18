@@ -99,7 +99,7 @@ describe("copyTree handlers", () => {
   it("returns validation errors instead of throwing for invalid test-config payloads", async () => {
     const handler = getInvokeHandler(CHANNELS.COPYTREE_TEST_CONFIG);
 
-    await expect(handler({} as never, null as never)).resolves.toEqual(
+    await expect(handler(mockEvent, null as never)).resolves.toEqual(
       expect.objectContaining({
         error: expect.stringContaining("Invalid payload"),
       })

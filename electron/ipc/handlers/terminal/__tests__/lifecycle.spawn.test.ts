@@ -1,10 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
+const ipcMainMock = vi.hoisted(() => ({
+  handle: vi.fn(),
+  removeHandler: vi.fn(),
+}));
+
 vi.mock("electron", () => ({
-  ipcMain: {
-    handle: vi.fn(),
-    removeHandler: vi.fn(),
-  },
+  ipcMain: ipcMainMock,
   app: {
     getPath: vi.fn(() => "/tmp/test"),
   },
@@ -31,6 +33,27 @@ vi.mock("../../../services/pty/terminalShell.js", () => ({
 vi.mock("../../utils.js", () => ({
   waitForRateLimitSlot: vi.fn(),
   consumeRestoreQuota: vi.fn(() => false),
+  typedHandle: (channel: string, handler: unknown) => {
+    ipcMainMock.handle(channel, (_e: unknown, ...args: unknown[]) =>
+      (handler as (...a: unknown[]) => unknown)(...args)
+    );
+    return () => ipcMainMock.removeHandler(channel);
+  },
+  typedHandleWithContext: (channel: string, handler: unknown) => {
+    ipcMainMock.handle(
+      channel,
+      (event: { sender?: { id?: number } } | null | undefined, ...args: unknown[]) => {
+        const ctx = {
+          event: event as unknown,
+          webContentsId: event?.sender?.id ?? 0,
+          senderWindow: null,
+          projectId: null,
+        };
+        return (handler as (...a: unknown[]) => unknown)(ctx, ...args);
+      }
+    );
+    return () => ipcMainMock.removeHandler(channel);
+  },
 }));
 
 vi.mock("../../../../shared/config/agentRegistry.js", () => ({

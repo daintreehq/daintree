@@ -69,6 +69,27 @@ vi.mock("../../utils.js", () => ({
   broadcastToRenderer: vi.fn((channel: string, ...args: unknown[]) => {
     mainWindowMock.webContents.send(channel, ...args);
   }),
+  typedHandle: (channel: string, handler: unknown) => {
+    ipcMainMock.handle(channel, (_e: unknown, ...args: unknown[]) =>
+      (handler as (...a: unknown[]) => unknown)(...args)
+    );
+    return () => ipcMainMock.removeHandler(channel);
+  },
+  typedHandleWithContext: (channel: string, handler: unknown) => {
+    ipcMainMock.handle(
+      channel,
+      (event: { sender?: { id?: number } } | null | undefined, ...args: unknown[]) => {
+        const ctx = {
+          event: event as unknown,
+          webContentsId: event?.sender?.id ?? 0,
+          senderWindow: null,
+          projectId: null,
+        };
+        return (handler as (...a: unknown[]) => unknown)(ctx, ...args);
+      }
+    );
+    return () => ipcMainMock.removeHandler(channel);
+  },
 }));
 
 import { registerWebviewHandlers } from "../webview.js";

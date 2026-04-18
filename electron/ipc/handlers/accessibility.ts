@@ -1,6 +1,7 @@
-import { app, ipcMain, BrowserWindow } from "electron";
+import { app, BrowserWindow } from "electron";
 import { CHANNELS } from "../channels.js";
 import { getAppWebContents } from "../../window/webContentsRegistry.js";
+import { typedHandle } from "../utils.js";
 
 export function registerAccessibilityHandlers(): () => void {
   const handlers: Array<() => void> = [];
@@ -8,8 +9,7 @@ export function registerAccessibilityHandlers(): () => void {
   const handleGetEnabled = async () => {
     return app.accessibilitySupportEnabled;
   };
-  ipcMain.handle(CHANNELS.ACCESSIBILITY_GET_ENABLED, handleGetEnabled);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.ACCESSIBILITY_GET_ENABLED));
+  handlers.push(typedHandle(CHANNELS.ACCESSIBILITY_GET_ENABLED, handleGetEnabled));
 
   const onChanged = (_event: Electron.Event, enabled: boolean) => {
     for (const win of BrowserWindow.getAllWindows()) {

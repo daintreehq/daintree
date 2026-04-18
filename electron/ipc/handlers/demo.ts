@@ -6,6 +6,7 @@ import { spawn, type ChildProcess } from "child_process";
 import { CHANNELS } from "../channels.js";
 import type { HandlerDependencies } from "../types.js";
 import { getAppWebContents } from "../../window/webContentsRegistry.js";
+import { typedHandle } from "../utils.js";
 import type {
   DemoMoveToPayload,
   DemoMoveToSelectorPayload,
@@ -76,17 +77,11 @@ export function registerDemoHandlers(deps: HandlerDependencies): () => void {
     });
   }
 
-  const handleMoveTo = async (
-    _event: Electron.IpcMainInvokeEvent,
-    payload: DemoMoveToPayload
-  ): Promise<void> => {
+  const handleMoveTo = async (payload: DemoMoveToPayload): Promise<void> => {
     await sendCommandAndAwait(CHANNELS.DEMO_EXEC_MOVE_TO, payload);
   };
 
-  const handleMoveToSelector = async (
-    _event: Electron.IpcMainInvokeEvent,
-    payload: DemoMoveToSelectorPayload
-  ): Promise<void> => {
+  const handleMoveToSelector = async (payload: DemoMoveToSelectorPayload): Promise<void> => {
     await sendCommandAndAwait(CHANNELS.DEMO_EXEC_MOVE_TO_SELECTOR, payload);
   };
 
@@ -94,10 +89,7 @@ export function registerDemoHandlers(deps: HandlerDependencies): () => void {
     await sendCommandAndAwait(CHANNELS.DEMO_EXEC_CLICK);
   };
 
-  const handleType = async (
-    _event: Electron.IpcMainInvokeEvent,
-    payload: DemoTypePayload
-  ): Promise<void> => {
+  const handleType = async (payload: DemoTypePayload): Promise<void> => {
     await sendCommandAndAwait(CHANNELS.DEMO_EXEC_TYPE, payload);
   };
 
@@ -116,10 +108,7 @@ export function registerDemoHandlers(deps: HandlerDependencies): () => void {
     };
   };
 
-  const handleWaitForSelector = async (
-    _event: Electron.IpcMainInvokeEvent,
-    payload: DemoWaitForSelectorPayload
-  ): Promise<void> => {
+  const handleWaitForSelector = async (payload: DemoWaitForSelectorPayload): Promise<void> => {
     await sendCommandAndAwait(CHANNELS.DEMO_EXEC_WAIT_FOR_SELECTOR, payload);
   };
 
@@ -131,38 +120,23 @@ export function registerDemoHandlers(deps: HandlerDependencies): () => void {
     await sendCommandAndAwait(CHANNELS.DEMO_EXEC_RESUME);
   };
 
-  const handleSleep = async (
-    _event: Electron.IpcMainInvokeEvent,
-    payload: DemoSleepPayload
-  ): Promise<void> => {
+  const handleSleep = async (payload: DemoSleepPayload): Promise<void> => {
     await sendCommandAndAwait(CHANNELS.DEMO_EXEC_SLEEP, payload);
   };
 
-  const handleScroll = async (
-    _event: Electron.IpcMainInvokeEvent,
-    payload: DemoScrollPayload
-  ): Promise<void> => {
+  const handleScroll = async (payload: DemoScrollPayload): Promise<void> => {
     await sendCommandAndAwait(CHANNELS.DEMO_EXEC_SCROLL, payload);
   };
 
-  const handleDrag = async (
-    _event: Electron.IpcMainInvokeEvent,
-    payload: DemoDragPayload
-  ): Promise<void> => {
+  const handleDrag = async (payload: DemoDragPayload): Promise<void> => {
     await sendCommandAndAwait(CHANNELS.DEMO_EXEC_DRAG, payload);
   };
 
-  const handlePressKey = async (
-    _event: Electron.IpcMainInvokeEvent,
-    payload: DemoPressKeyPayload
-  ): Promise<void> => {
+  const handlePressKey = async (payload: DemoPressKeyPayload): Promise<void> => {
     await sendCommandAndAwait(CHANNELS.DEMO_EXEC_PRESS_KEY, payload);
   };
 
-  const handleSpotlight = async (
-    _event: Electron.IpcMainInvokeEvent,
-    payload: DemoSpotlightPayload
-  ): Promise<void> => {
+  const handleSpotlight = async (payload: DemoSpotlightPayload): Promise<void> => {
     await sendCommandAndAwait(CHANNELS.DEMO_EXEC_SPOTLIGHT, payload);
   };
 
@@ -170,26 +144,17 @@ export function registerDemoHandlers(deps: HandlerDependencies): () => void {
     await sendCommandAndAwait(CHANNELS.DEMO_EXEC_DISMISS_SPOTLIGHT);
   };
 
-  const handleAnnotate = async (
-    _event: Electron.IpcMainInvokeEvent,
-    payload: DemoAnnotatePayload
-  ): Promise<DemoAnnotateResult> => {
+  const handleAnnotate = async (payload: DemoAnnotatePayload): Promise<DemoAnnotateResult> => {
     const id = payload.id ?? randomBytes(8).toString("hex");
     await sendCommandAndAwait(CHANNELS.DEMO_EXEC_ANNOTATE, { ...payload, id });
     return { id };
   };
 
-  const handleDismissAnnotation = async (
-    _event: Electron.IpcMainInvokeEvent,
-    payload: DemoDismissAnnotationPayload
-  ): Promise<void> => {
+  const handleDismissAnnotation = async (payload: DemoDismissAnnotationPayload): Promise<void> => {
     await sendCommandAndAwait(CHANNELS.DEMO_EXEC_DISMISS_ANNOTATION, payload);
   };
 
-  const handleWaitForIdle = async (
-    _event: Electron.IpcMainInvokeEvent,
-    payload: DemoWaitForIdlePayload
-  ): Promise<void> => {
+  const handleWaitForIdle = async (payload: DemoWaitForIdlePayload): Promise<void> => {
     await sendCommandAndAwait(CHANNELS.DEMO_EXEC_WAIT_FOR_IDLE, payload);
   };
 
@@ -280,7 +245,6 @@ export function registerDemoHandlers(deps: HandlerDependencies): () => void {
   }
 
   const handleStartCapture = async (
-    _event: Electron.IpcMainInvokeEvent,
     payload: DemoStartCapturePayload
   ): Promise<DemoStartCaptureResult> => {
     if (captureSession) {
@@ -487,51 +451,36 @@ export function registerDemoHandlers(deps: HandlerDependencies): () => void {
     },
   };
 
-  ipcMain.handle(CHANNELS.DEMO_MOVE_TO, handleMoveTo);
-  ipcMain.handle(CHANNELS.DEMO_MOVE_TO_SELECTOR, handleMoveToSelector);
-  ipcMain.handle(CHANNELS.DEMO_CLICK, handleClick);
-  ipcMain.handle(CHANNELS.DEMO_SCREENSHOT, handleScreenshot);
-  ipcMain.handle(CHANNELS.DEMO_TYPE, handleType);
-  ipcMain.handle(CHANNELS.DEMO_WAIT_FOR_SELECTOR, handleWaitForSelector);
-  ipcMain.handle(CHANNELS.DEMO_PAUSE, handlePause);
-  ipcMain.handle(CHANNELS.DEMO_RESUME, handleResume);
-  ipcMain.handle(CHANNELS.DEMO_SLEEP, handleSleep);
-  ipcMain.handle(CHANNELS.DEMO_SCROLL, handleScroll);
-  ipcMain.handle(CHANNELS.DEMO_DRAG, handleDrag);
-  ipcMain.handle(CHANNELS.DEMO_PRESS_KEY, handlePressKey);
-  ipcMain.handle(CHANNELS.DEMO_SPOTLIGHT, handleSpotlight);
-  ipcMain.handle(CHANNELS.DEMO_DISMISS_SPOTLIGHT, handleDismissSpotlight);
-  ipcMain.handle(CHANNELS.DEMO_ANNOTATE, handleAnnotate);
-  ipcMain.handle(CHANNELS.DEMO_DISMISS_ANNOTATION, handleDismissAnnotation);
-  ipcMain.handle(CHANNELS.DEMO_WAIT_FOR_IDLE, handleWaitForIdle);
-  ipcMain.handle(CHANNELS.DEMO_START_CAPTURE, handleStartCapture);
-  ipcMain.handle(CHANNELS.DEMO_STOP_CAPTURE, handleStopCapture);
-  ipcMain.handle(CHANNELS.DEMO_GET_CAPTURE_STATUS, handleGetCaptureStatus);
+  const cleanups: Array<() => void> = [
+    typedHandle(CHANNELS.DEMO_MOVE_TO, handleMoveTo),
+    typedHandle(CHANNELS.DEMO_MOVE_TO_SELECTOR, handleMoveToSelector),
+    typedHandle(CHANNELS.DEMO_CLICK, handleClick),
+    typedHandle(CHANNELS.DEMO_SCREENSHOT, handleScreenshot),
+    typedHandle(CHANNELS.DEMO_TYPE, handleType),
+    typedHandle(CHANNELS.DEMO_WAIT_FOR_SELECTOR, handleWaitForSelector),
+    typedHandle(CHANNELS.DEMO_PAUSE, handlePause),
+    typedHandle(CHANNELS.DEMO_RESUME, handleResume),
+    typedHandle(CHANNELS.DEMO_SLEEP, handleSleep),
+    typedHandle(CHANNELS.DEMO_SCROLL, handleScroll),
+    typedHandle(CHANNELS.DEMO_DRAG, handleDrag),
+    typedHandle(CHANNELS.DEMO_PRESS_KEY, handlePressKey),
+    typedHandle(CHANNELS.DEMO_SPOTLIGHT, handleSpotlight),
+    typedHandle(CHANNELS.DEMO_DISMISS_SPOTLIGHT, handleDismissSpotlight),
+    typedHandle(CHANNELS.DEMO_ANNOTATE, handleAnnotate),
+    typedHandle(CHANNELS.DEMO_DISMISS_ANNOTATION, handleDismissAnnotation),
+    typedHandle(CHANNELS.DEMO_WAIT_FOR_IDLE, handleWaitForIdle),
+    typedHandle(CHANNELS.DEMO_START_CAPTURE, handleStartCapture),
+    typedHandle(CHANNELS.DEMO_STOP_CAPTURE, handleStopCapture),
+    typedHandle(CHANNELS.DEMO_GET_CAPTURE_STATUS, handleGetCaptureStatus),
+  ];
 
   return () => {
     if (captureSession) {
       stopCaptureSession();
       captureSession?.ffmpegProc.kill("SIGKILL");
     }
-    ipcMain.removeHandler(CHANNELS.DEMO_MOVE_TO);
-    ipcMain.removeHandler(CHANNELS.DEMO_MOVE_TO_SELECTOR);
-    ipcMain.removeHandler(CHANNELS.DEMO_CLICK);
-    ipcMain.removeHandler(CHANNELS.DEMO_SCREENSHOT);
-    ipcMain.removeHandler(CHANNELS.DEMO_TYPE);
-    ipcMain.removeHandler(CHANNELS.DEMO_WAIT_FOR_SELECTOR);
-    ipcMain.removeHandler(CHANNELS.DEMO_PAUSE);
-    ipcMain.removeHandler(CHANNELS.DEMO_RESUME);
-    ipcMain.removeHandler(CHANNELS.DEMO_SLEEP);
-    ipcMain.removeHandler(CHANNELS.DEMO_SCROLL);
-    ipcMain.removeHandler(CHANNELS.DEMO_DRAG);
-    ipcMain.removeHandler(CHANNELS.DEMO_PRESS_KEY);
-    ipcMain.removeHandler(CHANNELS.DEMO_SPOTLIGHT);
-    ipcMain.removeHandler(CHANNELS.DEMO_DISMISS_SPOTLIGHT);
-    ipcMain.removeHandler(CHANNELS.DEMO_ANNOTATE);
-    ipcMain.removeHandler(CHANNELS.DEMO_DISMISS_ANNOTATION);
-    ipcMain.removeHandler(CHANNELS.DEMO_WAIT_FOR_IDLE);
-    ipcMain.removeHandler(CHANNELS.DEMO_START_CAPTURE);
-    ipcMain.removeHandler(CHANNELS.DEMO_STOP_CAPTURE);
-    ipcMain.removeHandler(CHANNELS.DEMO_GET_CAPTURE_STATUS);
+    for (const cleanup of cleanups) {
+      cleanup();
+    }
   };
 }

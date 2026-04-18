@@ -1,12 +1,10 @@
-import { ipcMain } from "electron";
 import { CHANNELS } from "../channels.js";
 import { getAgentIds } from "../../../shared/config/agentRegistry.js";
 import type {
   AgentAvailabilityState,
   AgentInstallPayload,
 } from "../../../shared/types/ipc/system.js";
-import { sendToRenderer } from "../utils.js";
-import { getWindowForWebContents } from "../../window/webContentsRegistry.js";
+import { sendToRenderer, typedHandle, typedHandleWithContext } from "../utils.js";
 import { runAgentInstall } from "../../services/AgentInstallService.js";
 import type { HandlerDependencies } from "../types.js";
 
@@ -29,8 +27,7 @@ export function registerAgentCliHandlers(deps: HandlerDependencies): () => void 
 
     return await cliAvailabilityService.checkAvailability();
   };
-  ipcMain.handle(CHANNELS.SYSTEM_GET_CLI_AVAILABILITY, handleSystemGetCliAvailability);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.SYSTEM_GET_CLI_AVAILABILITY));
+  handlers.push(typedHandle(CHANNELS.SYSTEM_GET_CLI_AVAILABILITY, handleSystemGetCliAvailability));
 
   const handleSystemRefreshCliAvailability = async () => {
     if (!cliAvailabilityService) {
@@ -42,8 +39,9 @@ export function registerAgentCliHandlers(deps: HandlerDependencies): () => void 
 
     return await cliAvailabilityService.refresh();
   };
-  ipcMain.handle(CHANNELS.SYSTEM_REFRESH_CLI_AVAILABILITY, handleSystemRefreshCliAvailability);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.SYSTEM_REFRESH_CLI_AVAILABILITY));
+  handlers.push(
+    typedHandle(CHANNELS.SYSTEM_REFRESH_CLI_AVAILABILITY, handleSystemRefreshCliAvailability)
+  );
 
   const handleSystemGetAgentVersions = async () => {
     if (!agentVersionService) {
@@ -53,8 +51,7 @@ export function registerAgentCliHandlers(deps: HandlerDependencies): () => void 
 
     return await agentVersionService.getVersions();
   };
-  ipcMain.handle(CHANNELS.SYSTEM_GET_AGENT_VERSIONS, handleSystemGetAgentVersions);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.SYSTEM_GET_AGENT_VERSIONS));
+  handlers.push(typedHandle(CHANNELS.SYSTEM_GET_AGENT_VERSIONS, handleSystemGetAgentVersions));
 
   const handleSystemRefreshAgentVersions = async () => {
     if (!agentVersionService) {
@@ -64,8 +61,9 @@ export function registerAgentCliHandlers(deps: HandlerDependencies): () => void 
 
     return await agentVersionService.getVersions(true);
   };
-  ipcMain.handle(CHANNELS.SYSTEM_REFRESH_AGENT_VERSIONS, handleSystemRefreshAgentVersions);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.SYSTEM_REFRESH_AGENT_VERSIONS));
+  handlers.push(
+    typedHandle(CHANNELS.SYSTEM_REFRESH_AGENT_VERSIONS, handleSystemRefreshAgentVersions)
+  );
 
   const handleSystemGetAgentUpdateSettings = async () => {
     const { store } = await import("../../store.js");
@@ -75,11 +73,11 @@ export function registerAgentCliHandlers(deps: HandlerDependencies): () => void 
       lastAutoCheck: null,
     });
   };
-  ipcMain.handle(CHANNELS.SYSTEM_GET_AGENT_UPDATE_SETTINGS, handleSystemGetAgentUpdateSettings);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.SYSTEM_GET_AGENT_UPDATE_SETTINGS));
+  handlers.push(
+    typedHandle(CHANNELS.SYSTEM_GET_AGENT_UPDATE_SETTINGS, handleSystemGetAgentUpdateSettings)
+  );
 
   const handleSystemSetAgentUpdateSettings = async (
-    _event: Electron.IpcMainInvokeEvent,
     settings: import("../../types/index.js").AgentUpdateSettings
   ) => {
     if (
@@ -98,11 +96,11 @@ export function registerAgentCliHandlers(deps: HandlerDependencies): () => void 
     const { store } = await import("../../store.js");
     store.set("agentUpdateSettings", settings);
   };
-  ipcMain.handle(CHANNELS.SYSTEM_SET_AGENT_UPDATE_SETTINGS, handleSystemSetAgentUpdateSettings);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.SYSTEM_SET_AGENT_UPDATE_SETTINGS));
+  handlers.push(
+    typedHandle(CHANNELS.SYSTEM_SET_AGENT_UPDATE_SETTINGS, handleSystemSetAgentUpdateSettings)
+  );
 
   const handleSystemStartAgentUpdate = async (
-    _event: Electron.IpcMainInvokeEvent,
     payload: import("../../types/index.js").StartAgentUpdatePayload
   ) => {
     if (!agentUpdateHandler) {
@@ -120,31 +118,21 @@ export function registerAgentCliHandlers(deps: HandlerDependencies): () => void 
 
     return await agentUpdateHandler.startUpdate(payload);
   };
-  ipcMain.handle(CHANNELS.SYSTEM_START_AGENT_UPDATE, handleSystemStartAgentUpdate);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.SYSTEM_START_AGENT_UPDATE));
+  handlers.push(typedHandle(CHANNELS.SYSTEM_START_AGENT_UPDATE, handleSystemStartAgentUpdate));
 
-  const handleSystemHealthCheck = async (
-    _event: Electron.IpcMainInvokeEvent,
-    agentIds?: string[]
-  ) => {
+  const handleSystemHealthCheck = async (agentIds?: string[]) => {
     const { runSystemHealthCheck } = await import("../../services/SystemHealthCheck.js");
     return await runSystemHealthCheck(agentIds);
   };
-  ipcMain.handle(CHANNELS.SYSTEM_HEALTH_CHECK, handleSystemHealthCheck);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.SYSTEM_HEALTH_CHECK));
+  handlers.push(typedHandle(CHANNELS.SYSTEM_HEALTH_CHECK, handleSystemHealthCheck));
 
-  const handleSystemHealthCheckSpecs = async (
-    _event: Electron.IpcMainInvokeEvent,
-    agentIds?: string[]
-  ) => {
+  const handleSystemHealthCheckSpecs = async (agentIds?: string[]) => {
     const { getHealthCheckSpecs } = await import("../../services/SystemHealthCheck.js");
     return await getHealthCheckSpecs(agentIds);
   };
-  ipcMain.handle(CHANNELS.SYSTEM_HEALTH_CHECK_SPECS, handleSystemHealthCheckSpecs);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.SYSTEM_HEALTH_CHECK_SPECS));
+  handlers.push(typedHandle(CHANNELS.SYSTEM_HEALTH_CHECK_SPECS, handleSystemHealthCheckSpecs));
 
   const handleSystemCheckTool = async (
-    _event: Electron.IpcMainInvokeEvent,
     spec: import("../../../shared/types/ipc/system.js").PrerequisiteSpec
   ) => {
     const { checkPrerequisite } = await import("../../services/SystemHealthCheck.js");
@@ -154,14 +142,13 @@ export function registerAgentCliHandlers(deps: HandlerDependencies): () => void 
       }
     );
   };
-  ipcMain.handle(CHANNELS.SYSTEM_CHECK_TOOL, handleSystemCheckTool);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.SYSTEM_CHECK_TOOL));
+  handlers.push(typedHandle(CHANNELS.SYSTEM_CHECK_TOOL, handleSystemCheckTool));
 
   const handleSetupAgentInstall = async (
-    event: Electron.IpcMainInvokeEvent,
+    ctx: import("../types.js").IpcContext,
     payload: AgentInstallPayload
   ) => {
-    const senderWindow = getWindowForWebContents(event.sender);
+    const senderWindow = ctx.senderWindow;
 
     if (
       !payload ||
@@ -179,8 +166,7 @@ export function registerAgentCliHandlers(deps: HandlerDependencies): () => void 
       }
     });
   };
-  ipcMain.handle(CHANNELS.SETUP_AGENT_INSTALL, handleSetupAgentInstall);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.SETUP_AGENT_INSTALL));
+  handlers.push(typedHandleWithContext(CHANNELS.SETUP_AGENT_INSTALL, handleSetupAgentInstall));
 
   return () => handlers.forEach((cleanup) => cleanup());
 }

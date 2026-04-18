@@ -1,8 +1,8 @@
-import { BrowserWindow, ipcMain, webContents } from "electron";
+import { BrowserWindow, webContents } from "electron";
 import { getWindowForWebContents } from "../../window/webContentsRegistry.js";
 import { CHANNELS } from "../channels.js";
 import { getWebviewDialogService } from "../../services/WebviewDialogService.js";
-import { broadcastToRenderer, sendToRenderer } from "../utils.js";
+import { broadcastToRenderer, sendToRenderer, typedHandle } from "../utils.js";
 import { startOAuthLoopback } from "../../services/OAuthLoopbackService.js";
 import type { HandlerDependencies } from "../types.js";
 import type {
@@ -217,7 +217,6 @@ function cleanupSession(wcId: number): void {
 
 export function registerWebviewHandlers(_deps: HandlerDependencies): () => void {
   const handleSetLifecycleState = async (
-    _event: Electron.IpcMainInvokeEvent,
     webContentsId: unknown,
     frozen: unknown
   ): Promise<void> => {
@@ -250,7 +249,6 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
   };
 
   const handleStartConsoleCapture = async (
-    _event: Electron.IpcMainInvokeEvent,
     webContentsId: unknown,
     paneId: unknown
   ): Promise<void> => {
@@ -413,7 +411,6 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
   }
 
   const handleStopConsoleCapture = async (
-    _event: Electron.IpcMainInvokeEvent,
     webContentsId: unknown,
     paneId: unknown
   ): Promise<void> => {
@@ -447,7 +444,6 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
   };
 
   const handleClearConsoleCapture = async (
-    _event: Electron.IpcMainInvokeEvent,
     webContentsId: unknown,
     paneId: unknown
   ): Promise<void> => {
@@ -467,7 +463,6 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
   };
 
   const handleGetConsoleProperties = async (
-    _event: Electron.IpcMainInvokeEvent,
     webContentsId: unknown,
     objectId: unknown
   ): Promise<{ properties: CdpPropertyDescriptor[] }> => {
@@ -519,10 +514,7 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
     }
   };
 
-  const handleRegisterPanel = async (
-    _event: Electron.IpcMainInvokeEvent,
-    payload: unknown
-  ): Promise<void> => {
+  const handleRegisterPanel = async (payload: unknown): Promise<void> => {
     if (
       !payload ||
       typeof payload !== "object" ||
@@ -535,10 +527,7 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
     getWebviewDialogService().registerPanel(webContentsId, panelId);
   };
 
-  const handleDialogResponse = async (
-    _event: Electron.IpcMainInvokeEvent,
-    payload: unknown
-  ): Promise<void> => {
+  const handleDialogResponse = async (payload: unknown): Promise<void> => {
     if (
       !payload ||
       typeof payload !== "object" ||
@@ -556,7 +545,6 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
   };
 
   const handleOAuthLoopback = async (
-    _event: Electron.IpcMainInvokeEvent,
     authUrl: unknown,
     panelId: unknown,
     webContentsId: unknown,
@@ -792,24 +780,19 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
     return { success: true };
   };
 
-  ipcMain.handle(CHANNELS.WEBVIEW_SET_LIFECYCLE_STATE, handleSetLifecycleState);
-  ipcMain.handle(CHANNELS.WEBVIEW_REGISTER_PANEL, handleRegisterPanel);
-  ipcMain.handle(CHANNELS.WEBVIEW_DIALOG_RESPONSE, handleDialogResponse);
-  ipcMain.handle(CHANNELS.WEBVIEW_START_CONSOLE_CAPTURE, handleStartConsoleCapture);
-  ipcMain.handle(CHANNELS.WEBVIEW_STOP_CONSOLE_CAPTURE, handleStopConsoleCapture);
-  ipcMain.handle(CHANNELS.WEBVIEW_CLEAR_CONSOLE_CAPTURE, handleClearConsoleCapture);
-  ipcMain.handle(CHANNELS.WEBVIEW_GET_CONSOLE_PROPERTIES, handleGetConsoleProperties);
-  ipcMain.handle(CHANNELS.WEBVIEW_OAUTH_LOOPBACK, handleOAuthLoopback);
+  const cleanups: Array<() => void> = [
+    typedHandle(CHANNELS.WEBVIEW_SET_LIFECYCLE_STATE, handleSetLifecycleState),
+    typedHandle(CHANNELS.WEBVIEW_REGISTER_PANEL, handleRegisterPanel),
+    typedHandle(CHANNELS.WEBVIEW_DIALOG_RESPONSE, handleDialogResponse),
+    typedHandle(CHANNELS.WEBVIEW_START_CONSOLE_CAPTURE, handleStartConsoleCapture),
+    typedHandle(CHANNELS.WEBVIEW_STOP_CONSOLE_CAPTURE, handleStopConsoleCapture),
+    typedHandle(CHANNELS.WEBVIEW_CLEAR_CONSOLE_CAPTURE, handleClearConsoleCapture),
+    typedHandle(CHANNELS.WEBVIEW_GET_CONSOLE_PROPERTIES, handleGetConsoleProperties),
+    typedHandle(CHANNELS.WEBVIEW_OAUTH_LOOPBACK, handleOAuthLoopback),
+  ];
 
   return () => {
-    ipcMain.removeHandler(CHANNELS.WEBVIEW_SET_LIFECYCLE_STATE);
-    ipcMain.removeHandler(CHANNELS.WEBVIEW_REGISTER_PANEL);
-    ipcMain.removeHandler(CHANNELS.WEBVIEW_DIALOG_RESPONSE);
-    ipcMain.removeHandler(CHANNELS.WEBVIEW_START_CONSOLE_CAPTURE);
-    ipcMain.removeHandler(CHANNELS.WEBVIEW_STOP_CONSOLE_CAPTURE);
-    ipcMain.removeHandler(CHANNELS.WEBVIEW_CLEAR_CONSOLE_CAPTURE);
-    ipcMain.removeHandler(CHANNELS.WEBVIEW_GET_CONSOLE_PROPERTIES);
-    ipcMain.removeHandler(CHANNELS.WEBVIEW_OAUTH_LOOPBACK);
+    for (const cleanup of cleanups) cleanup();
 
     // Clean up all sessions
     for (const wcId of sessions.keys()) {

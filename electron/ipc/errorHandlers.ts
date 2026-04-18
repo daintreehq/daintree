@@ -3,7 +3,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { ipcMain, BrowserWindow, shell } from "electron";
 import { CHANNELS } from "./channels.js";
 import { getLogFilePath, logError as logErrorUtil } from "../utils/logger.js";
-import { broadcastToRenderer } from "./utils.js";
+import { broadcastToRenderer, typedHandle } from "./utils.js";
 import {
   GitError,
   ProcessError,
@@ -424,7 +424,7 @@ export function registerErrorHandlers(
 
   errorService.initialize(worktreeService, ptyClient);
 
-  const handleRetry = async (_event: Electron.IpcMainInvokeEvent, payload: unknown) => {
+  const handleRetry = async (payload: unknown) => {
     let actionForError: RetryAction | undefined;
     let argsForError: Record<string, unknown> | undefined;
 
@@ -445,8 +445,7 @@ export function registerErrorHandlers(
       throw error;
     }
   };
-  ipcMain.handle(CHANNELS.ERROR_RETRY, handleRetry);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.ERROR_RETRY));
+  handlers.push(typedHandle(CHANNELS.ERROR_RETRY, handleRetry));
 
   const handleRetryCancelListener = (_event: Electron.IpcMainEvent, errorId: unknown) => {
     if (typeof errorId === "string") {
@@ -461,14 +460,12 @@ export function registerErrorHandlers(
   const handleOpenLogs = async () => {
     await errorService.openLogs();
   };
-  ipcMain.handle(CHANNELS.ERROR_OPEN_LOGS, handleOpenLogs);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.ERROR_OPEN_LOGS));
+  handlers.push(typedHandle(CHANNELS.ERROR_OPEN_LOGS, handleOpenLogs));
 
   const handleGetPending = () => {
     return errorService.getPendingPersistedErrors();
   };
-  ipcMain.handle(CHANNELS.ERROR_GET_PENDING, handleGetPending);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.ERROR_GET_PENDING));
+  handlers.push(typedHandle(CHANNELS.ERROR_GET_PENDING, handleGetPending));
 
   return () => {
     handlers.forEach((cleanup) => cleanup());

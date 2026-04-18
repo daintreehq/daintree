@@ -1,10 +1,10 @@
-import { ipcMain } from "electron";
 import path from "path";
 import fs from "fs/promises";
 import { CHANNELS } from "../channels.js";
 import { projectStore } from "../../services/ProjectStore.js";
 import type { HandlerDependencies } from "../types.js";
 import type { Project } from "../../types/index.js";
+import { typedHandle } from "../utils.js";
 
 async function resolveClaudeMdPath(projectId: string): Promise<string> {
   if (typeof projectId !== "string" || !projectId) {
@@ -49,10 +49,7 @@ async function resolveClaudeMdPath(projectId: string): Promise<string> {
 export function registerProjectInRepoSettingsHandlers(_deps: HandlerDependencies): () => void {
   const handlers: Array<() => void> = [];
 
-  const handleProjectReadClaudeMd = async (
-    _event: Electron.IpcMainInvokeEvent,
-    projectId: string
-  ): Promise<string | null> => {
+  const handleProjectReadClaudeMd = async (projectId: string): Promise<string | null> => {
     const claudeMdPath = await resolveClaudeMdPath(projectId);
     try {
       return await fs.readFile(claudeMdPath, "utf-8");
@@ -68,13 +65,12 @@ export function registerProjectInRepoSettingsHandlers(_deps: HandlerDependencies
       throw error;
     }
   };
-  ipcMain.handle(CHANNELS.PROJECT_READ_CLAUDE_MD, handleProjectReadClaudeMd);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.PROJECT_READ_CLAUDE_MD));
+  handlers.push(typedHandle(CHANNELS.PROJECT_READ_CLAUDE_MD, handleProjectReadClaudeMd));
 
-  const handleProjectWriteClaudeMd = async (
-    _event: Electron.IpcMainInvokeEvent,
-    payload: { projectId: string; content: string }
-  ): Promise<void> => {
+  const handleProjectWriteClaudeMd = async (payload: {
+    projectId: string;
+    content: string;
+  }): Promise<void> => {
     if (!payload || typeof payload !== "object") {
       throw new Error("Invalid payload");
     }
@@ -88,13 +84,9 @@ export function registerProjectInRepoSettingsHandlers(_deps: HandlerDependencies
     const claudeMdPath = await resolveClaudeMdPath(projectId);
     await fs.writeFile(claudeMdPath, content, "utf-8");
   };
-  ipcMain.handle(CHANNELS.PROJECT_WRITE_CLAUDE_MD, handleProjectWriteClaudeMd);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.PROJECT_WRITE_CLAUDE_MD));
+  handlers.push(typedHandle(CHANNELS.PROJECT_WRITE_CLAUDE_MD, handleProjectWriteClaudeMd));
 
-  const handleProjectEnableInRepoSettings = async (
-    _event: Electron.IpcMainInvokeEvent,
-    projectId: string
-  ): Promise<Project> => {
+  const handleProjectEnableInRepoSettings = async (projectId: string): Promise<Project> => {
     if (typeof projectId !== "string" || !projectId) {
       throw new Error("Invalid project ID");
     }
@@ -121,13 +113,11 @@ export function registerProjectInRepoSettingsHandlers(_deps: HandlerDependencies
       daintreeConfigPresent: true,
     });
   };
-  ipcMain.handle(CHANNELS.PROJECT_ENABLE_IN_REPO_SETTINGS, handleProjectEnableInRepoSettings);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.PROJECT_ENABLE_IN_REPO_SETTINGS));
+  handlers.push(
+    typedHandle(CHANNELS.PROJECT_ENABLE_IN_REPO_SETTINGS, handleProjectEnableInRepoSettings)
+  );
 
-  const handleProjectDisableInRepoSettings = async (
-    _event: Electron.IpcMainInvokeEvent,
-    projectId: string
-  ): Promise<Project> => {
+  const handleProjectDisableInRepoSettings = async (projectId: string): Promise<Project> => {
     if (typeof projectId !== "string" || !projectId) {
       throw new Error("Invalid project ID");
     }
@@ -137,8 +127,9 @@ export function registerProjectInRepoSettingsHandlers(_deps: HandlerDependencies
     }
     return projectStore.updateProject(projectId, { inRepoSettings: false });
   };
-  ipcMain.handle(CHANNELS.PROJECT_DISABLE_IN_REPO_SETTINGS, handleProjectDisableInRepoSettings);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.PROJECT_DISABLE_IN_REPO_SETTINGS));
+  handlers.push(
+    typedHandle(CHANNELS.PROJECT_DISABLE_IN_REPO_SETTINGS, handleProjectDisableInRepoSettings)
+  );
 
   return () => handlers.forEach((cleanup) => cleanup());
 }

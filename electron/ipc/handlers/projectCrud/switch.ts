@@ -1,5 +1,5 @@
-import { ipcMain } from "electron";
 import { CHANNELS } from "../../channels.js";
+import { typedHandleWithContext } from "../../utils.js";
 import { getWindowForWebContents } from "../../../window/webContentsRegistry.js";
 import { distributePortsToView } from "../../../window/portDistribution.js";
 import { projectStore } from "../../../services/ProjectStore.js";
@@ -21,7 +21,7 @@ export function registerProjectSwitchHandlers(deps: HandlerDependencies): () => 
   const projectSwitchService = deps.projectSwitchService ?? new ProjectSwitchService(deps);
 
   const handleProjectSwitch = async (
-    event: Electron.IpcMainInvokeEvent,
+    ctx: import("../../types.js").IpcContext,
     projectId: string,
     outgoingState?: ProjectSwitchOutgoingState
   ) => {
@@ -34,27 +34,23 @@ export function registerProjectSwitchHandlers(deps: HandlerDependencies): () => 
       throw new Error(`Project not found: ${projectId}`);
     }
 
-    // Pre-apply the renderer's outgoing terminal state to the current project's
-    // persisted state BEFORE the switch runs.
     const previousProjectId = projectStore.getCurrentProjectId();
     await persistOutgoingProjectState(outgoingState, previousProjectId, "project:switch");
 
-    const pvm = resolveProjectViewManager(deps, event);
+    const pvm = resolveProjectViewManager(deps, ctx.event);
     if (pvm) {
-      await activateProjectView(deps, event, pvm, projectId, project, {
+      await activateProjectView(deps, ctx.event, pvm, projectId, project, {
         logPrefix: "[ProjectSwitch]",
       });
       return project;
     }
 
-    // Fallback: legacy single-view switch path
     return await projectSwitchService.switchProject(projectId);
   };
-  ipcMain.handle(CHANNELS.PROJECT_SWITCH, handleProjectSwitch);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.PROJECT_SWITCH));
+  handlers.push(typedHandleWithContext(CHANNELS.PROJECT_SWITCH, handleProjectSwitch));
 
   const handleProjectReopen = async (
-    event: Electron.IpcMainInvokeEvent,
+    ctx: import("../../types.js").IpcContext,
     projectId: string,
     outgoingState?: ProjectSwitchOutgoingState
   ) => {
@@ -75,15 +71,14 @@ export function registerProjectSwitchHandlers(deps: HandlerDependencies): () => 
       );
     }
 
-    // Pre-apply outgoing terminal state
     const previousProjectId = projectStore.getCurrentProjectId();
     if (previousProjectId !== projectId) {
       await persistOutgoingProjectState(outgoingState, previousProjectId, "project:reopen");
     }
 
-    const pvm = resolveProjectViewManager(deps, event);
+    const pvm = resolveProjectViewManager(deps, ctx.event);
     if (pvm) {
-      await activateProjectView(deps, event, pvm, projectId, project, {
+      await activateProjectView(deps, ctx.event, pvm, projectId, project, {
         logPrefix: "[ProjectReopen]",
         markActive: true,
         resumeWorkspace: true,
@@ -91,14 +86,12 @@ export function registerProjectSwitchHandlers(deps: HandlerDependencies): () => 
       return project;
     }
 
-    // Fallback: legacy single-view path
     if (deps.worktreeService) {
       deps.worktreeService.resumeProject(project.path);
     }
     return await projectSwitchService.reopenProject(projectId);
   };
-  ipcMain.handle(CHANNELS.PROJECT_REOPEN, handleProjectReopen);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.PROJECT_REOPEN));
+  handlers.push(typedHandleWithContext(CHANNELS.PROJECT_REOPEN, handleProjectReopen));
 
   return () => handlers.forEach((cleanup) => cleanup());
 }

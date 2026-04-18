@@ -1,29 +1,26 @@
-import { ipcMain } from "electron";
 import { CHANNELS } from "../../channels.js";
 import type { HandlerDependencies } from "../../types.js";
 import { generateWorktreePath, validatePathPattern } from "../../../../shared/utils/pathPattern.js";
 import { resolveWorktreePattern } from "../../../utils/worktreePattern.js";
 import { taskWorktreeService } from "../../../services/TaskWorktreeService.js";
+import { typedHandle } from "../../utils.js";
 
 export function registerWorktreeBranchHandlers(deps: HandlerDependencies): () => void {
   const handlers: Array<() => void> = [];
 
-  const handleWorktreeListBranches = async (
-    _event: Electron.IpcMainInvokeEvent,
-    payload: { rootPath: string }
-  ) => {
+  const handleWorktreeListBranches = async (payload: { rootPath: string }) => {
     if (!deps.worktreeService) {
       throw new Error("Workspace client not initialized");
     }
     return await deps.worktreeService.listBranches(payload.rootPath);
   };
-  ipcMain.handle(CHANNELS.WORKTREE_LIST_BRANCHES, handleWorktreeListBranches);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.WORKTREE_LIST_BRANCHES));
+  handlers.push(typedHandle(CHANNELS.WORKTREE_LIST_BRANCHES, handleWorktreeListBranches));
 
-  const handleWorktreeFetchPRBranch = async (
-    _event: Electron.IpcMainInvokeEvent,
-    payload: { rootPath: string; prNumber: number; headRefName: string }
-  ) => {
+  const handleWorktreeFetchPRBranch = async (payload: {
+    rootPath: string;
+    prNumber: number;
+    headRefName: string;
+  }) => {
     if (!deps.worktreeService) {
       throw new Error("Workspace client not initialized");
     }
@@ -42,25 +39,22 @@ export function registerWorktreeBranchHandlers(deps: HandlerDependencies): () =>
       payload.headRefName
     );
   };
-  ipcMain.handle(CHANNELS.WORKTREE_FETCH_PR_BRANCH, handleWorktreeFetchPRBranch);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.WORKTREE_FETCH_PR_BRANCH));
+  handlers.push(typedHandle(CHANNELS.WORKTREE_FETCH_PR_BRANCH, handleWorktreeFetchPRBranch));
 
-  const handleWorktreeGetRecentBranches = async (
-    _event: Electron.IpcMainInvokeEvent,
-    payload: { rootPath: string }
-  ) => {
+  const handleWorktreeGetRecentBranches = async (payload: { rootPath: string }) => {
     if (!deps.worktreeService) {
       throw new Error("Workspace client not initialized");
     }
     return await deps.worktreeService.getRecentBranches(payload.rootPath);
   };
-  ipcMain.handle(CHANNELS.WORKTREE_GET_RECENT_BRANCHES, handleWorktreeGetRecentBranches);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.WORKTREE_GET_RECENT_BRANCHES));
+  handlers.push(
+    typedHandle(CHANNELS.WORKTREE_GET_RECENT_BRANCHES, handleWorktreeGetRecentBranches)
+  );
 
-  const handleWorktreeGetDefaultPath = async (
-    _event: Electron.IpcMainInvokeEvent,
-    payload: { rootPath: string; branchName: string }
-  ): Promise<string> => {
+  const handleWorktreeGetDefaultPath = async (payload: {
+    rootPath: string;
+    branchName: string;
+  }): Promise<string> => {
     if (!payload || typeof payload !== "object") {
       throw new Error("Invalid payload for worktree:get-default-path");
     }
@@ -82,20 +76,17 @@ export function registerWorktreeBranchHandlers(deps: HandlerDependencies): () =>
       throw new Error(`Invalid stored pattern: ${validation.error}`);
     }
 
-    // Generate the initial path
     const initialPath = generateWorktreePath(rootPath, branchName, pattern);
 
-    // Auto-resolve path conflicts by finding an available path
     const gitService = taskWorktreeService.getGitService(rootPath);
     return gitService.findAvailablePath(initialPath);
   };
-  ipcMain.handle(CHANNELS.WORKTREE_GET_DEFAULT_PATH, handleWorktreeGetDefaultPath);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.WORKTREE_GET_DEFAULT_PATH));
+  handlers.push(typedHandle(CHANNELS.WORKTREE_GET_DEFAULT_PATH, handleWorktreeGetDefaultPath));
 
-  const handleWorktreeGetAvailableBranch = async (
-    _event: Electron.IpcMainInvokeEvent,
-    payload: { rootPath: string; branchName: string }
-  ): Promise<string> => {
+  const handleWorktreeGetAvailableBranch = async (payload: {
+    rootPath: string;
+    branchName: string;
+  }): Promise<string> => {
     if (!payload || typeof payload !== "object") {
       throw new Error("Invalid payload for worktree:get-available-branch");
     }
@@ -113,8 +104,9 @@ export function registerWorktreeBranchHandlers(deps: HandlerDependencies): () =>
     const gitService = taskWorktreeService.getGitService(rootPath);
     return gitService.findAvailableBranchName(branchName);
   };
-  ipcMain.handle(CHANNELS.WORKTREE_GET_AVAILABLE_BRANCH, handleWorktreeGetAvailableBranch);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.WORKTREE_GET_AVAILABLE_BRANCH));
+  handlers.push(
+    typedHandle(CHANNELS.WORKTREE_GET_AVAILABLE_BRANCH, handleWorktreeGetAvailableBranch)
+  );
 
   return () => handlers.forEach((cleanup) => cleanup());
 }

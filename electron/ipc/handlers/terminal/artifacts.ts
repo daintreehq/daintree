@@ -2,19 +2,18 @@
  * Artifact handlers - save to file, apply patch.
  */
 
-import { ipcMain, dialog } from "electron";
-import { getWindowForWebContents } from "../../../window/webContentsRegistry.js";
+import { dialog } from "electron";
 import os from "os";
 import path from "path";
 import { CHANNELS } from "../../channels.js";
 import type { HandlerDependencies } from "../../types.js";
+import { typedHandle, typedHandleWithContext } from "../../utils.js";
 
 export function registerArtifactHandlers(deps: HandlerDependencies): () => void {
   const mainWindow = deps.windowRegistry?.getPrimary()?.browserWindow ?? deps.mainWindow;
   const handlers: Array<() => void> = [];
 
   const handleArtifactSaveToFile = async (
-    _event: Electron.IpcMainInvokeEvent,
     options: unknown
   ): Promise<{ filePath: string; success: boolean } | null> => {
     try {
@@ -79,11 +78,10 @@ export function registerArtifactHandlers(deps: HandlerDependencies): () => void 
       throw new Error(`Failed to save artifact: ${errorMessage}`);
     }
   };
-  ipcMain.handle(CHANNELS.ARTIFACT_SAVE_TO_FILE, handleArtifactSaveToFile);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.ARTIFACT_SAVE_TO_FILE));
+  handlers.push(typedHandle(CHANNELS.ARTIFACT_SAVE_TO_FILE, handleArtifactSaveToFile));
 
   const handleArtifactApplyPatch = async (
-    event: Electron.IpcMainInvokeEvent,
+    ctx: import("../../types.js").IpcContext,
     options: unknown
   ): Promise<{ success: boolean; error?: string; modifiedFiles?: string[] }> => {
     try {
@@ -128,7 +126,7 @@ export function registerArtifactHandlers(deps: HandlerDependencies): () => void 
         }
 
         if (deps.worktreeService) {
-          const senderWindowPatch = getWindowForWebContents(event.sender);
+          const senderWindowPatch = ctx.senderWindow;
           const states = await deps.worktreeService.getAllStatesAsync(senderWindowPatch?.id);
           const isValidWorktree = states.some(
             (wt: { path: string }) => path.resolve(wt.path) === resolvedCwd
@@ -182,8 +180,7 @@ export function registerArtifactHandlers(deps: HandlerDependencies): () => void 
       };
     }
   };
-  ipcMain.handle(CHANNELS.ARTIFACT_APPLY_PATCH, handleArtifactApplyPatch);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.ARTIFACT_APPLY_PATCH));
+  handlers.push(typedHandleWithContext(CHANNELS.ARTIFACT_APPLY_PATCH, handleArtifactApplyPatch));
 
   return () => handlers.forEach((cleanup) => cleanup());
 }

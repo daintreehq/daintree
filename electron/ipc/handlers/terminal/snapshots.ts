@@ -2,12 +2,12 @@
  * Terminal snapshot handlers - getSerializedState, wake, getInfo.
  */
 
-import { ipcMain } from "electron";
 import { CHANNELS } from "../../channels.js";
 import type { HandlerDependencies } from "../../types.js";
 import { TerminalReplayHistoryPayloadSchema } from "../../../schemas/index.js";
 import { logDebug, logInfo, logWarn, logError } from "../../../utils/logger.js";
 import { getAgentAvailabilityStore } from "../../../services/AgentAvailabilityStore.js";
+import { typedHandle } from "../../utils.js";
 
 export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () => void {
   const { ptyClient } = deps;
@@ -17,7 +17,6 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
   const handlers: Array<() => void> = [];
 
   const handleTerminalWake = async (
-    _event: Electron.IpcMainInvokeEvent,
     id: string
   ): Promise<{ state: string | null; warnings?: string[] }> => {
     try {
@@ -30,13 +29,9 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
       throw new Error(`Failed to wake terminal: ${errorMessage}`);
     }
   };
-  ipcMain.handle(CHANNELS.TERMINAL_WAKE, handleTerminalWake);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.TERMINAL_WAKE));
+  handlers.push(typedHandle(CHANNELS.TERMINAL_WAKE, handleTerminalWake));
 
-  const handleTerminalGetSerializedState = async (
-    _event: Electron.IpcMainInvokeEvent,
-    terminalId: string
-  ): Promise<string | null> => {
+  const handleTerminalGetSerializedState = async (terminalId: string): Promise<string | null> => {
     try {
       if (typeof terminalId !== "string" || !terminalId) {
         throw new Error("Invalid terminal ID: must be a non-empty string");
@@ -55,11 +50,11 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
       throw new Error(`Failed to get serialized terminal state: ${errorMessage}`);
     }
   };
-  ipcMain.handle(CHANNELS.TERMINAL_GET_SERIALIZED_STATE, handleTerminalGetSerializedState);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.TERMINAL_GET_SERIALIZED_STATE));
+  handlers.push(
+    typedHandle(CHANNELS.TERMINAL_GET_SERIALIZED_STATE, handleTerminalGetSerializedState)
+  );
 
   const handleTerminalGetSerializedStates = async (
-    _event: Electron.IpcMainInvokeEvent,
     terminalIds: string[]
   ): Promise<Record<string, string | null>> => {
     if (!Array.isArray(terminalIds)) {
@@ -95,11 +90,11 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
 
     return Object.fromEntries(results);
   };
-  ipcMain.handle(CHANNELS.TERMINAL_GET_SERIALIZED_STATES, handleTerminalGetSerializedStates);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.TERMINAL_GET_SERIALIZED_STATES));
+  handlers.push(
+    typedHandle(CHANNELS.TERMINAL_GET_SERIALIZED_STATES, handleTerminalGetSerializedStates)
+  );
 
   const handleTerminalGetInfo = async (
-    _event: Electron.IpcMainInvokeEvent,
     id: string
   ): Promise<import("../../../../shared/types/ipc.js").TerminalInfoPayload> => {
     try {
@@ -119,8 +114,7 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
       throw new Error(`Failed to get terminal info: ${errorMessage}`);
     }
   };
-  ipcMain.handle(CHANNELS.TERMINAL_GET_INFO, handleTerminalGetInfo);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.TERMINAL_GET_INFO));
+  handlers.push(typedHandle(CHANNELS.TERMINAL_GET_INFO, handleTerminalGetInfo));
 
   const handleTerminalGetSharedBuffers = async (): Promise<{
     visualBuffers: SharedArrayBuffer[];
@@ -133,8 +127,7 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
       return { visualBuffers: [], signalBuffer: null };
     }
   };
-  ipcMain.handle(CHANNELS.TERMINAL_GET_SHARED_BUFFERS, handleTerminalGetSharedBuffers);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.TERMINAL_GET_SHARED_BUFFERS));
+  handlers.push(typedHandle(CHANNELS.TERMINAL_GET_SHARED_BUFFERS, handleTerminalGetSharedBuffers));
 
   const handleTerminalGetAnalysisBuffer = async (): Promise<SharedArrayBuffer | null> => {
     try {
@@ -144,13 +137,11 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
       return null;
     }
   };
-  ipcMain.handle(CHANNELS.TERMINAL_GET_ANALYSIS_BUFFER, handleTerminalGetAnalysisBuffer);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.TERMINAL_GET_ANALYSIS_BUFFER));
+  handlers.push(
+    typedHandle(CHANNELS.TERMINAL_GET_ANALYSIS_BUFFER, handleTerminalGetAnalysisBuffer)
+  );
 
-  const handleTerminalReplayHistory = async (
-    _event: Electron.IpcMainInvokeEvent,
-    payload: unknown
-  ) => {
+  const handleTerminalReplayHistory = async (payload: unknown) => {
     const parseResult = TerminalReplayHistoryPayloadSchema.safeParse(payload);
     if (!parseResult.success) {
       logError("terminal:replayHistory validation failed", undefined, {
@@ -171,13 +162,9 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
       throw new Error(`Failed to replay terminal history: ${errorMessage}`);
     }
   };
-  ipcMain.handle(CHANNELS.TERMINAL_REPLAY_HISTORY, handleTerminalReplayHistory);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.TERMINAL_REPLAY_HISTORY));
+  handlers.push(typedHandle(CHANNELS.TERMINAL_REPLAY_HISTORY, handleTerminalReplayHistory));
 
-  const handleTerminalGetForProject = async (
-    _event: Electron.IpcMainInvokeEvent,
-    projectId: string
-  ) => {
+  const handleTerminalGetForProject = async (projectId: string) => {
     try {
       if (typeof projectId !== "string" || !projectId) {
         throw new Error("Invalid project ID: must be a non-empty string");
@@ -235,8 +222,7 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
       throw new Error(`Failed to get terminals for project: ${errorMessage}`);
     }
   };
-  ipcMain.handle(CHANNELS.TERMINAL_GET_FOR_PROJECT, handleTerminalGetForProject);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.TERMINAL_GET_FOR_PROJECT));
+  handlers.push(typedHandle(CHANNELS.TERMINAL_GET_FOR_PROJECT, handleTerminalGetForProject));
 
   const handleTerminalGetAvailable = async () => {
     try {
@@ -272,10 +258,9 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
       throw new Error(`Failed to get available terminals: ${errorMessage}`);
     }
   };
-  ipcMain.handle(CHANNELS.TERMINAL_GET_AVAILABLE, handleTerminalGetAvailable);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.TERMINAL_GET_AVAILABLE));
+  handlers.push(typedHandle(CHANNELS.TERMINAL_GET_AVAILABLE, handleTerminalGetAvailable));
 
-  const handleTerminalGetByState = async (_event: Electron.IpcMainInvokeEvent, state: string) => {
+  const handleTerminalGetByState = async (state: string) => {
     try {
       if (typeof state !== "string" || !state) {
         throw new Error("Invalid state: must be a non-empty string");
@@ -320,8 +305,7 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
       throw new Error(`Failed to get terminals by state: ${errorMessage}`);
     }
   };
-  ipcMain.handle(CHANNELS.TERMINAL_GET_BY_STATE, handleTerminalGetByState);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.TERMINAL_GET_BY_STATE));
+  handlers.push(typedHandle(CHANNELS.TERMINAL_GET_BY_STATE, handleTerminalGetByState));
 
   const handleTerminalGetAll = async () => {
     try {
@@ -357,13 +341,9 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
       throw new Error(`Failed to get all terminals: ${errorMessage}`);
     }
   };
-  ipcMain.handle(CHANNELS.TERMINAL_GET_ALL, handleTerminalGetAll);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.TERMINAL_GET_ALL));
+  handlers.push(typedHandle(CHANNELS.TERMINAL_GET_ALL, handleTerminalGetAll));
 
-  const handleTerminalReconnect = async (
-    _event: Electron.IpcMainInvokeEvent,
-    terminalId: string
-  ) => {
+  const handleTerminalReconnect = async (terminalId: string) => {
     try {
       if (typeof terminalId !== "string" || !terminalId) {
         throw new Error("Invalid terminal ID: must be a non-empty string");
@@ -408,8 +388,7 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
       throw new Error(`Failed to reconnect to terminal: ${errorMessage}`);
     }
   };
-  ipcMain.handle(CHANNELS.TERMINAL_RECONNECT, handleTerminalReconnect);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.TERMINAL_RECONNECT));
+  handlers.push(typedHandle(CHANNELS.TERMINAL_RECONNECT, handleTerminalReconnect));
 
   return () => handlers.forEach((cleanup) => cleanup());
 }

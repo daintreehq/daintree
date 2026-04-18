@@ -1,6 +1,5 @@
-import { ipcMain } from "electron";
 import { CHANNELS } from "../channels.js";
-import { checkRateLimit } from "../utils.js";
+import { checkRateLimit, typedHandle } from "../utils.js";
 import type { HandlerDependencies } from "../types.js";
 import type { GitStatus } from "../../../shared/types/git.js";
 import { validateCwd, createHardenedGit, createAuthenticatedGit } from "../../utils/hardenedGit.js";
@@ -28,10 +27,7 @@ export interface StagingStatus {
 export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void {
   const handlers: Array<() => void> = [];
 
-  const handleStageFile = async (
-    _event: Electron.IpcMainInvokeEvent,
-    payload: { cwd: string; filePath: string }
-  ): Promise<void> => {
+  const handleStageFile = async (payload: { cwd: string; filePath: string }): Promise<void> => {
     checkRateLimit(CHANNELS.GIT_STAGE_FILE, 30, 10_000);
     validateCwd(payload?.cwd);
     if (typeof payload.filePath !== "string" || !payload.filePath) {
@@ -41,13 +37,9 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
     const git = createHardenedGit(payload.cwd);
     await git.add(["--", payload.filePath]);
   };
-  ipcMain.handle(CHANNELS.GIT_STAGE_FILE, handleStageFile);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.GIT_STAGE_FILE));
+  handlers.push(typedHandle(CHANNELS.GIT_STAGE_FILE, handleStageFile));
 
-  const handleUnstageFile = async (
-    _event: Electron.IpcMainInvokeEvent,
-    payload: { cwd: string; filePath: string }
-  ): Promise<void> => {
+  const handleUnstageFile = async (payload: { cwd: string; filePath: string }): Promise<void> => {
     checkRateLimit(CHANNELS.GIT_UNSTAGE_FILE, 30, 10_000);
     validateCwd(payload?.cwd);
     if (typeof payload.filePath !== "string" || !payload.filePath) {
@@ -69,26 +61,18 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
       await git.raw(["rm", "--cached", "--", payload.filePath]);
     }
   };
-  ipcMain.handle(CHANNELS.GIT_UNSTAGE_FILE, handleUnstageFile);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.GIT_UNSTAGE_FILE));
+  handlers.push(typedHandle(CHANNELS.GIT_UNSTAGE_FILE, handleUnstageFile));
 
-  const handleStageAll = async (
-    _event: Electron.IpcMainInvokeEvent,
-    cwd: string
-  ): Promise<void> => {
+  const handleStageAll = async (cwd: string): Promise<void> => {
     checkRateLimit(CHANNELS.GIT_STAGE_ALL, 10, 10_000);
     validateCwd(cwd);
 
     const git = createHardenedGit(cwd);
     await git.add("-A");
   };
-  ipcMain.handle(CHANNELS.GIT_STAGE_ALL, handleStageAll);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.GIT_STAGE_ALL));
+  handlers.push(typedHandle(CHANNELS.GIT_STAGE_ALL, handleStageAll));
 
-  const handleUnstageAll = async (
-    _event: Electron.IpcMainInvokeEvent,
-    cwd: string
-  ): Promise<void> => {
+  const handleUnstageAll = async (cwd: string): Promise<void> => {
     checkRateLimit(CHANNELS.GIT_UNSTAGE_ALL, 10, 10_000);
     validateCwd(cwd);
 
@@ -107,13 +91,12 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
       await git.raw(["rm", "--cached", "-r", "."]);
     }
   };
-  ipcMain.handle(CHANNELS.GIT_UNSTAGE_ALL, handleUnstageAll);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.GIT_UNSTAGE_ALL));
+  handlers.push(typedHandle(CHANNELS.GIT_UNSTAGE_ALL, handleUnstageAll));
 
-  const handleCommit = async (
-    _event: Electron.IpcMainInvokeEvent,
-    payload: { cwd: string; message: string }
-  ): Promise<{ hash: string; summary: string }> => {
+  const handleCommit = async (payload: {
+    cwd: string;
+    message: string;
+  }): Promise<{ hash: string; summary: string }> => {
     checkRateLimit(CHANNELS.GIT_COMMIT, 5, 10_000);
     validateCwd(payload?.cwd);
     if (typeof payload.message !== "string" || !payload.message.trim()) {
@@ -130,13 +113,12 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
       summary: `${result.summary.changes} changed, ${result.summary.insertions} insertions(+), ${result.summary.deletions} deletions(-)`,
     };
   };
-  ipcMain.handle(CHANNELS.GIT_COMMIT, handleCommit);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.GIT_COMMIT));
+  handlers.push(typedHandle(CHANNELS.GIT_COMMIT, handleCommit));
 
-  const handlePush = async (
-    _event: Electron.IpcMainInvokeEvent,
-    payload: { cwd: string; setUpstream?: boolean }
-  ): Promise<{ success: boolean; error?: string }> => {
+  const handlePush = async (payload: {
+    cwd: string;
+    setUpstream?: boolean;
+  }): Promise<{ success: boolean; error?: string }> => {
     checkRateLimit(CHANNELS.GIT_PUSH, 5, 10_000);
     validateCwd(payload?.cwd);
 
@@ -172,13 +154,9 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
       return { success: false, error: errorMessage };
     }
   };
-  ipcMain.handle(CHANNELS.GIT_PUSH, handlePush);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.GIT_PUSH));
+  handlers.push(typedHandle(CHANNELS.GIT_PUSH, handlePush));
 
-  const handleGetUsername = async (
-    _event: Electron.IpcMainInvokeEvent,
-    cwd: string
-  ): Promise<string | null> => {
+  const handleGetUsername = async (cwd: string): Promise<string | null> => {
     checkRateLimit(CHANNELS.GIT_GET_USERNAME, 20, 10_000);
     validateCwd(cwd);
     const git = createHardenedGit(cwd);
@@ -189,13 +167,9 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
       return null;
     }
   };
-  ipcMain.handle(CHANNELS.GIT_GET_USERNAME, handleGetUsername);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.GIT_GET_USERNAME));
+  handlers.push(typedHandle(CHANNELS.GIT_GET_USERNAME, handleGetUsername));
 
-  const handleGetStagingStatus = async (
-    _event: Electron.IpcMainInvokeEvent,
-    cwd: string
-  ): Promise<StagingStatus> => {
+  const handleGetStagingStatus = async (cwd: string): Promise<StagingStatus> => {
     checkRateLimit(CHANNELS.GIT_GET_STAGING_STATUS, 20, 10_000);
     validateCwd(cwd);
 
@@ -275,15 +249,14 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
 
     return { staged, unstaged, conflicted, isDetachedHead, currentBranch, hasRemote };
   };
-  ipcMain.handle(CHANNELS.GIT_GET_STAGING_STATUS, handleGetStagingStatus);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.GIT_GET_STAGING_STATUS));
+  handlers.push(typedHandle(CHANNELS.GIT_GET_STAGING_STATUS, handleGetStagingStatus));
 
   const DIFF_LINE_LIMIT = 500;
 
-  const handleGetWorkingDiff = async (
-    _event: Electron.IpcMainInvokeEvent,
-    payload: { cwd: string; type: "unstaged" | "staged" | "head" }
-  ): Promise<string> => {
+  const handleGetWorkingDiff = async (payload: {
+    cwd: string;
+    type: "unstaged" | "staged" | "head";
+  }): Promise<string> => {
     checkRateLimit(CHANNELS.GIT_GET_WORKING_DIFF, 20, 10_000);
     validateCwd(payload?.cwd);
     const diffType = payload?.type;
@@ -318,46 +291,32 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
 
     return raw;
   };
-  ipcMain.handle(CHANNELS.GIT_GET_WORKING_DIFF, handleGetWorkingDiff);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.GIT_GET_WORKING_DIFF));
+  handlers.push(typedHandle(CHANNELS.GIT_GET_WORKING_DIFF, handleGetWorkingDiff));
 
   // Snapshot handlers
-  const handleSnapshotGet = async (
-    _event: Electron.IpcMainInvokeEvent,
-    worktreeId: string
-  ): Promise<SnapshotInfo | null> => {
+  const handleSnapshotGet = async (worktreeId: string): Promise<SnapshotInfo | null> => {
     if (typeof worktreeId !== "string" || !worktreeId) return null;
     return preAgentSnapshotService.getSnapshot(worktreeId);
   };
-  ipcMain.handle(CHANNELS.GIT_SNAPSHOT_GET, handleSnapshotGet);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.GIT_SNAPSHOT_GET));
+  handlers.push(typedHandle(CHANNELS.GIT_SNAPSHOT_GET, handleSnapshotGet));
 
   const handleSnapshotList = async (): Promise<SnapshotInfo[]> => {
     return preAgentSnapshotService.listSnapshots();
   };
-  ipcMain.handle(CHANNELS.GIT_SNAPSHOT_LIST, handleSnapshotList);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.GIT_SNAPSHOT_LIST));
+  handlers.push(typedHandle(CHANNELS.GIT_SNAPSHOT_LIST, handleSnapshotList));
 
-  const handleSnapshotRevert = async (
-    _event: Electron.IpcMainInvokeEvent,
-    worktreeId: string
-  ): Promise<SnapshotRevertResult> => {
+  const handleSnapshotRevert = async (worktreeId: string): Promise<SnapshotRevertResult> => {
     validateCwd(worktreeId);
     checkRateLimit(CHANNELS.GIT_SNAPSHOT_REVERT, 3, 10_000);
     return preAgentSnapshotService.revertToSnapshot(worktreeId);
   };
-  ipcMain.handle(CHANNELS.GIT_SNAPSHOT_REVERT, handleSnapshotRevert);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.GIT_SNAPSHOT_REVERT));
+  handlers.push(typedHandle(CHANNELS.GIT_SNAPSHOT_REVERT, handleSnapshotRevert));
 
-  const handleSnapshotDelete = async (
-    _event: Electron.IpcMainInvokeEvent,
-    worktreeId: string
-  ): Promise<void> => {
+  const handleSnapshotDelete = async (worktreeId: string): Promise<void> => {
     validateCwd(worktreeId);
     await preAgentSnapshotService.deleteSnapshot(worktreeId);
   };
-  ipcMain.handle(CHANNELS.GIT_SNAPSHOT_DELETE, handleSnapshotDelete);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.GIT_SNAPSHOT_DELETE));
+  handlers.push(typedHandle(CHANNELS.GIT_SNAPSHOT_DELETE, handleSnapshotDelete));
 
   return () => handlers.forEach((cleanup) => cleanup());
 }

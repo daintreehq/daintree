@@ -53,9 +53,13 @@ export function unregisterWebContents(webContents: WebContents): void {
  * then falls back to the registry (works for WebContentsView webContents).
  */
 export function getWindowForWebContents(webContents: WebContents): BrowserWindow | null {
-  // Fast path: native lookup works for BrowserWindow-owned webContents
-  const native = BrowserWindow.fromWebContents(webContents);
-  if (native) return native;
+  // Fast path: native lookup works for BrowserWindow-owned webContents.
+  // Guarded because test environments frequently stub BrowserWindow without
+  // the static fromWebContents helper.
+  if (typeof BrowserWindow.fromWebContents === "function") {
+    const native = BrowserWindow.fromWebContents(webContents);
+    if (native) return native;
+  }
 
   // Fallback: registry lookup for WebContentsView webContents
   const registered = webContentsToWindow.get(webContents.id);

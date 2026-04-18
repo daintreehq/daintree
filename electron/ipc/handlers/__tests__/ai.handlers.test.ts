@@ -46,6 +46,27 @@ vi.mock("../../../services/UserAgentRegistryService.js", () => ({
 
 vi.mock("../../utils.js", () => ({
   broadcastToRenderer: broadcastToRendererMock,
+  typedHandle: (channel: string, handler: unknown) => {
+    ipcMainMock.handle(channel, (_e: unknown, ...args: unknown[]) =>
+      (handler as (...a: unknown[]) => unknown)(...args)
+    );
+    return () => ipcMainMock.removeHandler(channel);
+  },
+  typedHandleWithContext: (channel: string, handler: unknown) => {
+    ipcMainMock.handle(
+      channel,
+      (event: { sender?: { id?: number } } | null | undefined, ...args: unknown[]) => {
+        const ctx = {
+          event: event as unknown,
+          webContentsId: event?.sender?.id ?? 0,
+          senderWindow: null,
+          projectId: null,
+        };
+        return (handler as (...a: unknown[]) => unknown)(ctx, ...args);
+      }
+    );
+    return () => ipcMainMock.removeHandler(channel);
+  },
 }));
 
 vi.mock("../../../menu.js", () => ({

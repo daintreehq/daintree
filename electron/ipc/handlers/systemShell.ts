@@ -1,4 +1,4 @@
-import { ipcMain, shell } from "electron";
+import { shell } from "electron";
 import os from "os";
 import { CHANNELS } from "../channels.js";
 import { openExternalUrl } from "../../utils/openExternal.js";
@@ -9,14 +9,12 @@ import {
   SystemOpenInEditorPayloadSchema,
 } from "../../schemas/index.js";
 import type { HandlerDependencies } from "../types.js";
+import { typedHandle } from "../utils.js";
 
 export function registerSystemShellHandlers(_deps: HandlerDependencies): () => void {
   const handlers: Array<() => void> = [];
 
-  const handleSystemOpenExternal = async (
-    _event: Electron.IpcMainInvokeEvent,
-    payload: unknown
-  ) => {
+  const handleSystemOpenExternal = async (payload: unknown) => {
     const parseResult = SystemOpenExternalPayloadSchema.safeParse(payload);
     if (!parseResult.success) {
       console.error("[IPC] system:open-external validation failed:", parseResult.error.format());
@@ -33,10 +31,9 @@ export function registerSystemShellHandlers(_deps: HandlerDependencies): () => v
       throw error;
     }
   };
-  ipcMain.handle(CHANNELS.SYSTEM_OPEN_EXTERNAL, handleSystemOpenExternal);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.SYSTEM_OPEN_EXTERNAL));
+  handlers.push(typedHandle(CHANNELS.SYSTEM_OPEN_EXTERNAL, handleSystemOpenExternal));
 
-  const handleSystemOpenPath = async (_event: Electron.IpcMainInvokeEvent, payload: unknown) => {
+  const handleSystemOpenPath = async (payload: unknown) => {
     const parseResult = SystemOpenPathPayloadSchema.safeParse(payload);
     if (!parseResult.success) {
       console.error("[IPC] system:open-path validation failed:", parseResult.error.format());
@@ -61,13 +58,9 @@ export function registerSystemShellHandlers(_deps: HandlerDependencies): () => v
       throw error;
     }
   };
-  ipcMain.handle(CHANNELS.SYSTEM_OPEN_PATH, handleSystemOpenPath);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.SYSTEM_OPEN_PATH));
+  handlers.push(typedHandle(CHANNELS.SYSTEM_OPEN_PATH, handleSystemOpenPath));
 
-  const handleSystemOpenInEditor = async (
-    _event: Electron.IpcMainInvokeEvent,
-    payload: unknown
-  ) => {
+  const handleSystemOpenInEditor = async (payload: unknown) => {
     const parseResult = SystemOpenInEditorPayloadSchema.safeParse(payload);
     if (!parseResult.success) {
       throw new Error(`Invalid payload: ${parseResult.error.message}`);
@@ -88,13 +81,9 @@ export function registerSystemShellHandlers(_deps: HandlerDependencies): () => v
     const { openFile } = await import("../../services/EditorService.js");
     await openFile(targetPath, line, col, editorConfig);
   };
-  ipcMain.handle(CHANNELS.SYSTEM_OPEN_IN_EDITOR, handleSystemOpenInEditor);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.SYSTEM_OPEN_IN_EDITOR));
+  handlers.push(typedHandle(CHANNELS.SYSTEM_OPEN_IN_EDITOR, handleSystemOpenInEditor));
 
-  const handleSystemCheckCommand = async (
-    _event: Electron.IpcMainInvokeEvent,
-    command: string
-  ): Promise<boolean> => {
+  const handleSystemCheckCommand = async (command: string): Promise<boolean> => {
     if (typeof command !== "string" || !command.trim()) {
       return false;
     }
@@ -113,13 +102,9 @@ export function registerSystemShellHandlers(_deps: HandlerDependencies): () => v
       return false;
     }
   };
-  ipcMain.handle(CHANNELS.SYSTEM_CHECK_COMMAND, handleSystemCheckCommand);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.SYSTEM_CHECK_COMMAND));
+  handlers.push(typedHandle(CHANNELS.SYSTEM_CHECK_COMMAND, handleSystemCheckCommand));
 
-  const handleSystemCheckDirectory = async (
-    _event: Electron.IpcMainInvokeEvent,
-    directoryPath: string
-  ): Promise<boolean> => {
+  const handleSystemCheckDirectory = async (directoryPath: string): Promise<boolean> => {
     if (typeof directoryPath !== "string" || !directoryPath.trim()) {
       return false;
     }
@@ -138,20 +123,17 @@ export function registerSystemShellHandlers(_deps: HandlerDependencies): () => v
       return false;
     }
   };
-  ipcMain.handle(CHANNELS.SYSTEM_CHECK_DIRECTORY, handleSystemCheckDirectory);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.SYSTEM_CHECK_DIRECTORY));
+  handlers.push(typedHandle(CHANNELS.SYSTEM_CHECK_DIRECTORY, handleSystemCheckDirectory));
 
   const handleSystemGetHomeDir = async () => {
     return os.homedir();
   };
-  ipcMain.handle(CHANNELS.SYSTEM_GET_HOME_DIR, handleSystemGetHomeDir);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.SYSTEM_GET_HOME_DIR));
+  handlers.push(typedHandle(CHANNELS.SYSTEM_GET_HOME_DIR, handleSystemGetHomeDir));
 
   const handleSystemGetTmpDir = async () => {
     return os.tmpdir();
   };
-  ipcMain.handle(CHANNELS.SYSTEM_GET_TMP_DIR, handleSystemGetTmpDir);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.SYSTEM_GET_TMP_DIR));
+  handlers.push(typedHandle(CHANNELS.SYSTEM_GET_TMP_DIR, handleSystemGetTmpDir));
 
   return () => handlers.forEach((cleanup) => cleanup());
 }

@@ -1,6 +1,6 @@
-import { app, ipcMain } from "electron";
+import { app } from "electron";
 import { CHANNELS } from "../channels.js";
-import { broadcastToRenderer } from "../utils.js";
+import { broadcastToRenderer, typedHandle } from "../utils.js";
 import type { HandlerDependencies } from "../types.js";
 import { NotesService, NoteConflictError, type NoteMetadata } from "../../services/NotesService.js";
 import { projectStore } from "../../services/ProjectStore.js";
@@ -73,7 +73,6 @@ export function registerNotesHandlers(_deps: HandlerDependencies): () => void {
   };
 
   const handleNotesCreate = async (
-    _event: Electron.IpcMainInvokeEvent,
     title: string,
     scope: "worktree" | "project",
     worktreeId?: string
@@ -83,18 +82,15 @@ export function registerNotesHandlers(_deps: HandlerDependencies): () => void {
     broadcastUpdate({ notePath: result.path, title, action: "created" });
     return result;
   };
-  ipcMain.handle(CHANNELS.NOTES_CREATE, handleNotesCreate);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.NOTES_CREATE));
+  handlers.push(typedHandle(CHANNELS.NOTES_CREATE, handleNotesCreate));
 
-  const handleNotesRead = async (_event: Electron.IpcMainInvokeEvent, notePath: string) => {
+  const handleNotesRead = async (notePath: string) => {
     const service = getNotesService();
     return await service.read(notePath);
   };
-  ipcMain.handle(CHANNELS.NOTES_READ, handleNotesRead);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.NOTES_READ));
+  handlers.push(typedHandle(CHANNELS.NOTES_READ, handleNotesRead));
 
   const handleNotesWrite = async (
-    _event: Electron.IpcMainInvokeEvent,
     notePath: string,
     content: string,
     metadata: unknown,
@@ -114,7 +110,7 @@ export function registerNotesHandlers(_deps: HandlerDependencies): () => void {
     } catch (error) {
       if (error instanceof NoteConflictError) {
         return {
-          error: "conflict",
+          error: "conflict" as const,
           message: error.message,
           currentLastModified: error.currentLastModified,
         };
@@ -122,30 +118,26 @@ export function registerNotesHandlers(_deps: HandlerDependencies): () => void {
       throw error;
     }
   };
-  ipcMain.handle(CHANNELS.NOTES_WRITE, handleNotesWrite);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.NOTES_WRITE));
+  handlers.push(typedHandle(CHANNELS.NOTES_WRITE, handleNotesWrite));
 
-  const handleNotesList = async (_event: Electron.IpcMainInvokeEvent) => {
+  const handleNotesList = async () => {
     const service = getNotesService();
     return await service.list();
   };
-  ipcMain.handle(CHANNELS.NOTES_LIST, handleNotesList);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.NOTES_LIST));
+  handlers.push(typedHandle(CHANNELS.NOTES_LIST, handleNotesList));
 
-  const handleNotesDelete = async (_event: Electron.IpcMainInvokeEvent, notePath: string) => {
+  const handleNotesDelete = async (notePath: string) => {
     const service = getNotesService();
     await service.delete(notePath);
     broadcastUpdate({ notePath, title: "", action: "deleted" });
   };
-  ipcMain.handle(CHANNELS.NOTES_DELETE, handleNotesDelete);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.NOTES_DELETE));
+  handlers.push(typedHandle(CHANNELS.NOTES_DELETE, handleNotesDelete));
 
-  const handleNotesSearch = async (_event: Electron.IpcMainInvokeEvent, query: string) => {
+  const handleNotesSearch = async (query: string) => {
     const service = getNotesService();
     return await service.search(query);
   };
-  ipcMain.handle(CHANNELS.NOTES_SEARCH, handleNotesSearch);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.NOTES_SEARCH));
+  handlers.push(typedHandle(CHANNELS.NOTES_SEARCH, handleNotesSearch));
 
   return () => {
     handlers.forEach((dispose) => dispose());
