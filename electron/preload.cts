@@ -815,6 +815,8 @@ const CHANNELS = {
   GIT_SNAPSHOT_LIST: "git:snapshot-list",
   GIT_SNAPSHOT_REVERT: "git:snapshot-revert",
   GIT_SNAPSHOT_DELETE: "git:snapshot-delete",
+  GIT_ABORT_REPOSITORY_OPERATION: "git:abort-repository-operation",
+  GIT_CONTINUE_REPOSITORY_OPERATION: "git:continue-repository-operation",
 
   // Portal channels
   PORTAL_CREATE: "portal:create",
