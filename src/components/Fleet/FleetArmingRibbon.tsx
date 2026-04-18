@@ -12,6 +12,7 @@ import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { usePanelStore } from "@/store/panelStore";
 import { actionService } from "@/services/ActionService";
 import { keybindingService } from "@/services/KeybindingService";
+import { FleetComposer } from "./FleetComposer";
 
 interface PresetOption {
   value: FleetArmStatePreset;
@@ -276,73 +277,77 @@ export function FleetArmingRibbon(): ReactElement | null {
   };
 
   return (
-    <div
-      role="status"
-      aria-live="off"
-      className="flex items-center gap-3 border-b border-daintree-accent/40 bg-daintree-accent/10 px-3 py-1.5 text-[12px] text-daintree-text"
-      data-testid="fleet-arming-ribbon"
-    >
-      <span className="font-medium text-daintree-accent">
-        {armedCount} {armedCount === 1 ? "agent" : "agents"} armed
-      </span>
-      <div className="flex items-center gap-1" role="toolbar" aria-label="Arm by state">
-        {PRESETS.map((preset) => (
-          <button
-            key={preset.value}
-            type="button"
-            onClick={(e) => {
-              armByState(preset.value, "current", e.shiftKey);
-            }}
-            className={cn(
-              "inline-flex items-center rounded-full px-2 py-0.5 text-[11px] transition-colors",
-              "bg-tint/[0.08] text-daintree-text/80 hover:bg-tint/[0.14] hover:text-daintree-text"
-            )}
-            aria-label={`Arm ${preset.label.toLowerCase()} agents (shift to extend)`}
-          >
-            {preset.label}
-          </button>
-        ))}
-      </div>
-      <div className="flex items-center gap-1" role="toolbar" aria-label="Fleet quick actions">
-        {QUICK_ACTIONS.map((action) => {
-          const eligible = isEligible(action.id);
-          const chord = action.chordOverride ?? keybindingService.getDisplayCombo(action.id) ?? "";
-          return (
+    <div data-testid="fleet-arming-ribbon-group">
+      <div
+        role="status"
+        aria-live="off"
+        className="flex items-center gap-3 border-b border-daintree-accent/40 bg-daintree-accent/10 px-3 py-1.5 text-[12px] text-daintree-text"
+        data-testid="fleet-arming-ribbon"
+      >
+        <span className="font-medium text-daintree-accent">
+          {armedCount} {armedCount === 1 ? "agent" : "agents"} armed
+        </span>
+        <div className="flex items-center gap-1" role="toolbar" aria-label="Arm by state">
+          {PRESETS.map((preset) => (
             <button
-              key={action.id}
+              key={preset.value}
               type="button"
-              disabled={!eligible}
-              onClick={() => {
-                void actionService.dispatch(action.id, undefined, { source: "user" });
+              onClick={(e) => {
+                armByState(preset.value, "current", e.shiftKey);
               }}
               className={cn(
-                "inline-flex items-center gap-1 rounded px-2 py-0.5 text-[11px] transition-colors",
-                eligible
-                  ? "bg-tint/[0.08] text-daintree-text/80 hover:bg-tint/[0.14] hover:text-daintree-text"
-                  : "cursor-not-allowed bg-tint/[0.04] text-daintree-text/30"
+                "inline-flex items-center rounded-full px-2 py-0.5 text-[11px] transition-colors",
+                "bg-tint/[0.08] text-daintree-text/80 hover:bg-tint/[0.14] hover:text-daintree-text"
               )}
-              aria-label={`${action.label} armed agents (${chord})`}
-              data-testid={`fleet-quick-${action.id.replace("fleet.", "")}`}
+              aria-label={`Arm ${preset.label.toLowerCase()} agents (shift to extend)`}
             >
-              <span>{action.label}</span>
-              {chord ? (
-                <kbd className="rounded border border-daintree-text/20 bg-tint/[0.06] px-1 font-mono text-[10px] leading-tight">
-                  {chord}
-                </kbd>
-              ) : null}
+              {preset.label}
             </button>
-          );
-        })}
+          ))}
+        </div>
+        <div className="flex items-center gap-1" role="toolbar" aria-label="Fleet quick actions">
+          {QUICK_ACTIONS.map((action) => {
+            const eligible = isEligible(action.id);
+            const chord =
+              action.chordOverride ?? keybindingService.getDisplayCombo(action.id) ?? "";
+            return (
+              <button
+                key={action.id}
+                type="button"
+                disabled={!eligible}
+                onClick={() => {
+                  void actionService.dispatch(action.id, undefined, { source: "user" });
+                }}
+                className={cn(
+                  "inline-flex items-center gap-1 rounded px-2 py-0.5 text-[11px] transition-colors",
+                  eligible
+                    ? "bg-tint/[0.08] text-daintree-text/80 hover:bg-tint/[0.14] hover:text-daintree-text"
+                    : "cursor-not-allowed bg-tint/[0.04] text-daintree-text/30"
+                )}
+                aria-label={`${action.label} armed agents (${chord})`}
+                data-testid={`fleet-quick-${action.id.replace("fleet.", "")}`}
+              >
+                <span>{action.label}</span>
+                {chord ? (
+                  <kbd className="rounded border border-daintree-text/20 bg-tint/[0.06] px-1 font-mono text-[10px] leading-tight">
+                    {chord}
+                  </kbd>
+                ) : null}
+              </button>
+            );
+          })}
+        </div>
+        <span className="ml-auto text-[11px] text-daintree-text/50">{hint}</span>
+        <button
+          type="button"
+          onClick={clear}
+          aria-label="Disarm all"
+          className="rounded p-1 text-daintree-text/60 transition-colors hover:bg-tint/[0.08] hover:text-daintree-text"
+        >
+          <X className="h-3.5 w-3.5" />
+        </button>
       </div>
-      <span className="ml-auto text-[11px] text-daintree-text/50">{hint}</span>
-      <button
-        type="button"
-        onClick={clear}
-        aria-label="Disarm all"
-        className="rounded p-1 text-daintree-text/60 transition-colors hover:bg-tint/[0.08] hover:text-daintree-text"
-      >
-        <X className="h-3.5 w-3.5" />
-      </button>
+      <FleetComposer />
     </div>
   );
 }

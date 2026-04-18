@@ -118,6 +118,7 @@ export type BuiltInKeyAction =
   | "terminal.bulkCommand"
   | "terminal.armDefault"
   | "terminal.disarmAll"
+  | "terminal.focusFleetComposer"
 
   // Fleet quick-actions (scoped to "fleet ribbon visible" at dispatch time)
   | "fleet.accept"
@@ -305,6 +306,7 @@ export const KEY_ACTION_VALUES: ReadonlySet<string> = new Set<string>([
   "fleet.restart",
   "fleet.kill",
   "fleet.trash",
+  "terminal.focusFleetComposer",
   "agent.palette",
   ...BUILT_IN_AGENT_KEY_ACTIONS,
   "agent.terminal",

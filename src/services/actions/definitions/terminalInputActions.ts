@@ -286,4 +286,18 @@ export function registerTerminalInputActions(
       useFleetArmingStore.getState().armAll("current");
     },
   }));
+
+  actions.set("terminal.focusFleetComposer", () => ({
+    id: "terminal.focusFleetComposer",
+    title: "Focus Fleet Broadcast",
+    description: "Focus the fleet broadcast composer for armed agents",
+    category: "terminal",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    run: async () => {
+      const { focusFleetComposer } = await import("@/components/Fleet/fleetComposerFocus");
+      focusFleetComposer();
+    },
+  }));
 }

@@ -288,7 +288,8 @@ export type BuiltInActionId =
   | "fleet.interrupt"
   | "fleet.restart"
   | "fleet.kill"
-  | "fleet.trash";
+  | "fleet.trash"
+  | "terminal.focusFleetComposer";
 
 export type ActionId = BuiltInActionId | (string & {});
 

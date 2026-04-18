@@ -390,6 +390,14 @@ export const DEFAULT_KEYBINDINGS: KeybindingConfig[] = [
     category: "Fleet",
   },
   {
+    actionId: "terminal.focusFleetComposer",
+    combo: "Cmd+Shift+F",
+    scope: "global",
+    priority: 0,
+    description: "Focus the fleet broadcast composer",
+    category: "Terminal",
+  },
+  {
     actionId: "terminal.bulkCommand",
     combo: "Cmd+Alt+Shift+B",
     scope: "global",
