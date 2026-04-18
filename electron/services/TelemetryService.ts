@@ -187,7 +187,11 @@ export async function initializeTelemetry(): Promise<void> {
         environment: app.isPackaged ? "production" : "development",
         // Do not set `sampleRate` — it defaults to 1.0 (100% error capture). If
         // performance tracing is ever added, use `tracesSampleRate` instead.
-        beforeSend: (event) => sanitizeEvent(event as SentryEvent) as typeof event,
+        // The local `SentryEvent` interface is a narrower projection of the
+        // SDK's `Event` type — cast through `unknown` at the hook boundary so
+        // our scrubbing logic can use the shape we control.
+        beforeSend: (event) =>
+          sanitizeEvent(event as unknown as SentryEvent) as unknown as typeof event,
         initialScope: {
           tags: {
             platform: process.platform,
@@ -196,7 +200,7 @@ export async function initializeTelemetry(): Promise<void> {
           },
         },
       });
-      captureEventFn = sentry.captureEvent;
+      captureEventFn = sentry.captureEvent as unknown as (event: SentryEvent) => string;
       sentryModule = sentry;
       initialized = true;
     } catch (err) {

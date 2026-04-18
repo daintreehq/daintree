@@ -954,9 +954,11 @@ describe("beforeSend wrapper (end-to-end via initializeTelemetry)", () => {
     expect(out).not.toBeNull();
     expect(out?.message).not.toContain("ghp_");
     expect(out?.message).toContain("[REDACTED]");
-    const headers = (out?.breadcrumbs?.[0]?.data as {
-      request: { headers: { authorization: string } };
-    }).request.headers;
+    const headers = (
+      out?.breadcrumbs?.[0]?.data as {
+        request: { headers: { authorization: string } };
+      }
+    ).request.headers;
     expect(headers.authorization).toBe("Bearer [REDACTED]");
     expect(out?.extra?.note).not.toContain("sk-ant-");
     expect(out?.extra?.note).toContain("[REDACTED]");

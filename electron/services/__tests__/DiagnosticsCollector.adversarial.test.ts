@@ -363,7 +363,9 @@ describe("DiagnosticsCollector adversarial", () => {
       };
     };
 
-    expect(payload.logs.recentEntries[0]?.context?.requestHeaders?.authorization).toBe("<redacted>");
+    expect(payload.logs.recentEntries[0]?.context?.requestHeaders?.authorization).toBe(
+      "<redacted>"
+    );
     const body = payload.logs.recentEntries[0]?.context?.responseBody ?? "";
     expect(body).not.toContain(jwt);
     expect(body).not.toContain("eyJ");
