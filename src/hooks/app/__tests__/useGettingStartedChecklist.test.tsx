@@ -147,7 +147,9 @@ describe("useGettingStartedChecklist", () => {
 
   it("marks openedProject when project store fires", async () => {
     renderHook(() => useGettingStartedChecklist(true));
-    await vi.advanceTimersByTimeAsync(0);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
 
     act(() => {
       const prev = { currentProject: null };
@@ -160,7 +162,9 @@ describe("useGettingStartedChecklist", () => {
 
   it("marks launchedAgent when terminal store fires", async () => {
     renderHook(() => useGettingStartedChecklist(true));
-    await vi.advanceTimersByTimeAsync(0);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
 
     act(() => {
       const prev = {
@@ -182,7 +186,9 @@ describe("useGettingStartedChecklist", () => {
 
   it("marks createdWorktree when worktree store fires", async () => {
     renderHook(() => useGettingStartedChecklist(true));
-    await vi.advanceTimersByTimeAsync(0);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
 
     act(() => {
       const prev = { worktrees: new Map([["main", {}]]) };
