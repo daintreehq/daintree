@@ -566,13 +566,15 @@ export function AppThemePicker() {
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === "Escape") {
+                if (e.key === "Escape" && query !== "") {
+                  // Only intercept Escape when there's a query to clear. The
                   // preventDefault is required in addition to stopPropagation
                   // because `useGlobalEscapeDispatcher` listens on the native
                   // `window` keydown and only checks `defaultPrevented` —
                   // React's synthetic `stopPropagation` does not block it.
-                  // Without this, pressing Escape while clearing search text
-                  // would simultaneously clear an active hover preview.
+                  // Letting Escape bubble when the query is empty lets the
+                  // global dispatcher clear an active preview or close the
+                  // modal instead of trapping focus.
                   e.stopPropagation();
                   e.preventDefault();
                   setQuery("");

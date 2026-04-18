@@ -210,6 +210,31 @@ describe("AppThemePicker hover preview", () => {
     expect(useAppThemeStore.getState().previewSchemeId).toBe(target.id);
   });
 
+  it("Escape in the search input with an empty query clears the preview", () => {
+    const target = otherDarkScheme();
+    render(<Harness />);
+
+    fireEvent.pointerEnter(findRowByName(target.name));
+    act(() => {
+      vi.advanceTimersByTime(300);
+    });
+    expect(useAppThemeStore.getState().previewSchemeId).toBe(target.id);
+
+    const searchInput = screen.getByLabelText("Filter themes") as HTMLInputElement;
+    expect(searchInput.value).toBe("");
+
+    // Fire the synthetic keyDown AND dispatch the native event on window in
+    // the same tick — the search input should NOT preventDefault (because
+    // the query is already empty), so the global dispatcher runs and clears
+    // the preview.
+    act(() => {
+      fireEvent.keyDown(searchInput, { key: "Escape" });
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    });
+
+    expect(useAppThemeStore.getState().previewSchemeId).toBeNull();
+  });
+
   it("click commits the hovered theme and clears the preview before the view transition", () => {
     const target = otherDarkScheme();
     // Capture the value of previewSchemeId at the moment startViewTransition's
@@ -264,6 +289,139 @@ describe("AppThemePicker hover preview", () => {
     fireEvent.pointerLeave(findRowByName(target.name));
     flushRaf();
     expect(live?.textContent).toBe("");
+  });
+
+  it("rapid traversal across rows previews only the final row", () => {
+    const a = BUILT_IN_APP_SCHEMES.find(
+      (s) => s.type !== "light" && s.id !== DEFAULT_APP_SCHEME_ID
+    )!;
+    const b = BUILT_IN_APP_SCHEMES.find(
+      (s) => s.type !== "light" && s.id !== DEFAULT_APP_SCHEME_ID && s.id !== a.id
+    )!;
+    render(<Harness />);
+
+    const rowA = findRowByName(a.name);
+    const rowB = findRowByName(b.name);
+
+    fireEvent.pointerEnter(rowA);
+    act(() => {
+      vi.advanceTimersByTime(150);
+    });
+    // Switch to B before A's debounce fires.
+    fireEvent.pointerEnter(rowB);
+    act(() => {
+      vi.advanceTimersByTime(300);
+    });
+
+    expect(useAppThemeStore.getState().previewSchemeId).toBe(b.id);
+  });
+
+  it("leave-then-re-enter cancels the pending rAF revert", () => {
+    const a = BUILT_IN_APP_SCHEMES.find(
+      (s) => s.type !== "light" && s.id !== DEFAULT_APP_SCHEME_ID
+    )!;
+    const b = BUILT_IN_APP_SCHEMES.find(
+      (s) => s.type !== "light" && s.id !== DEFAULT_APP_SCHEME_ID && s.id !== a.id
+    )!;
+    render(<Harness />);
+
+    // Establish preview on A.
+    fireEvent.pointerEnter(findRowByName(a.name));
+    act(() => {
+      vi.advanceTimersByTime(300);
+    });
+    expect(useAppThemeStore.getState().previewSchemeId).toBe(a.id);
+
+    // Leave A — this schedules a rAF revert.
+    fireEvent.pointerLeave(findRowByName(a.name));
+    // Enter B before rAF flushes — should cancel the revert and debounce B.
+    fireEvent.pointerEnter(findRowByName(b.name));
+    act(() => {
+      vi.advanceTimersByTime(300);
+    });
+    flushRaf(); // any stale rAF must be a no-op now
+
+    expect(useAppThemeStore.getState().previewSchemeId).toBe(b.id);
+  });
+
+  it("setAccentColorOverride during an active preview targets the previewed scheme", () => {
+    const target = otherDarkScheme();
+    render(<Harness />);
+
+    fireEvent.pointerEnter(findRowByName(target.name));
+    act(() => {
+      vi.advanceTimersByTime(300);
+    });
+    expect(useAppThemeStore.getState().previewSchemeId).toBe(target.id);
+
+    act(() => {
+      useAppThemeStore.getState().setAccentColorOverride("#ff00aa");
+    });
+
+    // After the override, the previewed scheme must still be the one on :root:
+    // the accent-primary CSS var should reflect the override, and non-accent
+    // tokens should reflect the PREVIEWED scheme (not the committed one).
+    expect(document.documentElement.style.getPropertyValue("--theme-accent-primary")).toBe(
+      "#ff00aa"
+    );
+    expect(document.documentElement.style.getPropertyValue("--theme-surface-canvas")).toBe(
+      target.tokens["surface-canvas"]
+    );
+  });
+
+  it("click commit calls setPreviewSchemeId(null) before startViewTransition", () => {
+    const target = otherDarkScheme();
+    const callOrder: string[] = [];
+
+    const originalSet = useAppThemeStore.getState().setPreviewSchemeId;
+    const originalCommit = useAppThemeStore.getState().commitSchemeSelection;
+    useAppThemeStore.setState({
+      setPreviewSchemeId: (id: string | null) => {
+        if (id === null && callOrder[callOrder.length - 1] !== "clearPreview") {
+          callOrder.push("clearPreview");
+        }
+        originalSet(id);
+      },
+      commitSchemeSelection: (id: string) => {
+        callOrder.push("commit");
+        originalCommit(id);
+      },
+    });
+
+    const startViewTransition = vi.fn((cb: () => void) => {
+      callOrder.push("startViewTransition");
+      cb();
+      return { ready: Promise.resolve(), finished: Promise.resolve() };
+    });
+    (
+      document as unknown as { startViewTransition?: typeof startViewTransition }
+    ).startViewTransition = startViewTransition;
+    Object.defineProperty(window, "matchMedia", {
+      configurable: true,
+      value: () => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() }),
+    });
+    Object.defineProperty(document, "visibilityState", {
+      configurable: true,
+      get: () => "visible",
+    });
+
+    render(<Harness />);
+    const row = findRowByName(target.name);
+    fireEvent.pointerEnter(row);
+    act(() => {
+      vi.advanceTimersByTime(300);
+    });
+    fireEvent.click(row);
+
+    // Expect strict ordering: preview cleared → commit → view transition.
+    const clearIdx = callOrder.indexOf("clearPreview");
+    const commitIdx = callOrder.indexOf("commit");
+    const transitionIdx = callOrder.indexOf("startViewTransition");
+    expect(clearIdx).toBeGreaterThanOrEqual(0);
+    expect(commitIdx).toBeGreaterThan(clearIdx);
+    expect(transitionIdx).toBeGreaterThan(commitIdx);
+
+    delete (document as unknown as { startViewTransition?: unknown }).startViewTransition;
   });
 
   it("hero panel image reflects the previewed theme during preview", () => {
