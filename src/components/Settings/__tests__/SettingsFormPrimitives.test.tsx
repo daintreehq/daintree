@@ -68,7 +68,7 @@ describe("SettingsInput", () => {
   });
 
   it("uses semantic tokens for background and focus", () => {
-    const { container } = render(<SettingsInput label="Host" />);
+    render(<SettingsInput label="Host" />);
     const input = screen.getByLabelText("Host");
     expect(input.className).toContain("bg-surface-input");
     expect(input.className).toContain("focus-visible:outline");
