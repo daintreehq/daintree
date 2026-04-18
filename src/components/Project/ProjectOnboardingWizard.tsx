@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import {
   SquareTerminal,
   Rocket,
@@ -8,6 +8,7 @@ import {
   ChevronDown,
   ChevronRight,
   Settings2,
+  Shuffle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -17,6 +18,38 @@ import { useProjectSettings } from "@/hooks";
 import { useProjectStore } from "@/store/projectStore";
 import type { RunCommand } from "@/types";
 import { getProjectGradient } from "@/lib/colorUtils";
+
+const CURATED_EMOJIS = [
+  "🌲",
+  "🌿",
+  "🌴",
+  "🪴",
+  "🍃",
+  "🌱",
+  "🌳",
+  "🦊",
+  "🐢",
+  "🐙",
+  "🚀",
+  "⚡",
+  "🔥",
+  "📦",
+  "🧰",
+  "🛠️",
+  "💎",
+  "🎯",
+  "🌊",
+  "🧪",
+] as const;
+
+function shuffleArray<T>(arr: readonly T[]): T[] {
+  const a = [...arr];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
 
 interface ProjectOnboardingWizardProps {
   isOpen: boolean;
@@ -45,6 +78,7 @@ export function ProjectOnboardingWizard({
   const [isSaving, setIsSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const initStartedRef = useRef(false);
+  const emojiShuffleQueueRef = useRef<string[]>([]);
 
   useEffect(() => {
     if (isOpen && !isLoading && settings && currentProject && !initStartedRef.current) {
@@ -98,6 +132,19 @@ export function ProjectOnboardingWizard({
     }
   };
 
+  const handleShuffleEmoji = useCallback(() => {
+    const otherEmojis = CURATED_EMOJIS.filter((e) => e !== emoji);
+
+    emojiShuffleQueueRef.current = emojiShuffleQueueRef.current.filter((e) => e !== emoji);
+
+    if (emojiShuffleQueueRef.current.length === 0) {
+      emojiShuffleQueueRef.current = shuffleArray(otherEmojis);
+    }
+
+    const nextEmoji = emojiShuffleQueueRef.current.shift()!;
+    setEmoji(nextEmoji);
+  }, [emoji]);
+
   return (
     <AppDialog isOpen={isOpen} onClose={onClose} size="md" dismissible={!isSaving}>
       <AppDialog.Body>
@@ -133,6 +180,14 @@ export function ProjectOnboardingWizard({
                     <span className="text-2xl select-none">{emoji}</span>
                   </button>
                 </PopoverTrigger>
+                <button
+                  type="button"
+                  aria-label="Randomize emoji"
+                  onClick={handleShuffleEmoji}
+                  className="flex h-11 w-11 shrink-0 items-center justify-center rounded-[var(--radius-md)] hover:bg-daintree-border/50 transition-colors"
+                >
+                  <Shuffle className="h-4 w-4 text-daintree-text/60" />
+                </button>
                 <PopoverContent className="w-auto p-0">
                   <EmojiPicker
                     onEmojiSelect={({ emoji: e }) => {
@@ -155,6 +210,12 @@ export function ProjectOnboardingWizard({
                   type="text"
                   value={name}
                   onChange={(e) => setName(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      handleFinish();
+                    }
+                  }}
                   className="w-full bg-transparent border border-daintree-border rounded px-3 py-2 text-sm text-daintree-text focus:outline-none focus:border-daintree-accent focus:ring-1 focus:ring-daintree-accent/30 transition placeholder:text-text-muted"
                   placeholder="My Project"
                 />
