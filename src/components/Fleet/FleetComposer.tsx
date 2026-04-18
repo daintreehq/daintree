@@ -15,6 +15,7 @@ import { useCommandHistoryStore } from "@/store/commandHistoryStore";
 import { useNotificationStore } from "@/store/notificationStore";
 import { replaceRecipeVariables } from "@/utils/recipeVariables";
 import { terminalClient } from "@/clients";
+import { logWarn } from "@/utils/logger";
 import {
   FLEET_BROADCAST_HISTORY_KEY,
   buildFleetBroadcastRecipeContext,
@@ -51,21 +52,14 @@ export function FleetComposer(): ReactElement | null {
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const cancelButtonRef = useRef<HTMLButtonElement | null>(null);
   const historySnapshotRef = useRef<string>("");
+  // Synchronous re-entrancy guard — `isSubmitting` React state updates are
+  // batched, so the ref is what actually blocks a double-click between
+  // render passes (lesson #5087: stale closure in async callback).
+  const submittingRef = useRef<boolean>(false);
 
   const [isConfirming, setIsConfirming] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [historyIndex, setHistoryIndex] = useState(-1);
-
-  // Clear draft and any pending confirm state when the fleet is fully disarmed.
-  // One effect keyed on armedCount — not separate effects sharing a flag (lesson #4958).
-  useEffect(() => {
-    if (armedCount === 0) {
-      clearDraft();
-      setIsConfirming(false);
-      setHistoryIndex(-1);
-      historySnapshotRef.current = "";
-    }
-  }, [armedCount, clearDraft]);
 
   // Register focus handler so terminal.focusFleetComposer can reach us.
   useEffect(() => {
@@ -89,14 +83,17 @@ export function FleetComposer(): ReactElement | null {
   const handleSubmit = useCallback(
     async (options: { force?: boolean } = {}) => {
       const { force = false } = options;
+      if (submittingRef.current) return;
+
       const currentDraft = useFleetComposerStore.getState().draft;
-      if (currentDraft.trim() === "" || isSubmitting) return;
+      if (currentDraft.trim() === "") return;
 
       if (!force && needsFleetBroadcastConfirmation(currentDraft)) {
         setIsConfirming(true);
         return;
       }
 
+      submittingRef.current = true;
       setIsConfirming(false);
       setIsSubmitting(true);
 
@@ -115,24 +112,24 @@ export function FleetComposer(): ReactElement | null {
 
         const submissions: Promise<void>[] = [];
         for (const terminalId of targetIds) {
-          const ctx = buildFleetBroadcastRecipeContext(terminalId);
-          if (!ctx) continue;
+          const ctx = buildFleetBroadcastRecipeContext(terminalId) ?? {};
           const resolved = replaceRecipeVariables(currentDraft, ctx);
           submissions.push(terminalClient.submit(terminalId, resolved));
-        }
-
-        if (submissions.length === 0) {
-          useNotificationStore.getState().addNotification({
-            type: "warning",
-            priority: "low",
-            message: "Could not resolve context for any armed agent",
-          });
-          return;
         }
 
         const results = await Promise.allSettled(submissions);
         const successCount = results.filter((r) => r.status === "fulfilled").length;
         const failureCount = results.length - successCount;
+
+        if (failureCount > 0) {
+          const reasons = results
+            .map((r) => (r.status === "rejected" ? String(r.reason) : null))
+            .filter((r): r is string => r !== null);
+          logWarn("[FleetComposer] broadcast submit had rejections", {
+            failureCount,
+            reasons,
+          });
+        }
 
         useNotificationStore.getState().addNotification({
           type: successCount > 0 ? "success" : "warning",
@@ -145,15 +142,20 @@ export function FleetComposer(): ReactElement | null {
 
         if (successCount > 0) {
           useCommandHistoryStore.getState().recordPrompt(FLEET_BROADCAST_HISTORY_KEY, currentDraft);
-          clearDraft();
+          // Only clear if the user hasn't started typing a new draft since we
+          // captured `currentDraft`. Otherwise we'd nuke in-flight typing.
+          if (useFleetComposerStore.getState().draft === currentDraft) {
+            clearDraft();
+          }
           setHistoryIndex(-1);
           historySnapshotRef.current = "";
         }
       } finally {
+        submittingRef.current = false;
         setIsSubmitting(false);
       }
     },
-    [clearDraft, isSubmitting]
+    [clearDraft]
   );
 
   const handleKeyDown = useCallback(
@@ -214,6 +216,15 @@ export function FleetComposer(): ReactElement | null {
     [clearDraft, draft, handleSubmit, historyEntries, historyIndex, setDraft]
   );
 
+  const handleConfirmStripKeyDown = useCallback((e: KeyboardEvent<HTMLDivElement>) => {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      e.stopPropagation();
+      setIsConfirming(false);
+      textareaRef.current?.focus();
+    }
+  }, []);
+
   if (armedCount === 0) return null;
 
   const sendLabel = isSubmitting ? "Sending…" : "Send";
@@ -268,6 +279,7 @@ export function FleetComposer(): ReactElement | null {
           aria-live="polite"
           aria-atomic="true"
           data-testid="fleet-composer-confirm"
+          onKeyDown={handleConfirmStripKeyDown}
           className="flex items-center gap-2 rounded-[var(--radius-md)] border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-[11px] text-amber-200"
         >
           <span className="flex-1">
@@ -288,9 +300,10 @@ export function FleetComposer(): ReactElement | null {
           </button>
           <button
             type="button"
+            disabled={isSubmitting}
             onClick={() => void handleSubmit({ force: true })}
             data-testid="fleet-composer-confirm-send"
-            className="rounded-[var(--radius-md)] bg-amber-500/20 px-2 py-0.5 text-amber-100 transition-colors hover:bg-amber-500/30"
+            className="rounded-[var(--radius-md)] bg-amber-500/20 px-2 py-0.5 text-amber-100 transition-colors hover:bg-amber-500/30 disabled:cursor-not-allowed disabled:opacity-40"
           >
             Send anyway
           </button>

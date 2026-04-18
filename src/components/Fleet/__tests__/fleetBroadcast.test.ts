@@ -100,6 +100,10 @@ describe("FLEET_DESTRUCTIVE_RE", () => {
     "rm -rf /tmp/foo",
     "rm -r ./build",
     "rm -f something",
+    "rm -rfv node_modules",
+    "rm -Rf /tmp/foo",
+    "git clean -fd",
+    "git clean -fdx",
     "sudo apt install",
     "drop table users",
     "DROP TABLE USERS",
@@ -151,6 +155,18 @@ describe("getFleetBroadcastWarnings", () => {
     const large = "a".repeat(FLEET_CONFIRM_BYTE_THRESHOLD + 1);
     expect(getFleetBroadcastWarnings(small).overByteLimit).toBe(false);
     expect(getFleetBroadcastWarnings(large).overByteLimit).toBe(true);
+  });
+
+  it("counts UTF-8 bytes — 509 ASCII + rocket (4 bytes) crosses to 513", () => {
+    const borderline = "a".repeat(FLEET_CONFIRM_BYTE_THRESHOLD - 3) + "🚀";
+    expect(getFleetBroadcastByteLength(borderline)).toBe(FLEET_CONFIRM_BYTE_THRESHOLD + 1);
+    expect(getFleetBroadcastWarnings(borderline).overByteLimit).toBe(true);
+  });
+
+  it("treats exactly 512 UTF-8 bytes as within limit", () => {
+    const exact = "a".repeat(FLEET_CONFIRM_BYTE_THRESHOLD - 4) + "🚀";
+    expect(getFleetBroadcastByteLength(exact)).toBe(FLEET_CONFIRM_BYTE_THRESHOLD);
+    expect(getFleetBroadcastWarnings(exact).overByteLimit).toBe(false);
   });
 
   it("detects destructive commands", () => {

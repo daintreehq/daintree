@@ -17,7 +17,7 @@ export const FLEET_CONFIRM_BYTE_THRESHOLD = 512;
  * (an extra confirm). False negatives are the real cost.
  */
 export const FLEET_DESTRUCTIVE_RE =
-  /(\brm\s+(?:-[rRf]{1,3}\s|-[rRf]{1,3}[^\s]*\s|--recursive\s|--force\s))|(^|\s)sudo\s|(\bdrop\s+(?:table|database|schema)\b)|(\btruncate\s+table\b)|(\bchmod\s+-R\s+)|(\bmkfs\b)|(\bdd\s+if=)|(\bforkbomb\b)|(:\(\)\s*\{)/i;
+  /(\brm\s+(?:-[rRfv]{1,4}\s|-[rRfv]{1,4}[^\s]*\s|--recursive\s|--force\s))|(^|\s)sudo\s|(\bgit\s+clean\s+-[a-z]*f[a-z]*\b)|(\bdrop\s+(?:table|database|schema)\b)|(\btruncate\s+table\b)|(\bchmod\s+-R\s+)|(\bmkfs\b)|(\bdd\s+if=)|(\bforkbomb\b)|(:\(\)\s*\{)/i;
 
 export interface FleetBroadcastWarnings {
   multiline: boolean;
