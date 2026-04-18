@@ -1,4 +1,12 @@
-import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+  type ReactNode,
+} from "react";
 import type { SettingsTab } from "./SettingsDialog";
 
 interface ValidationRegistryApi {
@@ -17,8 +25,9 @@ interface ProviderProps {
 export function SettingsValidationProvider({ children }: ProviderProps) {
   const [tabsWithErrors, setTabsWithErrors] = useState<Set<SettingsTab>>(new Set());
 
-  const setTabHasError = (tab: SettingsTab, hasError: boolean) => {
+  const setTabHasError = useCallback((tab: SettingsTab, hasError: boolean) => {
     setTabsWithErrors((prev) => {
+      if (prev.has(tab) === hasError) return prev;
       const next = new Set(prev);
       if (hasError) {
         next.add(tab);
@@ -27,21 +36,23 @@ export function SettingsValidationProvider({ children }: ProviderProps) {
       }
       return next;
     });
-  };
+  }, []);
 
-  const clearTab = (tab: SettingsTab) => {
+  const clearTab = useCallback((tab: SettingsTab) => {
     setTabsWithErrors((prev) => {
+      if (!prev.has(tab)) return prev;
       const next = new Set(prev);
       next.delete(tab);
       return next;
     });
-  };
+  }, []);
 
-  return (
-    <ValidationContext.Provider value={{ setTabHasError, clearTab, tabsWithErrors }}>
-      {children}
-    </ValidationContext.Provider>
+  const value = useMemo(
+    () => ({ setTabHasError, clearTab, tabsWithErrors }),
+    [setTabHasError, clearTab, tabsWithErrors]
   );
+
+  return <ValidationContext.Provider value={value}>{children}</ValidationContext.Provider>;
 }
 
 /**
