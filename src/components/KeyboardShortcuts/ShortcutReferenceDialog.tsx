@@ -1,4 +1,5 @@
 import { useState, useMemo, useEffect, useRef } from "react";
+import Fuse, { type IFuseOptions } from "fuse.js";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { useOverlayState } from "@/hooks";
 import { keybindingService } from "../../services/KeybindingService";
@@ -9,17 +10,165 @@ interface ShortcutReferenceDialogProps {
   onClose: () => void;
 }
 
+interface ShortcutSearchItem extends KeybindingConfig {
+  effectiveCombo: string;
+  displayCombo: string;
+  normalizedCombo: string;
+  keywords?: string[];
+}
+
+const MODIFIER_MAP: Record<string, string> = {
+  cmd: "cmd",
+  command: "cmd",
+  meta: "cmd",
+  ctrl: "ctrl",
+  control: "ctrl",
+  alt: "alt",
+  option: "alt",
+  shift: "shift",
+  "⌘": "cmd",
+  "⌃": "ctrl",
+  "⌥": "alt",
+  "⇧": "shift",
+};
+
+// Valid key characters for chord detection (letters, digits, punctuation keys)
+const VALID_KEY_PATTERN = /^[a-z0-9`~!@#$%^&*()_\-=[\]{}\\|;:'",.<>/?]$/i;
+
+function isChordPrefix(query: string): boolean {
+  const trimmed = query.toLowerCase().trim();
+  if (!trimmed) return false;
+
+  // Look for modifier symbols (⌘, ⌥, ⌃, ⇧) or modifier text with separator
+  const hasModifierSymbol = /[⌘⌥⌃⇧]/.test(trimmed);
+  const hasModifierText = /^(cmd|command|meta|ctrl|control|alt|option|shift)[+\s]/i.test(trimmed);
+
+  if (!hasModifierSymbol && !hasModifierText) return false;
+
+  // Normalize for validation
+  let normalized = trimmed.replace(/\s*\+\s*/g, "+").replace(/\s+/g, "+");
+
+  // Replace unicode symbols with text equivalents
+  for (const [symbol, text] of Object.entries(MODIFIER_MAP)) {
+    if (symbol !== text) {
+      normalized = normalized.replace(new RegExp(symbol, "g"), text);
+    }
+  }
+
+  // Find the modifier at the start
+  const modifierMatch = Object.values(MODIFIER_MAP).find((m) => normalized.startsWith(m));
+  if (!modifierMatch) return false;
+
+  // Must have more than just the modifier
+  if (normalized.length <= modifierMatch.length) return false;
+
+  // Split by + and check we have at least 2 parts
+  const parts = normalized.split("+").filter(Boolean);
+  if (parts.length >= 2) {
+    // All parts should be valid: either a modifier or a valid key
+    return parts.every((p) => {
+      if (Object.values(MODIFIER_MAP).includes(p)) return true;
+      // Check it's a valid key character, not just empty or another modifier word
+      return p.length > 0 && VALID_KEY_PATTERN.test(p);
+    });
+  }
+
+  // Handle cases without separator (e.g., "cmdk" or "⌘k")
+  const remaining = normalized.slice(modifierMatch.length);
+  // The remaining part must be a valid key, not empty or modifier-like
+  return remaining.length > 0 && VALID_KEY_PATTERN.test(remaining);
+}
+
+function normalizeQuery(query: string): string {
+  let normalized = query.toLowerCase().trim();
+  normalized = normalized.replace(/\s*\+\s*/g, "+").replace(/\s+/g, "+");
+
+  // Replace unicode symbols with text equivalents
+  for (const [symbol, text] of Object.entries(MODIFIER_MAP)) {
+    if (symbol !== text) {
+      normalized = normalized.replace(new RegExp(symbol, "g"), text);
+    }
+  }
+
+  return normalized;
+}
+
 export function ShortcutReferenceDialog({ isOpen, onClose }: ShortcutReferenceDialogProps) {
   useOverlayState(isOpen);
   const [searchQuery, setSearchQuery] = useState("");
+  const [bindingsVersion, setBindingsVersion] = useState(0);
   const searchInputRef = useRef<HTMLInputElement>(null);
 
-  const allBindings = useMemo(() => keybindingService.getAllBindings(), []);
+  useEffect(() => {
+    const unsubscribe = keybindingService.subscribe(() => {
+      setBindingsVersion((v) => v + 1);
+    });
+    return unsubscribe;
+  }, []);
+
+  const allBindings = useMemo(
+    () => keybindingService.getAllBindingsWithEffectiveCombos(),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [bindingsVersion]
+  );
+
+  const searchItems = useMemo<ShortcutSearchItem[]>(() => {
+    return allBindings.map((binding) => {
+      const displayCombo = keybindingService.getDisplayCombo(binding.actionId);
+      let normalizedCombo = displayCombo.toLowerCase().replace(/[\s+]+/g, "");
+      for (const [symbol, text] of Object.entries(MODIFIER_MAP)) {
+        normalizedCombo = normalizedCombo.replace(new RegExp(symbol, "g"), text);
+      }
+      return {
+        ...binding,
+        effectiveCombo: binding.effectiveCombo,
+        displayCombo,
+        normalizedCombo,
+        keywords: [],
+      };
+    });
+  }, [allBindings]);
+
+  const fuseOptions: IFuseOptions<ShortcutSearchItem> = useMemo(
+    () => ({
+      keys: [
+        { name: "description", weight: 2.0 },
+        { name: "keywords", weight: 1.5 },
+        { name: "actionId", weight: 1.0 },
+        { name: "category", weight: 0.5 },
+        { name: "normalizedCombo", weight: 0.3 },
+      ],
+      threshold: 0.4,
+      includeScore: true,
+      ignoreLocation: true,
+    }),
+    []
+  );
+
+  const fuse = useMemo(() => new Fuse(searchItems, fuseOptions), [searchItems, fuseOptions]);
+
+  const filteredBindings = useMemo(() => {
+    if (!searchQuery.trim()) {
+      return searchItems;
+    }
+
+    const normalizedQuery = normalizeQuery(searchQuery);
+
+    if (isChordPrefix(searchQuery)) {
+      const queryPrefix = normalizedQuery.replace(/\+/g, "");
+      return searchItems.filter((item) => {
+        return item.normalizedCombo.startsWith(queryPrefix);
+      });
+    }
+
+    const results = fuse.search(normalizedQuery);
+    return results.map((result) => result.item);
+  }, [searchItems, fuse, searchQuery]);
 
   const groupedBindings = useMemo(() => {
-    const groups: Record<string, KeybindingConfig[]> = {};
+    const groups: Record<string, ShortcutSearchItem[]> = {};
 
-    allBindings.forEach((binding) => {
+    filteredBindings.forEach((binding) => {
       const category = binding.category || "Other";
       if (!groups[category]) {
         groups[category] = [];
@@ -28,32 +177,7 @@ export function ShortcutReferenceDialog({ isOpen, onClose }: ShortcutReferenceDi
     });
 
     return groups;
-  }, [allBindings]);
-
-  const filteredGroups = useMemo(() => {
-    if (!searchQuery.trim()) return groupedBindings;
-
-    const query = searchQuery.toLowerCase();
-    const filtered: Record<string, KeybindingConfig[]> = {};
-
-    Object.entries(groupedBindings).forEach(([category, bindings]) => {
-      const matchingBindings = bindings.filter((binding) => {
-        const displayCombo = keybindingService.getDisplayCombo(binding.actionId).toLowerCase();
-        return (
-          binding.description?.toLowerCase().includes(query) ||
-          binding.actionId.toLowerCase().includes(query) ||
-          binding.combo.toLowerCase().includes(query) ||
-          displayCombo.includes(query)
-        );
-      });
-
-      if (matchingBindings.length > 0) {
-        filtered[category] = matchingBindings;
-      }
-    });
-
-    return filtered;
-  }, [groupedBindings, searchQuery]);
+  }, [filteredBindings]);
 
   const categoryOrder = [
     "Terminal",
@@ -67,7 +191,7 @@ export function ShortcutReferenceDialog({ isOpen, onClose }: ShortcutReferenceDi
   ];
 
   const sortedCategories = useMemo(() => {
-    const categories = Object.keys(filteredGroups);
+    const categories = Object.keys(groupedBindings);
     return categories.sort((a, b) => {
       const aIndex = categoryOrder.indexOf(a);
       const bIndex = categoryOrder.indexOf(b);
@@ -76,7 +200,7 @@ export function ShortcutReferenceDialog({ isOpen, onClose }: ShortcutReferenceDi
       if (bIndex === -1) return -1;
       return aIndex - bIndex;
     });
-  }, [filteredGroups]);
+  }, [groupedBindings, categoryOrder]);
 
   useEffect(() => {
     if (isOpen) {
@@ -114,7 +238,7 @@ export function ShortcutReferenceDialog({ isOpen, onClose }: ShortcutReferenceDi
                   {category}
                 </h3>
                 <div className="space-y-2">
-                  {filteredGroups[category]!.map((binding) => (
+                  {groupedBindings[category]!.map((binding) => (
                     <div
                       key={binding.actionId}
                       className="flex items-center justify-between py-2 px-3 rounded hover:bg-daintree-border/50"
@@ -129,7 +253,7 @@ export function ShortcutReferenceDialog({ isOpen, onClose }: ShortcutReferenceDi
                       </div>
                       <div className="ml-4">
                         <kbd className="px-3 py-1.5 bg-daintree-bg border border-daintree-border rounded text-sm font-mono text-daintree-text shadow-[var(--theme-shadow-ambient)]">
-                          {keybindingService.getDisplayCombo(binding.actionId)}
+                          {binding.displayCombo}
                         </kbd>
                       </div>
                     </div>

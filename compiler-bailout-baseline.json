@@ -378,9 +378,9 @@
     "pipeline": 0
   },
   "src/components/KeyboardShortcuts/ShortcutReferenceDialog.tsx": {
-    "success": 1,
+    "success": 0,
     "skip": 0,
-    "error": 0,
+    "error": 1,
     "pipeline": 0
   },
   "src/components/Layout/AgentButton.tsx": {
