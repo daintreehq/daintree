@@ -255,7 +255,13 @@ describe("SettingsShortcutCapture", () => {
   it("displays conflict warnings when conflicts exist", async () => {
     const { keybindingService } = await import("@/services/KeybindingService");
     vi.mocked(keybindingService.findConflicts).mockReturnValue([
-      { actionId: "conflict.action", description: "Conflicting Action" },
+      {
+        actionId: "conflict.action",
+        description: "Conflicting Action",
+        combo: "Cmd+A",
+        scope: "global",
+        priority: 0,
+      },
     ]);
 
     render(
