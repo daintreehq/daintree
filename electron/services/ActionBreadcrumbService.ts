@@ -36,10 +36,15 @@ export class ActionBreadcrumbService {
   dispose(): void {
     this.unsubscribe?.();
     this.unsubscribe = null;
+    this.ring = [];
+    this.lastEntry = null;
   }
 
   getRecentActions(): ActionBreadcrumb[] {
-    return this.ring.map((entry) => ({ ...entry }));
+    return this.ring.map((entry) => ({
+      ...entry,
+      ...(entry.args ? { args: { ...entry.args } } : {}),
+    }));
   }
 
   private handleDispatched(payload: {
@@ -52,10 +57,15 @@ export class ActionBreadcrumbService {
   }): void {
     try {
       const last = this.lastEntry;
+      const delta = last === null ? Infinity : payload.timestamp - last.timestamp;
+      // Reject negative deltas so an out-of-order emission (a long-running dispatch
+      // that started earlier but finishes later) is recorded as a distinct entry
+      // rather than merged into a newer fast dispatch of the same actionId.
       const isDedup =
         last !== null &&
         last.actionId === payload.actionId &&
-        payload.timestamp - last.timestamp <= DEDUP_WINDOW_MS;
+        delta >= 0 &&
+        delta <= DEDUP_WINDOW_MS;
 
       if (isDedup && last) {
         last.count += 1;

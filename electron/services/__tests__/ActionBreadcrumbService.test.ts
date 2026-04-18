@@ -124,6 +124,45 @@ describe("ActionBreadcrumbService", () => {
       const recent = service.getRecentActions();
       expect(recent).toHaveLength(2);
     });
+
+    it("does not dedup when the newer payload has an earlier timestamp (out-of-order completion)", () => {
+      // Scenario: two concurrent dispatches of the same action. Call A starts at t=0
+      // and finishes after 5000ms; call B starts at t=1000 and finishes instantly.
+      // B emits first with timestamp=1000. A emits second with timestamp=0. Dedup
+      // must treat A as a distinct entry, not merge it into B.
+      emit({ actionId: "slow.op", timestamp: 1000 });
+      emit({ actionId: "slow.op", timestamp: 0 });
+      const recent = service.getRecentActions();
+      expect(recent).toHaveLength(2);
+      expect(recent.every((e) => e.count === 1)).toBe(true);
+    });
+  });
+
+  describe("lifecycle", () => {
+    it("dispose() clears ring and lastEntry so a post-reinit dispatch creates a fresh entry", () => {
+      const t = 10_000;
+      emit({ actionId: "foo", timestamp: t });
+      expect(service.getRecentActions()).toHaveLength(1);
+
+      service.dispose();
+      expect(service.getRecentActions()).toHaveLength(0);
+
+      service.initialize();
+      emit({ actionId: "foo", timestamp: t + 50 });
+      const recent = service.getRecentActions();
+      expect(recent).toHaveLength(1);
+      expect(recent[0]!.count).toBe(1);
+    });
+  });
+
+  describe("defensive copies", () => {
+    it("mutating getRecentActions()[i].args does not mutate the internal ring", () => {
+      emit({ actionId: "foo", safeArgs: { show: true } });
+      const recent = service.getRecentActions();
+      (recent[0]!.args as Record<string, unknown>).show = false;
+      const fresh = service.getRecentActions();
+      expect((fresh[0]!.args as Record<string, unknown>).show).toBe(true);
+    });
   });
 
   describe("Sentry breadcrumb emission", () => {

@@ -477,6 +477,58 @@ describe("ActionService", () => {
         restore();
       }
     });
+
+    it("preserves falsy primitive values under allowlisted keys", async () => {
+      const emit = vi.fn().mockResolvedValue(undefined);
+      const restore = installEmit(emit);
+      try {
+        service.register({
+          id: "actions.list" as ActionId,
+          title: "T",
+          description: "T",
+          category: "preferences",
+          kind: "command",
+          danger: "safe",
+          scope: "renderer",
+          safeBreadcrumbArgs: ["show"],
+          run: vi.fn().mockResolvedValue(undefined),
+        });
+        await service.dispatch("actions.list" as ActionId, { show: false });
+        await Promise.resolve();
+        const payload = emit.mock.calls[0]![1] as { safeArgs?: Record<string, unknown> };
+        expect(payload.safeArgs).toEqual({ show: false });
+      } finally {
+        restore();
+      }
+    });
+
+    it("does not emit when an agent invokes a confirm action without the confirmed flag", async () => {
+      const emit = vi.fn().mockResolvedValue(undefined);
+      const restore = installEmit(emit);
+      try {
+        const run = vi.fn().mockResolvedValue(undefined);
+        service.register({
+          id: "actions.list" as ActionId,
+          title: "T",
+          description: "T",
+          category: "test",
+          kind: "command",
+          danger: "confirm",
+          scope: "renderer",
+          run,
+        });
+        const result = await service.dispatch("actions.list" as ActionId, undefined, {
+          source: "agent",
+        });
+        expect(result.ok).toBe(false);
+        if (!result.ok) expect(result.error.code).toBe("CONFIRMATION_REQUIRED");
+        await Promise.resolve();
+        expect(run).not.toHaveBeenCalled();
+        expect(emit).not.toHaveBeenCalled();
+      } finally {
+        restore();
+      }
+    });
   });
 
   describe("dispatch resilience", () => {
