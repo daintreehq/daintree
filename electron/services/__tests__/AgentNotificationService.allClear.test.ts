@@ -345,4 +345,72 @@ describe("AgentNotificationService – all-clear", () => {
     vi.advanceTimersByTime(600);
     expect(soundServiceMock.play).not.toHaveBeenCalledWith("all-clear");
   });
+
+  it("does not fire when no working transition ever occurs (empty session)", () => {
+    // Never emit any working state - only idle/completed states
+    mockTerminals([{ id: "term-1", agentState: "idle" }]);
+    emitStateChange("idle", "idle", "term-1");
+
+    mockTerminals([{ id: "term-1", agentState: "completed" }]);
+    emitStateChange("completed", "idle", "term-1");
+
+    // Advance past debounce - should not fire because hasEverGoneWorking is false
+    vi.advanceTimersByTime(600);
+    expect(soundServiceMock.play).not.toHaveBeenCalledWith("all-clear");
+  });
+
+  it("does not fire when peak concurrent never reaches 2 (sequential single-agent sessions)", () => {
+    // First agent works and completes (peak = 1)
+    mockTerminals([{ id: "term-1", agentState: "working" }]);
+    emitStateChange("working", "idle", "term-1");
+
+    mockTerminals([{ id: "term-1", agentState: "completed" }]);
+    emitStateChange("completed", "working", "term-1");
+
+    vi.advanceTimersByTime(600);
+    expect(soundServiceMock.play).not.toHaveBeenCalledWith("all-clear");
+
+    // Second agent works and completes (peak still = 1, never reached 2)
+    mockTerminals([{ id: "term-2", agentState: "working" }]);
+    emitStateChange("working", "idle", "term-2");
+
+    mockTerminals([{ id: "term-2", agentState: "completed" }]);
+    emitStateChange("completed", "working", "term-2");
+
+    vi.advanceTimersByTime(600);
+    expect(soundServiceMock.play).not.toHaveBeenCalledWith("all-clear");
+  });
+
+  it("does not fire for single-agent session after reset (stale-state protection)", () => {
+    // First, trigger a multi-agent all-clear (this resets the state)
+    mockTerminals([
+      { id: "term-1", agentState: "working" },
+      { id: "term-2", agentState: "working" },
+    ]);
+    emitStateChange("working", "idle", "term-1");
+    emitStateChange("working", "idle", "term-2");
+
+    mockTerminals([
+      { id: "term-1", agentState: "completed" },
+      { id: "term-2", agentState: "completed" },
+    ]);
+    emitStateChange("completed", "working", "term-1");
+    emitStateChange("completed", "working", "term-2");
+
+    vi.advanceTimersByTime(600);
+    expect(soundServiceMock.play).toHaveBeenCalledWith("all-clear");
+
+    soundServiceMock.play.mockClear();
+
+    // After reset, a single-agent session should NOT fire all-clear
+    // because peakConcurrentWorking starts at 0 and only reaches 1
+    mockTerminals([{ id: "term-3", agentState: "working" }]);
+    emitStateChange("working", "idle", "term-3");
+
+    mockTerminals([{ id: "term-3", agentState: "completed" }]);
+    emitStateChange("completed", "working", "term-3");
+
+    vi.advanceTimersByTime(600);
+    expect(soundServiceMock.play).not.toHaveBeenCalledWith("all-clear");
+  });
 });
