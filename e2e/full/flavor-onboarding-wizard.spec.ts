@@ -35,7 +35,7 @@ test.describe.serial("Flavors: Onboarding/Wizard Integration (83–88)", () => {
     await ctx.window.waitForTimeout(35_000);
 
     await ctx.window.evaluate(() =>
-      window.dispatchEvent(new CustomEvent("canopy:open-agent-setup-wizard"))
+      window.dispatchEvent(new CustomEvent("daintree:open-agent-setup-wizard"))
     );
 
     const wizardDialog = ctx.window.locator('[role="dialog"][aria-label="Agent Setup Wizard"]');
@@ -74,7 +74,7 @@ test.describe.serial("Flavors: Onboarding/Wizard Integration (83–88)", () => {
 
   test("85. Verify flavor badge text shows correct count like '2 flavors'", async () => {
     await ctx.window.evaluate(() =>
-      window.dispatchEvent(new CustomEvent("canopy:open-agent-setup-wizard"))
+      window.dispatchEvent(new CustomEvent("daintree:open-agent-setup-wizard"))
     );
 
     const wizardDialog = ctx.window.locator('[role="dialog"][aria-label="Agent Setup Wizard"]');
@@ -96,7 +96,7 @@ test.describe.serial("Flavors: Onboarding/Wizard Integration (83–88)", () => {
 
   test("86. Verify Gemini does NOT show a flavor badge (no CCR flavors)", async () => {
     await ctx.window.evaluate(() =>
-      window.dispatchEvent(new CustomEvent("canopy:open-agent-setup-wizard"))
+      window.dispatchEvent(new CustomEvent("daintree:open-agent-setup-wizard"))
     );
 
     const wizardDialog = ctx.window.locator('[role="dialog"][aria-label="Agent Setup Wizard"]');
@@ -117,7 +117,7 @@ test.describe.serial("Flavors: Onboarding/Wizard Integration (83–88)", () => {
 
   test("87. Complete wizard pinning an agent with flavors, verify agent is pinned and flavors still available", async () => {
     await ctx.window.evaluate(() =>
-      window.dispatchEvent(new CustomEvent("canopy:open-agent-setup-wizard"))
+      window.dispatchEvent(new CustomEvent("daintree:open-agent-setup-wizard"))
     );
 
     const wizardDialog = ctx.window.locator('[role="dialog"][aria-label="Agent Setup Wizard"]');
@@ -178,7 +178,7 @@ test.describe.serial("Flavors: Onboarding/Wizard Integration (83–88)", () => {
     await ctx.window.waitForTimeout(T_SETTLE);
 
     await ctx.window.evaluate(() =>
-      window.dispatchEvent(new CustomEvent("canopy:open-agent-setup-wizard"))
+      window.dispatchEvent(new CustomEvent("daintree:open-agent-setup-wizard"))
     );
 
     const wizardDialog = ctx.window.locator('[role="dialog"][aria-label="Agent Setup Wizard"]');
