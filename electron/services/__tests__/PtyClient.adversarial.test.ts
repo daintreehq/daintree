@@ -893,4 +893,100 @@ describe("PtyClient adversarial", () => {
       result: { success: true, id: "t-overflow" },
     });
   });
+
+  const MAX_PENDING_KILLS = 500;
+
+  function countKillMessages(child: MockUtilityProcess): number {
+    return child.postMessage.mock.calls.filter(
+      (call: unknown[]) => (call[0] as { type?: string })?.type === "kill"
+    ).length;
+  }
+
+  it("PENDING_KILLS_REJECTED_AT_CAP", async () => {
+    const client = createReadyClient();
+    const privateAccess = client as unknown as PtyClientPrivateAccess;
+    const { logWarn } = await import("../../utils/logger.js");
+
+    for (let i = 0; i < MAX_PENDING_KILLS; i++) {
+      client.kill(`t-${i}`);
+    }
+    expect(privateAccess.pendingKillCount.size).toBe(MAX_PENDING_KILLS);
+    expect(countKillMessages(mockChild)).toBe(MAX_PENDING_KILLS);
+    (logWarn as Mock).mockClear();
+    mockChild.postMessage.mockClear();
+
+    client.kill("t-overflow");
+
+    expect(privateAccess.pendingKillCount.size).toBe(MAX_PENDING_KILLS);
+    expect(privateAccess.pendingKillCount.has("t-overflow")).toBe(false);
+    expect(countKillMessages(mockChild)).toBe(0);
+    expect(logWarn).toHaveBeenCalledWith(expect.stringContaining("pendingKillCount at cap"));
+  });
+
+  it("KILL_EXISTING_ID_ALLOWED_AT_CAP", async () => {
+    const client = createReadyClient();
+    const privateAccess = client as unknown as PtyClientPrivateAccess;
+    const { logWarn } = await import("../../utils/logger.js");
+
+    for (let i = 0; i < MAX_PENDING_KILLS; i++) {
+      client.kill(`t-${i}`);
+    }
+    expect(privateAccess.pendingKillCount.size).toBe(MAX_PENDING_KILLS);
+    (logWarn as Mock).mockClear();
+    mockChild.postMessage.mockClear();
+
+    client.kill("t-0");
+
+    expect(logWarn).not.toHaveBeenCalled();
+    expect(privateAccess.pendingKillCount.size).toBe(MAX_PENDING_KILLS);
+    expect(privateAccess.pendingKillCount.get("t-0")).toBe(2);
+    const killCalls = mockChild.postMessage.mock.calls.filter(
+      (call: unknown[]) =>
+        (call[0] as { type?: string })?.type === "kill" &&
+        (call[0] as { id?: string })?.id === "t-0"
+    );
+    expect(killCalls).toHaveLength(1);
+  });
+
+  it("KILL_COUNT_CLEARED_ON_HOST_CRASH", () => {
+    const client = createReadyClient();
+    const privateAccess = client as unknown as PtyClientPrivateAccess;
+    const restartedChild = createMockChild();
+
+    client.kill("t-0");
+    client.kill("t-1");
+    client.kill("t-2");
+    expect(privateAccess.pendingKillCount.size).toBe(3);
+
+    shared.forkMock.mockReturnValue(restartedChild);
+    mockChild.emit("exit", 1);
+    vi.advanceTimersByTime(2000);
+    restartedChild.emit("message", { type: "ready" });
+
+    expect(privateAccess.pendingKillCount.size).toBe(0);
+    expect(countKillMessages(restartedChild)).toBe(0);
+
+    client.dispose();
+  });
+
+  it("BOOKKEEPING_RUNS_ON_REJECTED_KILL", async () => {
+    const client = createReadyClient();
+    const privateAccess = client as unknown as PtyClientPrivateAccess;
+    const { logWarn } = await import("../../utils/logger.js");
+
+    client.spawn("t-victim", baseSpawnOptions());
+    expect(client.hasTerminal("t-victim")).toBe(true);
+
+    for (let i = 0; i < MAX_PENDING_KILLS; i++) {
+      client.kill(`fill-${i}`);
+    }
+    expect(privateAccess.pendingKillCount.size).toBe(MAX_PENDING_KILLS);
+    (logWarn as Mock).mockClear();
+
+    client.kill("t-victim");
+
+    expect(client.hasTerminal("t-victim")).toBe(false);
+    expect(privateAccess.pendingKillCount.has("t-victim")).toBe(false);
+    expect(logWarn).toHaveBeenCalledWith(expect.stringContaining("pendingKillCount at cap"));
+  });
 });

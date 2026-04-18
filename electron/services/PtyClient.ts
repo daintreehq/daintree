@@ -218,6 +218,14 @@ export class PtyClient extends EventEmitter {
    */
   private readonly MAX_PENDING_SPAWNS = 250;
 
+  /**
+   * Cap on pendingKillCount to prevent unbounded growth after repeated host
+   * crashes. Entries are decremented via "exit" events; if the host crashes
+   * before emitting them, entries persist. 2x MAX_PENDING_SPAWNS since kills
+   * are fire-and-forget IPC messages with no replay cost.
+   */
+  private readonly MAX_PENDING_KILLS = 500;
+
   /** RTT observability: timestamp of the in-flight health-check ping, or null if none. */
   private lastPingTime: number | null = null;
   private rttSamples: number[] = [];
@@ -829,6 +837,13 @@ export class PtyClient extends EventEmitter {
   }
 
   private respawnPending(): void {
+    // Kills sent to the crashed host will never receive "exit" events, so
+    // pendingKillCount entries from that session are permanently stale.
+    // Unlike pendingSpawns (replayed below to recreate terminals on the new
+    // host), pendingKillCount is cleared — the terminals those kills targeted
+    // died with the host process.
+    this.pendingKillCount.clear();
+
     // Notify that ports need refresh after host restart
     if (this.onPortRefresh) {
       for (const port of this.pendingMessagePorts.values()) {
@@ -1085,9 +1100,16 @@ export class PtyClient extends EventEmitter {
 
   kill(id: string, reason?: string): void {
     getTrashedPidTracker().removeTrashed(id);
-    this.pendingKillCount.set(id, (this.pendingKillCount.get(id) ?? 0) + 1);
     this.pendingSpawns.delete(id);
     this.ipcDataMirrorIds.delete(id);
+
+    if (!this.pendingKillCount.has(id) && this.pendingKillCount.size >= this.MAX_PENDING_KILLS) {
+      logWarn(
+        `[PtyClient] kill skipped — pendingKillCount at cap (${this.MAX_PENDING_KILLS}), id=${id}`
+      );
+      return;
+    }
+    this.pendingKillCount.set(id, (this.pendingKillCount.get(id) ?? 0) + 1);
     this.send({ type: "kill", id, reason });
   }
 
