@@ -53,6 +53,7 @@ const createMockProjectClient = () => ({
   createFolder: vi.fn().mockResolvedValue(""),
   enableInRepoSettings: vi.fn().mockResolvedValue({}),
   disableInRepoSettings: vi.fn().mockResolvedValue({}),
+  detectContextFiles: vi.fn().mockResolvedValue([]),
   checkMissing: vi.fn().mockResolvedValue([]),
   locate: vi.fn().mockResolvedValue(null),
   cloneRepo: vi.fn().mockResolvedValue({ success: true }),

@@ -164,6 +164,10 @@ export class ProjectSettingsManager {
           typeof parsed.cloudSyncWarningDismissed === "boolean"
             ? parsed.cloudSyncWarningDismissed
             : undefined,
+        contextFilesOfferDismissed:
+          typeof parsed.contextFilesOfferDismissed === "boolean"
+            ? parsed.contextFilesOfferDismissed
+            : undefined,
         devServerLoadTimeout:
           typeof parsed.devServerLoadTimeout === "number" &&
           Number.isFinite(parsed.devServerLoadTimeout) &&
@@ -298,6 +302,10 @@ export class ProjectSettingsManager {
       cloudSyncWarningDismissed:
         typeof settings.cloudSyncWarningDismissed === "boolean"
           ? settings.cloudSyncWarningDismissed
+          : undefined,
+      contextFilesOfferDismissed:
+        typeof settings.contextFilesOfferDismissed === "boolean"
+          ? settings.contextFilesOfferDismissed
           : undefined,
       devServerLoadTimeout:
         typeof settings.devServerLoadTimeout === "number" &&

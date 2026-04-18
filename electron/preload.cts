@@ -756,6 +756,7 @@ const CHANNELS = {
   PROJECT_WRITE_CLAUDE_MD: "project:write-claude-md",
   PROJECT_ENABLE_IN_REPO_SETTINGS: "project:enable-in-repo-settings",
   PROJECT_DISABLE_IN_REPO_SETTINGS: "project:disable-in-repo-settings",
+  PROJECT_DETECT_CONTEXT_FILES: "project:detect-context-files",
   PROJECT_CHECK_MISSING: "project:check-missing",
   PROJECT_LOCATE: "project:locate",
   // Agent settings channels
@@ -1852,6 +1853,9 @@ const api: ElectronAPI = {
 
     disableInRepoSettings: (projectId: string): Promise<Project> =>
       _unwrappingInvoke(CHANNELS.PROJECT_DISABLE_IN_REPO_SETTINGS, projectId),
+
+    detectContextFiles: (projectId: string): Promise<string[]> =>
+      _unwrappingInvoke(CHANNELS.PROJECT_DETECT_CONTEXT_FILES, projectId),
 
     checkMissing: (): Promise<string[]> => _unwrappingInvoke(CHANNELS.PROJECT_CHECK_MISSING),
 

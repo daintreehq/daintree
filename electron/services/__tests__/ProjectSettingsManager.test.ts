@@ -183,4 +183,35 @@ describe("ProjectSettingsManager caching", () => {
     const loaded = await manager.getProjectSettings(projectId);
     expect(loaded.turbopackEnabled).toBeUndefined();
   });
+
+  it("round-trips contextFilesOfferDismissed=true through save/load", async () => {
+    await manager.saveProjectSettings(projectId, {
+      runCommands: [],
+      contextFilesOfferDismissed: true,
+    });
+
+    const freshManager = new ProjectSettingsManager(tempDir, createMockStore());
+    const loaded = await freshManager.getProjectSettings(projectId);
+    expect(loaded.contextFilesOfferDismissed).toBe(true);
+  });
+
+  it("treats missing contextFilesOfferDismissed as undefined", async () => {
+    const settingsPath = path.join(tempDir, projectId, "settings.json");
+    await fs.writeFile(settingsPath, JSON.stringify({ runCommands: [] }), "utf-8");
+
+    const loaded = await manager.getProjectSettings(projectId);
+    expect(loaded.contextFilesOfferDismissed).toBeUndefined();
+  });
+
+  it("rejects non-boolean contextFilesOfferDismissed in the settings file", async () => {
+    const settingsPath = path.join(tempDir, projectId, "settings.json");
+    await fs.writeFile(
+      settingsPath,
+      JSON.stringify({ runCommands: [], contextFilesOfferDismissed: "yes" }),
+      "utf-8"
+    );
+
+    const loaded = await manager.getProjectSettings(projectId);
+    expect(loaded.contextFilesOfferDismissed).toBeUndefined();
+  });
 });
