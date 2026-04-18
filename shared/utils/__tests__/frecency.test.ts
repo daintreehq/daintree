@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { computeFrecencyScore, FRECENCY_HALF_LIFE_MS } from "../../../shared/utils/frecency.js";
+import { computeFrecencyScore, FRECENCY_HALF_LIFE_MS } from "../frecency.js";
 
 describe("computeFrecencyScore", () => {
   const NOW = 1_700_000_000_000;
@@ -11,25 +11,21 @@ describe("computeFrecencyScore", () => {
 
   it("decays score by half after one half-life", () => {
     const score = computeFrecencyScore(4.0, NOW - FRECENCY_HALF_LIFE_MS, NOW);
-    // 4.0 * 0.5 + 1.0 = 3.0
     expect(score).toBeCloseTo(3.0);
   });
 
   it("decays score by 75% after two half-lives", () => {
     const score = computeFrecencyScore(4.0, NOW - 2 * FRECENCY_HALF_LIFE_MS, NOW);
-    // 4.0 * 0.25 + 1.0 = 2.0
     expect(score).toBeCloseTo(2.0);
   });
 
   it("handles zero lastAccessedAt by treating as accessed now (no decay)", () => {
     const score = computeFrecencyScore(3.0, 0, NOW);
-    // safeLastAccess = NOW, elapsed = 0, decayed = 3.0, + 1.0 = 4.0
     expect(score).toBeCloseTo(4.0);
   });
 
   it("handles NaN score gracefully", () => {
     const score = computeFrecencyScore(NaN, NOW, NOW);
-    // safeScore = 0, + 1.0 = 1.0
     expect(score).toBeCloseTo(1.0);
   });
 

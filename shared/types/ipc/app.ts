@@ -1,6 +1,7 @@
 import type { AgentId } from "../agent.js";
 import type { TerminalState } from "./terminal.js";
 import type { TerminalConfig } from "./config.js";
+import type { ActionFrecencyEntry } from "../actions.js";
 
 /** Saved recipe terminal */
 export interface SavedRecipeTerminal {
@@ -78,8 +79,8 @@ export interface AppState {
   panelGridConfig?: import("../config.js").PanelGridConfig;
   /** Most-recently-used ordered list of quick-switcher item IDs ("terminal:<id>" | "worktree:<id>") */
   mruList?: string[];
-  /** Most-recently-used ordered list of action IDs for the action palette */
-  actionMruList?: string[];
+  /** Most-recently-used action frecency entries for the action palette (migrated from legacy string[] format) */
+  actionMruList?: ActionFrecencyEntry[] | string[];
   /** Whether the Fleet Deck panel is open */
   fleetDeckOpen?: boolean;
   /** Which edge the Fleet Deck is docked to */

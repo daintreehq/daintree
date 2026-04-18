@@ -410,3 +410,9 @@ export interface ActionDispatchPayload {
   source: ActionSource;
   timestamp: number;
 }
+
+export interface ActionFrecencyEntry {
+  id: string;
+  score: number;
+  lastAccessedAt: number;
+}

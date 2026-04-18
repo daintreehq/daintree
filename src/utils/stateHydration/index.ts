@@ -12,6 +12,7 @@ import type {
   TerminalReconnectError,
   TabGroup,
 } from "@/types";
+import type { ActionFrecencyEntry } from "@shared/types/actions";
 import { keybindingService } from "@/services/KeybindingService";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { panelPersistence } from "@/store/persistence/panelPersistence";
@@ -158,7 +159,7 @@ export interface HydrationOptions {
   setReconnectError?: (id: string, error: TerminalReconnectError) => void;
   hydrateTabGroups?: (tabGroups: TabGroup[], options?: { skipPersist?: boolean }) => void;
   hydrateMru?: (list: string[]) => void;
-  hydrateActionMru?: (list: string[]) => void;
+  hydrateActionMru?: (list: ActionFrecencyEntry[] | string[]) => void;
   restoreTerminalOrder?: (orderedIds: string[]) => void;
   /**
    * Optional hydration-batch hooks. When both are provided, each restore phase is

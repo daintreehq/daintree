@@ -405,20 +405,58 @@ export function registerAppStateHandlers(): () => void {
 
       if ("actionMruList" in partialState && Array.isArray(partialState.actionMruList)) {
         const ACTION_ID_PATTERN = /^[a-zA-Z][a-zA-Z0-9._-]{0,127}$/;
-        const seen = new Set<string>();
-        const sanitized: string[] = [];
-        for (const id of partialState.actionMruList) {
-          if (
-            typeof id === "string" &&
-            ACTION_ID_PATTERN.test(id) &&
-            !seen.has(id) &&
-            sanitized.length < 20
-          ) {
-            seen.add(id);
-            sanitized.push(id);
+        const MAX_ENTRIES = 20;
+        const MAX_SCORE = 100;
+        const now = Date.now();
+
+        const isLegacy =
+          partialState.actionMruList.length > 0 &&
+          typeof partialState.actionMruList[0] === "string";
+
+        if (isLegacy) {
+          const seen = new Set<string>();
+          const sanitized: string[] = [];
+          for (const id of partialState.actionMruList as string[]) {
+            if (
+              typeof id === "string" &&
+              ACTION_ID_PATTERN.test(id) &&
+              !seen.has(id) &&
+              sanitized.length < MAX_ENTRIES
+            ) {
+              seen.add(id);
+              sanitized.push(id);
+            }
           }
+          updates.actionMruList = sanitized;
+        } else {
+          const seen = new Set<string>();
+          const sanitized: Array<{ id: string; score: number; lastAccessedAt: number }> = [];
+          for (const entry of partialState.actionMruList as Array<{
+            id?: unknown;
+            score?: unknown;
+            lastAccessedAt?: unknown;
+          }>) {
+            const id = entry.id;
+            const score = typeof entry.score === "number" ? entry.score : 0;
+            const lastAccessedAt =
+              typeof entry.lastAccessedAt === "number" ? entry.lastAccessedAt : 0;
+
+            if (
+              typeof id === "string" &&
+              ACTION_ID_PATTERN.test(id) &&
+              !seen.has(id) &&
+              sanitized.length < MAX_ENTRIES
+            ) {
+              seen.add(id);
+              sanitized.push({
+                id,
+                score: Math.max(0, Math.min(MAX_SCORE, score)),
+                lastAccessedAt: Math.max(0, Math.min(now, lastAccessedAt)),
+              });
+            }
+          }
+          updates.actionMruList = sanitized;
         }
-        updates.actionMruList = sanitized;
       }
 
       store.set("appState", { ...currentState, ...updates });

@@ -47,7 +47,7 @@ const FUSE_OPTIONS: IFuseOptions<ActionPaletteItem> = {
 };
 
 const MAX_RESULTS = 20;
-const MRU_BOOST_FACTOR = 0.05;
+const FUSE_SCORE_EPSILON = 0.001;
 
 function toActionPaletteItem(entry: ActionManifestEntry): ActionPaletteItem {
   const title =
@@ -71,7 +71,9 @@ function toActionPaletteItem(entry: ActionManifestEntry): ActionPaletteItem {
 
 export function useActionPalette(): UseActionPaletteReturn {
   const isActionOpen = usePaletteStore((state) => state.activePaletteId === "action");
-  const actionMruList = useActionMruStore(useShallow((state) => state.actionMruList));
+  const getSortedActionMruList = useActionMruStore(
+    useShallow((state) => state.getSortedActionMruList)
+  );
 
   const allActions = useMemo<ActionPaletteItem[]>(() => {
     if (!isActionOpen) return [];
@@ -83,16 +85,16 @@ export function useActionPalette(): UseActionPaletteReturn {
 
   const filterFn = useCallback(
     (items: ActionPaletteItem[], query: string): ActionPaletteItem[] => {
-      const mruIndexMap = new Map<string, number>();
-      actionMruList.forEach((id, index) => mruIndexMap.set(id, index));
-      const mruSize = actionMruList.length;
+      const frecencyEntries = getSortedActionMruList();
+      const frecencyScoreMap = new Map<string, number>();
+      frecencyEntries.forEach(({ id, score }) => frecencyScoreMap.set(id, score));
 
       if (!query.trim()) {
         return [...items].sort((a, b) => {
           if (a.enabled !== b.enabled) return a.enabled ? -1 : 1;
-          const aIndex = mruIndexMap.get(a.id) ?? Infinity;
-          const bIndex = mruIndexMap.get(b.id) ?? Infinity;
-          if (aIndex !== bIndex) return aIndex - bIndex;
+          const aScore = frecencyScoreMap.get(a.id) ?? 0;
+          const bScore = frecencyScoreMap.get(b.id) ?? 0;
+          if (aScore !== bScore) return bScore - aScore;
           return a.title.localeCompare(b.title);
         });
       }
@@ -100,18 +102,19 @@ export function useActionPalette(): UseActionPaletteReturn {
       const fuseResults = fuse.search(query);
       return fuseResults
         .map((r) => {
-          const rank = mruIndexMap.get(r.item.id);
-          const boost =
-            rank !== undefined ? (1 - rank / Math.max(mruSize, 1)) * MRU_BOOST_FACTOR : 0;
-          return { item: r.item, boostedScore: (r.score ?? 1) - boost };
+          const frecencyScore = frecencyScoreMap.get(r.item.id) ?? 0;
+          return { item: r.item, fuseScore: r.score ?? 1, frecencyScore };
         })
         .sort((a, b) => {
           if (a.item.enabled !== b.item.enabled) return a.item.enabled ? -1 : 1;
-          return a.boostedScore - b.boostedScore;
+          const scoreDiff = a.fuseScore - b.fuseScore;
+          if (Math.abs(scoreDiff) > FUSE_SCORE_EPSILON) return scoreDiff;
+          if (a.frecencyScore !== b.frecencyScore) return b.frecencyScore - a.frecencyScore;
+          return a.item.title.localeCompare(b.item.title);
         })
         .map((r) => r.item);
     },
-    [fuse, actionMruList]
+    [fuse, getSortedActionMruList]
   );
 
   const {

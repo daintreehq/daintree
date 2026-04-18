@@ -13,7 +13,7 @@ import type { AppError } from "../shared/types/ipc/errors.js";
 import type { BuiltInTerminalType } from "../shared/config/agentIds.js";
 import { DEFAULT_AGENT_SETTINGS, DEFAULT_APP_AGENT_CONFIG } from "../shared/types/index.js";
 import type { AppThemeConfig } from "../shared/types/appTheme.js";
-import type { SettingsRecovery } from "../shared/types/ipc/app.js";
+import type { SettingsRecovery, ActionFrecencyEntry } from "../shared/types/ipc/app.js";
 
 export interface StoreSchema {
   _schemaVersion: number;
@@ -103,7 +103,7 @@ export interface StoreSchema {
     }>;
     panelGridConfig?: PanelGridConfig;
     mruList?: string[];
-    actionMruList?: string[];
+    actionMruList?: ActionFrecencyEntry[] | string[];
     fleetDeckOpen?: boolean;
     fleetDeckEdge?: "right" | "left" | "bottom";
     fleetDeckWidth?: number;

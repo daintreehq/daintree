@@ -93,7 +93,7 @@ export function AgentTrayButton({
   const agentSettings = useAgentSettingsStore((s) => s.settings);
   const setAgentPinned = useAgentSettingsStore((s) => s.setAgentPinned);
 
-  const actionMruList = useActionMruStore((s) => s.actionMruList);
+  const getSortedActionMruList = useActionMruStore(useShallow((s) => s.getSortedActionMruList));
 
   const refreshAvailability = useCliAvailabilityStore((s) => s.refresh);
   const hasRealData = useCliAvailabilityStore((s) => s.hasRealData);
@@ -252,21 +252,25 @@ export function AgentTrayButton({
       fallbackSetup.push(row);
     }
 
-    // Sort Launch by palette MRU (lower index = more recent). Untracked
+    // Sort Launch by palette frecency (higher score = more recent). Untracked
     // agents keep their natural BUILT_IN_AGENT_IDS order after any tracked
-    // ones. Only palette dispatches populate `actionMruList`; tray launches
-    // don't record MRU, but palette-sourced recency is the signal we have.
+    // ones. Only palette dispatches populate frecency; tray launches
+    // don't record, but palette-sourced frecency is the signal we have.
+    const frecencyEntries = getSortedActionMruList();
+    const frecencyScoreMap = new Map<string, number>();
+    frecencyEntries.forEach(({ id, score }) => frecencyScoreMap.set(id, score));
+
     launchable.sort((a, b) => {
-      const ai = actionMruList.indexOf(`agent.${a.id}`);
-      const bi = actionMruList.indexOf(`agent.${b.id}`);
-      if (ai === -1 && bi === -1) return 0;
-      if (ai === -1) return 1;
-      if (bi === -1) return -1;
-      return ai - bi;
+      const aScore = frecencyScoreMap.get(`agent.${a.id}`) ?? -Infinity;
+      const bScore = frecencyScoreMap.get(`agent.${b.id}`) ?? -Infinity;
+      if (aScore === -Infinity && bScore === -Infinity) return 0;
+      if (aScore === -Infinity) return 1;
+      if (bScore === -Infinity) return -1;
+      return bScore - aScore;
     });
 
     return { launchable, needsSetup, fallbackSetup };
-  }, [agentAvailability, agentSettings, agentDominantStates, actionMruList, newAgentIds]);
+  }, [agentAvailability, agentSettings, agentDominantStates, getSortedActionMruList, newAgentIds]);
 
   const handleLaunch = (row: AgentRow) => {
     void actionService.dispatch("agent.launch", { agentId: row.id }, { source: "user" });
