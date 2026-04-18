@@ -656,6 +656,22 @@ export const DEFAULT_KEYBINDINGS: KeybindingConfig[] = [
     category: "Project",
   },
   {
+    actionId: "project.mruCycleOlder",
+    combo: "Cmd+Alt+-",
+    scope: "global",
+    priority: 10,
+    description: "Switch to previous project (hold to scrub older)",
+    category: "Project",
+  },
+  {
+    actionId: "project.mruCycleNewer",
+    combo: "Cmd+Alt+=",
+    scope: "global",
+    priority: 10,
+    description: "Switch to previous project (hold to scrub newer)",
+    category: "Project",
+  },
+  {
     actionId: "notes.openPalette",
     combo: "Cmd+Shift+N",
     scope: "global",

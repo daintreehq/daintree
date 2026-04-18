@@ -83,6 +83,9 @@ export type { ActionPaletteItem, UseActionPaletteReturn } from "./useActionPalet
 
 export { useDoubleShift } from "./useDoubleShift";
 
+export { useProjectMruSwitcher } from "./useProjectMruSwitcher";
+export type { UseProjectMruSwitcherReturn } from "./useProjectMruSwitcher";
+
 export { useMainProcessToastListener } from "./useMainProcessToastListener";
 
 export { useAnimatedPresence } from "./useAnimatedPresence";
