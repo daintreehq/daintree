@@ -48,9 +48,8 @@ function preservePreviousSessionTail(basePath: string): void {
     try {
       let cursor = stats.size;
       let buffer = Buffer.alloc(0);
-      let firstIteration = true;
 
-      while (lines.length < PREVIOUS_SESSION_TAIL_LINES && cursor > 0) {
+      while (lines.length < PREVIOUS_SESSION_TAIL_LINES - 1 && cursor > 0) {
         const bytesToRead = Math.min(cursor, CHUNK_SIZE);
         cursor -= bytesToRead;
 
@@ -65,23 +64,27 @@ function preservePreviousSessionTail(basePath: string): void {
 
         buffer = Buffer.from(lastLine, "utf8");
 
-        if (firstIteration && lastLine.trim()) {
-          lines.unshift(lastLine.trim());
-          firstIteration = false;
-        }
-
         for (let i = splitLines.length - 1; i >= 0; i--) {
           const line = splitLines[i].trim();
           if (line) {
-            lines.unshift(line);
+            lines.push(line);
           }
-          if (lines.length >= PREVIOUS_SESSION_TAIL_LINES) {
+          if (lines.length >= PREVIOUS_SESSION_TAIL_LINES - 1) {
             break;
           }
         }
       }
 
-      previousSessionTail = lines.slice(0, PREVIOUS_SESSION_TAIL_LINES).join("\n");
+      lines.reverse();
+
+      if (buffer.length > 0) {
+        const lastLine = buffer.toString("utf8").trim();
+        if (lastLine) {
+          lines.push(lastLine);
+        }
+      }
+
+      previousSessionTail = lines.join("\n");
     } finally {
       closeSync(handle);
     }
@@ -90,19 +93,20 @@ function preservePreviousSessionTail(basePath: string): void {
   }
 }
 
-function rotateLogsIfNeeded(): void {
-  if (isRotating) return;
+function rotateLogsIfNeeded(): boolean {
+  if (isRotating) return true;
 
   const logFile = getLogFilePath();
   try {
-    if (!existsSync(logFile)) return;
+    if (!existsSync(logFile)) return true;
 
     const stats = statSync(logFile);
-    if (stats.size < ROTATION_MAX_SIZE) return;
+    if (stats.size < ROTATION_MAX_SIZE) return true;
 
     isRotating = true;
 
     const logDir = getLogDirectory();
+    let rotationSucceeded = true;
 
     for (let i = ROTATION_MAX_FILES - 1; i >= 1; i--) {
       const oldFile = join(logDir, `daintree.log.${i}`);
@@ -113,13 +117,13 @@ function rotateLogsIfNeeded(): void {
           try {
             unlinkSync(oldFile);
           } catch {
-            // Skip if locked
+            rotationSucceeded = false;
           }
         } else {
           try {
             resilientRenameSync(oldFile, newFile);
           } catch {
-            // Skip if locked
+            rotationSucceeded = false;
           }
         }
       }
@@ -128,10 +132,12 @@ function rotateLogsIfNeeded(): void {
     try {
       resilientRenameSync(logFile, join(logDir, "daintree.log.1"));
     } catch {
-      // Skip if locked
+      rotationSucceeded = false;
     }
+
+    return rotationSucceeded;
   } catch {
-    // Ignore rotation errors
+    return false;
   } finally {
     isRotating = false;
   }
@@ -391,7 +397,9 @@ function writeToLogFile(level: string, message: string, context?: LogContext): v
       mkdirSync(logDir, { recursive: true });
     }
 
-    rotateLogsIfNeeded();
+    if (!rotateLogsIfNeeded()) {
+      return;
+    }
     appendFileSync(logFile, logLine, "utf8");
   } catch (_error) {
     // ignore
