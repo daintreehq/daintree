@@ -1,6 +1,8 @@
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import { z } from "zod";
 import { terminalClient } from "@/clients";
+import { openBulkCommandPalette } from "@/components/BulkCommandCenter/BulkCommandPalette";
+import { openSendToAgentPalette } from "@/hooks/useSendToAgentPalette";
 import { openPanelContextMenu } from "@/lib/panelContextMenu";
 import { terminalInstanceService } from "@/services/terminal/TerminalInstanceService";
 import { useFleetArmingStore, isFleetArmEligible } from "@/store/fleetArmingStore";
@@ -158,10 +160,6 @@ export function registerTerminalInputActions(
     danger: "safe",
     scope: "renderer",
     run: async () => {
-      // Lazy-loaded: BulkCommandPalette is a heavy React component pulled in only when the
-      // user opens the bulk-operations palette — keeps its transitive graph out of startup.
-      const { openBulkCommandPalette } =
-        await import("@/components/BulkCommandCenter/BulkCommandPalette");
       openBulkCommandPalette();
     },
   }));
@@ -185,9 +183,6 @@ export function registerTerminalInputActions(
       if (!terminal) return;
       if (terminal.kind && !panelKindHasPty(terminal.kind)) return;
 
-      // Lazy-loaded: useSendToAgentPalette pulls in fuse.js and a React hook graph — only
-      // needed when the user triggers the send-to-agent flow.
-      const { openSendToAgentPalette } = await import("@/hooks/useSendToAgentPalette");
       openSendToAgentPalette(sourceId);
     },
   }));
