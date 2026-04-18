@@ -7,6 +7,11 @@ import { store } from "../../store.js";
 import { soundService } from "../../services/SoundService.js";
 import { preAgentSnapshotService } from "../../services/PreAgentSnapshotService.js";
 import type { SnapshotInfo, SnapshotRevertResult } from "../../../shared/types/ipc/git.js";
+import type { GitOperationReason, RecoveryAction } from "../../../shared/types/ipc/errors.js";
+import {
+  classifyGitError,
+  getGitRecoveryAction,
+} from "../../../shared/utils/gitOperationErrors.js";
 
 interface StagingFileEntry {
   path: string;
@@ -118,7 +123,12 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
   const handlePush = async (payload: {
     cwd: string;
     setUpstream?: boolean;
-  }): Promise<{ success: boolean; error?: string }> => {
+  }): Promise<{
+    success: boolean;
+    error?: string;
+    gitReason?: GitOperationReason;
+    recoveryAction?: RecoveryAction;
+  }> => {
     checkRateLimit(CHANNELS.GIT_PUSH, 5, 10_000);
     validateCwd(payload?.cwd);
 
@@ -134,6 +144,8 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
         try {
           await git.push();
         } catch (pushErr) {
+          // Keep the narrow upstream-missing auto-retry via substring match —
+          // classifier's `config-missing` also covers unrelated config errors.
           const msg = pushErr instanceof Error ? pushErr.message : String(pushErr);
           if (msg.includes("no upstream branch") || msg.includes("has no upstream")) {
             await git.push(["--set-upstream", "origin", branchName]);
@@ -151,7 +163,13 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
         soundService.play("git-push-error");
       }
       const errorMessage = error instanceof Error ? error.message : String(error);
-      return { success: false, error: errorMessage };
+      const gitReason = classifyGitError(error);
+      return {
+        success: false,
+        error: errorMessage,
+        gitReason,
+        recoveryAction: getGitRecoveryAction(gitReason),
+      };
     }
   };
   handlers.push(typedHandle(CHANNELS.GIT_PUSH, handlePush));

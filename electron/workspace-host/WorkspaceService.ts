@@ -5,6 +5,7 @@ import { join as pathJoin, dirname, resolve as pathResolve, isAbsolute } from "p
 import { generateProjectId, settingsFilePath } from "../services/projectStorePaths.js";
 import { SimpleGit, BranchSummary } from "simple-git";
 import { createHardenedGit, createAuthenticatedGit } from "../utils/hardenedGit.js";
+import { classifyGitError, getGitRecoveryAction } from "../../shared/utils/gitOperationErrors.js";
 import type { Worktree, WorktreeResourceStatus } from "../../shared/types/worktree.js";
 import type {
   WorkspaceHostEvent,
@@ -1330,11 +1331,14 @@ export class WorkspaceService {
       await git.raw(["fetch", "origin", `pull/${prNumber}/head:${headRefName}`]);
       this.sendEvent({ type: "fetch-pr-branch-result", requestId, success: true });
     } catch (error) {
+      const gitReason = classifyGitError(error);
       this.sendEvent({
         type: "fetch-pr-branch-result",
         requestId,
         success: false,
         error: (error as Error).message,
+        gitReason,
+        recoveryAction: getGitRecoveryAction(gitReason),
       });
     }
   }

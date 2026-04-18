@@ -170,12 +170,16 @@ describe("WorkspaceService.fetchPRBranch", () => {
       requestId: "req-2",
       success: false,
       error: "fatal: couldn't find remote ref pull/99999/head",
+      gitReason: "pathspec-invalid",
+      recoveryAction: undefined,
     });
   });
 
   it("should handle network errors gracefully", async () => {
     mockSimpleGit.raw.mockRejectedValueOnce(
-      new Error("fatal: unable to access 'https://github.com/...'")
+      new Error(
+        "fatal: unable to access 'https://github.com/foo.git/': Could not resolve host: github.com"
+      )
     );
 
     await service.fetchPRBranch("req-3", "/test/root", 10, "some-branch");
@@ -184,7 +188,47 @@ describe("WorkspaceService.fetchPRBranch", () => {
       type: "fetch-pr-branch-result",
       requestId: "req-3",
       success: false,
-      error: "fatal: unable to access 'https://github.com/...'",
+      error:
+        "fatal: unable to access 'https://github.com/foo.git/': Could not resolve host: github.com",
+      gitReason: "network-unavailable",
+      recoveryAction: undefined,
     });
+  });
+
+  it("should include structured gitReason and recoveryAction on auth failure", async () => {
+    mockSimpleGit.raw.mockRejectedValueOnce(
+      new Error("remote: Authentication failed for 'https://github.com/foo/bar.git/'")
+    );
+
+    await service.fetchPRBranch("req-auth", "/test/root", 5, "branch");
+
+    expect(mockSendEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "fetch-pr-branch-result",
+        requestId: "req-auth",
+        success: false,
+        gitReason: "auth-failed",
+        recoveryAction: { label: "Sign in with GitHub", actionId: "github.auth" },
+      })
+    );
+  });
+
+  it("should classify network resolution failure", async () => {
+    mockSimpleGit.raw.mockRejectedValueOnce(
+      new Error(
+        "fatal: unable to access 'https://github.com/foo.git/': Could not resolve host: github.com"
+      )
+    );
+
+    await service.fetchPRBranch("req-net", "/test/root", 5, "branch");
+
+    expect(mockSendEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "fetch-pr-branch-result",
+        requestId: "req-net",
+        success: false,
+        gitReason: "network-unavailable",
+      })
+    );
   });
 });

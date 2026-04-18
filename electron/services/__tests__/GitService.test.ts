@@ -27,7 +27,7 @@ vi.mock("../../utils/logger.js", () => ({
 }));
 
 import { GitService } from "../GitService.js";
-import { GitError, WorktreeRemovedError } from "../../utils/errorTypes.js";
+import { GitError, GitOperationError, WorktreeRemovedError } from "../../utils/errorTypes.js";
 
 describe("GitService", () => {
   let tempDir: string;
@@ -119,6 +119,44 @@ describe("GitService", () => {
     const branches = await service.listBranches();
 
     expect(branches.map((branch) => branch.name)).toEqual(["main", "origin/main"]);
+  });
+
+  it("listBranches throws GitOperationError with classified reason on failure", async () => {
+    gitClientMock.branch.mockRejectedValue(new Error("fatal: not a git repository"));
+    const service = new GitService(tempDir);
+
+    let caught: unknown;
+    try {
+      await service.listBranches();
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(GitOperationError);
+    expect(caught).toBeInstanceOf(GitError);
+    const opError = caught as GitOperationError;
+    expect(opError.reason).toBe("not-a-repository");
+    expect(opError.op).toBe("list-branches");
+    expect(opError.context).toEqual(
+      expect.objectContaining({ cwd: tempDir, op: "list-branches", reason: "not-a-repository" })
+    );
+  });
+
+  it("listBranches classifies authentication failures", async () => {
+    gitClientMock.branch.mockRejectedValue(
+      new Error("remote: Authentication failed for 'https://github.com/foo/bar.git/'")
+    );
+    const service = new GitService(tempDir);
+
+    let caught: unknown;
+    try {
+      await service.listBranches();
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(GitOperationError);
+    expect((caught as GitOperationError).reason).toBe("auth-failed");
   });
 
   describe("compareWorktrees", () => {

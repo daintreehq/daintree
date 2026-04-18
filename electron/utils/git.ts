@@ -2,7 +2,7 @@ import { dirname, resolve } from "path";
 import { realpathSync, promises as fs } from "fs";
 import type { SimpleGit, StatusResult } from "simple-git";
 import type { FileChangeDetail, GitStatus, WorktreeChanges } from "../types/index.js";
-import { GitError, WorktreeRemovedError } from "./errorTypes.js";
+import { WorktreeRemovedError, toGitOperationError } from "./errorTypes.js";
 import { logWarn, logError } from "./logger.js";
 import { Cache } from "./cache.js";
 import { createHardenedGit } from "./hardenedGit.js";
@@ -454,8 +454,7 @@ export async function getWorktreeChangesWithStats(
         throw new WorktreeRemovedError(cwd, error instanceof Error ? error : undefined);
       }
 
-      const cause = error instanceof Error ? error : new Error(String(error));
-      const gitError = new GitError("Failed to get git worktree changes", { cwd }, cause);
+      const gitError = toGitOperationError(error, { cwd, op: "status" });
       logError("Git worktree changes operation failed", gitError, { cwd });
       throw gitError;
     }

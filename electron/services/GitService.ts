@@ -4,7 +4,7 @@ import { existsSync } from "fs";
 import { readFile, stat } from "fs/promises";
 import { logDebug, logError, logWarn } from "../utils/logger.js";
 import type { GitStatus, WorktreeChanges } from "../../shared/types/index.js";
-import { WorktreeRemovedError, GitError } from "../utils/errorTypes.js";
+import { WorktreeRemovedError, GitError, toGitOperationError } from "../utils/errorTypes.js";
 import type { CrossWorktreeDiffResult, CrossWorktreeFile } from "../../shared/types/ipc/git.js";
 import { createHardenedGit } from "../utils/hardenedGit.js";
 
@@ -62,7 +62,7 @@ export class GitService {
       return branches;
     } catch (error) {
       logError("Failed to list branches", { error: (error as Error).message });
-      throw new Error(`Failed to list branches: ${(error as Error).message}`);
+      throw toGitOperationError(error, { cwd: this.rootPath, op: "list-branches" });
     }
   }
 

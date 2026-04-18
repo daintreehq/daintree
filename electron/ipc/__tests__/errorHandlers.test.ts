@@ -1165,6 +1165,64 @@ describe("errorHandlers", () => {
       expect(sentError.recoveryHint).toBeUndefined();
     });
 
+    it("populates gitReason and recoveryAction for GitOperationError", async () => {
+      const CHANNELS = await getChannels();
+      const { GitOperationError } = await import("../../utils/errorTypes.js");
+      const mockWindow = createMockWindow();
+      registerErrorHandlers(null, null);
+
+      const spawn = vi.fn(() => {
+        throw new GitOperationError("auth-failed", "Authentication failed for remote", {
+          cwd: "/repo",
+          op: "push",
+        });
+      });
+      registerErrorHandlers(null, createPtyClientMock(spawn));
+
+      const retryHandler = getInvokeHandler(CHANNELS.ERROR_RETRY);
+      await retryHandler({} as never, {
+        errorId: "e",
+        action: "terminal",
+        args: { id: "t", cwd: "/" },
+      }).catch(() => {});
+
+      const sentError = mockWindow.webContents.send.mock.calls.find(
+        ([channel]: string[]) => channel === CHANNELS.ERROR_NOTIFY
+      )?.[1];
+      expect(sentError.gitReason).toBe("auth-failed");
+      expect(sentError.recoveryAction).toEqual({
+        label: "Sign in with GitHub",
+        actionId: "github.auth",
+      });
+      expect(sentError.recoveryHint).toContain("credentials");
+      expect(sentError.type).toBe("git");
+    });
+
+    it("leaves gitReason and recoveryAction undefined for plain GitError", async () => {
+      const CHANNELS = await getChannels();
+      const { GitError } = await import("../../utils/errorTypes.js");
+      const mockWindow = createMockWindow();
+      registerErrorHandlers(null, null);
+
+      const spawn = vi.fn(() => {
+        throw new GitError("fatal: not a git repository");
+      });
+      registerErrorHandlers(null, createPtyClientMock(spawn));
+
+      const retryHandler = getInvokeHandler(CHANNELS.ERROR_RETRY);
+      await retryHandler({} as never, {
+        errorId: "e",
+        action: "terminal",
+        args: { id: "t", cwd: "/" },
+      }).catch(() => {});
+
+      const sentError = mockWindow.webContents.send.mock.calls.find(
+        ([channel]: string[]) => channel === CHANNELS.ERROR_NOTIFY
+      )?.[1];
+      expect(sentError.gitReason).toBeUndefined();
+      expect(sentError.recoveryAction).toBeUndefined();
+    });
+
     it("returns reset hint for ECONNRESET", async () => {
       const CHANNELS = await getChannels();
       const mockWindow = createMockWindow();

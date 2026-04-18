@@ -316,7 +316,14 @@ export type WorkspaceHostEvent =
   // Branch operation responses
   | { type: "list-branches-result"; requestId: string; branches: BranchInfo[]; error?: string }
   | { type: "get-recent-branches-result"; requestId: string; branches: string[]; error?: string }
-  | { type: "fetch-pr-branch-result"; requestId: string; success: boolean; error?: string }
+  | {
+      type: "fetch-pr-branch-result";
+      requestId: string;
+      success: boolean;
+      error?: string;
+      gitReason?: import("./ipc/errors.js").GitOperationReason;
+      recoveryAction?: import("./ipc/errors.js").RecoveryAction;
+    }
   // Git operation responses
   | { type: "get-file-diff-result"; requestId: string; diff: string; error?: string }
   // Spontaneous updates (no requestId - these are pushed events)

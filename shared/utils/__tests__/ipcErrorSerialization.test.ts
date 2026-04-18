@@ -222,6 +222,44 @@ describe("round-trip serialization", () => {
     expect(restored.context).toEqual({ noteId: "n-1" });
     expect(restored.currentLastModified).toBe(12345);
   });
+
+  it("round-trips a GitOperationError discriminator via serialize -> structuredClone -> deserialize", () => {
+    // Shared-layer test synthesizes the GitOperationError shape without importing
+    // the electron/ module — shared/ must not depend on electron/.
+    //
+    // NOTE: electron/setup/security.ts strips `properties` from the IPC envelope in
+    // packaged builds. This test proves the `properties` bag survives a naive
+    // serialize/clone/deserialize cycle, which is what dev-mode IPC uses and what
+    // our renderer event payloads (e.g. fetch-pr-branch-result, handlePush return)
+    // use. In packaged builds we rely on top-level AppError.gitReason, not on the
+    // wrapped-error properties bag.
+    const original = Object.assign(new Error("fatal: not a git repository"), {
+      name: "GitOperationError",
+      context: { cwd: "/repo", op: "status", reason: "not-a-repository" },
+      reason: "not-a-repository",
+      op: "status",
+      rawMessage: "fatal: not a git repository",
+    });
+
+    const serialized = serializeError(original);
+    const cloned = structuredClone(serialized);
+    const restored = deserializeError(cloned) as Error & {
+      reason: string;
+      op: string;
+      rawMessage: string;
+      context: Record<string, unknown>;
+    };
+
+    expect(restored.name).toBe("GitOperationError");
+    expect(restored.reason).toBe("not-a-repository");
+    expect(restored.op).toBe("status");
+    expect(restored.rawMessage).toBe("fatal: not a git repository");
+    expect(restored.context).toEqual({
+      cwd: "/repo",
+      op: "status",
+      reason: "not-a-repository",
+    });
+  });
 });
 
 describe("wrapSuccess", () => {

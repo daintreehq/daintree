@@ -37,6 +37,39 @@ export function isIpcEnvelope(value: unknown): value is IpcEnvelope {
 /** Error type */
 export type ErrorType = "git" | "process" | "filesystem" | "network" | "config" | "unknown";
 
+/**
+ * Discriminated reason for a failed git operation. The classifier in
+ * `shared/utils/gitOperationErrors.ts` maps simple-git stderr output to one of
+ * these reasons so UI code can branch without substring-matching raw stderr.
+ */
+export type GitOperationReason =
+  | "auth-failed"
+  | "network-unavailable"
+  | "repository-not-found"
+  | "not-a-repository"
+  | "dubious-ownership"
+  | "config-missing"
+  | "worktree-dirty"
+  | "conflict-unresolved"
+  | "push-rejected-outdated"
+  | "push-rejected-policy"
+  | "pathspec-invalid"
+  | "lfs-missing"
+  | "hook-rejected"
+  | "system-io-error"
+  | "unknown";
+
+/**
+ * Structured contextual CTA for an error. `actionId` is dispatched via the
+ * renderer's ActionService when the user clicks the recovery button. All
+ * fields are plain primitives so the object survives structured clone.
+ */
+export interface RecoveryAction {
+  label: string;
+  actionId: string;
+  args?: Record<string, unknown>;
+}
+
 /** Action that can be retried after an error */
 export type RetryAction = "terminal" | "git" | "worktree";
 
@@ -84,4 +117,8 @@ export interface AppError {
   recoveryHint?: string;
   /** Retry progress state (set during active retry loop) */
   retryProgress?: { attempt: number; maxAttempts: number };
+  /** Classified reason when this error originated from a git operation */
+  gitReason?: GitOperationReason;
+  /** Structured CTA the renderer can surface alongside the error */
+  recoveryAction?: RecoveryAction;
 }

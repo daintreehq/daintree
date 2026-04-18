@@ -1,3 +1,6 @@
+import { classifyGitError, extractGitErrorMessage } from "../../shared/utils/gitOperationErrors.js";
+import type { GitOperationReason } from "../../shared/types/ipc/errors.js";
+
 export class DaintreeError extends Error {
   constructor(
     message: string,
@@ -14,6 +17,59 @@ export class GitError extends DaintreeError {
   constructor(message: string, context?: Record<string, unknown>, cause?: Error) {
     super(message, context, cause);
   }
+}
+
+/**
+ * Classified git failure. Extends GitError (not simple-git's GitError) so
+ * existing `instanceof GitError` checks keep working, while new callers can
+ * `instanceof GitOperationError` to branch on the discriminated `reason`.
+ */
+export class GitOperationError extends GitError {
+  readonly reason: GitOperationReason;
+  readonly op?: string;
+  readonly rawMessage: string;
+
+  constructor(
+    reason: GitOperationReason,
+    message: string,
+    opts: {
+      cwd?: string;
+      op?: string;
+      cause?: Error;
+      rawMessage?: string;
+      context?: Record<string, unknown>;
+    } = {}
+  ) {
+    const context: Record<string, unknown> = { ...(opts.context ?? {}) };
+    if (opts.cwd !== undefined) context.cwd = opts.cwd;
+    if (opts.op !== undefined) context.op = opts.op;
+    context.reason = reason;
+    super(message, context, opts.cause);
+    this.reason = reason;
+    this.op = opts.op;
+    this.rawMessage = opts.rawMessage ?? message;
+  }
+}
+
+/**
+ * Wrap any thrown value into a GitOperationError. If the value is already a
+ * GitOperationError it is returned unchanged so repeated wrapping at multiple
+ * layers is a no-op.
+ */
+export function toGitOperationError(
+  error: unknown,
+  opts: { cwd?: string; op?: string } = {}
+): GitOperationError {
+  if (error instanceof GitOperationError) return error;
+  const rawMessage = extractGitErrorMessage(error);
+  const reason = classifyGitError(error);
+  const cause = error instanceof Error ? error : undefined;
+  return new GitOperationError(reason, rawMessage || "Git operation failed", {
+    cwd: opts.cwd,
+    op: opts.op,
+    cause,
+    rawMessage,
+  });
 }
 
 /**

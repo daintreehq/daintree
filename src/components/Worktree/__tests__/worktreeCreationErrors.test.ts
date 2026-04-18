@@ -110,5 +110,35 @@ describe("mapCreationError", () => {
     expect(result.friendly).toBe(raw);
     expect(result.raw).toBe(raw);
     expect(result.recovery).toBeUndefined();
+    expect(result.gitReason).toBeUndefined();
+  });
+
+  it("tags existing worktree-specific overlays with a gitReason", () => {
+    const ioRaw = "fatal: could not create work tree dir '/no-permission/path': Permission denied";
+    expect(mapCreationError(ioRaw).gitReason).toBe("system-io-error");
+
+    const invalidRaw = "fatal: 'my..branch' is not a valid branch name";
+    expect(mapCreationError(invalidRaw).gitReason).toBe("pathspec-invalid");
+
+    const existsRaw = "fatal: '/path/to/work tree' already exists";
+    expect(mapCreationError(existsRaw).gitReason).toBe("system-io-error");
+  });
+
+  it("delegates to the shared classifier for generic git failures", () => {
+    const raw = "remote: Authentication failed for 'https://github.com/foo/bar.git/'";
+    const result = mapCreationError(raw);
+
+    expect(result.gitReason).toBe("auth-failed");
+    expect(result.friendly).toContain("credentials");
+    expect(result.raw).toBe(raw);
+  });
+
+  it("uses the classifier hint as the friendly message for network failures", () => {
+    const raw =
+      "fatal: unable to access 'https://github.com/foo.git/': Could not resolve host: github.com";
+    const result = mapCreationError(raw);
+
+    expect(result.gitReason).toBe("network-unavailable");
+    expect(result.friendly).toContain("internet connection");
   });
 });

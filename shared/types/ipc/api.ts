@@ -73,7 +73,13 @@ import type {
 } from "./system.js";
 import type { AppState, HydrateResult } from "./app.js";
 import type { LogEntry, LogFilterOptions } from "./logs.js";
-import type { RetryAction, AppError, RetryProgressPayload } from "./errors.js";
+import type {
+  RetryAction,
+  AppError,
+  RetryProgressPayload,
+  GitOperationReason,
+  RecoveryAction,
+} from "./errors.js";
 import type { EventRecord, EventFilterOptions } from "./events.js";
 import type {
   ProjectCloseResult,
@@ -743,7 +749,15 @@ export interface ElectronAPI {
     stageAll(cwd: string): Promise<void>;
     unstageAll(cwd: string): Promise<void>;
     commit(cwd: string, message: string): Promise<{ hash: string; summary: string }>;
-    push(cwd: string, setUpstream?: boolean): Promise<{ success: boolean; error?: string }>;
+    push(
+      cwd: string,
+      setUpstream?: boolean
+    ): Promise<{
+      success: boolean;
+      error?: string;
+      gitReason?: GitOperationReason;
+      recoveryAction?: RecoveryAction;
+    }>;
     getStagingStatus(cwd: string): Promise<StagingStatus>;
     compareWorktrees(
       cwd: string,

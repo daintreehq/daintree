@@ -6,6 +6,7 @@ import { getLogFilePath, logError as logErrorUtil } from "../utils/logger.js";
 import { broadcastToRenderer, typedHandle } from "./utils.js";
 import {
   GitError,
+  GitOperationError,
   ProcessError,
   FileSystemError,
   ConfigError,
@@ -13,6 +14,7 @@ import {
   getErrorDetails,
   isTransientError,
 } from "../utils/errorTypes.js";
+import { getGitRecoveryAction, getGitRecoveryHint } from "../../shared/utils/gitOperationErrors.js";
 import { store } from "../store.js";
 import { FAULT_MODE_ENABLED } from "./faultRegistry.js";
 import type { PtyClient } from "../services/PtyClient.js";
@@ -110,6 +112,10 @@ function getRecoveryHint(error: unknown): string | undefined {
     return "The terminal process could not start.";
   }
 
+  if (error instanceof GitOperationError) {
+    return getGitRecoveryHint(error.reason);
+  }
+
   if (error instanceof GitError) {
     const msg = error.message + (error.cause ? ` ${error.cause.message}` : "");
     if (msg.includes("not a git repository")) {
@@ -177,6 +183,9 @@ function createAppError(
   const details = getErrorDetails(error);
   const correlationId = randomUUID();
 
+  const gitReason = error instanceof GitOperationError ? error.reason : undefined;
+  const recoveryAction = gitReason ? getGitRecoveryAction(gitReason) : undefined;
+
   return {
     id: generateErrorId(),
     timestamp: Date.now(),
@@ -191,6 +200,8 @@ function createAppError(
     retryArgs: options.retryArgs,
     correlationId,
     recoveryHint: getRecoveryHint(error),
+    gitReason,
+    recoveryAction,
   };
 }
 
