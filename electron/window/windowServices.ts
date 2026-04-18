@@ -22,8 +22,7 @@ import { ProjectSwitchService } from "../services/ProjectSwitchService.js";
 import { projectStore } from "../services/ProjectStore.js";
 import { taskQueueService } from "../services/TaskQueueService.js";
 import { store } from "../store.js";
-import { MigrationRunner } from "../services/StoreMigrations.js";
-import { migrations } from "../services/migrations/index.js";
+import { LATEST_SCHEMA_VERSION, MigrationRunner } from "../services/StoreMigrations.js";
 import { initializeTelemetry } from "../services/TelemetryService.js";
 import { GitHubAuth } from "../services/github/GitHubAuth.js";
 import { secureStorage } from "../services/SecureStorage.js";
@@ -282,12 +281,20 @@ export async function setupWindowServices(
     globalServicesInitialized = true;
     markPerformance(PERF_MARKS.SERVICE_INIT_START);
 
-    // Store migrations
-    console.log("[MAIN] Running store migrations...");
+    // Store migrations — lazy-load the migrations barrel only when the store is
+    // out of sync with the latest schema version. In the common case (already up
+    // to date), this skips parsing ~15KB of migration modules on startup.
     try {
       const migrationRunner = new MigrationRunner(store);
-      await migrationRunner.runMigrations(migrations);
-      console.log("[MAIN] Store migrations completed");
+      const currentVersion = migrationRunner.getCurrentVersion();
+      if (currentVersion !== LATEST_SCHEMA_VERSION) {
+        console.log(
+          `[MAIN] Running store migrations (v${currentVersion} -> v${LATEST_SCHEMA_VERSION})...`
+        );
+        const { migrations } = await import("../services/migrations/index.js");
+        await migrationRunner.runMigrations(migrations);
+        console.log("[MAIN] Store migrations completed");
+      }
       markPerformance(PERF_MARKS.SERVICE_INIT_MIGRATIONS_DONE);
     } catch (error) {
       console.error("[MAIN] Store migration failed:", error);

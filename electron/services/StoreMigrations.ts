@@ -2,6 +2,8 @@ import Store from "electron-store";
 import type { StoreSchema } from "../store.js";
 import fs from "fs";
 
+export const LATEST_SCHEMA_VERSION = 14;
+
 export interface Migration {
   version: number;
   description: string;

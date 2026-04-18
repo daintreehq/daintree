@@ -2,8 +2,23 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import fs from "fs";
 import os from "os";
 import path from "path";
+
+// The migrations barrel transitively imports modules that touch `electron.app`
+// at module load (ProjectStore in migration003). Mock it before the barrel
+// import so the drift-guard test can read the full migrations list.
+vi.mock("electron", () => ({
+  app: {
+    getPath: vi.fn(() => os.tmpdir()),
+    on: vi.fn(),
+    getName: vi.fn(() => "daintree-test"),
+  },
+  BrowserWindow: { getAllWindows: vi.fn(() => []) },
+  ipcMain: { handle: vi.fn(), on: vi.fn(), removeAllListeners: vi.fn() },
+}));
+
 import type { Migration } from "../StoreMigrations.js";
-import { MigrationRunner } from "../StoreMigrations.js";
+import { LATEST_SCHEMA_VERSION, MigrationRunner } from "../StoreMigrations.js";
+import { migrations } from "../migrations/index.js";
 import { migration004 } from "../migrations/004-upgrade-correction-model.js";
 import { migration006 } from "../migrations/006-rename-theme-canopy-to-daintree.js";
 import { migration007 } from "../migrations/007-reduce-default-terminal-scrollback.js";
@@ -392,6 +407,11 @@ describe("MigrationRunner", () => {
       const after2 = store.data.notificationSettings as Record<string, unknown>;
       expect(after2).toEqual(after1);
     });
+  });
+
+  it("LATEST_SCHEMA_VERSION matches the highest version in the migrations barrel", () => {
+    const highest = Math.max(...migrations.map((m) => m.version));
+    expect(LATEST_SCHEMA_VERSION).toBe(highest);
   });
 
   it("does nothing when there are no pending migrations", async () => {
