@@ -2,6 +2,7 @@ import {
   forwardRef,
   useRef,
   useCallback,
+  useEffect,
   type ReactNode,
   type ComponentPropsWithoutRef,
   type Ref,
@@ -68,17 +69,22 @@ export function useScrollShadowOverlays(externalRef?: Ref<HTMLElement>) {
   const internalRef = useRef<HTMLElement>(null);
   const { canScrollUp, canScrollDown } = useVerticalScrollShadows(internalRef);
 
-  const ref = useCallback(
-    (el: HTMLElement | null) => {
-      (internalRef as React.MutableRefObject<HTMLElement | null>).current = el;
-      if (typeof externalRef === "function") {
-        externalRef(el);
-      } else if (externalRef) {
-        (externalRef as React.MutableRefObject<HTMLElement | null>).current = el;
-      }
-    },
-    [externalRef]
-  );
+  // Indirect the externalRef via a ref so the callback below doesn't mutate a
+  // hook argument directly — the React Compiler rejects that pattern.
+  const externalRefHolder = useRef<Ref<HTMLElement> | undefined>(externalRef);
+  useEffect(() => {
+    externalRefHolder.current = externalRef;
+  }, [externalRef]);
+
+  const ref = useCallback((el: HTMLElement | null) => {
+    (internalRef as React.MutableRefObject<HTMLElement | null>).current = el;
+    const ext = externalRefHolder.current;
+    if (typeof ext === "function") {
+      ext(el);
+    } else if (ext) {
+      (ext as React.MutableRefObject<HTMLElement | null>).current = el;
+    }
+  }, []);
 
   return {
     ref,

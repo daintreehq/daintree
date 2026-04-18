@@ -146,7 +146,7 @@ function TerminalPaneComponent({
   "use memo";
   const containerRef = useRef<HTMLDivElement>(null);
   const prevFocusedRef = useRef(isFocused);
-  const justFocusedUntilRef = useRef<number>(0);
+  const [justFocusedUntil, setJustFocusedUntil] = useState(0);
   const inputBarRef = useRef<HybridInputBarHandle>(null);
   const [dismissedRestartPrompt, setDismissedRestartPrompt] = useState(false);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
@@ -158,11 +158,10 @@ function TerminalPaneComponent({
   const processStartTimeRef = useRef<number>(0);
   const [inputTracker] = useState(() => new InputTracker());
 
-  if (isFocused && !prevFocusedRef.current) {
-    justFocusedUntilRef.current = performance.now() + 250;
-  }
-
   useEffect(() => {
+    if (isFocused && !prevFocusedRef.current) {
+      setJustFocusedUntil(performance.now() + 250);
+    }
     prevFocusedRef.current = isFocused;
   }, [isFocused]);
 
@@ -264,7 +263,7 @@ function TerminalPaneComponent({
     [id]
   );
   const isPinged = usePanelStore(pingedIdSelector);
-  const wasJustSelected = isPinged && isFocused && performance.now() < justFocusedUntilRef.current;
+  const wasJustSelected = isPinged && isFocused && performance.now() < justFocusedUntil;
 
   const terminalErrors = useErrorStore(
     useShallow((state) => state.errors.filter((e) => e.context?.terminalId === id && !e.dismissed))
@@ -418,7 +417,7 @@ function TerminalPaneComponent({
         }
       }
     },
-    [id, updateLastCommand]
+    [id, updateLastCommand, inputTracker]
   );
 
   useEffect(() => {

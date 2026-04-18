@@ -154,7 +154,11 @@ function XtermAdapterComponent({
     [terminalId]
   );
 
-  // Fallback fit for initial mount and visibility changes
+  // Fallback fit for initial mount and visibility changes. Uses a ref to
+  // break the RAF self-reference — the React Compiler rejects accessing
+  // `performFit` before its declaration, so the retry reads the latest
+  // performFit via performFitRef.current instead.
+  const performFitRef = useRef<(() => void) | null>(null);
   const performFit = useCallback(() => {
     const container = containerRef.current;
     if (!container) return;
@@ -166,7 +170,7 @@ function XtermAdapterComponent({
       }
       // Retry on next frame for drag/mount transitions where container isn't sized yet
       requestAnimationFrame(() => {
-        if (containerRef.current) performFit();
+        if (containerRef.current) performFitRef.current?.();
       });
       return;
     }
@@ -185,6 +189,9 @@ function XtermAdapterComponent({
       initialFitDoneRef.current = true;
     }
   }, [terminalId]);
+  useEffect(() => {
+    performFitRef.current = performFit;
+  }, [performFit]);
 
   useLayoutEffect(() => {
     const container = containerRef.current;

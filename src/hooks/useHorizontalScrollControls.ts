@@ -74,7 +74,7 @@ export function useHorizontalScrollControls(
       resizeObserver.disconnect();
       el.removeEventListener("scroll", throttledUpdate);
     };
-  }, [scrollRef.current, updateScrollState, throttledUpdate]);
+  }, [scrollRef, updateScrollState, throttledUpdate]);
 
   const scrollLeft = useCallback(() => {
     const el = scrollRef.current;
