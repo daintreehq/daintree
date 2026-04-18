@@ -10,6 +10,15 @@ export interface SentryBreadcrumb {
   [key: string]: unknown;
 }
 
+export interface SentryRequest {
+  url?: string;
+  headers?: Record<string, unknown>;
+  cookies?: unknown;
+  data?: unknown;
+  query_string?: unknown;
+  [key: string]: unknown;
+}
+
 export interface SentryEvent {
   exception?: {
     values?: Array<{
@@ -20,7 +29,7 @@ export interface SentryEvent {
     }>;
   };
   message?: string;
-  request?: { url?: string };
+  request?: SentryRequest;
   breadcrumbs?: SentryBreadcrumb[];
   extra?: Record<string, unknown>;
   [key: string]: unknown;
@@ -49,8 +58,11 @@ function sanitizeString(value: string): string {
 const MAX_DEEP_SANITIZE_DEPTH = 10;
 
 function sanitizeStringsDeep(value: unknown, depth = 0): unknown {
-  if (depth > MAX_DEEP_SANITIZE_DEPTH) return value;
+  // Scrub scalar strings regardless of depth — a secret nested beyond the
+  // recursion cap is still worth redacting. Only the descent into containers
+  // is stopped when depth overflows.
   if (typeof value === "string") return sanitizeString(value);
+  if (depth > MAX_DEEP_SANITIZE_DEPTH) return value;
   if (Array.isArray(value)) {
     return value.map((item) => sanitizeStringsDeep(item, depth + 1));
   }
@@ -69,10 +81,10 @@ export function sanitizeEvent(event: SentryEvent): SentryEvent | null {
   // silently. Fail closed on unexpected input rather than leaking unscrubbed
   // data by returning the event as-is.
   try {
-    if (event.exception?.values) {
+    if (Array.isArray(event.exception?.values)) {
       for (const ex of event.exception.values) {
         if (!ex || typeof ex !== "object") continue;
-        if (ex.stacktrace?.frames) {
+        if (Array.isArray(ex.stacktrace?.frames)) {
           for (const frame of ex.stacktrace.frames) {
             if (!frame || typeof frame !== "object") continue;
             if (frame.filename) frame.filename = sanitizeString(frame.filename);
@@ -85,16 +97,35 @@ export function sanitizeEvent(event: SentryEvent): SentryEvent | null {
     if (typeof event.message === "string") {
       event.message = sanitizeString(event.message);
     }
-    if (event.request?.url) {
-      try {
-        const u = new URL(event.request.url);
-        u.search = "";
-        u.hash = "";
-        u.username = "";
-        u.password = "";
-        event.request.url = u.toString();
-      } catch {
-        // not a valid URL, leave as-is
+    if (event.request) {
+      if (typeof event.request.url === "string") {
+        try {
+          const u = new URL(event.request.url);
+          u.search = "";
+          u.hash = "";
+          u.username = "";
+          u.password = "";
+          event.request.url = u.toString();
+        } catch {
+          // Not parseable as an absolute URL (relative path, mailto:, etc.)
+          // Still scrub any inline free-text secrets before giving up.
+          event.request.url = sanitizeString(event.request.url);
+        }
+      }
+      if (event.request.headers && typeof event.request.headers === "object") {
+        event.request.headers = sanitizeStringsDeep(event.request.headers) as Record<
+          string,
+          unknown
+        >;
+      }
+      if (event.request.cookies !== undefined) {
+        event.request.cookies = sanitizeStringsDeep(event.request.cookies);
+      }
+      if (event.request.data !== undefined) {
+        event.request.data = sanitizeStringsDeep(event.request.data);
+      }
+      if (event.request.query_string !== undefined) {
+        event.request.query_string = sanitizeStringsDeep(event.request.query_string);
       }
     }
     if (Array.isArray(event.breadcrumbs)) {
