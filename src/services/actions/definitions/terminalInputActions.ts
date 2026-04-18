@@ -1,8 +1,13 @@
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import { z } from "zod";
+import { terminalClient } from "@/clients";
 import { openPanelContextMenu } from "@/lib/panelContextMenu";
+import { terminalInstanceService } from "@/services/terminal/TerminalInstanceService";
+import { useFleetArmingStore, isFleetArmEligible } from "@/store/fleetArmingStore";
 import { usePanelStore } from "@/store/panelStore";
+import { triggerPopStash, triggerStashInput } from "@/store/terminalInputStore";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
+import { formatWithBracketedPaste } from "@shared/utils/terminalInputProtocol";
 export function registerTerminalInputActions(
   actions: ActionRegistry,
   callbacks: ActionCallbacks
@@ -37,8 +42,6 @@ export function registerTerminalInputActions(
       const state = usePanelStore.getState();
       const targetId = terminalId ?? state.focusedId;
       if (!targetId) return;
-      const { terminalInstanceService } =
-        await import("@/services/terminal/TerminalInstanceService");
       const managed = terminalInstanceService.get(targetId);
       if (managed?.terminal) {
         const selection = managed.terminal.getSelection();
@@ -65,15 +68,11 @@ export function registerTerminalInputActions(
       if (!targetId) return;
       const terminal = state.panelsById[targetId];
       if (terminal?.isInputLocked) return;
-      const { terminalInstanceService } =
-        await import("@/services/terminal/TerminalInstanceService");
       const managed = terminalInstanceService.get(targetId);
       if (!managed || managed.isInputLocked) return;
       try {
         const text = await navigator.clipboard.readText();
         if (!text) return;
-        const { terminalClient } = await import("@/clients");
-        const { formatWithBracketedPaste } = await import("@shared/utils/terminalInputProtocol");
         if (managed.terminal.modes.bracketedPasteMode) {
           terminalClient.write(targetId, formatWithBracketedPaste(text));
         } else {
@@ -129,7 +128,6 @@ export function registerTerminalInputActions(
     danger: "safe",
     scope: "renderer",
     run: async () => {
-      const { triggerStashInput } = await import("@/store/terminalInputStore");
       const state = usePanelStore.getState();
       const targetId = state.focusedId;
       if (targetId) triggerStashInput(targetId);
@@ -145,7 +143,6 @@ export function registerTerminalInputActions(
     danger: "safe",
     scope: "renderer",
     run: async () => {
-      const { triggerPopStash } = await import("@/store/terminalInputStore");
       const state = usePanelStore.getState();
       const targetId = state.focusedId;
       if (targetId) triggerPopStash(targetId);
@@ -161,6 +158,8 @@ export function registerTerminalInputActions(
     danger: "safe",
     scope: "renderer",
     run: async () => {
+      // Lazy-loaded: BulkCommandPalette is a heavy React component pulled in only when the
+      // user opens the bulk-operations palette — keeps its transitive graph out of startup.
       const { openBulkCommandPalette } =
         await import("@/components/BulkCommandCenter/BulkCommandPalette");
       openBulkCommandPalette();
@@ -186,6 +185,8 @@ export function registerTerminalInputActions(
       if (!terminal) return;
       if (terminal.kind && !panelKindHasPty(terminal.kind)) return;
 
+      // Lazy-loaded: useSendToAgentPalette pulls in fuse.js and a React hook graph — only
+      // needed when the user triggers the send-to-agent flow.
       const { openSendToAgentPalette } = await import("@/hooks/useSendToAgentPalette");
       openSendToAgentPalette(sourceId);
     },
@@ -203,7 +204,6 @@ export function registerTerminalInputActions(
     run: async (args: unknown) => {
       const { terminalId } = args as { terminalId: string };
       const terminal = usePanelStore.getState().panelsById[terminalId];
-      const { useFleetArmingStore, isFleetArmEligible } = await import("@/store/fleetArmingStore");
       if (!isFleetArmEligible(terminal)) return;
       useFleetArmingStore.getState().armId(terminalId);
     },
@@ -220,7 +220,6 @@ export function registerTerminalInputActions(
     argsSchema: z.object({ terminalId: z.string() }),
     run: async (args: unknown) => {
       const { terminalId } = args as { terminalId: string };
-      const { useFleetArmingStore } = await import("@/store/fleetArmingStore");
       useFleetArmingStore.getState().disarmId(terminalId);
     },
   }));
@@ -234,7 +233,6 @@ export function registerTerminalInputActions(
     danger: "safe",
     scope: "renderer",
     run: async () => {
-      const { useFleetArmingStore } = await import("@/store/fleetArmingStore");
       useFleetArmingStore.getState().clear();
     },
   }));
@@ -262,7 +260,6 @@ export function registerTerminalInputActions(
         scope?: "current" | "all";
         extend?: boolean;
       };
-      const { useFleetArmingStore } = await import("@/store/fleetArmingStore");
       useFleetArmingStore.getState().armByState(state, scope, extend);
     },
   }));
@@ -278,7 +275,6 @@ export function registerTerminalInputActions(
     argsSchema: z.object({ scope: z.enum(["current", "all"]).optional() }).optional(),
     run: async (args: unknown) => {
       const { scope = "current" } = (args ?? {}) as { scope?: "current" | "all" };
-      const { useFleetArmingStore } = await import("@/store/fleetArmingStore");
       useFleetArmingStore.getState().armAll(scope);
     },
   }));
@@ -292,7 +288,6 @@ export function registerTerminalInputActions(
     danger: "safe",
     scope: "renderer",
     run: async () => {
-      const { useFleetArmingStore } = await import("@/store/fleetArmingStore");
       useFleetArmingStore.getState().armAll("current");
     },
   }));

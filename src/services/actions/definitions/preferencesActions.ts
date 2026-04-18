@@ -10,10 +10,13 @@ import {
   worktreeConfigClient,
 } from "@/clients";
 import { notify } from "@/lib/notify";
+import { actionService } from "@/services/ActionService";
 import { keybindingService } from "@/services/KeybindingService";
 import { useAgentPreferencesStore } from "@/store/agentPreferencesStore";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
+import { useHelpPanelStore } from "@/store/helpPanelStore";
+import { ASSISTANT_FAST_MODELS, getEffectiveAgentConfig } from "@shared/config/agentRegistry";
 import { getAgentSettingsEntry } from "@shared/types";
 import { getDefaultAgentId } from "@/lib/resolveAgentId";
 import { usePerformanceModeStore } from "@/store/performanceModeStore";
@@ -678,8 +681,6 @@ export function registerPreferencesActions(
       const agentSettings = useAgentSettingsStore.getState().settings;
       const agentEntry = getAgentSettingsEntry(agentSettings, agentId);
       const storedModel = agentEntry.assistantModelId as string | undefined;
-      const { getEffectiveAgentConfig, ASSISTANT_FAST_MODELS } =
-        await import("@shared/config/agentRegistry");
       const agentCfg = getEffectiveAgentConfig(agentId);
       let model: string | undefined;
       if (storedModel && agentCfg?.models?.some((m) => m.id === storedModel)) {
@@ -692,7 +693,6 @@ export function registerPreferencesActions(
       const helpPrompt =
         "I need help with Daintree, an Electron-based IDE for orchestrating AI coding agents. Please briefly tell me how you can help.";
 
-      const { actionService } = await import("@/services/ActionService");
       const result = await actionService.dispatch<{ terminalId: string | null }>(
         "agent.launch",
         { agentId, cwd: folderPath, location: "dock", prompt: helpPrompt, ...(model && { model }) },
@@ -700,7 +700,6 @@ export function registerPreferencesActions(
       );
 
       // Store the terminal in the help panel
-      const { useHelpPanelStore } = await import("@/store/helpPanelStore");
       if (result.ok && result.result?.terminalId) {
         useHelpPanelStore.getState().setTerminal(result.result.terminalId, agentId);
         useHelpPanelStore.getState().setOpen(true);
@@ -718,7 +717,6 @@ export function registerPreferencesActions(
     danger: "safe",
     scope: "renderer",
     run: async () => {
-      const { useHelpPanelStore } = await import("@/store/helpPanelStore");
       useHelpPanelStore.getState().toggle();
     },
   }));

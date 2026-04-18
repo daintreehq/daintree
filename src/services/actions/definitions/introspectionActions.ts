@@ -1,8 +1,11 @@
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import type { ActionContext } from "@shared/types/actions";
 import { z } from "zod";
+import { actionService } from "@/services/ActionService";
 import { usePanelStore } from "@/store/panelStore";
+import { usePortalStore } from "@/store/portalStore";
 import { useProjectStore } from "@/store/projectStore";
+import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { listPersistedStores } from "@/store/persistence/persistedStoreRegistry";
 import { readLocalStorageItemSafely } from "@/store/persistence/safeStorage";
@@ -50,7 +53,6 @@ export function registerIntrospectionActions(
     run: async (args: unknown, ctx: ActionContext) => {
       const { category, search, enabledOnly } =
         (args as { category?: string; search?: string; enabledOnly?: boolean } | undefined) ?? {};
-      const { actionService } = await import("@/services/ActionService");
       let manifest = actionService.list(ctx);
 
       if (category) {
@@ -83,9 +85,6 @@ export function registerIntrospectionActions(
     danger: "safe",
     scope: "renderer",
     run: async () => {
-      const { useWorktreeSelectionStore } = await import("@/store/worktreeStore");
-      const { usePortalStore } = await import("@/store/portalStore");
-
       const project = useProjectStore.getState().currentProject;
       const terminalState = usePanelStore.getState();
       const worktreeSelection = useWorktreeSelectionStore.getState();

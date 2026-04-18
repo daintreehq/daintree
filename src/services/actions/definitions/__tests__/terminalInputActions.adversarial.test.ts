@@ -13,6 +13,22 @@ const bracketedMock = vi.hoisted(() => ({
   formatWithBracketedPaste: vi.fn((t: string) => `<BP>${t}</BP>`),
 }));
 const sendToAgentMock = vi.hoisted(() => ({ openSendToAgentPalette: vi.fn() }));
+const terminalInputStoreMock = vi.hoisted(() => ({
+  triggerStashInput: vi.fn(),
+  triggerPopStash: vi.fn(),
+}));
+const fleetArmingMock = vi.hoisted(() => ({
+  useFleetArmingStore: {
+    getState: vi.fn(() => ({
+      armId: vi.fn(),
+      disarmId: vi.fn(),
+      clear: vi.fn(),
+      armByState: vi.fn(),
+      armAll: vi.fn(),
+    })),
+  },
+  isFleetArmEligible: vi.fn(() => false),
+}));
 
 vi.mock("@/store/panelStore", () => ({
   usePanelStore: { getState: panelStoreMock.getState },
@@ -24,6 +40,8 @@ vi.mock("@/services/terminal/TerminalInstanceService", () => ({
 vi.mock("@/clients", () => ({ terminalClient: terminalClientMock }));
 vi.mock("@shared/utils/terminalInputProtocol", () => bracketedMock);
 vi.mock("@/hooks/useSendToAgentPalette", () => sendToAgentMock);
+vi.mock("@/store/terminalInputStore", () => terminalInputStoreMock);
+vi.mock("@/store/fleetArmingStore", () => fleetArmingMock);
 vi.mock("@shared/config/panelKindRegistry", () => ({
   panelKindHasPty: (kind: string) => kind === "terminal" || kind === "agent",
 }));

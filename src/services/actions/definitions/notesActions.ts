@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { notesClient } from "@/clients/notesClient";
+import { usePanelStore } from "@/store/panelStore";
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 
 export function registerNotesActions(actions: ActionRegistry, _callbacks: ActionCallbacks): void {
@@ -58,7 +59,6 @@ export function registerNotesActions(actions: ActionRegistry, _callbacks: Action
         await notesClient.write(note.path, content, note.metadata);
       }
       if (openPanel) {
-        const { usePanelStore } = await import("@/store/panelStore");
         const resolvedScope = noteScope ?? "project";
         await usePanelStore.getState().addPanel({
           kind: "notes",

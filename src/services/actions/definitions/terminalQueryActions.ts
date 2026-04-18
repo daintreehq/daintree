@@ -1,6 +1,7 @@
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import { z } from "zod";
 import { stripAnsiCodes } from "@shared/utils/artifactParser";
+import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 import { terminalClient } from "@/clients";
 import { usePanelStore, type TerminalInstance } from "@/store/panelStore";
 export function registerTerminalQueryActions(
@@ -159,7 +160,6 @@ export function registerTerminalQueryActions(
       }
 
       // Check if terminal kind supports PTY (must have a shell to send commands to)
-      const { panelKindHasPty } = await import("@shared/config/panelKindRegistry");
       const kind = terminal.kind ?? "terminal";
       if (!panelKindHasPty(kind)) {
         throw new Error(`Terminal kind "${kind}" does not support command execution`);

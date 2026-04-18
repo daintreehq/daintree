@@ -212,6 +212,10 @@ vi.mock("@/services/TerminalInstanceService", () => ({
   terminalInstanceService: mocks.terminalInstanceService,
 }));
 
+vi.mock("@/services/terminal/TerminalInstanceService", () => ({
+  terminalInstanceService: mocks.terminalInstanceService,
+}));
+
 vi.mock("@/services/ActionService", () => ({
   actionService: mocks.actionService,
 }));

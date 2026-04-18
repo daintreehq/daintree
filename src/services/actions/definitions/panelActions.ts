@@ -1,5 +1,6 @@
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import { z } from "zod";
+import { PORTAL_DEFAULT_WIDTH } from "@shared/types";
 import { systemClient } from "@/clients";
 import { getAIAgentInfo } from "@/lib/aiAgentDetection";
 import { getPortalPlaceholderBounds } from "@/lib/portalBounds";
@@ -812,7 +813,6 @@ export function registerPanelActions(actions: ActionRegistry, callbacks: ActionC
     danger: "safe",
     scope: "renderer",
     run: async () => {
-      const { PORTAL_DEFAULT_WIDTH } = await import("@shared/types");
       usePortalStore.getState().setWidth(PORTAL_DEFAULT_WIDTH);
     },
   }));

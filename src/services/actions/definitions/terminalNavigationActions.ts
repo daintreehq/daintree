@@ -2,6 +2,7 @@ import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import { z } from "zod";
 import type { ActionId } from "@shared/types/actions";
 import { usePanelStore } from "@/store/panelStore";
+import { terminalInstanceService } from "@/services/terminal/TerminalInstanceService";
 export function registerTerminalNavigationActions(
   actions: ActionRegistry,
   callbacks: ActionCallbacks
@@ -182,8 +183,6 @@ export function registerTerminalNavigationActions(
     run: async () => {
       const focusedId = usePanelStore.getState().focusedId;
       if (!focusedId) return;
-      const { terminalInstanceService } =
-        await import("@/services/terminal/TerminalInstanceService");
       terminalInstanceService.scrollToLastActivity(focusedId);
     },
   }));
