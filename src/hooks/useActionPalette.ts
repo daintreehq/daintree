@@ -4,7 +4,7 @@ import { useShallow } from "zustand/react/shallow";
 import { actionService } from "@/services/ActionService";
 import { keybindingService } from "@/services/KeybindingService";
 import { notify } from "@/lib/notify";
-import type { ActionManifestEntry } from "@shared/types/actions";
+import type { ActionContext, ActionManifestEntry } from "@shared/types/actions";
 import { usePaletteStore } from "@/store/paletteStore";
 import { useActionMruStore } from "@/store/actionMruStore";
 import { useSearchablePalette } from "./useSearchablePalette";
@@ -48,6 +48,44 @@ const FUSE_OPTIONS: IFuseOptions<ActionPaletteItem> = {
 
 const MAX_RESULTS = 20;
 const FUSE_SCORE_EPSILON = 0.001;
+const CONTEXT_BOOST_FACTOR = 0.08;
+
+function getBoostedCategories(ctx: ActionContext): Set<string> {
+  const boosted = new Set<string>();
+
+  switch (ctx.focusedTerminalKind) {
+    case "terminal":
+      boosted.add("terminal");
+      boosted.add("panel");
+      break;
+    case "agent":
+      boosted.add("terminal");
+      boosted.add("agent");
+      boosted.add("panel");
+      break;
+    case "browser":
+      boosted.add("browser");
+      boosted.add("panel");
+      break;
+    case "notes":
+      boosted.add("notes");
+      boosted.add("panel");
+      break;
+  }
+
+  if (typeof ctx.focusedWorktreeId === "string" && ctx.focusedWorktreeId.length > 0) {
+    boosted.add("worktree");
+    boosted.add("git");
+    boosted.add("github");
+  }
+
+  if (ctx.isSettingsOpen === true) {
+    boosted.add("settings");
+    boosted.add("preferences");
+  }
+
+  return boosted;
+}
 
 function toActionPaletteItem(entry: ActionManifestEntry): ActionPaletteItem {
   const title =
@@ -99,11 +137,14 @@ export function useActionPalette(): UseActionPaletteReturn {
         });
       }
 
+      const boostedCategories = getBoostedCategories(actionService.getContext());
+
       const fuseResults = fuse.search(query);
       return fuseResults
         .map((r) => {
           const frecencyScore = frecencyScoreMap.get(r.item.id) ?? 0;
-          return { item: r.item, fuseScore: r.score ?? 1, frecencyScore };
+          const contextBoost = boostedCategories.has(r.item.category) ? CONTEXT_BOOST_FACTOR : 0;
+          return { item: r.item, fuseScore: (r.score ?? 1) - contextBoost, frecencyScore };
         })
         .sort((a, b) => {
           if (a.item.enabled !== b.item.enabled) return a.item.enabled ? -1 : 1;

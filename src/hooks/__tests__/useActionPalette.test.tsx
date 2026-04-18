@@ -2,16 +2,18 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { listMock, dispatchMock, getDisplayComboMock } = vi.hoisted(() => ({
+const { listMock, dispatchMock, getDisplayComboMock, getContextMock } = vi.hoisted(() => ({
   listMock: vi.fn(),
   dispatchMock: vi.fn(),
   getDisplayComboMock: vi.fn(() => ""),
+  getContextMock: vi.fn(),
 }));
 
 vi.mock("@/services/ActionService", () => ({
   actionService: {
     list: listMock,
     dispatch: dispatchMock,
+    getContext: getContextMock,
   },
 }));
 
@@ -51,6 +53,7 @@ function makeEntry(
 describe("useActionPalette", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    getContextMock.mockReturnValue({});
     usePaletteStore.setState({ activePaletteId: null });
     useActionMruStore.setState({ actionFrecencyEntries: new Map() });
   });
@@ -223,5 +226,235 @@ describe("useActionPalette", () => {
     );
 
     expect(result.current.results[0]!.id).toBe("action.terminal.close");
+  });
+
+  describe("context-aware ranking", () => {
+    it("boosts terminal and panel categories when a terminal panel is focused", async () => {
+      listMock.mockReturnValue([
+        makeEntry("terminal.close", "Close", true, "terminal"),
+        makeEntry("browser.close", "Close", true, "browser"),
+        makeEntry("panel.close", "Close", true, "panel"),
+      ]);
+      getContextMock.mockReturnValue({ focusedTerminalKind: "terminal" });
+
+      const { result } = renderHook(() => useActionPalette());
+      act(() => result.current.open());
+      act(() => result.current.setQuery("close"));
+
+      await waitFor(() => expect(result.current.results.length).toBe(3), { timeout: 2000 });
+
+      const ids = result.current.results.map((r) => r.id);
+      expect(ids.indexOf("terminal.close")).toBeLessThan(ids.indexOf("browser.close"));
+      expect(ids.indexOf("panel.close")).toBeLessThan(ids.indexOf("browser.close"));
+    });
+
+    it("boosts terminal, agent, and panel categories when an agent panel is focused", async () => {
+      listMock.mockReturnValue([
+        makeEntry("agent.close", "Close", true, "agent"),
+        makeEntry("terminal.close", "Close", true, "terminal"),
+        makeEntry("panel.close", "Close", true, "panel"),
+        makeEntry("browser.close", "Close", true, "browser"),
+      ]);
+      getContextMock.mockReturnValue({ focusedTerminalKind: "agent" });
+
+      const { result } = renderHook(() => useActionPalette());
+      act(() => result.current.open());
+      act(() => result.current.setQuery("close"));
+
+      await waitFor(() => expect(result.current.results.length).toBe(4), { timeout: 2000 });
+
+      const ids = result.current.results.map((r) => r.id);
+      expect(ids.indexOf("browser.close")).toBe(3);
+      expect(ids).toContain("agent.close");
+      expect(ids).toContain("terminal.close");
+      expect(ids).toContain("panel.close");
+    });
+
+    it("boosts browser and panel categories when a browser panel is focused", async () => {
+      listMock.mockReturnValue([
+        makeEntry("terminal.close", "Close", true, "terminal"),
+        makeEntry("browser.close", "Close", true, "browser"),
+      ]);
+      getContextMock.mockReturnValue({ focusedTerminalKind: "browser" });
+
+      const { result } = renderHook(() => useActionPalette());
+      act(() => result.current.open());
+      act(() => result.current.setQuery("close"));
+
+      await waitFor(() => expect(result.current.results.length).toBe(2), { timeout: 2000 });
+
+      expect(result.current.results[0]!.id).toBe("browser.close");
+    });
+
+    it("boosts notes and panel categories when a notes panel is focused", async () => {
+      listMock.mockReturnValue([
+        makeEntry("terminal.close", "Close", true, "terminal"),
+        makeEntry("notes.close", "Close", true, "notes"),
+      ]);
+      getContextMock.mockReturnValue({ focusedTerminalKind: "notes" });
+
+      const { result } = renderHook(() => useActionPalette());
+      act(() => result.current.open());
+      act(() => result.current.setQuery("close"));
+
+      await waitFor(() => expect(result.current.results.length).toBe(2), { timeout: 2000 });
+
+      expect(result.current.results[0]!.id).toBe("notes.close");
+    });
+
+    it("boosts worktree, git, and github categories when a worktree is focused", async () => {
+      listMock.mockReturnValue([
+        makeEntry("worktree.open", "Open", true, "worktree"),
+        makeEntry("git.open", "Open", true, "git"),
+        makeEntry("github.open", "Open", true, "github"),
+        makeEntry("browser.open", "Open", true, "browser"),
+      ]);
+      getContextMock.mockReturnValue({ focusedWorktreeId: "wt-1" });
+
+      const { result } = renderHook(() => useActionPalette());
+      act(() => result.current.open());
+      act(() => result.current.setQuery("open"));
+
+      await waitFor(() => expect(result.current.results.length).toBe(4), { timeout: 2000 });
+
+      const ids = result.current.results.map((r) => r.id);
+      expect(ids.indexOf("browser.open")).toBe(3);
+    });
+
+    it("boosts settings and preferences categories when settings panel is open", async () => {
+      listMock.mockReturnValue([
+        makeEntry("settings.open", "Open", true, "settings"),
+        makeEntry("preferences.open", "Open", true, "preferences"),
+        makeEntry("terminal.open", "Open", true, "terminal"),
+      ]);
+      getContextMock.mockReturnValue({ isSettingsOpen: true });
+
+      const { result } = renderHook(() => useActionPalette());
+      act(() => result.current.open());
+      act(() => result.current.setQuery("open"));
+
+      await waitFor(() => expect(result.current.results.length).toBe(3), { timeout: 2000 });
+
+      const ids = result.current.results.map((r) => r.id);
+      expect(ids.indexOf("settings.open")).toBeLessThan(ids.indexOf("terminal.open"));
+      expect(ids.indexOf("preferences.open")).toBeLessThan(ids.indexOf("terminal.open"));
+    });
+
+    it("lets MRU + context boost stack on the same item", async () => {
+      listMock.mockReturnValue([
+        makeEntry("terminal.close", "Close", true, "terminal"),
+        makeEntry("browser.close", "Close", true, "browser"),
+        makeEntry("worktree.close", "Close", true, "worktree"),
+      ]);
+      // browser.close is in MRU but not context-boosted
+      // terminal.close is context-boosted but not in MRU
+      useActionMruStore.getState().hydrateActionMru(["browser.close"]);
+      getContextMock.mockReturnValue({ focusedTerminalKind: "terminal" });
+
+      const { result } = renderHook(() => useActionPalette());
+      act(() => result.current.open());
+      act(() => result.current.setQuery("close"));
+
+      await waitFor(() => expect(result.current.results.length).toBe(3), { timeout: 2000 });
+
+      // terminal.close gets 0.08 context boost, greater than browser.close's max 0.05 MRU boost
+      expect(result.current.results[0]!.id).toBe("terminal.close");
+    });
+
+    it("does not exclude non-matching categories from the results", async () => {
+      listMock.mockReturnValue([
+        makeEntry("terminal.close", "Close", true, "terminal"),
+        makeEntry("browser.close", "Close", true, "browser"),
+      ]);
+      getContextMock.mockReturnValue({ focusedTerminalKind: "terminal" });
+
+      const { result } = renderHook(() => useActionPalette());
+      act(() => result.current.open());
+      act(() => result.current.setQuery("close"));
+
+      await waitFor(() => expect(result.current.results.length).toBe(2), { timeout: 2000 });
+
+      const ids = result.current.results.map((r) => r.id);
+      expect(ids).toContain("browser.close");
+    });
+
+    it("leaves ordering unchanged when context is empty", async () => {
+      listMock.mockReturnValue([
+        makeEntry("terminal.close", "Close", true, "terminal"),
+        makeEntry("browser.close", "Close", true, "browser"),
+      ]);
+      useActionMruStore.getState().hydrateActionMru(["browser.close"]);
+      getContextMock.mockReturnValue({});
+
+      const { result } = renderHook(() => useActionPalette());
+      act(() => result.current.open());
+      act(() => result.current.setQuery("close"));
+
+      await waitFor(() => expect(result.current.results.length).toBe(2), { timeout: 2000 });
+
+      // Without context, MRU-boosted browser.close should win
+      expect(result.current.results[0]!.id).toBe("browser.close");
+    });
+
+    it("ignores unknown focusedTerminalKind without throwing", async () => {
+      listMock.mockReturnValue([
+        makeEntry("terminal.close", "Close", true, "terminal"),
+        makeEntry("browser.close", "Close", true, "browser"),
+      ]);
+      useActionMruStore.getState().hydrateActionMru(["browser.close"]);
+      getContextMock.mockReturnValue({ focusedTerminalKind: "custom-kind" });
+
+      const { result } = renderHook(() => useActionPalette());
+      act(() => result.current.open());
+      act(() => result.current.setQuery("close"));
+
+      await waitFor(() => expect(result.current.results.length).toBe(2), { timeout: 2000 });
+
+      // No context boost — MRU-boosted browser.close still wins
+      expect(result.current.results[0]!.id).toBe("browser.close");
+    });
+
+    it("reads context fresh on each filter call (no stale closure)", async () => {
+      listMock.mockReturnValue([
+        makeEntry("terminal.close", "Close", true, "terminal"),
+        makeEntry("browser.close", "Close", true, "browser"),
+      ]);
+      getContextMock.mockReturnValue({ focusedTerminalKind: "terminal" });
+
+      const { result } = renderHook(() => useActionPalette());
+      act(() => result.current.open());
+      act(() => result.current.setQuery("close"));
+
+      await waitFor(() => expect(result.current.results.length).toBe(2), { timeout: 2000 });
+      expect(result.current.results[0]!.id).toBe("terminal.close");
+
+      // Context flips to browser focus — change mock, then trigger a re-filter
+      getContextMock.mockReturnValue({ focusedTerminalKind: "browser" });
+      act(() => result.current.setQuery("clos"));
+      await waitFor(() => expect(result.current.query).toBe("clos"), { timeout: 2000 });
+      act(() => result.current.setQuery("close"));
+
+      await waitFor(() => expect(result.current.results[0]!.id).toBe("browser.close"), {
+        timeout: 2000,
+      });
+    });
+
+    it("keeps disabled context-boosted items below enabled items", async () => {
+      listMock.mockReturnValue([
+        makeEntry("terminal.close", "Close", false, "terminal"),
+        makeEntry("browser.close", "Close", true, "browser"),
+      ]);
+      getContextMock.mockReturnValue({ focusedTerminalKind: "terminal" });
+
+      const { result } = renderHook(() => useActionPalette());
+      act(() => result.current.open());
+      act(() => result.current.setQuery("close"));
+
+      await waitFor(() => expect(result.current.results.length).toBe(2), { timeout: 2000 });
+
+      // Enabled browser.close must appear before disabled terminal.close, context boost notwithstanding
+      expect(result.current.results[0]!.id).toBe("browser.close");
+      expect(result.current.results[1]!.id).toBe("terminal.close");
+    });
   });
 });
