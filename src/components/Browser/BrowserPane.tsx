@@ -478,6 +478,20 @@ export function BrowserPane({
     }
   }, [isWebviewReady]);
 
+  const handleHardReload = useCallback(() => {
+    setBlockedNav(null);
+    setIsLoading(true);
+    setLoadError(null);
+    const webview = webviewRef.current;
+    if (!webview || !isWebviewReady) return;
+    try {
+      const wcId = (webview as unknown as { getWebContentsId(): number }).getWebContentsId();
+      void window.electron.webview.reloadIgnoringCache(wcId, id);
+    } catch {
+      webview.reload();
+    }
+  }, [isWebviewReady, id]);
+
   const handleCaptureScreenshot = useCallback(async () => {
     const webview = webviewRef.current;
     if (!webview || !isWebviewReady) return;
@@ -614,6 +628,15 @@ export function BrowserPane({
       }
     };
 
+    const handleHardReloadEvent = (e: Event) => {
+      if (!(e instanceof CustomEvent)) return;
+      const detail = e.detail as unknown;
+      if (!detail || typeof (detail as { id?: unknown }).id !== "string") return;
+      if ((detail as { id: string }).id === id) {
+        handleHardReload();
+      }
+    };
+
     const controller = new AbortController();
     window.addEventListener("daintree:reload-browser", handleReloadEvent, {
       signal: controller.signal,
@@ -642,6 +665,9 @@ export function BrowserPane({
     window.addEventListener("daintree:browser-toggle-devtools", handleToggleDevToolsEvent, {
       signal: controller.signal,
     });
+    window.addEventListener("daintree:hard-reload-browser", handleHardReloadEvent, {
+      signal: controller.signal,
+    });
     return () => controller.abort();
   }, [
     id,
@@ -653,6 +679,7 @@ export function BrowserPane({
     handleToggleConsole,
     handleClearConsole,
     handleToggleDevTools,
+    handleHardReload,
   ]);
 
   // Blank the webview before React unmounts it for faster memory reclamation
@@ -712,6 +739,9 @@ export function BrowserPane({
       }
       onReload={() =>
         void actionService.dispatch("browser.reload", { terminalId: id }, { source: "user" })
+      }
+      onHardReload={() =>
+        void actionService.dispatch("browser.hardReload", { terminalId: id }, { source: "user" })
       }
       onOpenExternal={handleOpenExternal}
       onZoomChange={(factor) =>

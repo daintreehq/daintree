@@ -388,6 +388,17 @@ export function DevPreviewPane({
     webviewRef.current?.reload();
   }, []);
 
+  const handleHardReload = useCallback(() => {
+    const webview = webviewRef.current;
+    if (!webview || !isWebviewReady) return;
+    try {
+      const wcId = (webview as unknown as { getWebContentsId(): number }).getWebContentsId();
+      void window.electron.webview.reloadIgnoringCache(wcId, id);
+    } catch {
+      webview.reload();
+    }
+  }, [isWebviewReady, id]);
+
   const handleOpenExternal = useCallback(() => {
     if (currentUrl) {
       window.electron.system.openExternal(currentUrl);
@@ -759,6 +770,24 @@ export function DevPreviewPane({
     return () => clearTimeout(timer);
   }, [blockedNav]);
 
+  // Listen for action-driven hard-reload events
+  useEffect(() => {
+    const handleHardReloadEvent = (e: Event) => {
+      if (!(e instanceof CustomEvent)) return;
+      const detail = e.detail as unknown;
+      if (!detail || typeof (detail as { id?: unknown }).id !== "string") return;
+      if ((detail as { id: string }).id === id) {
+        handleHardReload();
+      }
+    };
+
+    const controller = new AbortController();
+    window.addEventListener("daintree:hard-reload-browser", handleHardReloadEvent, {
+      signal: controller.signal,
+    });
+    return () => controller.abort();
+  }, [id, handleHardReload]);
+
   return (
     <ContentPanel
       id={id}
@@ -788,6 +817,7 @@ export function DevPreviewPane({
           onBack={handleBack}
           onForward={handleForward}
           onReload={handleReload}
+          onHardReload={handleHardReload}
           onOpenExternal={handleOpenExternal}
           onZoomChange={handleZoomChange}
         />

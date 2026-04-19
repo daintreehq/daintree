@@ -1867,6 +1867,10 @@ export interface IpcInvokeMap {
     args: [webContentsId: number, objectId: string];
     result: import("./webviewConsole.js").CdpGetPropertiesResult;
   };
+  "webview:reload-ignoring-cache": {
+    args: [webContentsId: number, panelId: string];
+    result: void;
+  };
 
   // Demo mode channels (dev-only, gated by --demo-mode flag)
   "demo:move-to": {
