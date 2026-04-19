@@ -302,6 +302,43 @@ describe("ActionService", () => {
       expect(manifest).toHaveLength(1);
       expect(manifest[0]!.id).toBe("actions.safe");
     });
+
+    it("should propagate keywords to manifest entries", () => {
+      const action: ActionDefinition = {
+        id: "actions.keyworded" as ActionId,
+        title: "Keyworded Action",
+        description: "An action with keywords",
+        category: "test",
+        kind: "command",
+        danger: "safe",
+        scope: "renderer",
+        keywords: ["save", "draft", "store"],
+        run: vi.fn().mockResolvedValue(undefined),
+      };
+
+      service.register(action);
+      const manifest = service.list();
+
+      expect(manifest[0]!.keywords).toEqual(["save", "draft", "store"]);
+    });
+
+    it("should omit keywords when not defined", () => {
+      const action: ActionDefinition = {
+        id: "actions.noKeywords" as ActionId,
+        title: "No Keywords Action",
+        description: "An action without keywords",
+        category: "test",
+        kind: "command",
+        danger: "safe",
+        scope: "renderer",
+        run: vi.fn().mockResolvedValue(undefined),
+      };
+
+      service.register(action);
+      const manifest = service.list();
+
+      expect(manifest[0]!.keywords).toBeUndefined();
+    });
   });
 
   describe("get", () => {

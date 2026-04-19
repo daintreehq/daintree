@@ -18,6 +18,7 @@ export interface ActionPaletteItem {
   disabledReason?: string;
   keybinding?: string;
   kind: string;
+  keywords: string[];
 }
 
 export interface UseActionPaletteReturn {
@@ -40,6 +41,7 @@ const FUSE_OPTIONS: IFuseOptions<ActionPaletteItem> = {
   keys: [
     { name: "title", weight: 2 },
     { name: "category", weight: 1.5 },
+    { name: "keywords", weight: 1.5 },
     { name: "description", weight: 1 },
   ],
   threshold: 0.4,
@@ -108,6 +110,7 @@ function toActionPaletteItem(entry: ActionManifestEntry): ActionPaletteItem {
     disabledReason,
     keybinding: keybindingService.getDisplayCombo(entry.id),
     kind: entry.kind,
+    keywords: entry.keywords ?? [],
   };
 }
 

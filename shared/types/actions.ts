@@ -356,6 +356,8 @@ export interface ActionDefinition<
    * repeatable operation.
    */
   nonRepeatable?: boolean;
+  /** Synonyms and alternative mental-model terms for palette search. */
+  keywords?: string[];
 }
 
 export interface ActionManifestEntry {
@@ -375,6 +377,7 @@ export interface ActionManifestEntry {
   enabled: boolean;
   disabledReason?: string;
   requiresArgs: boolean;
+  keywords?: string[];
 }
 
 export interface ActionDispatchSuccess<Result = unknown> {

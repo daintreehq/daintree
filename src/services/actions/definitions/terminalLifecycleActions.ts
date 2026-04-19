@@ -331,6 +331,7 @@ export function registerTerminalLifecycleActions(
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    keywords: ["monitor", "observe", "notify", "alert"],
     argsSchema: z.object({ terminalId: z.string().optional() }).optional(),
     isEnabled: (ctx) => !!ctx.focusedTerminalId,
     run: async (args: unknown, ctx) => {

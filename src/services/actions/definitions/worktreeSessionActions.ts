@@ -16,6 +16,7 @@ export function registerWorktreeSessionActions(
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    keywords: ["collapse", "hide", "zen", "dock"],
     argsSchema: z.object({ worktreeId: z.string().optional() }),
     run: async (args: unknown, ctx: ActionContext) => {
       const { worktreeId } = args as { worktreeId?: string };

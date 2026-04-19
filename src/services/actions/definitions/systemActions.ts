@@ -209,6 +209,7 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
       kind: "query",
       danger: "confirm",
       scope: "renderer",
+      keywords: ["context", "dump", "snapshot", "tree"],
       argsSchema: z.object({ worktreeId: z.string(), options: CopyTreeOptionsSchema.optional() }),
       run: async ({ worktreeId, options }) => {
         return await copyTreeClient.generate(worktreeId, options);
@@ -241,6 +242,7 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
       kind: "command",
       danger: "confirm",
       scope: "renderer",
+      keywords: ["context", "inject", "dump"],
       argsSchema: z.object({
         terminalId: z.string(),
         worktreeId: z.string(),

@@ -129,6 +129,7 @@ export function registerTerminalInputActions(
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    keywords: ["save", "draft", "store", "park"],
     run: async () => {
       const state = usePanelStore.getState();
       const targetId = state.focusedId;
@@ -144,6 +145,7 @@ export function registerTerminalInputActions(
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    keywords: ["restore", "recall", "unstash"],
     run: async () => {
       const state = usePanelStore.getState();
       const targetId = state.focusedId;
@@ -159,6 +161,7 @@ export function registerTerminalInputActions(
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    keywords: ["broadcast", "fleet", "multi"],
     run: async () => {
       openBulkCommandPalette();
     },
