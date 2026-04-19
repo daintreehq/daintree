@@ -3,6 +3,7 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { EnvironmentSettingsTab } from "../EnvironmentSettingsTab";
+import { SettingsValidationProvider } from "../SettingsValidationRegistry";
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -14,9 +15,17 @@ beforeEach(() => {
   } as unknown as typeof window.electron;
 });
 
+function renderTab() {
+  return render(
+    <SettingsValidationProvider>
+      <EnvironmentSettingsTab />
+    </SettingsValidationProvider>
+  );
+}
+
 describe("EnvironmentSettingsTab", () => {
   it("renders without a project open (no empty-state guard)", async () => {
-    render(<EnvironmentSettingsTab />);
+    renderTab();
 
     await waitFor(() => {
       expect(screen.getByText("Environment Variables")).toBeTruthy();
@@ -32,7 +41,7 @@ describe("EnvironmentSettingsTab", () => {
       },
     } as unknown as typeof window.electron;
 
-    render(<EnvironmentSettingsTab />);
+    renderTab();
 
     await waitFor(() => {
       expect(window.electron.globalEnv.get).toHaveBeenCalledTimes(1);
@@ -50,7 +59,7 @@ describe("EnvironmentSettingsTab", () => {
       },
     } as unknown as typeof window.electron;
 
-    render(<EnvironmentSettingsTab />);
+    renderTab();
 
     await waitFor(() => {
       expect(screen.getAllByLabelText("Environment variable name")).toHaveLength(1);
@@ -68,7 +77,7 @@ describe("EnvironmentSettingsTab", () => {
   });
 
   it("shows description about global scope", async () => {
-    render(<EnvironmentSettingsTab />);
+    renderTab();
 
     await waitFor(() => {
       expect(
@@ -87,7 +96,7 @@ describe("EnvironmentSettingsTab", () => {
       },
     } as unknown as typeof window.electron;
 
-    render(<EnvironmentSettingsTab />);
+    renderTab();
 
     await waitFor(() => {
       expect(screen.getByText("No environment variables configured yet")).toBeTruthy();
@@ -104,7 +113,7 @@ describe("EnvironmentSettingsTab", () => {
       },
     } as unknown as typeof window.electron;
 
-    render(<EnvironmentSettingsTab />);
+    renderTab();
 
     await waitFor(() => {
       expect(screen.getByText("No environment variables configured yet")).toBeTruthy();

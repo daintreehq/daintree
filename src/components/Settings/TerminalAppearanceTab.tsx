@@ -11,6 +11,7 @@ import { ColorSchemePicker } from "./ColorSchemePicker";
 import { AppThemePicker } from "./AppThemePicker";
 import { ColorVisionPicker } from "./ColorVisionPicker";
 import { DockDensityPicker } from "./DockDensityPicker";
+import { useSettingsTabValidation } from "./SettingsValidationRegistry";
 
 const MIN_FONT_SIZE = 8;
 const MAX_FONT_SIZE = 24;
@@ -53,6 +54,12 @@ export function TerminalAppearanceTab({
   const fontSizeErrorId = useId();
   const [fontSizeInput, setFontSizeInput] = useState<string>(String(fontSize));
   const [fontSizeError, setFontSizeError] = useState<string | null>(null);
+
+  // Report validation state to sidebar (only when terminal subtab is active)
+  useSettingsTabValidation(
+    "terminalAppearance",
+    effectiveSubtab === "terminal" ? fontSizeError != null : false
+  );
 
   useEffect(() => {
     setFontSizeInput(String(fontSize));

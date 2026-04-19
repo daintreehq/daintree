@@ -11,6 +11,7 @@ import {
 } from "@shared/utils/pathPattern";
 import { actionService } from "@/services/ActionService";
 import { SettingsSection } from "./SettingsSection";
+import { useSettingsTabValidation } from "./SettingsValidationRegistry";
 
 const PATTERN_PRESETS = [
   {
@@ -89,6 +90,9 @@ export function WorktreeSettingsTab() {
     if (!pattern.trim()) return { valid: false, error: "Pattern cannot be empty" };
     return validatePathPattern(pattern);
   }, [pattern]);
+
+  // Report validation state to sidebar (only after loading completes)
+  useSettingsTabValidation("worktree", !isLoading && !validation.valid);
 
   const preview = useMemo(() => {
     if (!validation.valid) return null;

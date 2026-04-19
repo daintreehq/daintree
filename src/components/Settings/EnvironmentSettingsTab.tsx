@@ -5,6 +5,7 @@ import { Spinner } from "@/components/ui/Spinner";
 import { Button } from "@/components/ui/button";
 import { SettingsSection } from "./SettingsSection";
 import { isSensitiveEnvKey } from "@shared/utils/envVars";
+import { useSettingsTabValidation } from "./SettingsValidationRegistry";
 
 interface EnvVar {
   id: string;
@@ -45,6 +46,10 @@ export function EnvironmentSettingsTab() {
   const [rowErrors, setRowErrors] = useState<Record<string, string>>({});
   const [isDirty, setIsDirty] = useState(false);
   const [savedSnapshot, setSavedSnapshot] = useState<Record<string, string>>({});
+
+  // Report validation state to sidebar
+  const hasError = Object.keys(rowErrors).length > 0;
+  useSettingsTabValidation("environment", hasError);
 
   useEffect(() => {
     let cancelled = false;
@@ -110,6 +115,11 @@ export function EnvironmentSettingsTab() {
     setVisibleEnvVars((prev) => {
       const next = new Set(prev);
       next.delete(id);
+      return next;
+    });
+    setRowErrors((prev) => {
+      const next = { ...prev };
+      delete next[id];
       return next;
     });
     setIsDirty(true);

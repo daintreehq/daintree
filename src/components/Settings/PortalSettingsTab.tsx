@@ -7,6 +7,7 @@ import { getAgentConfig, isRegisteredAgent } from "@/config/agents";
 import { actionService } from "@/services/ActionService";
 import { SettingsSection } from "./SettingsSection";
 import { SettingsSelect } from "./SettingsSelect";
+import { useSettingsTabValidation } from "./SettingsValidationRegistry";
 
 function ServiceIcon({ name, size = 16 }: { name: string; size?: number }) {
   const className = size === 16 ? "w-4 h-4" : size === 32 ? "w-8 h-8" : "w-4 h-4";
@@ -60,6 +61,10 @@ export function PortalSettingsTab() {
   const [customUrlError, setCustomUrlError] = useState("");
   const customUrlErrorId = useId();
   const addLinkErrorId = useId();
+
+  // Report validation state to sidebar
+  const hasError = Boolean(urlError || customUrlError);
+  useSettingsTabValidation("portal", hasError);
 
   const systemLinks = links.filter((l) => l.type === "system");
   const userLinks = links.filter((l) => l.type === "user");

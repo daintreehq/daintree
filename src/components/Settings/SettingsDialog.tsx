@@ -9,6 +9,7 @@ import {
   useMemo,
   useRef,
   useCallback,
+  useContext,
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
 import {
@@ -153,6 +154,10 @@ import { RecipesTab as ProjectRecipesTab } from "@/components/Project/RecipesTab
 import { CommandOverridesTab } from "./CommandOverridesTab";
 import { ProjectNotificationsTab } from "@/components/Project/ProjectNotificationsTab";
 import { GitHubTab as ProjectGitHubTab } from "@/components/Project/GitHubTab";
+import {
+  SettingsValidationProvider,
+  SettingsValidationContext,
+} from "./SettingsValidationRegistry";
 
 let rememberedTab: SettingsTab = "general";
 let rememberedProjectTab: SettingsTab = "project:general";
@@ -205,7 +210,17 @@ function scopeForTab(tab: SettingsTab): SettingsScope {
   return tab.startsWith("project:") ? "project" : "global";
 }
 
-export function SettingsDialog({
+export function SettingsDialog(props: SettingsDialogProps) {
+  // Provider must wrap SettingsDialogInner: the inner component reads the registry
+  // via useContext to render nav-sidebar error dots.
+  return (
+    <SettingsValidationProvider>
+      <SettingsDialogInner {...props} />
+    </SettingsValidationProvider>
+  );
+}
+
+function SettingsDialogInner({
   isOpen,
   onClose,
   defaultTab,
@@ -401,6 +416,10 @@ export function SettingsDialog({
   const projectForm = useProjectSettingsForm({ projectId: projectId ?? null, isOpen });
   const projectLabel =
     projectForm.currentProject?.name ?? projectForm.currentProject?.id ?? "project";
+
+  // Validation error tracking from the registry provider
+  const validationRegistry = useContext(SettingsValidationContext);
+  const tabsWithErrors = validationRegistry?.tabsWithErrors ?? new Set();
 
   const [globalEnvVars, setGlobalEnvVars] = useState<Record<string, string>>({});
   useEffect(() => {
@@ -735,6 +754,7 @@ export function SettingsDialog({
                     isSearching={isSearching}
                     matchCount={matchCounts.general}
                     modified={modifiedTabs.has("general")}
+                    hasError={tabsWithErrors.has("general")}
                     onSelect={handleNavSelect}
                   />
                   <NavItem
@@ -745,6 +765,7 @@ export function SettingsDialog({
                     isSearching={isSearching}
                     matchCount={matchCounts.terminalAppearance}
                     modified={modifiedTabs.has("terminalAppearance")}
+                    hasError={tabsWithErrors.has("terminalAppearance")}
                     onSelect={handleNavSelect}
                   />
                   <NavItem
@@ -754,6 +775,7 @@ export function SettingsDialog({
                     activeTab={activeTab}
                     isSearching={isSearching}
                     matchCount={matchCounts.keyboard}
+                    hasError={tabsWithErrors.has("keyboard")}
                     onSelect={handleNavSelect}
                   />
                   <NavItem
@@ -763,6 +785,7 @@ export function SettingsDialog({
                     activeTab={activeTab}
                     isSearching={isSearching}
                     matchCount={matchCounts.notifications}
+                    hasError={tabsWithErrors.has("notifications")}
                     onSelect={handleNavSelect}
                   />
                   <NavItem
@@ -772,6 +795,7 @@ export function SettingsDialog({
                     activeTab={activeTab}
                     isSearching={isSearching}
                     matchCount={matchCounts.privacy}
+                    hasError={tabsWithErrors.has("privacy")}
                     onSelect={handleNavSelect}
                   />
                 </NavGroup>
@@ -784,6 +808,7 @@ export function SettingsDialog({
                     isSearching={isSearching}
                     matchCount={matchCounts.terminal}
                     modified={modifiedTabs.has("terminal")}
+                    hasError={tabsWithErrors.has("terminal")}
                     onSelect={handleNavSelect}
                   />
                   <NavItem
@@ -793,6 +818,7 @@ export function SettingsDialog({
                     activeTab={activeTab}
                     isSearching={isSearching}
                     matchCount={matchCounts.worktree}
+                    hasError={tabsWithErrors.has("worktree")}
                     onSelect={handleNavSelect}
                   />
                   <NavItem
@@ -802,6 +828,7 @@ export function SettingsDialog({
                     activeTab={activeTab}
                     isSearching={isSearching}
                     matchCount={matchCounts.toolbar}
+                    hasError={tabsWithErrors.has("toolbar")}
                     onSelect={handleNavSelect}
                   />
                   <NavItem
@@ -811,6 +838,7 @@ export function SettingsDialog({
                     activeTab={activeTab}
                     isSearching={isSearching}
                     matchCount={matchCounts.environment}
+                    hasError={tabsWithErrors.has("environment")}
                     onSelect={handleNavSelect}
                   />
                 </NavGroup>
@@ -822,6 +850,7 @@ export function SettingsDialog({
                     activeTab={activeTab}
                     isSearching={isSearching}
                     matchCount={matchCounts.agents}
+                    hasError={tabsWithErrors.has("agents")}
                     onSelect={handleNavSelect}
                   />
                   <NavItem
@@ -831,6 +860,7 @@ export function SettingsDialog({
                     activeTab={activeTab}
                     isSearching={isSearching}
                     matchCount={matchCounts.github}
+                    hasError={tabsWithErrors.has("github")}
                     onSelect={handleNavSelect}
                   />
                   <NavItem
@@ -840,6 +870,7 @@ export function SettingsDialog({
                     activeTab={activeTab}
                     isSearching={isSearching}
                     matchCount={matchCounts.integrations}
+                    hasError={tabsWithErrors.has("integrations")}
                     onSelect={handleNavSelect}
                   />
                   <NavItem
@@ -849,6 +880,7 @@ export function SettingsDialog({
                     activeTab={activeTab}
                     isSearching={isSearching}
                     matchCount={matchCounts.voice}
+                    hasError={tabsWithErrors.has("voice")}
                     onSelect={handleNavSelect}
                   />
                   <NavItem
@@ -858,6 +890,7 @@ export function SettingsDialog({
                     activeTab={activeTab}
                     isSearching={isSearching}
                     matchCount={matchCounts.portal}
+                    hasError={tabsWithErrors.has("portal")}
                     onSelect={handleNavSelect}
                   />
                   <NavItem
@@ -867,6 +900,7 @@ export function SettingsDialog({
                     activeTab={activeTab}
                     isSearching={isSearching}
                     matchCount={matchCounts.mcp}
+                    hasError={tabsWithErrors.has("mcp")}
                     onSelect={handleNavSelect}
                   />
                 </NavGroup>
@@ -879,6 +913,7 @@ export function SettingsDialog({
                     activeTab={activeTab}
                     isSearching={isSearching}
                     matchCount={matchCounts.troubleshooting}
+                    hasError={tabsWithErrors.has("troubleshooting")}
                     onSelect={handleNavSelect}
                   />
                 </NavGroup>
@@ -892,6 +927,7 @@ export function SettingsDialog({
                   activeTab={activeTab}
                   isSearching={isSearching}
                   matchCount={matchCounts["project:general"]}
+                  hasError={tabsWithErrors.has("project:general")}
                   onSelect={handleNavSelect}
                 />
                 <NavItem
@@ -901,6 +937,7 @@ export function SettingsDialog({
                   activeTab={activeTab}
                   isSearching={isSearching}
                   matchCount={matchCounts["project:context"]}
+                  hasError={tabsWithErrors.has("project:context")}
                   onSelect={handleNavSelect}
                 />
                 <NavItem
@@ -910,6 +947,7 @@ export function SettingsDialog({
                   activeTab={activeTab}
                   isSearching={isSearching}
                   matchCount={matchCounts["project:variables"]}
+                  hasError={tabsWithErrors.has("project:variables")}
                   onSelect={handleNavSelect}
                 />
                 <NavItem
@@ -919,6 +957,7 @@ export function SettingsDialog({
                   activeTab={activeTab}
                   isSearching={isSearching}
                   matchCount={matchCounts["project:automation"]}
+                  hasError={tabsWithErrors.has("project:automation")}
                   onSelect={handleNavSelect}
                 />
                 <NavItem
@@ -928,6 +967,7 @@ export function SettingsDialog({
                   activeTab={activeTab}
                   isSearching={isSearching}
                   matchCount={matchCounts["project:recipes"]}
+                  hasError={tabsWithErrors.has("project:recipes")}
                   onSelect={handleNavSelect}
                 />
                 <NavItem
@@ -937,6 +977,7 @@ export function SettingsDialog({
                   activeTab={activeTab}
                   isSearching={isSearching}
                   matchCount={matchCounts["project:commands"]}
+                  hasError={tabsWithErrors.has("project:commands")}
                   onSelect={handleNavSelect}
                 />
                 <NavItem
@@ -946,6 +987,7 @@ export function SettingsDialog({
                   activeTab={activeTab}
                   isSearching={isSearching}
                   matchCount={matchCounts["project:notifications"]}
+                  hasError={tabsWithErrors.has("project:notifications")}
                   onSelect={handleNavSelect}
                 />
                 <NavItem
@@ -955,6 +997,7 @@ export function SettingsDialog({
                   activeTab={activeTab}
                   isSearching={isSearching}
                   matchCount={matchCounts["project:github"]}
+                  hasError={tabsWithErrors.has("project:github")}
                   onSelect={handleNavSelect}
                 />
               </NavGroup>
@@ -1545,6 +1588,7 @@ interface NavItemProps {
   isSearching: boolean;
   matchCount?: number;
   modified?: boolean;
+  hasError?: boolean;
   onSelect: (tab: SettingsTab) => void;
 }
 
@@ -1556,6 +1600,7 @@ function NavItem({
   isSearching,
   matchCount,
   modified,
+  hasError,
   onSelect,
 }: NavItemProps) {
   const active = activeTab === tab && !isSearching;
@@ -1581,10 +1626,13 @@ function NavItem({
     >
       <span className="relative">
         {icon}
-        {modified && (
+        {(hasError || modified) && (
           <span
-            className="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full bg-daintree-accent"
-            title="Modified from default"
+            className={cn(
+              "absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full",
+              hasError ? "bg-status-warning" : "bg-daintree-accent"
+            )}
+            title={hasError ? "Contains validation errors" : "Modified from default"}
           />
         )}
       </span>
