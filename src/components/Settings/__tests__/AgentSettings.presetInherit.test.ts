@@ -7,9 +7,11 @@ import { describe, it, expect } from "vitest";
  */
 
 // Mirrors the inline helpers in AgentSettings.tsx. Kept local so the UI file
-// stays a single export and these tests stay hermetic.
+// stays a single export and these tests stay hermetic. The sentinel value
+// `"__inherit__"` is required because Radix Select forbids `value=""` on
+// SelectItem — see SettingsSelect / ui/select.tsx.
 const boolToSelectValue = (v: boolean | undefined): string =>
-  v === undefined ? "" : v ? "true" : "false";
+  v === undefined ? "__inherit__" : v ? "true" : "false";
 
 const selectValueToBool = (s: string): boolean | undefined =>
   s === "true" ? true : s === "false" ? false : undefined;
@@ -26,8 +28,8 @@ function inheritedEnvKeys(
 }
 
 describe("tri-state boolean serialization", () => {
-  it('maps undefined → "" (React 19 controlled-select requires a string)', () => {
-    expect(boolToSelectValue(undefined)).toBe("");
+  it('maps undefined → "__inherit__" sentinel (Radix Select forbids empty values)', () => {
+    expect(boolToSelectValue(undefined)).toBe("__inherit__");
   });
 
   it('maps true → "true" and false → "false"', () => {
@@ -35,8 +37,8 @@ describe("tri-state boolean serialization", () => {
     expect(boolToSelectValue(false)).toBe("false");
   });
 
-  it('maps "" → undefined (inherit)', () => {
-    expect(selectValueToBool("")).toBeUndefined();
+  it('maps "__inherit__" → undefined (inherit)', () => {
+    expect(selectValueToBool("__inherit__")).toBeUndefined();
   });
 
   it('maps "true" → true and "false" → false', () => {

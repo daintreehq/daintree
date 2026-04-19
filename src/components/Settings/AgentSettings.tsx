@@ -655,30 +655,34 @@ export function AgentSettings({
                 handleUpdatePreset(selectedPreset.id, { customFlags: undefined });
               };
 
-              // Tri-state select serialization: `""` (always a string, so the
-              // select stays controlled in React 19) ↔ `undefined`.
+              // Tri-state select serialization: a non-empty sentinel stands
+              // in for "no override" because Radix Select forbids `value=""`
+              // on SelectItem. The sentinel is never persisted — it is mapped
+              // back to `undefined` in `selectValueToBool` before any write.
               const boolToSelectValue = (v: boolean | undefined): string =>
-                v === undefined ? "" : v ? "true" : "false";
+                v === undefined ? "__inherit__" : v ? "true" : "false";
               // Defensively fall back to `undefined` for unexpected strings so
               // a future option-value typo can't silently write `false`.
               const selectValueToBool = (s: string): boolean | undefined =>
                 s === "true" ? true : s === "false" ? false : undefined;
 
-              const dangerousSelectOptions = (
-                <>
-                  <option value="">Inherit ({agentDefaultDangerous ? "On" : "Off"})</option>
-                  <option value="true">On</option>
-                  <option value="false">Off</option>
-                </>
-              );
+              const dangerousSelectOptions = [
+                {
+                  value: "__inherit__",
+                  label: `Inherit (${agentDefaultDangerous ? "On" : "Off"})`,
+                },
+                { value: "true", label: "On" },
+                { value: "false", label: "Off" },
+              ];
 
-              const inlineSelectOptions = (
-                <>
-                  <option value="">Inherit ({agentDefaultInline ? "On" : "Off"})</option>
-                  <option value="true">On</option>
-                  <option value="false">Off</option>
-                </>
-              );
+              const inlineSelectOptions = [
+                {
+                  value: "__inherit__",
+                  label: `Inherit (${agentDefaultInline ? "On" : "Off"})`,
+                },
+                { value: "true", label: "On" },
+                { value: "false", label: "Off" },
+              ];
 
               const behavioralSettings = (
                 <div className="space-y-3">
@@ -687,16 +691,12 @@ export function AgentSettings({
                       label="Skip Permissions"
                       description="Auto-approve all file, command, and network actions"
                       value={boolToSelectValue(dangerousOverride)}
-                      onChange={(e) =>
-                        onDangerousOverrideChange(selectValueToBool(e.target.value))
-                      }
+                      onValueChange={(v) => onDangerousOverrideChange(selectValueToBool(v))}
                       isModified={dangerousOverride !== undefined}
                       onReset={() => onDangerousOverrideChange(undefined)}
                       resetAriaLabel={`Reset skip permissions override for ${selectedPreset!.name}`}
-                      data-testid="preset-dangerous-select"
-                    >
-                      {dangerousSelectOptions}
-                    </SettingsSelect>
+                      options={dangerousSelectOptions}
+                    />
                     {effectiveSkipPerms && defaultDangerousArg && (
                       <div className="flex items-center gap-2 px-3 py-1.5 rounded-[var(--radius-md)] bg-status-error/10 border border-status-error/20">
                         <code className="text-xs text-status-error font-mono">
@@ -713,16 +713,12 @@ export function AgentSettings({
                         label="Inline Mode"
                         description="Disable fullscreen TUI for better resize handling and scrollback"
                         value={boolToSelectValue(inlineOverride)}
-                        onChange={(e) =>
-                          onInlineOverrideChange(selectValueToBool(e.target.value))
-                        }
+                        onValueChange={(v) => onInlineOverrideChange(selectValueToBool(v))}
                         isModified={inlineOverride !== undefined}
                         onReset={() => onInlineOverrideChange(undefined)}
                         resetAriaLabel={`Reset inline mode override for ${selectedPreset!.name}`}
-                        data-testid="preset-inline-select"
-                      >
-                        {inlineSelectOptions}
-                      </SettingsSelect>
+                        options={inlineSelectOptions}
+                      />
                     </div>
                   )}
 
