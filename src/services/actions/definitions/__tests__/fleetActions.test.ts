@@ -265,3 +265,80 @@ describe("fleet actions — threshold confirmation", () => {
     expect(terminalClient.batchDoubleEscape).toHaveBeenCalledWith(["a", "b", "c"]);
   });
 });
+
+describe("fleet scope actions — flag gating", () => {
+  beforeEach(async () => {
+    resetStores();
+    vi.clearAllMocks();
+    const { useFleetScopeFlagStore } = await import("@/store/fleetScopeFlagStore");
+    const { useWorktreeSelectionStore } = await import("@/store/worktreeStore");
+    useFleetScopeFlagStore.setState({ mode: "legacy", isHydrated: false });
+    useWorktreeSelectionStore.setState({
+      activeWorktreeId: null,
+      isFleetScopeActive: false,
+      _previousActiveWorktreeId: null,
+    });
+  });
+
+  it("fleet.scope.enter is a no-op in legacy mode", async () => {
+    const { useFleetScopeFlagStore } = await import("@/store/fleetScopeFlagStore");
+    const { useWorktreeSelectionStore } = await import("@/store/worktreeStore");
+    useFleetScopeFlagStore.setState({ mode: "legacy", isHydrated: true });
+    useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-1" });
+    const registry = await buildRegistry();
+    await run(registry, "fleet.scope.enter");
+    expect(useWorktreeSelectionStore.getState().isFleetScopeActive).toBe(false);
+  });
+
+  it("fleet.scope.enter activates scope and captures worktree in scoped mode", async () => {
+    const { useFleetScopeFlagStore } = await import("@/store/fleetScopeFlagStore");
+    const { useWorktreeSelectionStore } = await import("@/store/worktreeStore");
+    useFleetScopeFlagStore.setState({ mode: "scoped", isHydrated: true });
+    useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-1" });
+    const registry = await buildRegistry();
+    await run(registry, "fleet.scope.enter");
+    const state = useWorktreeSelectionStore.getState();
+    expect(state.isFleetScopeActive).toBe(true);
+    expect(state._previousActiveWorktreeId).toBe("wt-1");
+  });
+
+  it("fleet.scope.exit is a no-op in legacy mode", async () => {
+    const { useFleetScopeFlagStore } = await import("@/store/fleetScopeFlagStore");
+    const { useWorktreeSelectionStore } = await import("@/store/worktreeStore");
+    useFleetScopeFlagStore.setState({ mode: "legacy", isHydrated: true });
+    useWorktreeSelectionStore.setState({
+      activeWorktreeId: null,
+      isFleetScopeActive: true,
+      _previousActiveWorktreeId: "wt-stale",
+    });
+    const registry = await buildRegistry();
+    await run(registry, "fleet.scope.exit");
+    expect(useWorktreeSelectionStore.getState().isFleetScopeActive).toBe(true);
+  });
+
+  it("fleet.scope.exit restores prior worktree in scoped mode", async () => {
+    const { useFleetScopeFlagStore } = await import("@/store/fleetScopeFlagStore");
+    const { useWorktreeSelectionStore } = await import("@/store/worktreeStore");
+    useFleetScopeFlagStore.setState({ mode: "scoped", isHydrated: true });
+    useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-1" });
+    const registry = await buildRegistry();
+    await run(registry, "fleet.scope.enter");
+    useWorktreeSelectionStore.setState({ activeWorktreeId: null });
+    await run(registry, "fleet.scope.exit");
+    const state = useWorktreeSelectionStore.getState();
+    expect(state.isFleetScopeActive).toBe(false);
+    expect(state.activeWorktreeId).toBe("wt-1");
+  });
+
+  it("flag is read at execution time, not at registration time", async () => {
+    const { useFleetScopeFlagStore } = await import("@/store/fleetScopeFlagStore");
+    const { useWorktreeSelectionStore } = await import("@/store/worktreeStore");
+    useFleetScopeFlagStore.setState({ mode: "legacy", isHydrated: true });
+    const registry = await buildRegistry();
+    // Flip the flag AFTER registry build
+    useFleetScopeFlagStore.setState({ mode: "scoped", isHydrated: true });
+    useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-1" });
+    await run(registry, "fleet.scope.enter");
+    expect(useWorktreeSelectionStore.getState().isFleetScopeActive).toBe(true);
+  });
+});

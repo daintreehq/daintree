@@ -13,6 +13,7 @@ import {
 import { useFleetDeckStore } from "@/store/fleetDeckStore";
 import { useFleetSavedScopesStore } from "@/store/fleetSavedScopesStore";
 import { useFleetComposerStore } from "@/store/fleetComposerStore";
+import { useFleetScopeFlagStore } from "@/store/fleetScopeFlagStore";
 import { useProjectStore } from "@/store/projectStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { terminalClient } from "@/clients";
@@ -348,6 +349,36 @@ export function registerFleetActions(actions: ActionRegistry): void {
         const ids = collectEligibleIds(scope.filter.scope as "current" | "all", activeWorktreeId);
         useFleetArmingStore.getState().armIds(ids);
       }
+    },
+  }));
+
+  actions.set("fleet.scope.enter", () => ({
+    id: "fleet.scope.enter",
+    title: "Fleet: Enter Scope Mode",
+    description:
+      "Activate Fleet scope mode (primitive — gated by fleetScopeMode flag; no-op in legacy mode)",
+    category: "terminal",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    run: async () => {
+      if (useFleetScopeFlagStore.getState().mode !== "scoped") return;
+      useWorktreeSelectionStore.getState().enterFleetScope();
+    },
+  }));
+
+  actions.set("fleet.scope.exit", () => ({
+    id: "fleet.scope.exit",
+    title: "Fleet: Exit Scope Mode",
+    description:
+      "Exit Fleet scope mode, restoring the pre-scope active worktree (no-op in legacy mode)",
+    category: "terminal",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    run: async () => {
+      if (useFleetScopeFlagStore.getState().mode !== "scoped") return;
+      useWorktreeSelectionStore.getState().exitFleetScope();
     },
   }));
 

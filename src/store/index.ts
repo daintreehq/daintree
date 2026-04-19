@@ -94,6 +94,9 @@ export {
 } from "./fleetDeckStore";
 export type { FleetDeckEdge, FleetDeckScope, FleetDeckStateFilter } from "./fleetDeckStore";
 
+export { useFleetScopeFlagStore } from "./fleetScopeFlagStore";
+export type { FleetScopeMode } from "./fleetScopeFlagStore";
+
 export { useTwoPaneSplitStore } from "./twoPaneSplitStore";
 export type { TwoPaneSplitConfig, WorktreeRatioEntry } from "./twoPaneSplitStore";
 

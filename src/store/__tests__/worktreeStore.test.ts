@@ -313,4 +313,56 @@ describe("worktreeStore", () => {
 
     expect(setFocusedMock).not.toHaveBeenCalledWith("term-a");
   });
+
+  describe("fleet scope", () => {
+    it("starts inactive with no previous worktree captured", () => {
+      const state = useWorktreeSelectionStore.getState();
+      expect(state.isFleetScopeActive).toBe(false);
+      expect(state._previousActiveWorktreeId).toBeNull();
+    });
+
+    it("enterFleetScope captures current activeWorktreeId", () => {
+      useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-active" });
+      useWorktreeSelectionStore.getState().enterFleetScope();
+      const state = useWorktreeSelectionStore.getState();
+      expect(state.isFleetScopeActive).toBe(true);
+      expect(state._previousActiveWorktreeId).toBe("wt-active");
+    });
+
+    it("enterFleetScope is idempotent — repeated calls preserve the original capture", () => {
+      useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-original" });
+      useWorktreeSelectionStore.getState().enterFleetScope();
+      useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-changed" });
+      useWorktreeSelectionStore.getState().enterFleetScope();
+      expect(useWorktreeSelectionStore.getState()._previousActiveWorktreeId).toBe("wt-original");
+    });
+
+    it("exitFleetScope restores the previously captured activeWorktreeId", () => {
+      useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-original" });
+      useWorktreeSelectionStore.getState().enterFleetScope();
+      useWorktreeSelectionStore.setState({ activeWorktreeId: null });
+      useWorktreeSelectionStore.getState().exitFleetScope();
+      const state = useWorktreeSelectionStore.getState();
+      expect(state.isFleetScopeActive).toBe(false);
+      expect(state._previousActiveWorktreeId).toBeNull();
+      expect(state.activeWorktreeId).toBe("wt-original");
+    });
+
+    it("exitFleetScope is a no-op when scope is not active", () => {
+      useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-current" });
+      useWorktreeSelectionStore.getState().exitFleetScope();
+      const state = useWorktreeSelectionStore.getState();
+      expect(state.isFleetScopeActive).toBe(false);
+      expect(state.activeWorktreeId).toBe("wt-current");
+    });
+
+    it("reset clears fleet scope state", () => {
+      useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-active" });
+      useWorktreeSelectionStore.getState().enterFleetScope();
+      useWorktreeSelectionStore.getState().reset();
+      const state = useWorktreeSelectionStore.getState();
+      expect(state.isFleetScopeActive).toBe(false);
+      expect(state._previousActiveWorktreeId).toBeNull();
+    });
+  });
 });
