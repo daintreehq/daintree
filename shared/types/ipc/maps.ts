@@ -1476,6 +1476,14 @@ export interface IpcInvokeMap {
     args: [text: string];
     result: { ok: true } | { ok: false; error: string };
   };
+  "clipboard:write-selection": {
+    args: [text: string];
+    result: { ok: true } | { ok: false; error: string };
+  };
+  "clipboard:read-selection": {
+    args: [];
+    result: { ok: true; text: string } | { ok: false; error: string };
+  };
 
   // Notification settings channels
   "notification:settings-get": {

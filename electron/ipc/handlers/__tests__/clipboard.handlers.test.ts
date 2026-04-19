@@ -4,6 +4,7 @@ const clipboardMock = vi.hoisted(() => ({
   writeImage: vi.fn(),
   readImage: vi.fn(),
   writeText: vi.fn(),
+  readText: vi.fn(),
 }));
 
 const nativeImageMock = vi.hoisted(() => ({
@@ -172,5 +173,171 @@ describe("clipboard:write-text handler", () => {
     cleanup();
     const removedChannels = vi.mocked(ipcMain.removeHandler).mock.calls.map(([ch]) => ch);
     expect(removedChannels).toContain("clipboard:write-text");
+  });
+});
+
+describe("clipboard:write-selection handler", () => {
+  const originalPlatform = process.platform;
+  let cleanup: () => void;
+
+  const setPlatform = (value: NodeJS.Platform) => {
+    Object.defineProperty(process, "platform", { value, configurable: true });
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    setPlatform("linux");
+    cleanup = registerClipboardHandlers();
+  });
+
+  afterEach(() => {
+    cleanup();
+    setPlatform(originalPlatform);
+  });
+
+  it("registers the clipboard:write-selection handler", () => {
+    const channels = vi.mocked(ipcMain.handle).mock.calls.map(([ch]) => ch);
+    expect(channels).toContain("clipboard:write-selection");
+  });
+
+  it("writes to PRIMARY selection on Linux and returns ok", async () => {
+    const handler = getHandler("clipboard:write-selection");
+    const result = await handler(fakeEvent, "selected text");
+
+    expect(clipboardMock.writeText).toHaveBeenCalledWith("selected text", "selection");
+    expect(result).toEqual({ ok: true });
+  });
+
+  it("rejects empty text without calling clipboard", async () => {
+    const handler = getHandler("clipboard:write-selection");
+    const result = await handler(fakeEvent, "");
+
+    expect(clipboardMock.writeText).not.toHaveBeenCalled();
+    expect(result).toEqual({ ok: false, error: "Text must not be empty" });
+  });
+
+  it("rejects non-string input without calling clipboard", async () => {
+    const handler = getHandler("clipboard:write-selection");
+    const result = await handler(fakeEvent, 42 as unknown as string);
+
+    expect(clipboardMock.writeText).not.toHaveBeenCalled();
+    expect(result).toEqual({ ok: false, error: "Text must be a string" });
+  });
+
+  it("short-circuits on macOS without calling clipboard", async () => {
+    cleanup();
+    setPlatform("darwin");
+    cleanup = registerClipboardHandlers();
+
+    const handler = getHandler("clipboard:write-selection");
+    const result = await handler(fakeEvent, "hello");
+
+    expect(clipboardMock.writeText).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      ok: false,
+      error: "PRIMARY selection is only available on Linux",
+    });
+  });
+
+  it("short-circuits on Windows without calling clipboard", async () => {
+    cleanup();
+    setPlatform("win32");
+    cleanup = registerClipboardHandlers();
+
+    const handler = getHandler("clipboard:write-selection");
+    const result = await handler(fakeEvent, "hello");
+
+    expect(clipboardMock.writeText).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      ok: false,
+      error: "PRIMARY selection is only available on Linux",
+    });
+  });
+
+  it("returns error when clipboard.writeText throws", async () => {
+    clipboardMock.writeText.mockImplementationOnce(() => {
+      throw new Error("wayland compositor lacks primary selection");
+    });
+
+    const handler = getHandler("clipboard:write-selection");
+    const result = await handler(fakeEvent, "hello");
+
+    expect(result).toEqual({
+      ok: false,
+      error: "wayland compositor lacks primary selection",
+    });
+  });
+});
+
+describe("clipboard:read-selection handler", () => {
+  const originalPlatform = process.platform;
+  let cleanup: () => void;
+
+  const setPlatform = (value: NodeJS.Platform) => {
+    Object.defineProperty(process, "platform", { value, configurable: true });
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    setPlatform("linux");
+    cleanup = registerClipboardHandlers();
+  });
+
+  afterEach(() => {
+    cleanup();
+    setPlatform(originalPlatform);
+  });
+
+  it("registers the clipboard:read-selection handler", () => {
+    const channels = vi.mocked(ipcMain.handle).mock.calls.map(([ch]) => ch);
+    expect(channels).toContain("clipboard:read-selection");
+  });
+
+  it("reads PRIMARY selection on Linux and returns text", async () => {
+    clipboardMock.readText.mockReturnValueOnce("pasted text");
+
+    const handler = getHandler("clipboard:read-selection");
+    const result = await handler(fakeEvent);
+
+    expect(clipboardMock.readText).toHaveBeenCalledWith("selection");
+    expect(result).toEqual({ ok: true, text: "pasted text" });
+  });
+
+  it("returns empty text when PRIMARY selection is empty", async () => {
+    clipboardMock.readText.mockReturnValueOnce("");
+
+    const handler = getHandler("clipboard:read-selection");
+    const result = await handler(fakeEvent);
+
+    expect(result).toEqual({ ok: true, text: "" });
+  });
+
+  it("short-circuits on macOS without calling clipboard", async () => {
+    cleanup();
+    setPlatform("darwin");
+    cleanup = registerClipboardHandlers();
+
+    const handler = getHandler("clipboard:read-selection");
+    const result = await handler(fakeEvent);
+
+    expect(clipboardMock.readText).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      ok: false,
+      error: "PRIMARY selection is only available on Linux",
+    });
+  });
+
+  it("returns error when clipboard.readText throws", async () => {
+    clipboardMock.readText.mockImplementationOnce(() => {
+      throw new Error("focus required for primary read");
+    });
+
+    const handler = getHandler("clipboard:read-selection");
+    const result = await handler(fakeEvent);
+
+    expect(result).toEqual({
+      ok: false,
+      error: "focus required for primary read",
+    });
   });
 });

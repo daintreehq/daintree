@@ -465,6 +465,8 @@ export const CHANNELS = {
   CLIPBOARD_THUMBNAIL_FROM_PATH: "clipboard:thumbnail-from-path",
   CLIPBOARD_WRITE_IMAGE: "clipboard:write-image",
   CLIPBOARD_WRITE_TEXT: "clipboard:write-text",
+  CLIPBOARD_WRITE_SELECTION: "clipboard:write-selection",
+  CLIPBOARD_READ_SELECTION: "clipboard:read-selection",
 
   APP_THEME_GET: "app-theme:get",
   APP_THEME_SET_COLOR_SCHEME: "app-theme:set-color-scheme",
