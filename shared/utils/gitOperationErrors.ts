@@ -35,6 +35,25 @@ const PATTERNS: ReadonlyArray<readonly [GitOperationReason, RegExp]> = [
   ["not-a-repository", /fatal: not a git repository/i],
   ["dubious-ownership", /fatal: detected dubious ownership in repository at/i],
   [
+    // MUST run before `auth-failed`: GitHub's LFS batch API returns HTTP 403
+    // when a repo exceeds its LFS quota, so the quota-specific batch response
+    // co-occurs with the same "URL returned error: 403" fragment that
+    // `auth-failed` matches. The quota signal is the more actionable root
+    // cause, so it has to win the tie. Do not reorder without updating the
+    // "prefers lfs-quota-exceeded over auth-failed" test.
+    //
+    // LFS storage/bandwidth quota signals across major providers:
+    //   - GitHub (current): "batch response: This repository exceeded its LFS budget"
+    //   - GitHub (classic): "batch response: This repository is over its data quota"
+    //   - GitLab:           "reached ... free storage limit ... Git LFS"
+    //   - Azure DevOps:     VS403658 or HTTP 413 on LFS pushes
+    //
+    // The GitLab arm requires an "LFS"/"git-lfs" token nearby so that a plain
+    // namespace-level storage limit message does not misclassify as LFS.
+    "lfs-quota-exceeded",
+    /batch response:.*(?:exceeded.*LFS budget|over.*data quota|LFS budget)|reached.*free storage limit.*(?:Git LFS|git[- ]lfs|LFS)|(?:Git LFS|git[- ]lfs|LFS).*reached.*free storage limit|HTTP 413.*LFS|VS403658:/i,
+  ],
+  [
     "auth-failed",
     // HTTPS 401/403/407 (auth/perm/proxy-auth) as well as the direct SSH/HTTPS messages.
     /Authentication failed|Permission denied \(publickey\)|could not read Username for|unable to access.*: The requested URL returned error: 40[137]/i,
@@ -75,15 +94,6 @@ const PATTERNS: ReadonlyArray<readonly [GitOperationReason, RegExp]> = [
     /fatal: (?:bad revision|needed a single revision|pathspec '.*' did not match|ambiguous argument)|couldn't find remote ref/i,
   ],
   ["lfs-missing", /external filter 'git-lfs filter-process' failed|smudge filter lfs failed/i],
-  [
-    // LFS storage/bandwidth quota signals across major providers.
-    //   - GitHub (current): "batch response: This repository exceeded its LFS budget"
-    //   - GitHub (classic): "batch response: This repository is over its data quota"
-    //   - GitLab:           "reached ... free storage limit"
-    //   - Azure DevOps:     VS403658 or HTTP 413 on LFS pushes
-    "lfs-quota-exceeded",
-    /batch response:.*(?:exceeded.*LFS budget|over.*data quota|LFS budget)|reached.*free storage limit|HTTP 413.*LFS|VS403658:/i,
-  ],
   [
     "config-missing",
     // Covers the older 'has no upstream branch' and the newer 'no upstream configured for branch'.

@@ -166,13 +166,34 @@ describe("classifyGitError — ordering and normalization", () => {
     expect(classifyGitError(msg)).toBe("auth-failed");
   });
 
-  it("prefers lfs-missing over lfs-quota-exceeded when both signals appear", () => {
-    // PATTERNS ordering: lfs-missing is listed before lfs-quota-exceeded — the missing
-    // binary is the more actionable root cause when both error classes co-occur.
+  it("prefers lfs-quota-exceeded over lfs-missing when both signals appear", () => {
+    // Regardless of PATTERNS order, a quota signal is the more actionable root
+    // cause when a user sees both (the filter-process failure is a downstream
+    // consequence of the quota block, not a missing binary).
     const msg =
       "Smudge error: external filter 'git-lfs filter-process' failed\n" +
       "batch response: This repository exceeded its LFS budget";
-    expect(classifyGitError(msg)).toBe("lfs-missing");
+    expect(classifyGitError(msg)).toBe("lfs-quota-exceeded");
+  });
+
+  it("prefers lfs-quota-exceeded over auth-failed on HTTP 403 batch responses (GitHub LFS)", () => {
+    // Regression: GitHub's LFS batch API returns HTTP 403 when the repo exceeds
+    // its LFS quota. Before the ordering fix, `auth-failed` matched the 403
+    // fragment first and users saw "Sign in with GitHub" instead of a quota
+    // explanation. The quota signal must win the tie.
+    const msg =
+      "batch response: This repository exceeded its LFS budget. Please contact the owner.\n" +
+      "error: failed to push some refs to 'https://github.com/acme/media.git'\n" +
+      "fatal: unable to access 'https://github.com/acme/media.git/': The requested URL returned error: 403";
+    expect(classifyGitError(msg)).toBe("lfs-quota-exceeded");
+  });
+
+  it("does not classify a general GitLab namespace storage-limit message as lfs-quota-exceeded", () => {
+    // The regex arm for `reached ... free storage limit` requires an LFS token
+    // nearby so that a plain namespace-level storage warning does not
+    // misclassify as LFS-specific.
+    const msg = "You have reached the free storage limit of 5 GiB for your namespace";
+    expect(classifyGitError(msg)).toBe("unknown");
   });
 
   it("combines CRLF, remote-stripping, and ordering for hook rejection", () => {
