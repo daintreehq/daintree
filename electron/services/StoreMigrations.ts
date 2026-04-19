@@ -2,7 +2,7 @@ import Store from "electron-store";
 import type { StoreSchema } from "../store.js";
 import fs from "fs";
 
-export const LATEST_SCHEMA_VERSION = 16;
+export const LATEST_SCHEMA_VERSION = 17;
 
 export interface Migration {
   version: number;
