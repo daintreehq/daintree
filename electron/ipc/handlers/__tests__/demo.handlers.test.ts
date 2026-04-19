@@ -41,32 +41,6 @@ vi.mock("fs", () => ({
   createWriteStream: vi.fn(() => mockWriteStream),
 }));
 
-class MockStdin extends EventEmitter {
-  write = vi.fn(() => true);
-  end = vi.fn();
-}
-
-let mockProc: EventEmitter & {
-  stdin: MockStdin;
-  kill: ReturnType<typeof vi.fn>;
-};
-
-function createMockProc() {
-  const proc = new EventEmitter() as EventEmitter & {
-    stdin: MockStdin;
-    kill: ReturnType<typeof vi.fn>;
-  };
-  proc.stdin = new MockStdin();
-  proc.kill = vi.fn();
-  return proc;
-}
-
-vi.mock("child_process", () => ({
-  spawn: vi.fn(() => mockProc),
-}));
-
-vi.mock("ffmpeg-static", () => ({ default: "/mock/bin/ffmpeg" }));
-
 import { registerDemoHandlers } from "../demo.js";
 import type { HandlerDependencies } from "../../types.js";
 import type { BrowserWindow } from "electron";
@@ -111,7 +85,6 @@ function getIpcListener(channel: string): ((...args: unknown[]) => void) | undef
 describe("registerDemoHandlers", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockProc = createMockProc();
     mockWriteStream = new MockWriteStream();
   });
 
@@ -166,7 +139,6 @@ describe("registerDemoHandlers", () => {
     expect(channels).toContain("demo:start-capture");
     expect(channels).toContain("demo:stop-capture");
     expect(channels).toContain("demo:get-capture-status");
-    expect(channels).toContain("demo:encode");
     cleanup();
   });
 
@@ -178,10 +150,10 @@ describe("registerDemoHandlers", () => {
     cleanup();
   });
 
-  it("cleanup removes all 22 handlers", () => {
+  it("cleanup removes all 20 handlers", () => {
     const cleanup = registerDemoHandlers(makeDeps(true));
     cleanup();
-    expect(ipcMainMock.removeHandler).toHaveBeenCalledTimes(22);
+    expect(ipcMainMock.removeHandler).toHaveBeenCalledTimes(20);
   });
 
   it("cleanup removes chunk and stop listeners", () => {
@@ -196,7 +168,7 @@ describe("registerDemoHandlers", () => {
     const deps = makeDeps(true);
     registerDemoHandlers(deps);
     const handler = getHandler("demo:screenshot");
-    const result = (await handler()) as {
+    const result = (await handler({})) as {
       data: Uint8Array;
       width: number;
       height: number;
@@ -207,107 +179,13 @@ describe("registerDemoHandlers", () => {
     expect(result.height).toBe(1080);
   });
 
-  describe("handleEncode", () => {
-    function getEncodeHandler() {
-      registerDemoHandlers(makeDeps(true));
-      return getHandler("demo:encode");
-    }
-
-    function makeEvent(isDestroyed = false) {
-      return {
-        sender: {
-          send: vi.fn(),
-          isDestroyed: vi.fn(() => isDestroyed),
-        },
-      };
-    }
-
-    it("resolves with outputPath and durationMs on success", async () => {
-      const handler = getEncodeHandler();
-      const event = makeEvent();
-      const promise = handler(event, {
-        framesDir: "/tmp/frames",
-        outputPath: "/tmp/out.mp4",
-        preset: "youtube-1080p",
-      });
-      mockProc.emit("close", 0);
-      const result = (await promise) as { outputPath: string; durationMs: number };
-      expect(result.outputPath).toBe("/tmp/out.mp4");
-      expect(typeof result.durationMs).toBe("number");
-    });
-
-    it("rejects when no PNG frames found", async () => {
-      const fsMod = await import("fs");
-      (fsMod.readdirSync as ReturnType<typeof vi.fn>).mockReturnValueOnce([]);
-      const handler = getEncodeHandler();
-      const event = makeEvent();
-      await expect(
-        handler(event, {
-          framesDir: "/tmp/empty",
-          outputPath: "/tmp/out.mp4",
-          preset: "youtube-4k",
-        })
-      ).rejects.toThrow("No PNG frames matching frame-NNNNNN.png found");
-    });
-
-    it("rejects on non-zero exit code with stderr", async () => {
-      const handler = getEncodeHandler();
-      const event = makeEvent();
-      const promise = handler(event, {
-        framesDir: "/tmp/frames",
-        outputPath: "/tmp/out.mp4",
-        preset: "web-webm",
-      });
-      mockProc.stderr.emit("data", Buffer.from("Unknown encoder libx264"));
-      mockProc.emit("close", 1);
-      await expect(promise).rejects.toThrow("ffmpeg exited with code 1");
-    });
-
-    it("uses yuv444p and high444 profile for youtube presets", async () => {
-      const { spawn: spawnMock } = await import("child_process");
-      const handler = getEncodeHandler();
-      const event = makeEvent();
-      const promise = handler(event, {
-        framesDir: "/tmp/frames",
-        outputPath: "/tmp/out.mp4",
-        preset: "youtube-1080p",
-      });
-      mockProc.emit("close", 0);
-      await promise;
-      const args = (spawnMock as ReturnType<typeof vi.fn>).mock.calls[0]![1] as string[];
-      expect(args).toContain("yuv444p");
-      expect(args).toContain("high444");
-    });
-
-    it("uses frame-%06d.png input pattern", async () => {
-      const { spawn: spawnMock } = await import("child_process");
-      const handler = getEncodeHandler();
-      const event = makeEvent();
-      const promise = handler(event, {
-        framesDir: "/tmp/frames",
-        outputPath: "/tmp/out.mp4",
-        preset: "youtube-1080p",
-      });
-      mockProc.emit("close", 0);
-      await promise;
-      const args = (spawnMock as ReturnType<typeof vi.fn>).mock.calls[0]![1] as string[];
-      const inputIdx = args.indexOf("-i");
-      expect(args[inputIdx + 1]).toContain("frame-%06d.png");
-    });
-  });
-
   describe("MediaRecorder capture pipeline", () => {
     const defaultPayload = {
       fps: 30,
       outputPath: "/tmp/capture/out.webm",
     };
 
-    it("startCapture creates write stream, sends exec start, returns outputPath", async () => {
-      const fsMod = await import("fs");
-      const deps = makeDeps(true);
-      const cleanup = registerDemoHandlers(deps);
-      const handler = getHandler("demo:start-capture");
-
+    function autoResolveCommandDone() {
       ipcMainMock.on.mockImplementation(
         (channel: string, listener: (...args: unknown[]) => void) => {
           if (channel === "demo:command-done") {
@@ -315,6 +193,14 @@ describe("registerDemoHandlers", () => {
           }
         }
       );
+    }
+
+    it("startCapture creates write stream, sends exec start, returns outputPath", async () => {
+      const fsMod = await import("fs");
+      autoResolveCommandDone();
+      const deps = makeDeps(true);
+      const cleanup = registerDemoHandlers(deps);
+      const handler = getHandler("demo:start-capture");
 
       const result = (await handler({}, defaultPayload)) as { outputPath: string };
       expect(result.outputPath).toBe("/tmp/capture/out.webm");
@@ -332,13 +218,7 @@ describe("registerDemoHandlers", () => {
     });
 
     it("rejects startCapture when already active", async () => {
-      ipcMainMock.on.mockImplementation(
-        (channel: string, listener: (...args: unknown[]) => void) => {
-          if (channel === "demo:command-done") {
-            setTimeout(() => listener({}, { requestId: "test-request-id" }), 5);
-          }
-        }
-      );
+      autoResolveCommandDone();
       const cleanup = registerDemoHandlers(makeDeps(true));
       const handler = getHandler("demo:start-capture");
       await handler({}, defaultPayload);
@@ -347,46 +227,21 @@ describe("registerDemoHandlers", () => {
     });
 
     it("capture chunk handler writes buffer to stream for matching captureId", async () => {
-      // Build a real registration (not mocked) so we can capture the listener
+      autoResolveCommandDone();
       const deps = makeDeps(true);
       const cleanup = registerDemoHandlers(deps);
       const startHandler = getHandler("demo:start-capture");
-
-      // Arrange: resolve exec-start-capture
-      let doneListener: ((...args: unknown[]) => void) | undefined;
-      ipcMainMock.on.mock.calls.forEach((c: unknown[]) => {
-        if (c[0] === "demo:command-done") {
-          doneListener = c[1] as (...args: unknown[]) => void;
-        }
-      });
-      const startPromise = startHandler({}, defaultPayload);
-      // find the latest demo:command-done listener added by sendCommandAndAwait
-      setTimeout(() => {
-        const latest = ipcMainMock.on.mock.calls
-          .filter((c: unknown[]) => c[0] === "demo:command-done")
-          .at(-1);
-        (latest?.[1] as (...args: unknown[]) => void)?.({}, { requestId: "test-request-id" });
-      }, 0);
-      await startPromise;
+      await startHandler({}, defaultPayload);
 
       const chunkListener = getIpcListener("demo:capture-chunk");
       expect(chunkListener).toBeDefined();
-      const data = new Uint8Array([1, 2, 3, 4]);
-      chunkListener!({}, { captureId: "test-request-id", data });
+      chunkListener!({}, { captureId: "test-request-id", data: new Uint8Array([1, 2, 3, 4]) });
       expect(mockWriteStream.write).toHaveBeenCalledTimes(1);
       cleanup();
-      // doneListener is captured but unused; simulateCommandDone retained for other tests
-      void doneListener;
     });
 
     it("stale captureId chunks are ignored", async () => {
-      ipcMainMock.on.mockImplementation(
-        (channel: string, listener: (...args: unknown[]) => void) => {
-          if (channel === "demo:command-done") {
-            setTimeout(() => listener({}, { requestId: "test-request-id" }), 5);
-          }
-        }
-      );
+      autoResolveCommandDone();
       const cleanup = registerDemoHandlers(makeDeps(true));
       const handler = getHandler("demo:start-capture");
       await handler({}, defaultPayload);
@@ -397,13 +252,7 @@ describe("registerDemoHandlers", () => {
     });
 
     it("stop flow: exec-stop sent then capture-stop finalizes writeStream and resolves", async () => {
-      ipcMainMock.on.mockImplementation(
-        (channel: string, listener: (...args: unknown[]) => void) => {
-          if (channel === "demo:command-done") {
-            setTimeout(() => listener({}, { requestId: "test-request-id" }), 5);
-          }
-        }
-      );
+      autoResolveCommandDone();
       const deps = makeDeps(true);
       const cleanup = registerDemoHandlers(deps);
 
@@ -418,7 +267,6 @@ describe("registerDemoHandlers", () => {
         }>
       )({});
 
-      // Simulate renderer posting the final DEMO_CAPTURE_STOP
       setTimeout(() => {
         const stopListener = getIpcListener("demo:capture-stop");
         stopListener!({}, { captureId: "test-request-id", frameCount: 7 });
@@ -441,8 +289,8 @@ describe("registerDemoHandlers", () => {
     it("getCaptureStatus returns inactive before start", async () => {
       const cleanup = registerDemoHandlers(makeDeps(true));
       const status = (await (
-        getHandler("demo:get-capture-status") as () => Promise<unknown>
-      )()) as {
+        getHandler("demo:get-capture-status") as (ev: unknown) => Promise<unknown>
+      )({})) as {
         active: boolean;
         frameCount: number;
         outputPath: string | null;
@@ -453,21 +301,15 @@ describe("registerDemoHandlers", () => {
     });
 
     it("getCaptureStatus reports active after start", async () => {
-      ipcMainMock.on.mockImplementation(
-        (channel: string, listener: (...args: unknown[]) => void) => {
-          if (channel === "demo:command-done") {
-            setTimeout(() => listener({}, { requestId: "test-request-id" }), 5);
-          }
-        }
-      );
+      autoResolveCommandDone();
       const cleanup = registerDemoHandlers(makeDeps(true));
       await (getHandler("demo:start-capture") as (...a: unknown[]) => Promise<unknown>)(
         {},
         defaultPayload
       );
       const status = (await (
-        getHandler("demo:get-capture-status") as () => Promise<unknown>
-      )()) as {
+        getHandler("demo:get-capture-status") as (ev: unknown) => Promise<unknown>
+      )({})) as {
         active: boolean;
         outputPath: string | null;
       };
@@ -477,13 +319,7 @@ describe("registerDemoHandlers", () => {
     });
 
     it("error from renderer on capture-stop rejects finalize promise", async () => {
-      ipcMainMock.on.mockImplementation(
-        (channel: string, listener: (...args: unknown[]) => void) => {
-          if (channel === "demo:command-done") {
-            setTimeout(() => listener({}, { requestId: "test-request-id" }), 5);
-          }
-        }
-      );
+      autoResolveCommandDone();
       const cleanup = registerDemoHandlers(makeDeps(true));
       await (getHandler("demo:start-capture") as (...a: unknown[]) => Promise<unknown>)(
         {},

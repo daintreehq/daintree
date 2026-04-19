@@ -75,8 +75,6 @@ export interface DemoCaptureStatus {
   outputPath: string | null;
 }
 
-export type DemoEncodePreset = "youtube-4k" | "youtube-1080p" | "web-webm";
-
 export interface DemoScrollPayload {
   selector: string;
 }

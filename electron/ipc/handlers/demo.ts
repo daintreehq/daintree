@@ -2,7 +2,6 @@ import { ipcMain, session } from "electron";
 import { randomBytes } from "crypto";
 import * as fs from "fs";
 import * as path from "path";
-import { spawn, type ChildProcess } from "child_process";
 import { CHANNELS } from "../channels.js";
 import type { HandlerDependencies } from "../types.js";
 import { getAppWebContents } from "../../window/webContentsRegistry.js";
@@ -20,9 +19,6 @@ import type {
   DemoCaptureStatus,
   DemoCaptureChunkPayload,
   DemoCaptureStopPayload,
-  DemoEncodePayload,
-  DemoEncodeProgressEvent,
-  DemoEncodeResult,
   DemoScrollPayload,
   DemoDragPayload,
   DemoPressKeyPayload,
@@ -35,18 +31,6 @@ import type {
 
 const CAPTURE_MIME_TYPE = "video/webm;codecs=vp9";
 const PROJECT_SESSION_PARTITION = "persist:daintree";
-
-export function resolveFfmpegPath(): string {
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    return require("ffmpeg-static") as string;
-  } catch {
-    throw new Error(
-      "ffmpeg-static is not installed. Demo video capture is an optional feature — " +
-        "run `npm install ffmpeg-static` to enable it."
-    );
-  }
-}
 
 export function registerDemoHandlers(deps: HandlerDependencies): () => void {
   if (!deps.isDemoMode) {
@@ -172,7 +156,7 @@ export function registerDemoHandlers(deps: HandlerDependencies): () => void {
     await sendCommandAndAwait(CHANNELS.DEMO_EXEC_WAIT_FOR_IDLE, payload);
   };
 
-  // --- Frame capture state (MediaRecorder-based) ---
+  // --- MediaRecorder-based capture state ---
   interface CaptureSession {
     captureId: string;
     outputPath: string;
@@ -320,207 +304,28 @@ export function registerDemoHandlers(deps: HandlerDependencies): () => void {
     };
   };
 
-  // --- Encode presets for offline re-encode (PNG files from disk) ---
-
-  const ENCODE_PRESETS = {
-    "youtube-4k": {
-      outputOptions: [
-        "-vf",
-        "scale=3840:2160:flags=lanczos",
-        "-c:v",
-        "libx264",
-        "-profile:v",
-        "high444",
-        "-crf",
-        "18",
-        "-pix_fmt",
-        "yuv444p",
-        "-preset",
-        "slow",
-        "-g",
-        "15",
-        "-bf",
-        "2",
-        "-movflags",
-        "+faststart",
-        "-an",
-      ],
-    },
-    "youtube-1080p": {
-      outputOptions: [
-        "-vf",
-        "scale=1920:1080:flags=lanczos",
-        "-c:v",
-        "libx264",
-        "-profile:v",
-        "high444",
-        "-crf",
-        "18",
-        "-pix_fmt",
-        "yuv444p",
-        "-preset",
-        "slow",
-        "-g",
-        "15",
-        "-bf",
-        "2",
-        "-movflags",
-        "+faststart",
-        "-an",
-      ],
-    },
-    "web-webm": {
-      outputOptions: [
-        "-c:v",
-        "libvpx-vp9",
-        "-crf",
-        "20",
-        "-b:v",
-        "0",
-        "-deadline",
-        "good",
-        "-cpu-used",
-        "1",
-        "-row-mt",
-        "1",
-        "-pix_fmt",
-        "yuv444p",
-        "-an",
-      ],
-    },
-  } as const;
-
-  let activeEncode: { kill: () => void } | null = null;
-
-  const handleEncode = async (
-    event: Electron.IpcMainInvokeEvent,
-    payload: DemoEncodePayload
-  ): Promise<DemoEncodeResult> => {
-    if (activeEncode) {
-      throw new Error("An encode is already in progress");
-    }
-
-    const ffmpegBin = resolveFfmpegPath();
-    const { framesDir, outputPath, preset, fps = 30 } = payload;
-    const presetConfig = ENCODE_PRESETS[preset];
-
-    const framePattern = /^frame-\d{6}\.png$/;
-    const pngFiles = fs
-      .readdirSync(framesDir)
-      .filter((f) => framePattern.test(f))
-      .sort();
-    if (pngFiles.length === 0) {
-      throw new Error(`No PNG frames matching frame-NNNNNN.png found in ${framesDir}`);
-    }
-    const totalFrames = pngFiles.length;
-
-    fs.mkdirSync(path.dirname(outputPath), { recursive: true });
-
-    const startTime = Date.now();
-    const inputPattern = path.join(framesDir, "frame-%06d.png");
-
-    const args = [
-      "-y",
-      "-framerate",
-      String(fps),
-      "-i",
-      inputPattern,
-      ...presetConfig.outputOptions,
-      "-progress",
-      "pipe:1",
-      "-nostats",
-      outputPath,
-    ];
-
-    return new Promise<DemoEncodeResult>((resolve, reject) => {
-      const proc: ChildProcess = spawn(ffmpegBin, args, { stdio: ["ignore", "pipe", "pipe"] });
-
-      activeEncode = {
-        kill: () => {
-          proc.kill("SIGKILL");
-        },
-      };
-
-      let stdoutBuffer = "";
-      let currentFrame = 0;
-      let currentFps = 0;
-
-      proc.stdout?.on("data", (chunk: Buffer) => {
-        stdoutBuffer += chunk.toString();
-        const lines = stdoutBuffer.split("\n");
-        stdoutBuffer = lines.pop() ?? "";
-
-        for (const line of lines) {
-          const eqIdx = line.indexOf("=");
-          if (eqIdx === -1) continue;
-          const key = line.slice(0, eqIdx).trim();
-          const value = line.slice(eqIdx + 1).trim();
-
-          if (key === "frame") {
-            currentFrame = parseInt(value, 10) || 0;
-          } else if (key === "fps") {
-            currentFps = parseFloat(value) || 0;
-          } else if (key === "progress") {
-            if (currentFrame > 0 && !event.sender.isDestroyed()) {
-              const percentComplete = Math.min((currentFrame / totalFrames) * 100, 100);
-              const etaSeconds = currentFps > 0 ? (totalFrames - currentFrame) / currentFps : 0;
-
-              const progressEvent: DemoEncodeProgressEvent = {
-                frame: currentFrame,
-                fps: currentFps,
-                percentComplete: Math.round(percentComplete * 100) / 100,
-                etaSeconds: Math.round(etaSeconds * 10) / 10,
-              };
-              event.sender.send(CHANNELS.DEMO_ENCODE_PROGRESS, progressEvent);
-            }
-          }
-        }
-      });
-
-      let stderrOutput = "";
-      proc.stderr?.on("data", (chunk: Buffer) => {
-        stderrOutput += chunk.toString();
-      });
-
-      proc.on("error", (err: Error) => {
-        activeEncode = null;
-        reject(new Error(`Encode failed: ${err.message}`));
-      });
-
-      proc.on("close", (code) => {
-        activeEncode = null;
-        if (code === 0) {
-          resolve({ outputPath, durationMs: Date.now() - startTime });
-        } else {
-          const lastLines = stderrOutput.trim().split("\n").slice(-3).join("\n");
-          reject(new Error(`ffmpeg exited with code ${code}: ${lastLines}`));
-        }
-      });
-    });
-  };
-
-  ipcMain.handle(CHANNELS.DEMO_MOVE_TO, handleMoveTo);
-  ipcMain.handle(CHANNELS.DEMO_MOVE_TO_SELECTOR, handleMoveToSelector);
-  ipcMain.handle(CHANNELS.DEMO_CLICK, handleClick);
-  ipcMain.handle(CHANNELS.DEMO_SCREENSHOT, handleScreenshot);
-  ipcMain.handle(CHANNELS.DEMO_TYPE, handleType);
-  ipcMain.handle(CHANNELS.DEMO_SET_ZOOM, handleSetZoom);
-  ipcMain.handle(CHANNELS.DEMO_WAIT_FOR_SELECTOR, handleWaitForSelector);
-  ipcMain.handle(CHANNELS.DEMO_PAUSE, handlePause);
-  ipcMain.handle(CHANNELS.DEMO_RESUME, handleResume);
-  ipcMain.handle(CHANNELS.DEMO_SLEEP, handleSleep);
-  ipcMain.handle(CHANNELS.DEMO_SCROLL, handleScroll);
-  ipcMain.handle(CHANNELS.DEMO_DRAG, handleDrag);
-  ipcMain.handle(CHANNELS.DEMO_PRESS_KEY, handlePressKey);
-  ipcMain.handle(CHANNELS.DEMO_SPOTLIGHT, handleSpotlight);
-  ipcMain.handle(CHANNELS.DEMO_DISMISS_SPOTLIGHT, handleDismissSpotlight);
-  ipcMain.handle(CHANNELS.DEMO_ANNOTATE, handleAnnotate);
-  ipcMain.handle(CHANNELS.DEMO_DISMISS_ANNOTATION, handleDismissAnnotation);
-  ipcMain.handle(CHANNELS.DEMO_WAIT_FOR_IDLE, handleWaitForIdle);
-  ipcMain.handle(CHANNELS.DEMO_START_CAPTURE, handleStartCapture);
-  ipcMain.handle(CHANNELS.DEMO_STOP_CAPTURE, handleStopCapture);
-  ipcMain.handle(CHANNELS.DEMO_GET_CAPTURE_STATUS, handleGetCaptureStatus);
-  ipcMain.handle(CHANNELS.DEMO_ENCODE, handleEncode);
+  const cleanups: Array<() => void> = [
+    typedHandle(CHANNELS.DEMO_MOVE_TO, handleMoveTo),
+    typedHandle(CHANNELS.DEMO_MOVE_TO_SELECTOR, handleMoveToSelector),
+    typedHandle(CHANNELS.DEMO_CLICK, handleClick),
+    typedHandle(CHANNELS.DEMO_SCREENSHOT, handleScreenshot),
+    typedHandle(CHANNELS.DEMO_TYPE, handleType),
+    typedHandle(CHANNELS.DEMO_WAIT_FOR_SELECTOR, handleWaitForSelector),
+    typedHandle(CHANNELS.DEMO_PAUSE, handlePause),
+    typedHandle(CHANNELS.DEMO_RESUME, handleResume),
+    typedHandle(CHANNELS.DEMO_SLEEP, handleSleep),
+    typedHandle(CHANNELS.DEMO_SCROLL, handleScroll),
+    typedHandle(CHANNELS.DEMO_DRAG, handleDrag),
+    typedHandle(CHANNELS.DEMO_PRESS_KEY, handlePressKey),
+    typedHandle(CHANNELS.DEMO_SPOTLIGHT, handleSpotlight),
+    typedHandle(CHANNELS.DEMO_DISMISS_SPOTLIGHT, handleDismissSpotlight),
+    typedHandle(CHANNELS.DEMO_ANNOTATE, handleAnnotate),
+    typedHandle(CHANNELS.DEMO_DISMISS_ANNOTATION, handleDismissAnnotation),
+    typedHandle(CHANNELS.DEMO_WAIT_FOR_IDLE, handleWaitForIdle),
+    typedHandle(CHANNELS.DEMO_START_CAPTURE, handleStartCapture),
+    typedHandle(CHANNELS.DEMO_STOP_CAPTURE, handleStopCapture),
+    typedHandle(CHANNELS.DEMO_GET_CAPTURE_STATUS, handleGetCaptureStatus),
+  ];
 
   return () => {
     if (captureSession && !captureSession.finalized) {
@@ -533,31 +338,8 @@ export function registerDemoHandlers(deps: HandlerDependencies): () => void {
     ipcMain.removeListener(CHANNELS.DEMO_CAPTURE_CHUNK, onCaptureChunk);
     ipcMain.removeListener(CHANNELS.DEMO_CAPTURE_STOP, onCaptureStop);
     displayMediaHandlerSession.setDisplayMediaRequestHandler(null);
-    ipcMain.removeHandler(CHANNELS.DEMO_MOVE_TO);
-    ipcMain.removeHandler(CHANNELS.DEMO_MOVE_TO_SELECTOR);
-    ipcMain.removeHandler(CHANNELS.DEMO_CLICK);
-    ipcMain.removeHandler(CHANNELS.DEMO_SCREENSHOT);
-    ipcMain.removeHandler(CHANNELS.DEMO_TYPE);
-    ipcMain.removeHandler(CHANNELS.DEMO_SET_ZOOM);
-    ipcMain.removeHandler(CHANNELS.DEMO_WAIT_FOR_SELECTOR);
-    ipcMain.removeHandler(CHANNELS.DEMO_PAUSE);
-    ipcMain.removeHandler(CHANNELS.DEMO_RESUME);
-    ipcMain.removeHandler(CHANNELS.DEMO_SLEEP);
-    ipcMain.removeHandler(CHANNELS.DEMO_SCROLL);
-    ipcMain.removeHandler(CHANNELS.DEMO_DRAG);
-    ipcMain.removeHandler(CHANNELS.DEMO_PRESS_KEY);
-    ipcMain.removeHandler(CHANNELS.DEMO_SPOTLIGHT);
-    ipcMain.removeHandler(CHANNELS.DEMO_DISMISS_SPOTLIGHT);
-    ipcMain.removeHandler(CHANNELS.DEMO_ANNOTATE);
-    ipcMain.removeHandler(CHANNELS.DEMO_DISMISS_ANNOTATION);
-    ipcMain.removeHandler(CHANNELS.DEMO_WAIT_FOR_IDLE);
-    ipcMain.removeHandler(CHANNELS.DEMO_START_CAPTURE);
-    ipcMain.removeHandler(CHANNELS.DEMO_STOP_CAPTURE);
-    ipcMain.removeHandler(CHANNELS.DEMO_GET_CAPTURE_STATUS);
-    ipcMain.removeHandler(CHANNELS.DEMO_ENCODE);
-    if (activeEncode) {
-      activeEncode.kill();
-      activeEncode = null;
+    for (const cleanup of cleanups) {
+      cleanup();
     }
   };
 }
