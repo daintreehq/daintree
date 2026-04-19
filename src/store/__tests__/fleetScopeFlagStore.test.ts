@@ -59,14 +59,20 @@ describe("fleetScopeFlagStore", () => {
   });
 
   describe("setMode", () => {
-    it("updates mode and persists", () => {
+    it("updates mode and persists", async () => {
       useFleetScopeFlagStore.getState().setMode("scoped");
       expect(useFleetScopeFlagStore.getState().mode).toBe("scoped");
-      expect(setStateMock).toHaveBeenCalledWith({ fleetScopeMode: "scoped" });
+      // persistMode dynamically imports @/clients, so the setState call
+      // resolves after several microtasks. Wait for the mock instead of
+      // guessing how many Promise.resolve() ticks are needed.
+      await vi.waitFor(() =>
+        expect(setStateMock).toHaveBeenCalledWith({ fleetScopeMode: "scoped" })
+      );
     });
 
-    it("is a no-op when mode is unchanged", () => {
+    it("is a no-op when mode is unchanged", async () => {
       useFleetScopeFlagStore.getState().setMode("legacy");
+      await new Promise((resolve) => setTimeout(resolve, 0));
       expect(setStateMock).not.toHaveBeenCalled();
     });
 

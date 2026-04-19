@@ -1,5 +1,4 @@
 import { create } from "zustand";
-import { appClient } from "@/clients";
 
 export type FleetScopeMode = "legacy" | "scoped";
 
@@ -29,6 +28,7 @@ export const useFleetScopeFlagStore = create<FleetScopeFlagState>()((set, get) =
 
 async function persistMode(mode: FleetScopeMode): Promise<void> {
   try {
+    const { appClient } = await import("@/clients");
     await appClient.setState({ fleetScopeMode: mode });
   } catch (error) {
     console.error("Failed to persist fleet scope mode:", error);
