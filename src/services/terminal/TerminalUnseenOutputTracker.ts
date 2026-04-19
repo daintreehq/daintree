@@ -17,10 +17,8 @@ export class TerminalUnseenOutputTracker {
     const next = current + 1;
     this.unseenById.set(id, next);
 
-    if (current === 0) {
-      this.updateSnapshot(id, isUserScrolledBack, next);
-      this.notify(id);
-    }
+    this.updateSnapshot(id, isUserScrolledBack, next);
+    this.notify(id);
   }
 
   clearUnseen(id: string, isUserScrolledBack: boolean): void {

@@ -85,4 +85,13 @@ describe("TerminalScrollIndicator", () => {
     expect(container.className).toContain("pointer-events-none");
     expect(button.className).toContain("pointer-events-auto");
   });
+
+  it("anchors the pill to the bottom-right flush against the xterm scrollbar gutter", () => {
+    mockHasUnseenOutput = true;
+    render(<TerminalScrollIndicator terminalId="t1" />);
+    const container = screen.getByRole("button").parentElement!;
+    expect(container.className).toContain("justify-end");
+    expect(container.className).toContain("pr-[14px]");
+    expect(container.className).not.toContain("justify-center");
+  });
 });

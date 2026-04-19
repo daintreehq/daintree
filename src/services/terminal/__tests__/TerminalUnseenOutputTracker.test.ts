@@ -22,7 +22,7 @@ describe("TerminalUnseenOutputTracker", () => {
       expect(snapshot.unseen).toBe(0);
     });
 
-    it("should notify listeners only on 0→1 transition", () => {
+    it("should notify listeners on every increment so threshold gating re-evaluates", () => {
       const listener = vi.fn();
       tracker.subscribe(terminalId, listener);
 
@@ -30,7 +30,21 @@ describe("TerminalUnseenOutputTracker", () => {
       expect(listener).toHaveBeenCalledTimes(1);
 
       tracker.incrementUnseen(terminalId, true);
-      expect(listener).toHaveBeenCalledTimes(1);
+      expect(listener).toHaveBeenCalledTimes(2);
+
+      tracker.incrementUnseen(terminalId, true);
+      expect(listener).toHaveBeenCalledTimes(3);
+    });
+
+    it("should expose the running unseen count in the snapshot on each increment", () => {
+      tracker.incrementUnseen(terminalId, true);
+      expect(tracker.getSnapshot(terminalId).unseen).toBe(1);
+
+      tracker.incrementUnseen(terminalId, true);
+      expect(tracker.getSnapshot(terminalId).unseen).toBe(2);
+
+      tracker.incrementUnseen(terminalId, true);
+      expect(tracker.getSnapshot(terminalId).unseen).toBe(3);
     });
 
     it("should maintain separate counters for different terminals", () => {
@@ -42,7 +56,7 @@ describe("TerminalUnseenOutputTracker", () => {
       tracker.incrementUnseen(terminal2, true);
 
       expect(tracker.getSnapshot(terminal1).unseen).toBe(1);
-      expect(tracker.getSnapshot(terminal2).unseen).toBe(1);
+      expect(tracker.getSnapshot(terminal2).unseen).toBe(2);
     });
   });
 

@@ -878,6 +878,7 @@ class TerminalInstanceService {
     const SCROLL_KEYS = new Set(["PageUp", "PageDown", "Home", "End", "ArrowUp", "ArrowDown"]);
     const onWheel = () => {
       managed._userScrollIntent = true;
+      managed.lastWheelAt = Date.now();
     };
     const onKeydownScroll = (e: KeyboardEvent) => {
       if (SCROLL_KEYS.has(e.key)) managed._userScrollIntent = true;
@@ -1481,6 +1482,10 @@ class TerminalInstanceService {
 
   getUnseenOutputSnapshot(id: string): UnseenOutputSnapshot {
     return this.unseenTracker.getSnapshot(id);
+  }
+
+  getLastWheelAt(id: string): number {
+    return this.instances.get(id)?.lastWheelAt ?? 0;
   }
 
   resumeAutoScroll(id: string): void {

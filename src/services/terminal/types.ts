@@ -64,6 +64,9 @@ export interface ManagedTerminal {
   _suppressScrollTracking?: boolean;
   // Viewport pinning: set by wheel/keyboard events to distinguish user-initiated scroll
   _userScrollIntent?: boolean;
+  // Timestamp of the most recent wheel event on the host element — used to
+  // suppress the "new output" indicator while the user is actively scrolling.
+  lastWheelAt?: number;
 
   // Last activity marker for scroll-to-last-activity
   lastActivityMarker?: IMarker;

@@ -4,6 +4,7 @@ import { renderHook, act } from "@testing-library/react";
 
 let capturedListener: (() => void) | null = null;
 let currentSnapshot = { isUserScrolledBack: false, unseen: 0 };
+let currentLastWheelAt = 0;
 
 vi.mock("@/services/TerminalInstanceService", () => ({
   terminalInstanceService: {
@@ -14,6 +15,7 @@ vi.mock("@/services/TerminalInstanceService", () => ({
       };
     }),
     getUnseenOutputSnapshot: vi.fn(() => currentSnapshot),
+    getLastWheelAt: vi.fn(() => currentLastWheelAt),
   },
 }));
 
@@ -24,6 +26,7 @@ describe("useUnseenOutput", () => {
   beforeEach(() => {
     capturedListener = null;
     currentSnapshot = { isUserScrolledBack: false, unseen: 0 };
+    currentLastWheelAt = 0;
     vi.clearAllMocks();
   });
 
@@ -41,11 +44,35 @@ describe("useUnseenOutput", () => {
     expect(result.current.isUserScrolledBack).toBe(true);
   });
 
-  it("returns hasUnseenOutput: true when scrolled back with unseen output", () => {
+  it("returns hasUnseenOutput: false when unseen is at or below the hysteresis threshold", () => {
+    currentSnapshot = { isUserScrolledBack: true, unseen: 1 };
+    const { result: r1 } = renderHook(() => useUnseenOutput("t1"));
+    expect(r1.current.hasUnseenOutput).toBe(false);
+
+    currentSnapshot = { isUserScrolledBack: true, unseen: 2 };
+    const { result: r2 } = renderHook(() => useUnseenOutput("t1"));
+    expect(r2.current.hasUnseenOutput).toBe(false);
+  });
+
+  it("returns hasUnseenOutput: true when scrolled back with unseen above threshold", () => {
     currentSnapshot = { isUserScrolledBack: true, unseen: 5 };
     const { result } = renderHook(() => useUnseenOutput("t1"));
     expect(result.current.hasUnseenOutput).toBe(true);
     expect(result.current.isUserScrolledBack).toBe(true);
+  });
+
+  it("suppresses hasUnseenOutput while a wheel event fired within the suppression window", () => {
+    currentSnapshot = { isUserScrolledBack: true, unseen: 5 };
+    currentLastWheelAt = Date.now() - 50; // 50ms ago — inside 200ms window
+    const { result } = renderHook(() => useUnseenOutput("t1"));
+    expect(result.current.hasUnseenOutput).toBe(false);
+  });
+
+  it("shows hasUnseenOutput again after the wheel suppression window elapses", () => {
+    currentSnapshot = { isUserScrolledBack: true, unseen: 5 };
+    currentLastWheelAt = Date.now() - 500; // 500ms ago — well past 200ms window
+    const { result } = renderHook(() => useUnseenOutput("t1"));
+    expect(result.current.hasUnseenOutput).toBe(true);
   });
 
   it("re-renders when subscriber notification fires", () => {
@@ -53,7 +80,7 @@ describe("useUnseenOutput", () => {
     const { result } = renderHook(() => useUnseenOutput("t1"));
     expect(result.current.hasUnseenOutput).toBe(false);
 
-    currentSnapshot = { isUserScrolledBack: true, unseen: 1 };
+    currentSnapshot = { isUserScrolledBack: true, unseen: 3 };
     act(() => capturedListener?.());
     expect(result.current.hasUnseenOutput).toBe(true);
   });
