@@ -1,1 +1,1 @@
-export { BulkCommandPalette, openBulkCommandPalette } from "./BulkCommandPalette";
+export { openBulkCommandPalette } from "./compatibility";

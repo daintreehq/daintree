@@ -273,7 +273,6 @@ export interface WorktreeHeaderProps {
     launchAgents: WorktreeLaunchAgentItem[];
     recipes: TerminalRecipe[];
     runningRecipeId: string | null;
-    isRestartValidating: boolean;
     counts: {
       grid: number;
       dock: number;
@@ -298,11 +297,8 @@ export interface WorktreeHeaderProps {
     onLaunchAgent?: (agentId: string) => void;
     onDockAll: () => void;
     onMaximizeAll: () => void;
-    onRestartAll: () => void;
     onResetRenderers: () => void;
-    onCloseCompleted: () => void;
-    onCloseAll: () => void;
-    onEndAll: () => void;
+    onBroadcastToAgents: () => void;
     onAttachIssue?: () => void;
     onViewPlan?: () => void;
     onOpenReviewHub?: () => void;
@@ -663,7 +659,6 @@ export function WorktreeHeader({
                 launchAgents={menu.launchAgents}
                 recipes={recipeOptions}
                 runningRecipeId={menu.runningRecipeId}
-                isRestartValidating={menu.isRestartValidating}
                 isPinned={isPinned}
                 counts={menu.counts}
                 onLaunchAgent={menu.onLaunchAgent ? handleLaunchAgent : undefined}
@@ -687,11 +682,8 @@ export function WorktreeHeader({
                 isCollapsed={menu.isCollapsed}
                 onDockAll={menu.onDockAll}
                 onMaximizeAll={menu.onMaximizeAll}
-                onRestartAll={menu.onRestartAll}
                 onResetRenderers={menu.onResetRenderers}
-                onCloseCompleted={menu.onCloseCompleted}
-                onCloseAll={menu.onCloseAll}
-                onEndAll={menu.onEndAll}
+                onBroadcastToAgents={menu.onBroadcastToAgents}
                 onOpenPanelPalette={menu.onOpenPanelPalette}
                 onDeleteWorktree={menu.onDeleteWorktree}
                 onRevertAgentChanges={menu.onRevertAgentChanges}

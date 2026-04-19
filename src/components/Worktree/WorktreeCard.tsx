@@ -342,24 +342,18 @@ export const WorktreeCard = React.memo(function WorktreeCard({
 
   const {
     runningRecipeId,
-    isRestartValidating,
     confirmDialog,
     showDeleteDialog,
     setShowDeleteDialog,
     closeConfirmDialog,
     handlePathClick,
     handleRunRecipe,
-    handleCloseCompleted,
     handleDockAll,
     handleMaximizeAll,
-    handleCloseAll,
-    handleEndAll,
-    handleRestartAll,
+    handleBroadcastToAgents,
   } = useWorktreeActions({
     worktree,
     onCopyTree,
-    totalTerminalCount,
-    allTerminalCount,
   });
 
   const handleOpenIssuePortal = useCallback(() => {
@@ -782,7 +776,6 @@ export const WorktreeCard = React.memo(function WorktreeCard({
                   launchAgents,
                   recipes,
                   runningRecipeId,
-                  isRestartValidating,
                   counts: {
                     grid: gridCount,
                     dock: dockCount,
@@ -820,11 +813,8 @@ export const WorktreeCard = React.memo(function WorktreeCard({
                   },
                   onDockAll: handleDockAll,
                   onMaximizeAll: handleMaximizeAll,
-                  onRestartAll: () => void handleRestartAll(),
                   onResetRenderers: handleResetRenderers,
-                  onCloseCompleted: handleCloseCompleted,
-                  onCloseAll: handleCloseAll,
-                  onEndAll: handleEndAll,
+                  onBroadcastToAgents: handleBroadcastToAgents,
                   onDeleteWorktree: !isMainWorktree ? () => setShowDeleteDialog(true) : undefined,
                   onRevertAgentChanges: handleRevertAgentChanges,
                   hasSnapshot,
@@ -919,7 +909,6 @@ export const WorktreeCard = React.memo(function WorktreeCard({
           launchAgents={launchAgents}
           recipes={recipes.map((r) => ({ id: r.id, name: r.name }))}
           runningRecipeId={runningRecipeId}
-          isRestartValidating={isRestartValidating}
           isPinned={isPinned}
           counts={{
             grid: gridCount,
@@ -951,11 +940,8 @@ export const WorktreeCard = React.memo(function WorktreeCard({
           isCollapsed={effectiveIsCollapsed}
           onDockAll={handleDockAll}
           onMaximizeAll={handleMaximizeAll}
-          onRestartAll={() => void handleRestartAll()}
           onResetRenderers={handleResetRenderers}
-          onCloseCompleted={handleCloseCompleted}
-          onCloseAll={handleCloseAll}
-          onEndAll={handleEndAll}
+          onBroadcastToAgents={handleBroadcastToAgents}
           onOpenPanelPalette={handleOpenPanelPalette}
           onDeleteWorktree={!isMainWorktree ? () => setShowDeleteDialog(true) : undefined}
           hasResourceConfig={hasResourceConfig}

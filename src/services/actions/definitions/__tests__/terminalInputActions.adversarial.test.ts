@@ -12,7 +12,13 @@ const bracketedMock = vi.hoisted(() => ({
   formatWithBracketedPaste: vi.fn((t: string) => `<BP>${t}</BP>`),
 }));
 const sendToAgentMock = vi.hoisted(() => ({ openSendToAgentPalette: vi.fn() }));
-const bulkCommandMock = vi.hoisted(() => ({ openBulkCommandPalette: vi.fn() }));
+const fleetDeckMock = vi.hoisted(() => ({
+  useFleetDeckStore: {
+    getState: vi.fn(() => ({
+      openWithScope: vi.fn(),
+    })),
+  },
+}));
 const terminalInputStoreMock = vi.hoisted(() => ({
   triggerStashInput: vi.fn(),
   triggerPopStash: vi.fn(),
@@ -40,7 +46,7 @@ vi.mock("@/services/terminal/TerminalInstanceService", () => ({
 vi.mock("@/clients", () => ({ terminalClient: terminalClientMock }));
 vi.mock("@shared/utils/terminalInputProtocol", () => bracketedMock);
 vi.mock("@/hooks/useSendToAgentPalette", () => sendToAgentMock);
-vi.mock("@/components/BulkCommandCenter/BulkCommandPalette", () => bulkCommandMock);
+vi.mock("@/store/fleetDeckStore", () => fleetDeckMock);
 vi.mock("@/store/terminalInputStore", () => terminalInputStoreMock);
 vi.mock("@/store/fleetArmingStore", () => fleetArmingMock);
 vi.mock("@shared/config/panelKindRegistry", () => ({

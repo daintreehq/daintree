@@ -77,12 +77,6 @@
     "error": 0,
     "pipeline": 0
   },
-  "src/components/BulkCommandCenter/BulkCommandPalette.tsx": {
-    "success": 3,
-    "skip": 0,
-    "error": 0,
-    "pipeline": 0
-  },
   "src/components/Commands/CommandBuilder.tsx": {
     "success": 6,
     "skip": 0,
@@ -1676,7 +1670,7 @@
   "src/components/Worktree/WorktreeCard/hooks/useWorktreeActions.ts": {
     "success": 0,
     "skip": 0,
-    "error": 2,
+    "error": 1,
     "pipeline": 0
   },
   "src/components/Worktree/WorktreeCard/hooks/useWorktreeStatus.ts": {
