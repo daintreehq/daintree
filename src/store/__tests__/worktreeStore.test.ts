@@ -30,9 +30,15 @@ const terminalStoreState = {
   activeDockTerminalId: null as string | null,
   focusedId: null as string | null,
   mruList: [] as string[],
+  maximizedId: null as string | null,
+  maximizeTarget: null as { type: string; id: string } | null,
+  preMaximizeLayout: null as { gridCols: number } | null,
   recordMru: recordMruMock,
   setFocused: setFocusedMock,
 };
+const panelSetStateMock = vi.fn((patch: Record<string, unknown>) => {
+  Object.assign(terminalStoreState, patch);
+});
 function setMockTerminals(terminals: MockTerminal[]) {
   terminalStoreState.panelsById = Object.fromEntries(terminals.map((t) => [t.id, t]));
   terminalStoreState.panelIds = terminals.map((t) => t.id);
@@ -66,6 +72,7 @@ vi.mock("@/store/focusStore", () => ({
 vi.mock("@/store/panelStore", () => ({
   usePanelStore: {
     getState: vi.fn(() => terminalStoreState),
+    setState: panelSetStateMock,
     subscribe: subscribeMock,
   },
 }));
@@ -81,6 +88,9 @@ describe("worktreeStore", () => {
     terminalStoreState.activeDockTerminalId = null;
     terminalStoreState.focusedId = null;
     terminalStoreState.mruList = [];
+    terminalStoreState.maximizedId = null;
+    terminalStoreState.maximizeTarget = null;
+    terminalStoreState.preMaximizeLayout = null;
     focusStateGetterMock.mockReturnValue({ isFocusMode: false });
   });
 
@@ -398,6 +408,43 @@ describe("worktreeStore", () => {
       const state = useWorktreeSelectionStore.getState();
       expect(state.isFleetScopeActive).toBe(false);
       expect(state._previousActiveWorktreeId).toBeNull();
+    });
+
+    it("enterFleetScope clears any active maximize so the scope grid is visible", async () => {
+      useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-with-maximize" });
+      terminalStoreState.maximizedId = "term-maxed";
+      terminalStoreState.maximizeTarget = { type: "panel", id: "term-maxed" };
+      terminalStoreState.preMaximizeLayout = { gridCols: 2 };
+
+      useWorktreeSelectionStore.getState().enterFleetScope();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(panelSetStateMock).toHaveBeenCalledWith({
+        maximizedId: null,
+        maximizeTarget: null,
+        preMaximizeLayout: null,
+      });
+      expect(terminalStoreState.maximizedId).toBeNull();
+      expect(terminalStoreState.maximizeTarget).toBeNull();
+      expect(terminalStoreState.preMaximizeLayout).toBeNull();
+    });
+
+    it("exitFleetScope clears any lingering preMaximizeLayout snapshot", async () => {
+      useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-pre-scope" });
+      useWorktreeSelectionStore.getState().enterFleetScope();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      terminalStoreState.preMaximizeLayout = { gridCols: 3 };
+      panelSetStateMock.mockClear();
+
+      useWorktreeSelectionStore.getState().exitFleetScope();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(panelSetStateMock).toHaveBeenCalledWith({ preMaximizeLayout: null });
+      expect(terminalStoreState.preMaximizeLayout).toBeNull();
     });
   });
 });

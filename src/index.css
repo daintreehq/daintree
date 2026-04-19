@@ -1306,6 +1306,32 @@ body,
   pointer-events: none;
 }
 
+/* Fleet scope broadcast overlay — diagonal stripes signal read-only/armed
+   state on every panel rendered inside the fleet-scope grid. Rendered as a
+   pseudo-element so it never steals pointer events from selection, scroll,
+   or link-clicks inside the underlying xterm instance. */
+.fleet-broadcast-overlay {
+  position: relative;
+  contain: layout style;
+}
+
+.fleet-broadcast-overlay::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 2;
+  background-image: repeating-linear-gradient(
+    45deg,
+    color-mix(in oklab, var(--theme-tint) 10%, transparent) 0,
+    color-mix(in oklab, var(--theme-tint) 10%, transparent) 2px,
+    transparent 2px,
+    transparent 10px
+  );
+  mix-blend-mode: normal;
+  border-radius: inherit;
+}
+
 /* Backwards compatibility for older selection class */
 .terminal-focused {
   border-color: color-mix(in oklab, var(--theme-border-strong) 84%, var(--theme-text-primary));

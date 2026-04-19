@@ -12,6 +12,8 @@ import {
   useTwoPaneSplitStore,
   type TerminalInstance,
 } from "@/store";
+import { useFleetArmingStore } from "@/store/fleetArmingStore";
+import { useFleetScopeFlagStore } from "@/store/fleetScopeFlagStore";
 import { useProjectStore } from "@/store/projectStore";
 import { isAgentReady } from "../../../shared/utils/agentAvailability";
 import { computeGridCanLaunch, computeGridSelectedAgentIds } from "./contentGridAgentFilter";
@@ -422,6 +424,16 @@ export function ContentGrid({
   // Two-pane split mode settings
   const twoPaneSplitEnabled = useTwoPaneSplitStore((state) => state.config.enabled);
 
+  // Fleet scope render state — when the flag is "scoped" and scope is active
+  // the grid paints the armed set (across every worktree) as a flat grid of
+  // input-locked cells. Scope is a no-op in "legacy" mode.
+  const isFleetScopeActive = useWorktreeSelectionStore((state) => state.isFleetScopeActive);
+  const fleetScopeMode = useFleetScopeFlagStore((state) => state.mode);
+  const { armedIds, armOrder } = useFleetArmingStore(
+    useShallow((state) => ({ armedIds: state.armedIds, armOrder: state.armOrder }))
+  );
+  const isFleetScopeRender = fleetScopeMode === "scoped" && isFleetScopeActive && armedIds.size > 0;
+
   // Grid terminals filtered by location and active worktree
   const gridTerminals = useMemo(() => {
     const result: TerminalInstance[] = [];
@@ -697,6 +709,64 @@ export function ContentGrid({
     return ids;
   }, [tabGroups, showPlaceholder, placeholderIndex, placeholderInGrid]);
 
+  // Fleet scope projection: order is the user's arm order, dropping any ids
+  // that have since been pruned, trashed, or moved to the dock. We resolve
+  // against panelsById once here so GridPanel cells receive stable refs.
+  const fleetPanels = useMemo(() => {
+    if (!isFleetScopeRender) return [];
+    const result: TerminalInstance[] = [];
+    for (const id of armOrder) {
+      if (!armedIds.has(id)) continue;
+      const t = panelsById[id];
+      if (!t) continue;
+      if (t.location === "trash" || t.location === "background" || t.location === "dock") continue;
+      result.push(t);
+    }
+    return result;
+  }, [isFleetScopeRender, armOrder, armedIds, panelsById]);
+
+  const fleetNeedsWorktreePrefix = useMemo(() => {
+    if (fleetPanels.length <= 1) return false;
+    const firstWorktreeId = fleetPanels[0]?.worktreeId ?? null;
+    return fleetPanels.some((t) => (t.worktreeId ?? null) !== firstWorktreeId);
+  }, [fleetPanels]);
+
+  const fleetGridCols = useMemo(() => {
+    if (!isFleetScopeRender) return 1;
+    const { strategy, value } = layoutConfig;
+    return computeGridColumns(Math.max(fleetPanels.length, 1), gridWidth, strategy, value);
+  }, [isFleetScopeRender, fleetPanels.length, layoutConfig, gridWidth]);
+
+  // Dedicated fleet batch-fit: the main startBatchFit closure reads
+  // `gridTerminals` and can't be redirected at the current armed set, which
+  // spans worktrees. Stagger fits via rAF to let xterm reattach per cell
+  // without starving the renderer — lesson #5092 flagged simultaneous cross-
+  // worktree mounts as a risk for IntersectionObserver misfires.
+  useEffect(() => {
+    if (!isFleetScopeRender) return;
+    const ids = fleetPanels.map((t) => t.id);
+    const cancelRef = { cancelled: false };
+    const timeoutId = window.setTimeout(() => {
+      if (isDraggingRef.current) return;
+      let index = 0;
+      const processNext = () => {
+        if (cancelRef.cancelled || index >= ids.length) return;
+        if (isDraggingRef.current) return;
+        const id = ids[index++]!;
+        const managed = terminalInstanceService.get(id);
+        if (managed?.hostElement.isConnected) {
+          terminalInstanceService.fit(id);
+        }
+        requestAnimationFrame(processNext);
+      };
+      processNext();
+    }, GRID_FIT_DELAY_MS);
+    return () => {
+      cancelRef.cancelled = true;
+      clearTimeout(timeoutId);
+    };
+  }, [isFleetScopeRender, fleetPanels, fleetGridCols]);
+
   // Batch-fit grid terminals when layout (gridCols/count) changes.
   // gridTerminals is read via useEffectEvent so the effect doesn't re-run on
   // worktree switch (which mutates gridTerminals without changing layout).
@@ -888,6 +958,99 @@ export function ContentGrid({
       </ContextMenuItem>
     </ContextMenuContent>
   );
+
+  // Fleet scope render path: a flat grid of armed terminals from every
+  // worktree, each input-locked with a broadcast overlay. Deliberately
+  // placed before the maximize branch — a maximize captured against a
+  // different worktree must not shadow the fleet view. DnD, two-pane, and
+  // tab-group logic are bypassed entirely; the armed set is the source of
+  // truth for both membership and order.
+  if (isFleetScopeRender) {
+    return (
+      <div
+        key="fleet-scope-mode"
+        ref={gridRegionRef}
+        role="region"
+        tabIndex={-1}
+        aria-label="Fleet scope grid"
+        data-fleet-scope="true"
+        data-macro-focus={isMacroFocused ? "true" : undefined}
+        onKeyDown={handleGridRegionKeyDown}
+        className={cn(
+          "h-full flex flex-col outline-none",
+          "data-[macro-focus=true]:ring-2 data-[macro-focus=true]:ring-daintree-accent/60 data-[macro-focus=true]:ring-inset",
+          className
+        )}
+      >
+        <GridNotificationBar className="mx-1 mt-1 shrink-0" />
+        <TerminalCountWarning className="mx-1 mt-1 shrink-0" />
+        <div className="relative flex-1 min-h-0">
+          <ContextMenu>
+            <ContextMenuTrigger asChild>
+              <div
+                ref={combinedGridRef}
+                className="h-full bg-noise p-1"
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: `repeat(${fleetGridCols}, minmax(0, 1fr))`,
+                  gridAutoRows: `minmax(${MIN_TERMINAL_HEIGHT_PX}px, 1fr)`,
+                  gap: "4px",
+                  backgroundColor: "var(--color-grid-bg)",
+                  transition: isProjectSwitching
+                    ? "none"
+                    : `grid-template-columns ${GRID_TRANSITION_DURATION_MS}ms ease-out`,
+                  overflowY: "auto",
+                }}
+                id="panel-grid"
+                data-grid-container="true"
+              >
+                {fleetPanels.length === 0 ? (
+                  <div className="col-span-full row-span-full">
+                    <EmptyState
+                      hasActiveWorktree={hasActiveWorktree}
+                      activeWorktreeName={activeWorktreeName}
+                      activeWorktreeId={activeWorktreeId}
+                      showProjectPulse={showProjectPulse}
+                      projectIconSvg={projectIconSvg}
+                      defaultCwd={defaultCwd}
+                    />
+                  </div>
+                ) : (
+                  fleetPanels.map((terminal) => {
+                    let titleOverride: string | undefined;
+                    if (fleetNeedsWorktreePrefix) {
+                      const worktreeId = terminal.worktreeId ?? null;
+                      const worktree = worktreeId ? worktreeMap.get(worktreeId) : null;
+                      const prefix = worktree
+                        ? worktree.isMainWorktree
+                          ? worktree.name?.trim() || worktree.branch?.trim() || "Unknown Worktree"
+                          : worktree.branch?.trim() || worktree.name?.trim() || "Unknown Worktree"
+                        : null;
+                      if (prefix) {
+                        titleOverride = `${prefix} — ${terminal.title}`;
+                      }
+                    }
+                    return (
+                      <GridPanel
+                        key={terminal.id}
+                        terminal={terminal}
+                        isFocused={terminal.id === focusedId}
+                        gridPanelCount={fleetPanels.length}
+                        gridCols={fleetGridCols}
+                        isFleetScope
+                        titleOverride={titleOverride}
+                      />
+                    );
+                  })
+                )}
+              </div>
+            </ContextMenuTrigger>
+            {gridContextMenuContent}
+          </ContextMenu>
+        </div>
+      </div>
+    );
+  }
 
   // Maximized terminal or group takes full screen
   if (maximizedId && maximizeTarget) {

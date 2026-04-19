@@ -182,4 +182,28 @@ describe("gridPanelPropsAreEqual", () => {
     });
     expect(gridPanelPropsAreEqual(prev, next)).toBe(false);
   });
+
+  it("returns false when isFleetScope toggles", () => {
+    const prev = baseProps({ isFleetScope: false });
+    const next = baseProps({ isFleetScope: true });
+    expect(gridPanelPropsAreEqual(prev, next)).toBe(false);
+  });
+
+  it("returns true when both isFleetScope are undefined", () => {
+    const prev = baseProps();
+    const next = baseProps();
+    expect(gridPanelPropsAreEqual(prev, next)).toBe(true);
+  });
+
+  it("returns false when titleOverride changes", () => {
+    const prev = baseProps({ titleOverride: "wt-a — Claude" });
+    const next = baseProps({ titleOverride: "wt-b — Claude" });
+    expect(gridPanelPropsAreEqual(prev, next)).toBe(false);
+  });
+
+  it("returns false when titleOverride becomes defined", () => {
+    const prev = baseProps({ titleOverride: undefined });
+    const next = baseProps({ titleOverride: "wt-a — Claude" });
+    expect(gridPanelPropsAreEqual(prev, next)).toBe(false);
+  });
 });

@@ -100,6 +100,11 @@ export interface TerminalPaneProps {
   detectedProcessId?: string;
   // Group-level ambient state: highest-urgency state across all tabs, for container border styling
   ambientAgentState?: AgentState;
+  // Fleet scope render-time overrides: force-locks input and flags a broadcast
+  // overlay without mutating the underlying panel state. When undefined the
+  // pane falls back to the stored TerminalInstance.isInputLocked flag.
+  isInputLocked?: boolean;
+  isFleetScope?: boolean;
   // Tab support
   tabs?: import("@/components/Panel/TabButton").TabInfo[];
   onTabClick?: (tabId: string) => void;
@@ -138,6 +143,8 @@ function TerminalPaneComponent({
   gridPanelCount,
   detectedProcessId,
   ambientAgentState,
+  isInputLocked: isInputLockedOverride,
+  isFleetScope = false,
   tabs,
   onTabClick,
   onTabClose,
@@ -207,8 +214,17 @@ function TerminalPaneComponent({
     })
   );
 
-  const { isInputLocked, stateChangeTrigger, isRestarting, exitBehavior, isTrashedOrRemoved } =
-    terminalState;
+  const {
+    isInputLocked: storeInputLocked,
+    stateChangeTrigger,
+    isRestarting,
+    exitBehavior,
+    isTrashedOrRemoved,
+  } = terminalState;
+  // Fleet-scope mounts pass `isInputLocked: true` to render the panel as a
+  // read-only broadcast view. Prop takes precedence over the stored flag so
+  // unwinding scope reverts to the user-toggled lock state automatically.
+  const isInputLocked = isInputLockedOverride ?? storeInputLocked;
 
   const isBackendDisconnected = backendStatus === "disconnected";
   const isBackendRecovering = backendStatus === "recovering";
@@ -704,6 +720,7 @@ function TerminalPaneComponent({
       className={cn(
         "terminal-pane",
         isExited && "opacity-75 grayscale",
+        isFleetScope && "fleet-broadcast-overlay",
         isPinged &&
           allowPing &&
           (wasJustSelected ? "animate-terminal-ping-select" : "animate-terminal-ping")

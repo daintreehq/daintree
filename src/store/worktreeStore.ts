@@ -523,6 +523,19 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
       isFleetScopeActive: true,
       _previousActiveWorktreeId: get().activeWorktreeId,
     });
+    // Clear any active maximize so the fleet-scope render path isn't shadowed
+    // by the single-panel/group maximize branch in ContentGrid. Also clear the
+    // preMaximizeLayout snapshot so exiting scope later doesn't restore a
+    // stale layout captured against a different worktree.
+    void loadTerminalStoreModule()
+      .then(({ usePanelStore }) => {
+        usePanelStore.setState({
+          maximizedId: null,
+          maximizeTarget: null,
+          preMaximizeLayout: null,
+        });
+      })
+      .catch(() => {});
   },
 
   exitFleetScope: () => {
@@ -537,6 +550,13 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
       _policyGeneration: generation,
     });
     persistActiveWorktree(restoreId);
+    // Defensive: drop any preMaximizeLayout snapshot that may have survived
+    // scope entry. The restored worktree's layout should be computed fresh.
+    void loadTerminalStoreModule()
+      .then(({ usePanelStore }) => {
+        usePanelStore.setState({ preMaximizeLayout: null });
+      })
+      .catch(() => {});
     // Reconcile terminal streaming tiers: consumers may have mutated
     // activeWorktreeId during scope, so the renderer policy must be
     // reapplied for the restored worktree.
