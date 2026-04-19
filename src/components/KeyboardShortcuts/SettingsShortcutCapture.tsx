@@ -1,7 +1,9 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
-import { AlertTriangle } from "lucide-react";
+import { AlertTriangle, X } from "lucide-react";
 import { isMac } from "@/lib/platform";
 import { keybindingService, normalizeKeyForBinding } from "@/services/KeybindingService";
+import { actionService } from "@/services/ActionService";
+import { useNotificationStore } from "@/store/notificationStore";
 
 const CHORD_TIMEOUT_MS = 1000;
 
@@ -24,6 +26,8 @@ export function SettingsShortcutCapture({
   const [chordStep, setChordStep] = useState<"first" | "waiting" | "complete">("first");
   const chordTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const chordTokenRef = useRef(0);
+  const [_conflictRefreshKey, setConflictRefreshKey] = useState(0);
+  const [isUnbinding, setIsUnbinding] = useState(false);
 
   const capturedCombo = capturedCombos.length > 0 ? capturedCombos.join(" ") : null;
 
@@ -128,6 +132,124 @@ export function SettingsShortcutCapture({
     onCancel();
   };
 
+  const handleUnbindConflict = async (conflict: { actionId: string; description?: string }) => {
+    const { actionId } = conflict;
+    setIsUnbinding(true);
+
+    try {
+      const currentOverride = keybindingService.getOverride(actionId);
+      const defaultCombo = keybindingService.getDefaultCombo(actionId);
+
+      let conflictingCombo: string | undefined;
+      let isOverrideConflict = false;
+      let newOverrideCombos: string[] | undefined;
+
+      if (currentOverride) {
+        const matchingOverride = currentOverride.find(
+          (combo) => combo.trim().toLowerCase() === capturedCombo!.trim().toLowerCase()
+        );
+        if (matchingOverride) {
+          conflictingCombo = matchingOverride;
+          isOverrideConflict = true;
+          newOverrideCombos = currentOverride.filter(
+            (combo) => combo.trim().toLowerCase() !== capturedCombo!.trim().toLowerCase()
+          );
+        }
+      }
+
+      if (!conflictingCombo && defaultCombo) {
+        const normalizedDefault = defaultCombo.trim().toLowerCase();
+        const normalizedCaptured = capturedCombo!.trim().toLowerCase();
+        if (normalizedDefault === normalizedCaptured) {
+          conflictingCombo = defaultCombo;
+        }
+      }
+
+      if (isOverrideConflict) {
+        if (newOverrideCombos && newOverrideCombos.length > 0) {
+          const setResult = await actionService.dispatch(
+            "keybinding.setOverride",
+            { actionId, combo: newOverrideCombos },
+            { source: "user" }
+          );
+          if (!setResult.ok) {
+            throw new Error(setResult.error?.message || "Failed to update keybinding");
+          }
+        } else {
+          const removeResult = await actionService.dispatch(
+            "keybinding.removeOverride",
+            { actionId },
+            { source: "user" }
+          );
+          if (!removeResult.ok) {
+            throw new Error(removeResult.error?.message || "Failed to remove keybinding");
+          }
+        }
+      } else if (conflictingCombo) {
+        const setResult = await actionService.dispatch(
+          "keybinding.setOverride",
+          { actionId, combo: [] },
+          { source: "user" }
+        );
+        if (!setResult.ok) {
+          throw new Error(setResult.error?.message || "Failed to update keybinding");
+        }
+      } else {
+        console.error("Could not identify conflicting combo");
+        setIsUnbinding(false);
+        return;
+      }
+
+      setConflictRefreshKey((prev) => prev + 1);
+
+      const undoCombo = conflictingCombo!;
+
+      useNotificationStore.getState().addNotification({
+        type: "success",
+        message: `Unbound ${conflict.description || conflict.actionId}`,
+        duration: 5000,
+        priority: "low",
+        action: {
+          label: "Undo",
+          onClick: async () => {
+            try {
+              const restoreResult = await actionService.dispatch(
+                "keybinding.setOverride",
+                {
+                  actionId,
+                  combo: isOverrideConflict && currentOverride ? currentOverride : [undoCombo],
+                },
+                { source: "user" }
+              );
+              if (!restoreResult.ok) {
+                throw new Error(restoreResult.error?.message || "Failed to undo");
+              }
+              setConflictRefreshKey((prev) => prev + 1);
+            } catch (err) {
+              console.error("Failed to undo keybinding change:", err);
+              useNotificationStore.getState().addNotification({
+                type: "error",
+                message: "Failed to undo keybinding change",
+                duration: 3000,
+                priority: "low",
+              });
+            }
+          },
+        },
+      });
+    } catch (err) {
+      console.error("Failed to unbind keybinding:", err);
+      useNotificationStore.getState().addNotification({
+        type: "error",
+        message: "Failed to unbind keybinding",
+        duration: 3000,
+        priority: "low",
+      });
+    } finally {
+      setIsUnbinding(false);
+    }
+  };
+
   const isChord = capturedCombos.length > 1;
 
   return (
@@ -165,11 +287,28 @@ export function SettingsShortcutCapture({
       </div>
 
       {conflicts.length > 0 && (
-        <div className="flex items-start gap-2 text-status-warning text-sm">
-          <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
-          <span>
-            Conflicts with: {conflicts.map((c) => c.description || c.actionId).join(", ")}
-          </span>
+        <div className="space-y-2">
+          <div className="flex items-start gap-2 text-status-warning text-sm">
+            <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
+            <span>Conflicts with:</span>
+          </div>
+          <div className="space-y-1 pl-6">
+            {conflicts.map((conflict) => (
+              <div key={conflict.actionId} className="flex items-center gap-2 text-sm">
+                <span className="text-daintree-text/80">
+                  {conflict.description || conflict.actionId}
+                </span>
+                <button
+                  onClick={() => handleUnbindConflict(conflict)}
+                  disabled={isUnbinding}
+                  className="flex items-center gap-1 px-2 py-0.5 text-xs text-daintree-accent hover:bg-daintree-accent/10 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <X className="w-3 h-3" />
+                  <span>Unbind</span>
+                </button>
+              </div>
+            ))}
+          </div>
         </div>
       )}
 

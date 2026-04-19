@@ -9,12 +9,28 @@ vi.mock("@/services/KeybindingService", () => ({
   keybindingService: {
     findConflicts: vi.fn(() => []),
     formatComboForDisplay: vi.fn((combo: string) => combo),
+    getOverride: vi.fn(() => undefined),
+    getDefaultCombo: vi.fn(() => undefined),
   },
   normalizeKeyForBinding: vi.fn((e: KeyboardEvent) => e.key),
 }));
 
 vi.mock("@/lib/platform", () => ({
   isMac: vi.fn(() => false),
+}));
+
+vi.mock("@/services/ActionService", () => ({
+  actionService: {
+    dispatch: vi.fn().mockResolvedValue({ ok: true }),
+  },
+}));
+
+vi.mock("@/store/notificationStore", () => ({
+  useNotificationStore: {
+    getState: vi.fn(() => ({
+      addNotification: vi.fn(),
+    })),
+  },
 }));
 
 describe("SettingsShortcutCapture", () => {
@@ -286,7 +302,8 @@ describe("SettingsShortcutCapture", () => {
       vi.advanceTimersByTime(1100);
     });
 
-    expect(screen.getByText("Conflicts with: Conflicting Action")).toBeTruthy();
+    expect(screen.getByText("Conflicts with:")).toBeTruthy();
+    expect(screen.getByText("Conflicting Action")).toBeTruthy();
   });
 
   it("uses normalizeKeyForBinding for key normalization", async () => {
@@ -397,5 +414,271 @@ describe("SettingsShortcutCapture", () => {
     unmount();
 
     expect(clearTimeoutSpy).toHaveBeenCalled();
+  });
+
+  describe("conflict remediation", () => {
+    it("renders unbind buttons for each conflict", async () => {
+      const { keybindingService } = await import("@/services/KeybindingService");
+      vi.mocked(keybindingService.findConflicts).mockReturnValue([
+        {
+          actionId: "conflict.action1",
+          description: "Conflicting Action 1",
+          combo: "Cmd+A",
+          scope: "global",
+          priority: 0,
+        },
+        {
+          actionId: "conflict.action2",
+          description: "Conflicting Action 2",
+          combo: "Cmd+B",
+          scope: "global",
+          priority: 0,
+        },
+      ]);
+
+      render(
+        <SettingsShortcutCapture
+          onCapture={mockOnCapture}
+          onCancel={mockOnCancel}
+          excludeActionId="test.action"
+        />
+      );
+
+      fireEvent.click(screen.getByText("Click to record shortcut"));
+
+      const keyEvent = new KeyboardEvent("keydown", {
+        key: "k",
+        code: "KeyK",
+        ctrlKey: true,
+        bubbles: true,
+      });
+
+      act(() => {
+        window.dispatchEvent(keyEvent);
+        vi.advanceTimersByTime(1100);
+      });
+
+      expect(screen.getByText("Conflicts with:")).toBeTruthy();
+      expect(screen.getByText("Conflicting Action 1")).toBeTruthy();
+      expect(screen.getByText("Conflicting Action 2")).toBeTruthy();
+      expect(screen.getAllByText("Unbind")).toHaveLength(2);
+    });
+
+    it("dispatches setOverride action when unbind button is clicked for override conflict", async () => {
+      const { keybindingService } = await import("@/services/KeybindingService");
+      const { actionService } = await import("@/services/ActionService");
+      const { useNotificationStore } = await import("@/store/notificationStore");
+
+      vi.mocked(keybindingService.findConflicts).mockReturnValue([
+        {
+          actionId: "conflict.action",
+          description: "Conflicting Action",
+          combo: "Cmd+A",
+          scope: "global",
+          priority: 0,
+        },
+      ]);
+
+      vi.mocked(keybindingService.getOverride).mockReturnValue(["Cmd+K"]);
+      vi.mocked(keybindingService.getDefaultCombo).mockReturnValue("Cmd+A");
+
+      const addNotificationSpy = vi.fn();
+      vi.mocked(useNotificationStore.getState).mockReturnValue({
+        addNotification: addNotificationSpy,
+        notifications: [],
+        updateNotification: vi.fn(),
+        dismissNotification: vi.fn(),
+        removeNotification: vi.fn(),
+        clearNotifications: vi.fn(),
+        reset: vi.fn(),
+      });
+
+      render(
+        <SettingsShortcutCapture
+          onCapture={mockOnCapture}
+          onCancel={mockOnCancel}
+          excludeActionId="test.action"
+        />
+      );
+
+      fireEvent.click(screen.getByText("Click to record shortcut"));
+
+      const keyEvent = new KeyboardEvent("keydown", {
+        key: "k",
+        code: "KeyK",
+        ctrlKey: true,
+        bubbles: true,
+      });
+
+      act(() => {
+        window.dispatchEvent(keyEvent);
+        vi.advanceTimersByTime(1100);
+      });
+
+      await act(async () => {
+        const unbindButton = screen.getByText("Unbind");
+        fireEvent.click(unbindButton);
+        await vi.advanceTimersByTimeAsync(0);
+      });
+
+      expect(actionService.dispatch).toHaveBeenCalledWith(
+        "keybinding.removeOverride",
+        { actionId: "conflict.action" },
+        { source: "user" }
+      );
+    });
+
+    it("shows toast with undo action after successful unbind", async () => {
+      const { keybindingService } = await import("@/services/KeybindingService");
+      const { useNotificationStore } = await import("@/store/notificationStore");
+
+      vi.mocked(keybindingService.findConflicts).mockReturnValue([
+        {
+          actionId: "conflict.action",
+          description: "Conflicting Action",
+          combo: "Cmd+A",
+          scope: "global",
+          priority: 0,
+        },
+      ]);
+
+      vi.mocked(keybindingService.getOverride).mockReturnValue(["Cmd+K"]);
+      vi.mocked(keybindingService.getDefaultCombo).mockReturnValue("Cmd+A");
+
+      const addNotificationSpy = vi.fn();
+      vi.mocked(useNotificationStore.getState).mockReturnValue({
+        addNotification: addNotificationSpy,
+        notifications: [],
+        updateNotification: vi.fn(),
+        dismissNotification: vi.fn(),
+        removeNotification: vi.fn(),
+        clearNotifications: vi.fn(),
+        reset: vi.fn(),
+      });
+
+      render(
+        <SettingsShortcutCapture
+          onCapture={mockOnCapture}
+          onCancel={mockOnCancel}
+          excludeActionId="test.action"
+        />
+      );
+
+      fireEvent.click(screen.getByText("Click to record shortcut"));
+
+      const keyEvent = new KeyboardEvent("keydown", {
+        key: "k",
+        code: "KeyK",
+        ctrlKey: true,
+        bubbles: true,
+      });
+
+      act(() => {
+        window.dispatchEvent(keyEvent);
+        vi.advanceTimersByTime(1100);
+      });
+
+      await act(async () => {
+        fireEvent.click(screen.getByText("Unbind"));
+        await vi.advanceTimersByTimeAsync(0);
+      });
+
+      expect(addNotificationSpy).toHaveBeenCalledWith({
+        type: "success",
+        message: "Unbound Conflicting Action",
+        duration: 5000,
+        priority: "low",
+        action: expect.objectContaining({
+          label: "Undo",
+          onClick: expect.any(Function),
+        }),
+      });
+    });
+
+    it("handles multiple conflicts separately", async () => {
+      const { keybindingService } = await import("@/services/KeybindingService");
+      const { actionService } = await import("@/services/ActionService");
+      const { useNotificationStore } = await import("@/store/notificationStore");
+
+      vi.mocked(keybindingService.findConflicts).mockReturnValue([
+        {
+          actionId: "conflict.action1",
+          description: "First Action",
+          combo: "Cmd+A",
+          scope: "global",
+          priority: 0,
+        },
+        {
+          actionId: "conflict.action2",
+          description: "Second Action",
+          combo: "Cmd+B",
+          scope: "global",
+          priority: 0,
+        },
+      ]);
+
+      vi.mocked(keybindingService.getOverride).mockReturnValue(["Cmd+K"]);
+      vi.mocked(keybindingService.getDefaultCombo).mockReturnValue("Cmd+A");
+
+      const addNotificationSpy = vi.fn();
+      vi.mocked(useNotificationStore.getState).mockReturnValue({
+        addNotification: addNotificationSpy,
+        notifications: [],
+        updateNotification: vi.fn(),
+        dismissNotification: vi.fn(),
+        removeNotification: vi.fn(),
+        clearNotifications: vi.fn(),
+        reset: vi.fn(),
+      });
+
+      render(
+        <SettingsShortcutCapture
+          onCapture={mockOnCapture}
+          onCancel={mockOnCancel}
+          excludeActionId="test.action"
+        />
+      );
+
+      fireEvent.click(screen.getByText("Click to record shortcut"));
+
+      const keyEvent = new KeyboardEvent("keydown", {
+        key: "k",
+        code: "KeyK",
+        ctrlKey: true,
+        bubbles: true,
+      });
+
+      act(() => {
+        window.dispatchEvent(keyEvent);
+        vi.advanceTimersByTime(1100);
+      });
+
+      const unbindButtons = screen.getAllByText("Unbind");
+      expect(unbindButtons).toHaveLength(2);
+
+      await act(async () => {
+        fireEvent.click(unbindButtons[0]!);
+        await vi.advanceTimersByTimeAsync(0);
+      });
+
+      expect(actionService.dispatch).toHaveBeenCalledWith(
+        "keybinding.removeOverride",
+        { actionId: "conflict.action1" },
+        { source: "user" }
+      );
+
+      await act(async () => {
+        fireEvent.click(unbindButtons[1]!);
+        await vi.advanceTimersByTimeAsync(0);
+      });
+
+      expect(actionService.dispatch).toHaveBeenCalledWith(
+        "keybinding.removeOverride",
+        { actionId: "conflict.action2" },
+        { source: "user" }
+      );
+
+      expect(addNotificationSpy).toHaveBeenCalledTimes(2);
+    });
   });
 });
