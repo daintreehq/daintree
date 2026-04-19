@@ -1,10 +1,11 @@
-import type { PerfScenario } from "../types";
+import type { PerfScenario, ScenarioContext } from "../types";
 import {
   createPersistedLayout,
   simulateLayoutHydration,
   simulateProjectSwitchCycle,
   spinEventLoop,
 } from "../lib/workloads";
+import { findPackagedExecutable, launchPackagedAndMeasure } from "../lib/packagedLaunch";
 
 const EMPTY_LAYOUT = createPersistedLayout(10, 2, 101);
 const HEAVY_LAYOUT = createPersistedLayout(260, 16, 202);
@@ -85,6 +86,40 @@ export const startupScenarios: PerfScenario[] = [
           restoredGroups: hydrated.restoredGroups,
           checksum: hydrated.checksum,
         },
+      };
+    },
+  },
+  {
+    id: "PERF-004",
+    name: "Real Cold Start - Packaged Binary",
+    description:
+      "Launch the packaged Electron binary via Playwright, capture APP_BOOT_START to RENDERER_READY via NDJSON pipeline.",
+    tier: "heavy",
+    modes: ["nightly"],
+    iterations: { nightly: 30 },
+    warmups: 2,
+    async run(context: ScenarioContext) {
+      const projectRoot = process.cwd();
+      const executablePath = findPackagedExecutable(projectRoot);
+
+      if (!executablePath) {
+        return {
+          durationMs: -1,
+          metrics: {},
+          notes: "Packaged binary not found — run `npm run package` first",
+        };
+      }
+
+      const iteration = Math.floor(Math.random() * 100_000);
+      const result = await launchPackagedAndMeasure(executablePath, iteration, {
+        projectRoot,
+        timeoutMs: 45_000,
+      });
+
+      return {
+        durationMs: result.durationMs,
+        metrics: result.metrics,
+        notes: result.notes,
       };
     },
   },

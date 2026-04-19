@@ -1,4 +1,4 @@
-import type { PerfRunSummary, ScenarioAggregate } from "../types";
+import type { ComparisonAggregate, PerfRunSummary, ScenarioAggregate } from "../types";
 
 function format(value: number): string {
   return Number.isFinite(value) ? value.toFixed(2) : "n/a";
@@ -20,7 +20,31 @@ function aggregateLine(aggregate: ScenarioAggregate): string {
   ].join(" | ");
 }
 
-export function buildMarkdownReport(summary: PerfRunSummary): string {
+function comparisonSection(comparisons: ComparisonAggregate[]): string[] {
+  if (comparisons.length === 0) return [];
+
+  const lines = [
+    "",
+    "## A/B Comparison",
+    "",
+    "ID | p-value | Effect size | Verdict",
+    "--- | ---: | ---: | ---",
+  ];
+
+  for (const comp of comparisons) {
+    const verdict = comp.comparison.regression ? "REGRESSION" : "ok";
+    lines.push(
+      `${comp.id} | ${format(comp.comparison.pValue)} | ${format(comp.comparison.effectSize)} | ${verdict}`
+    );
+  }
+
+  return lines;
+}
+
+export function buildMarkdownReport(
+  summary: PerfRunSummary,
+  comparisons: ComparisonAggregate[] = []
+): string {
   const header = [
     "# Performance Benchmark Report",
     "",
@@ -44,5 +68,5 @@ export function buildMarkdownReport(summary: PerfRunSummary): string {
       ? ["", "## Regression Gate", "", "All scenario budgets passed."]
       : ["", "## Regression Gate", "", `Failed scenarios: ${summary.failedScenarios.join(", ")}`];
 
-  return [...header, ...body, ...failedSection, ""].join("\n");
+  return [...header, ...body, ...failedSection, ...comparisonSection(comparisons), ""].join("\n");
 }

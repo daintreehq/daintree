@@ -8,6 +8,11 @@
     "PERF-001": { "p95Ms": 3500, "maxRegressionPct": 15 },
     "PERF-002": { "p95Ms": 4500, "maxRegressionPct": 15 },
     "PERF-003": { "p95Ms": 1800, "maxRegressionPct": 15 },
+    "PERF-004": {
+      "p95Ms": 8000,
+      "maxRegressionPct": 20,
+      "comparison": { "maxPValue": 0.05, "minEffectSize": 0.5 }
+    },
 
     "PERF-010": { "p95Ms": 1800, "maxRegressionPct": 15 },
     "PERF-011": { "p95Ms": 1500, "maxRegressionPct": 15 },
