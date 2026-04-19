@@ -2768,6 +2768,8 @@ const api: ElectronAPI = {
       _unwrappingInvoke(CHANNELS.CLIPBOARD_THUMBNAIL_FROM_PATH, filePath),
     writeImage: (pngData: Uint8Array) => _unwrappingInvoke(CHANNELS.CLIPBOARD_WRITE_IMAGE, pngData),
     writeText: (text: string) => _unwrappingInvoke(CHANNELS.CLIPBOARD_WRITE_TEXT, text),
+    writeSelection: (text: string) => _unwrappingInvoke(CHANNELS.CLIPBOARD_WRITE_SELECTION, text),
+    readSelection: () => _unwrappingInvoke(CHANNELS.CLIPBOARD_READ_SELECTION),
   },
 
   // Web Utils API

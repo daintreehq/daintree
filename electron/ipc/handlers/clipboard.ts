@@ -147,10 +147,46 @@ export function registerClipboardHandlers(): () => void {
     }
   };
 
+  // Linux PRIMARY selection — underpins copy-on-select and middle-click paste.
+  // The 'selection' clipboard type only exists on Linux; short-circuit elsewhere.
+  const handleWriteSelection = (text: string): { ok: true } | { ok: false; error: string } => {
+    try {
+      if (process.platform !== "linux") {
+        return { ok: false, error: "PRIMARY selection is only available on Linux" };
+      }
+      if (typeof text !== "string") {
+        return { ok: false, error: "Text must be a string" };
+      }
+      if (text.length === 0) {
+        return { ok: false, error: "Text must not be empty" };
+      }
+      clipboard.writeText(text, "selection");
+      return { ok: true };
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      return { ok: false, error: message };
+    }
+  };
+
+  const handleReadSelection = (): { ok: true; text: string } | { ok: false; error: string } => {
+    try {
+      if (process.platform !== "linux") {
+        return { ok: false, error: "PRIMARY selection is only available on Linux" };
+      }
+      const text = clipboard.readText("selection");
+      return { ok: true, text };
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      return { ok: false, error: message };
+    }
+  };
+
   handlers.push(typedHandle(CHANNELS.CLIPBOARD_SAVE_IMAGE, handleSaveImage));
   handlers.push(typedHandle(CHANNELS.CLIPBOARD_THUMBNAIL_FROM_PATH, handleThumbnailFromPath));
   handlers.push(typedHandle(CHANNELS.CLIPBOARD_WRITE_IMAGE, handleWriteImage));
   handlers.push(typedHandle(CHANNELS.CLIPBOARD_WRITE_TEXT, handleWriteText));
+  handlers.push(typedHandle(CHANNELS.CLIPBOARD_WRITE_SELECTION, handleWriteSelection));
+  handlers.push(typedHandle(CHANNELS.CLIPBOARD_READ_SELECTION, handleReadSelection));
 
   return () => handlers.forEach((cleanup) => cleanup());
 }

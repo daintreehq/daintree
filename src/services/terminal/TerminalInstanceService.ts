@@ -1,6 +1,7 @@
 import { Terminal, ILink, IBufferRange } from "@xterm/xterm";
-import { isMac } from "@/lib/platform";
+import { isMac, isLinux } from "@/lib/platform";
 import { terminalClient } from "@/clients";
+import { installLinuxPrimarySelectionListeners } from "./primarySelection";
 import { TerminalRefreshTier, TerminalType } from "@/types";
 import type { AgentState } from "@/types";
 import {
@@ -892,11 +893,33 @@ class TerminalInstanceService {
       const sel = terminal.getSelection();
       if (sel) {
         this.cachedSelections.set(id, sel);
-      } else if (managed.lastAppliedTier === TerminalRefreshTier.BACKGROUND) {
-        reduceScrollback(managed, SCROLLBACK_BACKGROUND);
+      } else {
+        this.cachedSelections.delete(id);
+        if (managed.lastAppliedTier === TerminalRefreshTier.BACKGROUND) {
+          reduceScrollback(managed, SCROLLBACK_BACKGROUND);
+        }
       }
     });
     listeners.push(() => selectionDisposable.dispose());
+
+    if (isLinux()) {
+      const removePrimaryListeners = installLinuxPrimarySelectionListeners({
+        hostElement,
+        terminalId: id,
+        getCachedSelection: () => this.cachedSelections.get(id),
+        getBracketedPasteMode: () => {
+          const current = this.instances.get(id);
+          return current?.terminal.modes.bracketedPasteMode ?? false;
+        },
+        isDisposed: () => !this.instances.has(id),
+        isInputLocked: () => this.instances.get(id)?.isInputLocked ?? false,
+        writeToPty: (termId, data) => terminalClient.write(termId, data),
+        notifyUserInput: (termId) => this.notifyUserInput(termId),
+        writeSelection: (text) => window.electron.clipboard.writeSelection(text),
+        readSelection: () => window.electron.clipboard.readSelection(),
+      });
+      listeners.push(removePrimaryListeners);
+    }
 
     if (agentId) {
       const agentConfig = getEffectiveAgentConfig(agentId);
