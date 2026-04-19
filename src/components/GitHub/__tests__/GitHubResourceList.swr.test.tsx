@@ -66,6 +66,31 @@ vi.mock("../BulkActionBar", () => ({
 vi.mock("../GitHubDropdownSkeletons", () => ({
   GitHubResourceRowsSkeleton: () => <div data-testid="skeleton">Loading...</div>,
   MAX_SKELETON_ITEMS: 5,
+  RESOURCE_ITEM_HEIGHT_PX: 68,
+}));
+
+vi.mock("react-virtuoso", () => ({
+  Virtuoso: ({
+    data,
+    itemContent,
+    components,
+    context,
+  }: {
+    data: unknown[];
+    itemContent: (index: number, item: unknown) => ReactNode;
+    components?: { Footer?: (props: { context?: unknown }) => ReactNode };
+    context?: unknown;
+  }) => {
+    const Footer = components?.Footer;
+    return (
+      <div data-testid="virtuoso-mock">
+        {data.map((item, index) => (
+          <div key={index}>{itemContent(index, item)}</div>
+        ))}
+        {Footer ? <Footer context={context} /> : null}
+      </div>
+    );
+  },
 }));
 
 vi.mock("@/utils/timeAgo", () => ({
@@ -177,6 +202,43 @@ describe("GitHubResourceList SWR behavior", () => {
       expect(screen.getByText(/Network error/)).toBeTruthy();
     });
     expect(screen.getByTestId("item-20")).toBeTruthy();
+  });
+
+  it("renders Load More footer when hasNextPage is true", async () => {
+    const cacheKey = buildCacheKey("/test/proj", "issue", "open", "created");
+    setCache(cacheKey, {
+      items: [makeIssue(1), makeIssue(2)],
+      endCursor: "cursor-1",
+      hasNextPage: true,
+      timestamp: Date.now(),
+    });
+
+    mockListIssues.mockResolvedValue({
+      items: [makeIssue(1), makeIssue(2)],
+      pageInfo: { hasNextPage: true, endCursor: "cursor-1" },
+    });
+
+    render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /load more/i })).toBeTruthy();
+    });
+  });
+
+  it("omits Load More footer when hasNextPage is false", async () => {
+    const cacheKey = buildCacheKey("/test/proj", "issue", "open", "created");
+    setCache(cacheKey, {
+      items: [makeIssue(1)],
+      endCursor: null,
+      hasNextPage: false,
+      timestamp: Date.now(),
+    });
+
+    mockListIssues.mockResolvedValue(makeResponse([makeIssue(1)]));
+
+    render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
+
+    expect(screen.queryByRole("button", { name: /load more/i })).toBeNull();
   });
 
   it("different project paths use separate cache entries", async () => {
