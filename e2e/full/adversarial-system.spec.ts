@@ -3,6 +3,7 @@ import { launchApp, closeApp, type AppContext } from "../helpers/launch";
 import { createFixtureRepo } from "../helpers/fixtures";
 import { openAndOnboardProject } from "../helpers/project";
 import { SEL } from "../helpers/selectors";
+import { T_SHORT } from "../helpers/timeouts";
 import {
   navigateToAgentSettings,
   addCustomFlavor,
@@ -103,11 +104,9 @@ test.describe.serial("Adversarial E2E Tests: System Breakage", () => {
     await goToClaudeSettings();
     await addCustomFlavor(ctx.window);
 
-    const editBtn = ctx.window.locator(SEL.flavor.editButton).first();
-    await editBtn.click();
-    const input = ctx.window.locator("[data-testid='flavor-edit-input']");
-
-    // Try various unicode attacks
+    // Try various unicode attacks. Pressing Enter commits (or rejects) the
+    // edit and collapses the input back to a button, so each attack needs
+    // its own click-into-edit cycle.
     const attacks = [
       "🚀".repeat(1000), // Many emojis
       "\u0000\u0001\u0002", // Null bytes
@@ -116,6 +115,10 @@ test.describe.serial("Adversarial E2E Tests: System Breakage", () => {
     ];
 
     for (const attack of attacks) {
+      const editBtn = ctx.window.locator(SEL.flavor.editButton).first();
+      await editBtn.click();
+      const input = ctx.window.locator("[data-testid='flavor-edit-input']");
+      await expect(input).toBeVisible({ timeout: T_SHORT });
       await input.fill(attack);
       await input.press("Enter");
       await ctx.window.waitForTimeout(500);

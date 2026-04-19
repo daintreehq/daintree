@@ -130,8 +130,9 @@ export function PulseHeatmap({ cells, rangeDays, compact = false }: PulseHeatmap
       <div
         className="flex flex-col"
         style={{ gap: `${gap}px`, width: `${rowWidth}px` }}
-        role="img"
+        role="group"
         aria-label={`Activity over the last ${rangeDays} days`}
+        data-testid="pulse-heatmap"
       >
         {rows.map((row, rowIndex) => (
           <div

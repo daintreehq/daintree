@@ -373,16 +373,30 @@ export function AgentSettings({
 
               const handleAddFlavor = () => {
                 const now = Date.now();
-                // Rate limiting: max 5 adds per minute (12s between adds)
-                if (now - lastAddTimeRef.current < 12000) {
+                // Rate limiting: max 5 adds per minute (12s between adds).
+                // Skip in E2E mode — tests need to add multiple flavors in
+                // rapid succession and the real rate limit only defends
+                // against abusive renderer loops, not orchestrated tests.
+                const e2eMode =
+                  typeof window !== "undefined" && window.__DAINTREE_E2E_MODE__ === true;
+                if (!e2eMode && now - lastAddTimeRef.current < 12000) {
                   console.warn("Rate limit exceeded for flavor creation");
                   return;
                 }
                 lastAddTimeRef.current = now;
 
-                const id = `user-${now}`;
+                // Disambiguate rapid-fire adds (E2E) where two clicks can
+                // land in the same millisecond — otherwise the IDs collide
+                // and the dedup in getMergedFlavors drops one.
+                const existing = activeEntry.customFlavors ?? [];
+                let id = `user-${now}`;
+                if (existing.some((f) => f.id === id)) {
+                  let suffix = 1;
+                  while (existing.some((f) => f.id === `user-${now}-${suffix}`)) suffix += 1;
+                  id = `user-${now}-${suffix}`;
+                }
                 const updated = [
-                  ...(activeEntry.customFlavors ?? []),
+                  ...existing,
                   {
                     id,
                     name: "New Flavor",

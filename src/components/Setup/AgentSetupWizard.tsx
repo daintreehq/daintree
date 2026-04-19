@@ -878,12 +878,16 @@ function CompleteStep({ installedAgents }: { installedAgents: string[] }) {
             return (
               <div
                 key={id}
+                data-testid={`agent-card-${id}`}
                 className="flex items-center gap-3 px-3 py-2.5 rounded-[var(--radius-md)] border border-status-success/20 bg-status-success/5"
               >
                 <Icon size={18} brandColor={agent.color} />
                 <span className="text-sm text-daintree-text font-medium">{agent.name}</span>
                 {flavorCount > 1 && (
-                  <span className="text-[10px] text-daintree-accent font-medium bg-daintree-accent/10 px-1.5 py-0.5 rounded">
+                  <span
+                    data-testid="flavor-count-badge"
+                    className="text-[10px] text-daintree-accent font-medium bg-daintree-accent/10 px-1.5 py-0.5 rounded"
+                  >
                     {flavorCount} flavors
                   </span>
                 )}

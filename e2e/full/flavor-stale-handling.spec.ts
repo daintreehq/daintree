@@ -9,6 +9,9 @@ import {
   addCustomFlavor,
   writeCcrConfig,
   removeCcrConfig,
+  getSelectedFlavorLabel,
+  getFlavorOptionLabels,
+  getFlavorRowByName,
 } from "../helpers/flavors";
 
 let ctx: AppContext;
@@ -31,19 +34,23 @@ test.describe.serial("Flavors: Stale Flavor Handling (71–76)", () => {
   };
 
   const selectCustomAsDefault = async () => {
-    const select = ctx.window.locator(SEL.flavor.defaultSelect);
-    if (await select.isVisible().catch(() => false)) {
-      const options = await select.locator("option").allInnerTexts();
-      const customOption = options.find((o) => o.includes("New Flavor"));
-      if (customOption) {
-        await select.selectOption({ label: customOption });
+    const trigger = ctx.window.locator(SEL.flavor.selectorTrigger);
+    if (await trigger.isVisible().catch(() => false)) {
+      const labels = await getFlavorOptionLabels(ctx.window);
+      const customLabel = labels.find((o) => o.includes("New Flavor"));
+      if (customLabel) {
+        await getFlavorRowByName(ctx.window, customLabel);
         await ctx.window.waitForTimeout(T_SETTLE);
       }
     }
   };
 
   const deleteFirstCustomFlavor = async () => {
+    // The delete button only renders for the currently-selected custom flavor's
+    // detail view. Wait for it to be visible before clicking so timing races
+    // fail fast instead of stuck on a silent 30s timeout.
     const delBtn = ctx.window.locator(SEL.flavor.section).locator(SEL.flavor.deleteButton).first();
+    await expect(delBtn).toBeVisible({ timeout: T_SHORT });
     await delBtn.click();
     await ctx.window.waitForTimeout(T_SETTLE);
   };
@@ -68,10 +75,12 @@ test.describe.serial("Flavors: Stale Flavor Handling (71–76)", () => {
     await selectCustomAsDefault();
     await deleteFirstCustomFlavor();
 
-    const select = ctx.window.locator(SEL.flavor.defaultSelect);
-    if (await select.isVisible().catch(() => false)) {
-      const value = await select.inputValue();
-      expect(value).toBe("");
+    // The Popover trigger falls back to the Vanilla label when the selected
+    // flavor is deleted — no inputValue to read on a <button>.
+    const trigger = ctx.window.locator(SEL.flavor.selectorTrigger);
+    if (await trigger.isVisible().catch(() => false)) {
+      const label = await getSelectedFlavorLabel(ctx.window);
+      expect(label).toContain("Vanilla");
     }
   });
 
@@ -102,10 +111,10 @@ test.describe.serial("Flavors: Stale Flavor Handling (71–76)", () => {
     await ctx.window.waitForTimeout(T_SETTLE);
 
     await goToClaudeSettings();
-    const select = ctx.window.locator(SEL.flavor.defaultSelect);
-    if (await select.isVisible().catch(() => false)) {
-      const value = await select.inputValue();
-      expect(value).toBe("");
+    const trigger = ctx.window.locator(SEL.flavor.selectorTrigger);
+    if (await trigger.isVisible().catch(() => false)) {
+      const label = await getSelectedFlavorLabel(ctx.window);
+      expect(label).toContain("Vanilla");
     }
   });
 
@@ -114,12 +123,12 @@ test.describe.serial("Flavors: Stale Flavor Handling (71–76)", () => {
     await ctx.window.waitForTimeout(35_000);
 
     await goToClaudeSettings();
-    const select = ctx.window.locator(SEL.flavor.defaultSelect);
-    if (await select.isVisible().catch(() => false)) {
-      const options = await select.locator("option").allInnerTexts();
-      const ccrOption = options.find((o) => o.includes("CCR Stale"));
-      if (ccrOption) {
-        await select.selectOption({ label: ccrOption });
+    const trigger = ctx.window.locator(SEL.flavor.selectorTrigger);
+    if (await trigger.isVisible().catch(() => false)) {
+      const labels = await getFlavorOptionLabels(ctx.window);
+      const ccrLabel = labels.find((o) => o.includes("CCR Stale"));
+      if (ccrLabel) {
+        await getFlavorRowByName(ctx.window, ccrLabel);
         await ctx.window.waitForTimeout(T_SETTLE);
       }
     }
@@ -128,9 +137,9 @@ test.describe.serial("Flavors: Stale Flavor Handling (71–76)", () => {
     await ctx.window.waitForTimeout(30_000);
 
     await goToClaudeSettings();
-    if (await select.isVisible().catch(() => false)) {
-      const value = await select.inputValue();
-      expect(value).toBe("");
+    if (await trigger.isVisible().catch(() => false)) {
+      const label = await getSelectedFlavorLabel(ctx.window);
+      expect(label).toContain("Vanilla");
     }
   });
 
@@ -146,10 +155,10 @@ test.describe.serial("Flavors: Stale Flavor Handling (71–76)", () => {
     await selectCustomAsDefault();
     await deleteFirstCustomFlavor();
 
-    const select = ctx.window.locator(SEL.flavor.defaultSelect);
-    if (await select.isVisible().catch(() => false)) {
-      const value = await select.inputValue();
-      expect(value).toBe("");
+    const trigger = ctx.window.locator(SEL.flavor.selectorTrigger);
+    if (await trigger.isVisible().catch(() => false)) {
+      const label = await getSelectedFlavorLabel(ctx.window);
+      expect(label).toContain("Vanilla");
     }
   });
 });

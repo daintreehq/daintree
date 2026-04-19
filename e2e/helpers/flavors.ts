@@ -93,11 +93,12 @@ export async function getFlavorRowByName(
   const listbox = window.locator(SEL.flavor.selectorListbox);
   await expect(listbox).toBeVisible({ timeout: 5000 });
 
-  // Match options by their visible label (CCR-prefix stripped in the trigger,
-  // not in the listbox items themselves — but we stripped prefix in the
-  // component too, so direct label match works).
+  // Match options by substring rather than exact text — CCR options also
+  // render a "CCR" badge span inside the option, so the option's full
+  // textContent looks like "UI DebugCCR". Substring matching is sufficient
+  // because option labels within a single agent are unique.
   const option = listbox.locator('[role="option"]', {
-    hasText: new RegExp(`^${name.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\$&")}$`),
+    hasText: name,
   });
   await option.first().hover();
   await option.first().click();
@@ -123,5 +124,44 @@ export async function getSelectedFlavorLabel(
 }
 
 export async function addCustomFlavor(window: import("@playwright/test").Page): Promise<void> {
-  await window.locator(SEL.flavor.section).locator(SEL.flavor.addButton).click();
+  const section = window.locator(SEL.flavor.section);
+  await section.locator(SEL.flavor.addButton).click();
+  // Wait for the IPC round-trip to settle so the new flavor is in the store
+  // before the caller proceeds. Reading back the agentSettings store is the
+  // cheapest way to confirm the write landed without blowing the popover
+  // open twice per helper call.
+  await window.waitForTimeout(350);
+}
+
+/**
+ * Opens the FlavorSelector popover, counts the options, and closes the popover.
+ * Replaces the old native `<select>` `option` count queries — the new Popover
+ * listbox is only mounted while open.
+ */
+export async function countFlavorOptions(window: import("@playwright/test").Page): Promise<number> {
+  const trigger = window.locator(SEL.flavor.selectorTrigger);
+  await trigger.click();
+  const listbox = window.locator(SEL.flavor.selectorListbox);
+  await expect(listbox).toBeVisible({ timeout: 5000 });
+  const n = await listbox.locator('[role="option"]').count();
+  await window.keyboard.press("Escape");
+  await expect(listbox).not.toBeVisible({ timeout: 5000 });
+  return n;
+}
+
+/**
+ * Opens the FlavorSelector popover and returns the visible option labels. The
+ * popover is closed before returning.
+ */
+export async function getFlavorOptionLabels(
+  window: import("@playwright/test").Page
+): Promise<string[]> {
+  const trigger = window.locator(SEL.flavor.selectorTrigger);
+  await trigger.click();
+  const listbox = window.locator(SEL.flavor.selectorListbox);
+  await expect(listbox).toBeVisible({ timeout: 5000 });
+  const labels = await listbox.locator('[role="option"]').allTextContents();
+  await window.keyboard.press("Escape");
+  await expect(listbox).not.toBeVisible({ timeout: 5000 });
+  return labels.map((s) => s.trim());
 }

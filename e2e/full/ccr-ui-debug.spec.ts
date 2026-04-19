@@ -4,7 +4,12 @@ import { createFixtureRepo } from "../helpers/fixtures";
 import { openAndOnboardProject } from "../helpers/project";
 import { SEL } from "../helpers/selectors";
 import { T_MEDIUM } from "../helpers/timeouts";
-import { writeCcrConfig, removeCcrConfig, navigateToAgentSettings } from "../helpers/flavors";
+import {
+  writeCcrConfig,
+  removeCcrConfig,
+  navigateToAgentSettings,
+  getFlavorRowByName,
+} from "../helpers/flavors";
 
 let ctx: AppContext;
 test.describe("CCR UI Debug", () => {
@@ -28,9 +33,10 @@ test.describe("CCR UI Debug", () => {
 
   test("CCR flavor row is visible", async () => {
     await navigateToAgentSettings(ctx.window, "claude");
-    const row = ctx.window.locator(SEL.flavor.section).locator("div.flex.items-center.border", {
-      hasText: "UI Debug",
-    });
-    await expect(row).toBeVisible({ timeout: T_MEDIUM });
+    // Select the CCR flavor in the Popover, then assert the detail view
+    // renders with an `auto` badge (the indicator that it's a CCR flavor).
+    const detail = await getFlavorRowByName(ctx.window, "UI Debug");
+    await expect(detail).toBeVisible({ timeout: T_MEDIUM });
+    await expect(detail.locator(SEL.flavor.autoBadge)).toBeVisible();
   });
 });

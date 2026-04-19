@@ -4,7 +4,12 @@ import { createFixtureRepo } from "../helpers/fixtures";
 import { openAndOnboardProject } from "../helpers/project";
 import { SEL } from "../helpers/selectors";
 import { T_SHORT, T_MEDIUM, T_SETTLE } from "../helpers/timeouts";
-import { navigateToAgentSettings, addCustomFlavor, removeCcrConfig } from "../helpers/flavors";
+import {
+  navigateToAgentSettings,
+  addCustomFlavor,
+  removeCcrConfig,
+  countFlavorOptions,
+} from "../helpers/flavors";
 
 let ctx: AppContext;
 
@@ -41,9 +46,12 @@ test.describe.serial("Flavors: Edge Cases & Resilience (97–100)", () => {
     const section = ctx.window.locator(SEL.flavor.section);
     await expect(section).toBeVisible({ timeout: T_MEDIUM });
 
-    const customBadges = section.locator(SEL.flavor.customBadge);
-    const count = await customBadges.count();
-    expect(count).toBeGreaterThanOrEqual(50);
+    // With the Popover-based FlavorSelector the per-flavor "custom" badge only
+    // renders for the currently-selected flavor in the detail view, so counting
+    // badges would always yield 1. Open the listbox and count options instead
+    // (Vanilla + 50 custom entries = 51).
+    const optionCount = await countFlavorOptions(ctx.window);
+    expect(optionCount).toBeGreaterThanOrEqual(50);
   });
 
   test("98. Flavor name with shell metacharacters does not crash", async () => {

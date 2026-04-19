@@ -45,6 +45,19 @@ export function SortableTerminal({
     transition,
   };
 
+  // dnd-kit attaches role="button" + tabIndex={0} to the sortable container by
+  // default, which conflicts with axe's nested-interactive rule because the
+  // panel content hosts its own buttons, inputs, and xterm textarea. Strip
+  // those props — actual drag initiation happens via drag handles passed
+  // through DragHandleProvider, not via focusing the outer container.
+  const {
+    role: _role,
+    tabIndex: _tabIndex,
+    ...remainingAttributes
+  } = attributes as unknown as Record<string, unknown>;
+  void _role;
+  void _tabIndex;
+
   return (
     <div
       ref={setNodeRef}
@@ -54,7 +67,7 @@ export function SortableTerminal({
         "h-full min-w-0 contain-layout contain-style",
         isDragging && "opacity-40 ring-2 ring-daintree-accent/50 rounded"
       )}
-      {...attributes}
+      {...remainingAttributes}
       aria-roledescription="sortable item"
     >
       <DragHandleProvider value={{ listeners }}>{children}</DragHandleProvider>

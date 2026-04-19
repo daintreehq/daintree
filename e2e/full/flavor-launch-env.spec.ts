@@ -172,10 +172,10 @@ test.describe.serial("Flavors: Launch Env Overrides (63–70)", () => {
     await expect(row2).toBeVisible({ timeout: T_MEDIUM });
     await expect(row2.getByText("ANTHROPIC_MODEL")).toBeVisible({ timeout: T_SHORT });
 
-    // Verify second is now selected
-    const select = ctx.window.locator(SEL.flavor.defaultSelect);
-    const val = await select.inputValue();
-    expect(val).toBeTruthy();
+    // Verify second is now the selected flavor via the trigger label.
+    const { getSelectedFlavorLabel } = await import("../helpers/flavors");
+    const label = await getSelectedFlavorLabel(ctx.window);
+    expect(label).toContain("Dup Second");
   });
 
   test("70. Settings section shows env keys correctly for created flavor", async () => {

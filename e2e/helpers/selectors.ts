@@ -151,7 +151,7 @@ export const SEL = {
     tagInput: 'input[placeholder="Add tags..."]',
   },
   pulse: {
-    heatmap: '[role="img"][aria-label*="Activity over"]',
+    heatmap: '[data-testid="pulse-heatmap"]',
     rangeTrigger: '[aria-label="Select pulse range"]',
     refreshButton: '[aria-label="Refresh"]',
   },
