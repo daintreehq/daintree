@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import { Bell, Volume2, Play } from "lucide-react";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
 import { SettingsCheckbox } from "@/components/Settings/SettingsCheckbox";
+import { SettingsSelect } from "@/components/Settings/SettingsSelect";
 import { SettingsSwitchCard } from "@/components/Settings/SettingsSwitchCard";
 import type { NotificationSettings } from "@shared/types/ipc/api";
 
@@ -27,12 +28,25 @@ interface ProjectNotificationsTabProps {
 
 export function ProjectNotificationsTab({ overrides, onChange }: ProjectNotificationsTabProps) {
   const [globalSettings, setGlobalSettings] = useState<NotificationSettings | null>(null);
+  const [globalError, setGlobalError] = useState<string | null>(null);
 
   useEffect(() => {
-    window.electron?.notification
-      ?.getSettings()
-      .then(setGlobalSettings)
-      .catch(() => {});
+    if (!window.electron?.notification) return;
+
+    let mounted = true;
+    window.electron.notification
+      .getSettings()
+      .then((settings) => {
+        if (mounted) setGlobalSettings(settings);
+      })
+      .catch((err) => {
+        console.error("[ProjectNotificationsTab] Failed to load global settings:", err);
+        if (mounted) setGlobalError("Failed to load global settings");
+      });
+
+    return () => {
+      mounted = false;
+    };
   }, []);
 
   const setOverride = useCallback(
@@ -55,12 +69,43 @@ export function ProjectNotificationsTab({ overrides, onChange }: ProjectNotifica
     window.electron?.notification?.playSound(soundFile).catch(() => {});
   };
 
+  if (!window.electron?.notification) {
+    return <div className="text-sm text-daintree-text/50">Notification API not available</div>;
+  }
+
+  if (globalError) {
+    return (
+      <div className="text-sm text-status-error">
+        {globalError}{" "}
+        <button
+          type="button"
+          onClick={() => {
+            setGlobalError(null);
+            window.electron.notification
+              .getSettings()
+              .then(setGlobalSettings)
+              .catch((err) => {
+                console.error("[ProjectNotificationsTab] Retry failed:", err);
+                setGlobalError("Failed to load global settings");
+              });
+          }}
+          className="text-daintree-accent underline hover:text-daintree-accent/80"
+        >
+          Retry
+        </button>
+      </div>
+    );
+  }
+
   if (!globalSettings) {
     return <div className="text-sm text-daintree-text/50">Loading global settings…</div>;
   }
 
   const effective = (key: keyof NotificationSettings) =>
     overrides[key] !== undefined ? overrides[key] : globalSettings[key];
+
+  const scopeFor = (key: keyof NotificationSettings): "default" | "global" | "project" =>
+    overrides[key] !== undefined ? "project" : "global";
 
   return (
     <div className="space-y-6">
@@ -90,6 +135,7 @@ export function ProjectNotificationsTab({ overrides, onChange }: ProjectNotifica
               description="Override the global completed notification setting"
               checked={effective("completedEnabled") as boolean}
               onChange={(v) => setOverride("completedEnabled", v)}
+              scope={scopeFor("completedEnabled")}
             />
           </OverrideRow>
 
@@ -114,6 +160,7 @@ export function ProjectNotificationsTab({ overrides, onChange }: ProjectNotifica
               description="Override the global waiting notification setting"
               checked={effective("waitingEnabled") as boolean}
               onChange={(v) => setOverride("waitingEnabled", v)}
+              scope={scopeFor("waitingEnabled")}
             />
             {(effective("waitingEnabled") as boolean) && (
               <div className="ml-6 space-y-3 border-l border-daintree-border pl-4 mt-2">
@@ -138,6 +185,7 @@ export function ProjectNotificationsTab({ overrides, onChange }: ProjectNotifica
                     description="Override the global escalation setting"
                     checked={effective("waitingEscalationEnabled") as boolean}
                     onChange={(v) => setOverride("waitingEscalationEnabled", v)}
+                    scope={scopeFor("waitingEscalationEnabled")}
                   />
                 </OverrideRow>
 
@@ -154,19 +202,21 @@ export function ProjectNotificationsTab({ overrides, onChange }: ProjectNotifica
                       else clearOverrides("waitingEscalationDelayMs");
                     }}
                   >
-                    <select
+                    <SettingsSelect
+                      label="Delay"
+                      description="Time to wait before escalating"
                       value={effective("waitingEscalationDelayMs") as number}
                       onChange={(e) =>
                         setOverride("waitingEscalationDelayMs", Number(e.target.value))
                       }
-                      className="px-3 py-2 text-sm rounded-[var(--radius-md)] border border-daintree-border bg-daintree-bg text-daintree-text focus:border-daintree-accent focus:outline-none transition-colors"
+                      scope={scopeFor("waitingEscalationDelayMs")}
                     >
                       {ESCALATION_DELAY_OPTIONS.map(({ value, label }) => (
                         <option key={value} value={value}>
                           {label}
                         </option>
                       ))}
-                    </select>
+                    </SettingsSelect>
                   </OverrideRow>
                 )}
               </div>
@@ -204,6 +254,7 @@ export function ProjectNotificationsTab({ overrides, onChange }: ProjectNotifica
               isEnabled={effective("soundEnabled") as boolean}
               onChange={() => setOverride("soundEnabled", !(effective("soundEnabled") as boolean))}
               ariaLabel="Play sound for notifications"
+              scope={scopeFor("soundEnabled")}
             />
           </OverrideRow>
 
@@ -233,18 +284,20 @@ export function ProjectNotificationsTab({ overrides, onChange }: ProjectNotifica
                   else clearOverrides(field);
                 }}
               >
-                <div className="flex items-center gap-2">
-                  <select
+                <div className="flex items-center gap-2 flex-1">
+                  <SettingsSelect
+                    label={label}
                     value={effective(field) as string}
                     onChange={(e) => setOverride(field, e.target.value)}
-                    className="flex-1 px-3 py-2 text-sm rounded-[var(--radius-md)] border border-daintree-border bg-daintree-bg text-daintree-text focus:border-daintree-accent focus:outline-none transition-colors"
+                    scope={scopeFor(field)}
+                    className="flex-1"
                   >
                     {AVAILABLE_SOUNDS.map(({ file, label: soundLabel }) => (
                       <option key={file} value={file}>
                         {soundLabel}
                       </option>
                     ))}
-                  </select>
+                  </SettingsSelect>
                   <button
                     onClick={() => handlePreview(effective(field) as string)}
                     title={`Preview ${label.toLowerCase()}`}

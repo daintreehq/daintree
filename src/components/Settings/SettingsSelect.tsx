@@ -13,6 +13,7 @@ interface SettingsSelectProps extends Omit<ComponentPropsWithoutRef<"select">, "
   isModified?: boolean;
   onReset?: () => void;
   resetAriaLabel?: string;
+  scope?: "default" | "global" | "project";
   ref?: Ref<HTMLSelectElement>;
 }
 
@@ -23,6 +24,7 @@ export function SettingsSelect({
   isModified,
   onReset,
   resetAriaLabel,
+  scope,
   disabled,
   className,
   children,
@@ -39,12 +41,27 @@ export function SettingsSelect({
       .filter(Boolean)
       .join(" ") || undefined;
 
+  const scopeBadge = scope ? (
+    <span
+      className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${
+        scope === "project"
+          ? "bg-daintree-accent/10 text-daintree-accent dark:bg-daintree-accent/20"
+          : scope === "global"
+            ? "bg-blue-500/10 text-blue-500 dark:bg-blue-500/20"
+            : "bg-text-secondary/10 text-text-secondary dark:bg-text-secondary/20"
+      }`}
+    >
+      {scope === "project" ? "Project" : scope === "global" ? "Global" : "Default"}
+    </span>
+  ) : null;
+
   return (
     <div className="group flex flex-col gap-2">
       <div className="flex items-center gap-2">
         <label htmlFor={id} className="text-sm text-daintree-text/70">
           {label}
         </label>
+        {scopeBadge}
         {isModified && (
           <span className="w-1.5 h-1.5 rounded-full bg-daintree-accent" aria-hidden="true" />
         )}

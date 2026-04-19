@@ -13,6 +13,7 @@ interface SettingsCheckboxProps {
   onChange: (value: boolean) => void;
   disabled?: boolean;
   error?: string;
+  scope?: "default" | "global" | "project";
 }
 
 export function SettingsCheckbox({
@@ -23,6 +24,7 @@ export function SettingsCheckbox({
   onChange,
   disabled,
   error,
+  scope,
 }: SettingsCheckboxProps) {
   const generatedId = useId();
   const checkboxId = id ?? generatedId;
@@ -31,6 +33,20 @@ export function SettingsCheckbox({
 
   const describedBy = error ? errorId : descriptionId;
   const isError = error !== undefined && error !== "";
+
+  const scopeBadge = scope ? (
+    <span
+      className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${
+        scope === "project"
+          ? "bg-daintree-accent/10 text-daintree-accent dark:bg-daintree-accent/20"
+          : scope === "global"
+            ? "bg-blue-500/10 text-blue-500 dark:bg-blue-500/20"
+            : "bg-text-secondary/10 text-text-secondary dark:bg-text-secondary/20"
+      }`}
+    >
+      {scope === "project" ? "Project" : scope === "global" ? "Global" : "Default"}
+    </span>
+  ) : null;
 
   return (
     <label htmlFor={checkboxId} className="flex items-start gap-3 cursor-pointer">
@@ -72,6 +88,7 @@ export function SettingsCheckbox({
         >
           {label}
         </span>
+        {scopeBadge}
         {!isError && (
           <p id={descriptionId} className="text-xs text-text-muted mt-0.5 select-text">
             {description}

@@ -23,6 +23,7 @@ interface SettingsSwitchCardProps {
   onReset?: () => void;
   resetAriaLabel?: string;
   lifecycleBadge?: string;
+  scope?: "default" | "global" | "project";
 }
 
 export function SettingsSwitchCard({
@@ -39,6 +40,7 @@ export function SettingsSwitchCard({
   onReset,
   resetAriaLabel,
   lifecycleBadge,
+  scope,
 }: SettingsSwitchCardProps) {
   const scheme = COLOR_SCHEMES[colorScheme] ?? COLOR_SCHEMES.accent;
   const isCard = variant === "card";
@@ -51,6 +53,20 @@ export function SettingsSwitchCard({
     }
     onChange();
   };
+
+  const scopeBadge = scope ? (
+    <span
+      className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${
+        scope === "project"
+          ? "bg-daintree-accent/10 text-daintree-accent dark:bg-daintree-accent/20"
+          : scope === "global"
+            ? "bg-blue-500/10 text-blue-500 dark:bg-blue-500/20"
+            : "bg-text-secondary/10 text-text-secondary dark:bg-text-secondary/20"
+      }`}
+    >
+      {scope === "project" ? "Project" : scope === "global" ? "Global" : "Default"}
+    </span>
+  ) : null;
 
   const card = (
     <div
@@ -79,6 +95,7 @@ export function SettingsSwitchCard({
         <div className="text-left">
           <div className="text-sm font-medium flex items-center gap-1.5 flex-wrap">
             {title}
+            {scopeBadge}
             {lifecycleBadge && (
               <span className="inline-flex items-center px-1.5 py-0.5 rounded-sm text-[10px] font-medium bg-daintree-accent/10 border border-daintree-border/50 text-daintree-text/50 uppercase tracking-wide">
                 {lifecycleBadge}
