@@ -934,15 +934,19 @@ export async function setupWindowServices(
     console.error("[MAIN] Unexpected error during service initialization:", error);
   }
 
+  // Per-window project binding: use opts.initialProjectId/initialProjectPath
+  // instead of the global current project (which belongs to another window).
+  const restoreProject = opts.initialProjectId
+    ? projectStore.getProjectById(opts.initialProjectId)
+    : undefined;
+
   // PTY-related features
   if (ptyReady) {
     createAndDistributePorts(win, ctx);
 
-    const currentProjectId = projectStore.getCurrentProjectId();
-    const currentProjectPath = currentProjectId
-      ? projectStore.getProjectById(currentProjectId)?.path
-      : undefined;
-    ptyClient!.setActiveProject(win.id, currentProjectId, currentProjectPath);
+    if (restoreProject) {
+      ptyClient!.setActiveProject(win.id, restoreProject.id, restoreProject.path);
+    }
 
     const availabilityStore = initializeAgentAvailabilityStore();
     const agentRouter = initializeAgentRouter(availabilityStore);
@@ -954,7 +958,7 @@ export async function setupWindowServices(
 
     const processArgvCli = !processArgvCliHandled ? extractCliPath(process.argv) : null;
     const skipDefaultSpawn =
-      opts.initialProjectPath || processArgvCli || getPendingCliPath() || currentProjectId;
+      opts.initialProjectPath || processArgvCli || getPendingCliPath() || opts.initialProjectId;
     if (skipDefaultSpawn) {
       console.log(
         "[MAIN] CLI path, initial project path, or existing project set, skipping default terminal spawn"
@@ -967,7 +971,6 @@ export async function setupWindowServices(
           cwd: os.homedir(),
           cols: 80,
           rows: 30,
-          projectId: currentProjectId ?? undefined,
         });
       } catch (error) {
         console.error("[MAIN] Failed to spawn default terminal:", error);
@@ -977,13 +980,14 @@ export async function setupWindowServices(
     console.warn("[MAIN] PTY service unavailable - skipping terminal setup");
   }
 
-  // Register the initial view with ProjectViewManager once we know the project
-  const currentProject = projectStore.getCurrentProject();
-  if (opts.projectViewManager && opts.initialAppView && currentProject) {
+  // Register the initial view with ProjectViewManager — only when this window
+  // has a project binding (startup restore). Unbound windows (Cmd+N) start
+  // with the project picker and get their view registered on project open.
+  if (opts.projectViewManager && opts.initialAppView && restoreProject) {
     opts.projectViewManager.registerInitialView(
       opts.initialAppView,
-      currentProject.id,
-      currentProject.path
+      restoreProject.id,
+      restoreProject.path
     );
   }
 
@@ -993,8 +997,9 @@ export async function setupWindowServices(
     ctx.services.projectViewManager = opts.projectViewManager;
   }
 
-  // Load worktrees — prefer initialProjectPath for windows opened with a specific path
-  const projectPathForWorktrees = opts.initialProjectPath ?? currentProject?.path;
+  // Load worktrees — prefer initialProjectPath, else restoreProject for
+  // startup windows. Unbound windows (no project) skip worktree loading.
+  const projectPathForWorktrees = opts.initialProjectPath ?? restoreProject?.path;
   if (projectPathForWorktrees && workspaceClient && workspaceReady) {
     console.log("[MAIN] Loading worktrees for project path:", projectPathForWorktrees);
     try {
@@ -1021,11 +1026,11 @@ export async function setupWindowServices(
     console.warn("[MAIN] Workspace service unavailable - skipping worktree loading");
   }
 
-  // Task queue & workflow (only initialize once for the first window)
-  if (currentProject && !opts.initialProjectPath) {
-    console.log("[MAIN] Initializing task queue for current project:", currentProject.name);
+  // Task queue & workflow (startup restore only — not for unbound or path windows)
+  if (restoreProject && !opts.initialProjectPath) {
+    console.log("[MAIN] Initializing task queue for current project:", restoreProject.name);
     try {
-      await taskQueueService.initialize(currentProject.id);
+      await taskQueueService.initialize(restoreProject.id);
       console.log("[MAIN] Task queue initialized for current project");
     } catch (error) {
       console.error("[MAIN] Failed to initialize task queue:", error);
