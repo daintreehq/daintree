@@ -946,6 +946,8 @@ export async function setupWindowServices(
 
     if (restoreProject) {
       ptyClient!.setActiveProject(win.id, restoreProject.id, restoreProject.path);
+    } else {
+      ptyClient!.setActiveProject(win.id, null);
     }
 
     const availabilityStore = initializeAgentAvailabilityStore();
@@ -958,7 +960,7 @@ export async function setupWindowServices(
 
     const processArgvCli = !processArgvCliHandled ? extractCliPath(process.argv) : null;
     const skipDefaultSpawn =
-      opts.initialProjectPath || processArgvCli || getPendingCliPath() || opts.initialProjectId;
+      opts.initialProjectPath || processArgvCli || getPendingCliPath() || restoreProject;
     if (skipDefaultSpawn) {
       console.log(
         "[MAIN] CLI path, initial project path, or existing project set, skipping default terminal spawn"

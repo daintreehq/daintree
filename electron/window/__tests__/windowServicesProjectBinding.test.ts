@@ -26,16 +26,18 @@ function simulateBootstrap(
     ? projectStore.getProjectById(opts.initialProjectId)
     : undefined;
 
-  // PTY active project
+  // PTY active project (explicit null for unbound windows)
   if (restoreProject) {
     actions.push({
       action: "ptySetActiveProject",
       args: { id: restoreProject.id, path: restoreProject.path },
     });
+  } else {
+    actions.push({ action: "ptySetActiveProject", args: { id: null } });
   }
 
-  // Default terminal spawn
-  const skipDefaultSpawn = opts.initialProjectPath || opts.initialProjectId;
+  // Default terminal spawn (skip when restoreProject exists or explicit path)
+  const skipDefaultSpawn = opts.initialProjectPath || restoreProject;
   if (!skipDefaultSpawn) {
     actions.push({ action: "spawnDefaultTerminal" });
   }
@@ -100,16 +102,23 @@ describe("windowServices project binding (#5492)", () => {
       expect(actions.find((a) => a.action === "spawnDefaultTerminal")).toBeUndefined();
     });
 
-    it("handles missing project in store gracefully", () => {
+    it("handles missing project in store gracefully — clears PTY and spawns default terminal", () => {
       const actions = simulateBootstrap({ initialProjectId: "proj-missing" }, emptyStore);
-      expect(actions).toEqual([]);
+      expect(actions).toContainEqual({
+        action: "ptySetActiveProject",
+        args: { id: null },
+      });
+      expect(actions).toContainEqual({ action: "spawnDefaultTerminal" });
     });
   });
 
   describe("unbound new window (no initialProjectId, no initialProjectPath)", () => {
-    it("does NOT set PTY active project", () => {
+    it("sets PTY active project to null (no project binding)", () => {
       const actions = simulateBootstrap({}, storeWithProjectA);
-      expect(actions.find((a) => a.action === "ptySetActiveProject")).toBeUndefined();
+      expect(actions).toContainEqual({
+        action: "ptySetActiveProject",
+        args: { id: null },
+      });
     });
 
     it("does NOT register initial view", () => {
@@ -136,7 +145,11 @@ describe("windowServices project binding (#5492)", () => {
       // Even though storeWithProjectA has a project, the unbound window
       // should not use it — it must show the project picker instead.
       const actions = simulateBootstrap({}, storeWithProjectA);
-      const projectActions = actions.filter((a) => a.action !== "spawnDefaultTerminal");
+      const projectActions = actions.filter(
+        (a) =>
+          a.action !== "spawnDefaultTerminal" &&
+          !(a.action === "ptySetActiveProject" && a.args?.id === null)
+      );
       expect(projectActions).toEqual([]);
     });
   });
@@ -144,9 +157,12 @@ describe("windowServices project binding (#5492)", () => {
   describe("explicit-path window (initialProjectPath set, no initialProjectId)", () => {
     const opts: Opts = { initialProjectPath: "/cli/project" };
 
-    it("does NOT set PTY active project (no projectId yet)", () => {
+    it("sets PTY active project to null (no projectId yet)", () => {
       const actions = simulateBootstrap(opts, storeWithProjectA);
-      expect(actions.find((a) => a.action === "ptySetActiveProject")).toBeUndefined();
+      expect(actions).toContainEqual({
+        action: "ptySetActiveProject",
+        args: { id: null },
+      });
     });
 
     it("does NOT register initial view (no projectId yet)", () => {
