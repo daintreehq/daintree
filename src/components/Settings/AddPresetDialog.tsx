@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { getAgentConfig, type AgentPreset } from "@/config/agents";
 import { AppDialog } from "@/components/ui/AppDialog";
 
@@ -22,7 +22,7 @@ export function AddPresetDialog({
   const [choice, setChoice] = useState<CreationChoice>("blank");
   const [selectedTemplateId, setSelectedTemplateId] = useState<string>("");
 
-  const templates = getAgentConfig(agentId)?.providerTemplates ?? [];
+  const templates = useMemo(() => getAgentConfig(agentId)?.providerTemplates ?? [], [agentId]);
   const selectedTemplate = templates.find((t) => t.id === selectedTemplateId);
 
   useEffect(() => {
