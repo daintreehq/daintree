@@ -532,4 +532,88 @@ describe("useActionPalette", () => {
       expect(result.current.results[1]!.id).toBe("terminal.close");
     });
   });
+
+  describe("keyword search", () => {
+    it("finds actions by keyword when term is not in title or description", async () => {
+      listMock.mockReturnValue([
+        {
+          id: "terminal.stashInput",
+          title: "Stash Input",
+          description: "Park the current hybrid input draft to a temporary stash slot",
+          category: "terminal",
+          kind: "command",
+          enabled: true,
+          keywords: ["save", "draft", "store", "park"],
+        },
+        makeEntry("other.action", "Other Action"),
+      ]);
+
+      const { result } = renderHook(() => useActionPalette());
+      act(() => result.current.open());
+      act(() => result.current.setQuery("park"));
+
+      await waitFor(() => expect(result.current.results.length).toBeGreaterThan(0), {
+        timeout: 2000,
+      });
+
+      expect(result.current.results.some((r) => r.id === "terminal.stashInput")).toBe(true);
+    });
+
+    it("ranks title matches above keyword-only matches", async () => {
+      listMock.mockReturnValue([
+        {
+          id: "terminal.saveOutput",
+          title: "Save Output",
+          description: "Save terminal output to a file",
+          category: "terminal",
+          kind: "command",
+          enabled: true,
+          keywords: [],
+        },
+        {
+          id: "terminal.stashInput",
+          title: "Stash Input",
+          description: "Park the current hybrid input draft to a temporary stash slot",
+          category: "terminal",
+          kind: "command",
+          enabled: true,
+          keywords: ["save", "draft", "store"],
+        },
+      ]);
+
+      const { result } = renderHook(() => useActionPalette());
+      act(() => result.current.open());
+      act(() => result.current.setQuery("save"));
+
+      await waitFor(() => expect(result.current.results.length).toBe(2), { timeout: 2000 });
+
+      // Title match "Save Output" should rank above keyword-only "Stash Input"
+      expect(result.current.results[0]!.id).toBe("terminal.saveOutput");
+    });
+
+    it("handles actions without keywords gracefully", async () => {
+      listMock.mockReturnValue([
+        {
+          id: "action.noKeywords",
+          title: "No Keywords",
+          description: "An action without keywords",
+          category: "General",
+          kind: "command",
+          enabled: true,
+        },
+        makeEntry("other.action", "Other Action"),
+      ]);
+
+      const { result } = renderHook(() => useActionPalette());
+      act(() => result.current.open());
+      act(() => result.current.setQuery("no keywords"));
+
+      await waitFor(() => expect(result.current.results.length).toBeGreaterThan(0), {
+        timeout: 2000,
+      });
+
+      // Should not throw, and the action should be findable via title
+      expect(result.current.results.some((r) => r.id === "action.noKeywords")).toBe(true);
+    });
+  });
 });

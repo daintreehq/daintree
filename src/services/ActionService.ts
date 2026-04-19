@@ -237,7 +237,7 @@ export class ActionService {
         ? !definition.argsSchema.safeParse(undefined).success &&
           !definition.argsSchema.safeParse({}).success
         : false,
-      keywords: definition.keywords,
+      keywords: definition.keywords?.slice(),
     };
   }
 
