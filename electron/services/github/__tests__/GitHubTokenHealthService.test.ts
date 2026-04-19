@@ -144,7 +144,7 @@ describe("GitHubTokenHealthService", () => {
 
     it("force refresh bypasses the cooldown", async () => {
       GitHubAuth.setToken("ghp_testtoken0000000000000000000000000000000");
-      let now = 1_000_000;
+      const now = 1_000_000;
       gitHubTokenHealthService._setNowForTests(() => now);
       fetchMock.mockResolvedValue(buildResponse(200));
 
