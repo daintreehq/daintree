@@ -95,6 +95,8 @@ export interface AppState {
   fleetDeckAlwaysPreview?: boolean;
   /** Number of armed targets that triggers quorum confirmation */
   fleetDeckQuorumThreshold?: number;
+  /** Whether Fleet scope primitive is active ("scoped") or feature is disabled ("legacy", default) */
+  fleetScopeMode?: "legacy" | "scoped";
 }
 
 /** Describes how the settings store recovered from corruption at startup */

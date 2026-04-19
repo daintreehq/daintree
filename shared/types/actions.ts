@@ -306,6 +306,8 @@ export type BuiltInActionId =
   | "fleet.scope.save"
   | "fleet.scope.recall"
   | "fleet.scope.delete"
+  | "fleet.scope.enter"
+  | "fleet.scope.exit"
   | "fleet.dryRun"
   | "fleet.retryFailed"
   | "terminal.focusFleetComposer";

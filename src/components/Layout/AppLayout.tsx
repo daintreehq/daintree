@@ -13,6 +13,7 @@ import { DemoCaptureBridge, DemoCursor, DemoOverlay } from "../Demo";
 
 import { AllClearOverlay } from "../AllClearOverlay";
 import { useDiagnosticsStore, useDockStore, useFleetDeckStore, type PanelState } from "@/store";
+import { useFleetScopeFlagStore } from "@/store/fleetScopeFlagStore";
 import { useProjectStore } from "@/store/projectStore";
 import { useMacroFocusStore } from "@/store/macroFocusStore";
 import { useCcrPresetsSubscription } from "@/hooks/useCcrPresetsSubscription";
@@ -100,6 +101,7 @@ export function AppLayout({
           width: appState.fleetDeckWidth,
           height: appState.fleetDeckHeight,
         });
+        useFleetScopeFlagStore.getState().hydrate(appState.fleetScopeMode);
       } catch (error) {
         console.error("Failed to restore app state:", error);
       }

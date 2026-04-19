@@ -463,6 +463,13 @@ export function registerAppStateHandlers(): () => void {
         }
       }
 
+      if ("fleetScopeMode" in partialState) {
+        const mode = partialState.fleetScopeMode;
+        if (mode === "legacy" || mode === "scoped") {
+          updates.fleetScopeMode = mode;
+        }
+      }
+
       store.set("appState", { ...currentState, ...updates });
 
       // Note: We intentionally do NOT save per-project terminal state.

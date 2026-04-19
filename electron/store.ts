@@ -108,6 +108,7 @@ export interface StoreSchema {
     fleetDeckEdge?: "right" | "left" | "bottom";
     fleetDeckWidth?: number;
     fleetDeckHeight?: number;
+    fleetScopeMode?: "legacy" | "scoped";
   };
   userConfig: {
     githubToken?: string;

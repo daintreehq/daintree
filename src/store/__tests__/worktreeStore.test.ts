@@ -313,4 +313,91 @@ describe("worktreeStore", () => {
 
     expect(setFocusedMock).not.toHaveBeenCalledWith("term-a");
   });
+
+  describe("fleet scope", () => {
+    it("starts inactive with no previous worktree captured", () => {
+      const state = useWorktreeSelectionStore.getState();
+      expect(state.isFleetScopeActive).toBe(false);
+      expect(state._previousActiveWorktreeId).toBeNull();
+    });
+
+    it("enterFleetScope captures current activeWorktreeId", () => {
+      useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-active" });
+      useWorktreeSelectionStore.getState().enterFleetScope();
+      const state = useWorktreeSelectionStore.getState();
+      expect(state.isFleetScopeActive).toBe(true);
+      expect(state._previousActiveWorktreeId).toBe("wt-active");
+    });
+
+    it("enterFleetScope is idempotent — repeated calls preserve the original capture", () => {
+      useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-original" });
+      useWorktreeSelectionStore.getState().enterFleetScope();
+      useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-changed" });
+      useWorktreeSelectionStore.getState().enterFleetScope();
+      expect(useWorktreeSelectionStore.getState()._previousActiveWorktreeId).toBe("wt-original");
+    });
+
+    it("exitFleetScope restores the previously captured activeWorktreeId", () => {
+      useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-original" });
+      useWorktreeSelectionStore.getState().enterFleetScope();
+      useWorktreeSelectionStore.setState({ activeWorktreeId: null });
+      useWorktreeSelectionStore.getState().exitFleetScope();
+      const state = useWorktreeSelectionStore.getState();
+      expect(state.isFleetScopeActive).toBe(false);
+      expect(state._previousActiveWorktreeId).toBeNull();
+      expect(state.activeWorktreeId).toBe("wt-original");
+    });
+
+    it("exitFleetScope persists the restored activeWorktreeId", async () => {
+      // Unique id to avoid module-level persistActiveWorktree dedup bleeding
+      // from earlier tests that touched "wt-original" via setActiveWorktree.
+      const restoreId = "wt-fleet-exit-persist";
+      useWorktreeSelectionStore.setState({ activeWorktreeId: restoreId });
+      useWorktreeSelectionStore.getState().enterFleetScope();
+      useWorktreeSelectionStore.setState({ activeWorktreeId: null });
+      appSetStateMock.mockClear();
+      useWorktreeSelectionStore.getState().exitFleetScope();
+      // persistActiveWorktree loads the clients module via dynamic import,
+      // so the setState call is deferred to a microtask.
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(appSetStateMock).toHaveBeenCalledWith({ activeWorktreeId: restoreId });
+    });
+
+    it("exitFleetScope reapplies terminal streaming policy for the restored worktree", async () => {
+      setMockTerminals([
+        { id: "term-a", worktreeId: "wt-original", location: "grid" },
+        { id: "term-b", worktreeId: "wt-other", location: "grid" },
+      ]);
+      useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-original" });
+      useWorktreeSelectionStore.getState().enterFleetScope();
+      useWorktreeSelectionStore.setState({ activeWorktreeId: null });
+      applyRendererPolicyMock.mockClear();
+      useWorktreeSelectionStore.getState().exitFleetScope();
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(applyRendererPolicyMock).toHaveBeenCalledWith("term-a", TerminalRefreshTier.VISIBLE);
+      expect(applyRendererPolicyMock).toHaveBeenCalledWith(
+        "term-b",
+        TerminalRefreshTier.BACKGROUND
+      );
+    });
+
+    it("exitFleetScope is a no-op when scope is not active", () => {
+      useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-current" });
+      useWorktreeSelectionStore.getState().exitFleetScope();
+      const state = useWorktreeSelectionStore.getState();
+      expect(state.isFleetScopeActive).toBe(false);
+      expect(state.activeWorktreeId).toBe("wt-current");
+    });
+
+    it("reset clears fleet scope state", () => {
+      useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-active" });
+      useWorktreeSelectionStore.getState().enterFleetScope();
+      useWorktreeSelectionStore.getState().reset();
+      const state = useWorktreeSelectionStore.getState();
+      expect(state.isFleetScopeActive).toBe(false);
+      expect(state._previousActiveWorktreeId).toBeNull();
+    });
+  });
 });

@@ -46,6 +46,8 @@ interface WorktreeSelectionState {
   crossDiffDialog: CrossDiffDialogState;
   _policyGeneration: number;
   lastFocusedTerminalByWorktree: Map<string, string>;
+  isFleetScopeActive: boolean;
+  _previousActiveWorktreeId: string | null;
 
   setActiveWorktree: (id: string | null) => void;
   setFocusedWorktree: (id: string | null) => void;
@@ -72,6 +74,8 @@ interface WorktreeSelectionState {
   closeCrossWorktreeDiff: () => void;
   trackTerminalFocus: (worktreeId: string, terminalId: string) => void;
   clearWorktreeFocusTracking: (worktreeId: string) => void;
+  enterFleetScope: () => void;
+  exitFleetScope: () => void;
   reset: () => void;
 }
 
@@ -244,6 +248,8 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
   crossDiffDialog: { isOpen: false, initialWorktreeId: null },
   _policyGeneration: 0,
   lastFocusedTerminalByWorktree: new Map<string, string>(),
+  isFleetScopeActive: false,
+  _previousActiveWorktreeId: null,
 
   setActiveWorktree: (id) => {
     const previousId = get().activeWorktreeId;
@@ -509,6 +515,34 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
       return { lastFocusedTerminalByWorktree: next };
     }),
 
+  enterFleetScope: () => {
+    // Idempotent: first pre-scope activeWorktreeId wins so the restoration
+    // target isn't corrupted by a double-enter.
+    if (get().isFleetScopeActive) return;
+    set({
+      isFleetScopeActive: true,
+      _previousActiveWorktreeId: get().activeWorktreeId,
+    });
+  },
+
+  exitFleetScope: () => {
+    if (!get().isFleetScopeActive) return;
+    const restoreId = get()._previousActiveWorktreeId;
+    const generation = get()._policyGeneration + 1;
+    set({
+      isFleetScopeActive: false,
+      _previousActiveWorktreeId: null,
+      activeWorktreeId: restoreId,
+      focusedWorktreeId: restoreId,
+      _policyGeneration: generation,
+    });
+    persistActiveWorktree(restoreId);
+    // Reconcile terminal streaming tiers: consumers may have mutated
+    // activeWorktreeId during scope, so the renderer policy must be
+    // reapplied for the restored worktree.
+    applyWorktreeTerminalPolicy(get, set, restoreId, generation);
+  },
+
   reset: () =>
     set({
       activeWorktreeId: null,
@@ -527,6 +561,8 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
       quickCreate: { isOpen: false, issue: null, pr: null },
       crossDiffDialog: { isOpen: false, initialWorktreeId: null },
       lastFocusedTerminalByWorktree: new Map<string, string>(),
+      isFleetScopeActive: false,
+      _previousActiveWorktreeId: null,
     }),
 });
 
