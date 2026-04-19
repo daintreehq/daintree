@@ -48,6 +48,12 @@ export interface Notification {
     panelId?: string;
   };
   /**
+   * Number of events collapsed into this toast. `undefined` means a single
+   * event (rendered without a badge); values >= 2 indicate same-entity
+   * collapses and surface as a count badge in the toast UI.
+   */
+  count?: number;
+  /**
    * Fires exactly once when the user closes the toast via the close button
    * (or an action button). Does NOT fire on MAX_VISIBLE_TOASTS eviction or on
    * programmatic dismissNotification from elsewhere — only on the user-driven
@@ -74,7 +80,58 @@ export const useNotificationStore = create<NotificationStore>((set) => ({
   notifications: [],
   addNotification: (notification) => {
     const id = uuidv4();
+    let collapsedOntoId: string | null = null;
     set((state) => {
+      // Entity collapse: when the incoming notification carries a
+      // correlationId that matches a live (non-dismissed, non-grid-bar) toast,
+      // merge into it in place rather than adding a new toast + evicting.
+      // This keeps unrelated unread errors visible instead of FIFO-discarding
+      // them under rapid same-entity bursts (see issue #5385).
+      if (
+        notification.placement !== "grid-bar" &&
+        typeof notification.correlationId === "string" &&
+        notification.correlationId.length > 0
+      ) {
+        const liveMatch = state.notifications.find(
+          (n) =>
+            !n.dismissed &&
+            n.placement !== "grid-bar" &&
+            n.correlationId === notification.correlationId
+        );
+        if (liveMatch) {
+          collapsedOntoId = liveMatch.id;
+          const incomingHasActions = (notification.actions?.length ?? 0) > 0;
+          // `action` uses key-presence (not ??) so a caller can explicitly
+          // clear the slot by passing `action: undefined`. This matters for
+          // stage regressions (e.g. Update Ready → Update Available) where
+          // the prior toast's "Restart to Update" button must NOT carry over
+          // onto a downloading-again state. Unset keys still preserve the
+          // existing action (the default "missing = preserve" semantic).
+          const actionResolved = "action" in notification ? notification.action : liveMatch.action;
+          return {
+            notifications: state.notifications.map((n) =>
+              n.id === liveMatch.id
+                ? {
+                    ...n,
+                    type: notification.type,
+                    priority: notification.priority,
+                    message: notification.message,
+                    title: notification.title ?? n.title,
+                    inboxMessage: notification.inboxMessage ?? n.inboxMessage,
+                    duration: notification.duration ?? n.duration,
+                    action: actionResolved,
+                    actions: incomingHasActions ? notification.actions : n.actions,
+                    onDismiss: notification.onDismiss ?? n.onDismiss,
+                    historyEntryId: notification.historyEntryId ?? n.historyEntryId,
+                    count: (n.count ?? 1) + 1,
+                    updatedAt: Date.now(),
+                  }
+                : n
+            ),
+          };
+        }
+      }
+
       let notifications = state.notifications;
       if (notification.placement !== "grid-bar") {
         const active = notifications.filter((n) => !n.dismissed && n.placement !== "grid-bar");
@@ -92,7 +149,7 @@ export const useNotificationStore = create<NotificationStore>((set) => ({
         notifications: [...notifications, { ...notification, id, updatedAt: Date.now() }],
       };
     });
-    return id;
+    return collapsedOntoId ?? id;
   },
   updateNotification: (id, patch) =>
     set((state) => ({

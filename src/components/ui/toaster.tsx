@@ -119,11 +119,28 @@ function Toast({ notification }: { notification: Notification }) {
       role={notification.type === "error" ? "alert" : "status"}
     >
       <div className="flex-1 space-y-1 min-w-0 py-0.5">
-        {notification.title && (
-          <h4 className="font-medium leading-tight tracking-tight text-xs text-daintree-text">
-            {notification.title}
+        {notification.title ? (
+          <h4 className="font-medium leading-tight tracking-tight text-xs text-daintree-text flex items-center gap-1.5">
+            <span className="min-w-0 truncate">{notification.title}</span>
+            {notification.count != null && notification.count > 1 && (
+              <span
+                aria-label={`${notification.count} events`}
+                className="shrink-0 rounded-full bg-tint/10 px-1.5 py-0.5 text-[10px] font-medium leading-none text-daintree-text/60 tabular-nums"
+              >
+                ×{notification.count}
+              </span>
+            )}
           </h4>
-        )}
+        ) : notification.count != null && notification.count > 1 ? (
+          <div>
+            <span
+              aria-label={`${notification.count} events`}
+              className="inline-block rounded-full bg-tint/10 px-1.5 py-0.5 text-[10px] font-medium leading-none text-daintree-text/60 tabular-nums"
+            >
+              ×{notification.count}
+            </span>
+          </div>
+        ) : null}
         <div className="text-xs text-daintree-text/70 leading-snug break-words">
           {notification.message}
         </div>

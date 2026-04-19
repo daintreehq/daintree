@@ -183,4 +183,80 @@ describe("notificationStore adversarial", () => {
 
     expect(spy).not.toHaveBeenCalled();
   });
+
+  it("collapse never fires markUnseenAsToast — no history demotion when merging into a live toast", () => {
+    const h1 = addHistoryEntry(true);
+    addToast({ correlationId: "entity-a", historyEntryId: h1 });
+    addToast({ correlationId: "entity-a" });
+    addToast({ correlationId: "entity-a" });
+
+    const spy = vi.spyOn(useNotificationHistoryStore.getState(), "markUnseenAsToast");
+    addToast({ correlationId: "entity-a" });
+    addToast({ correlationId: "entity-a" });
+
+    expect(spy).not.toHaveBeenCalled();
+    expect(useNotificationHistoryStore.getState().unreadCount).toBe(0);
+  });
+
+  it("mixed entity/entity-less burst — collapse preserves 3 cap slots and does not evict unrelated", () => {
+    // A1, B1, A2, C1 — all three slots stay, A collapses, count=2 on A.
+    addToast({ correlationId: "entity-a", message: "a-1" });
+    addToast({ correlationId: "entity-b", message: "b-1" });
+    addToast({ correlationId: "entity-a", message: "a-2" });
+    addToast({ correlationId: "entity-c", message: "c-1" });
+
+    const notifications = useNotificationStore.getState().notifications;
+    expect(notifications.filter((n) => n.dismissed)).toHaveLength(0);
+
+    const byCorr = notifications.reduce(
+      (acc, n) => {
+        acc[n.correlationId!] = n;
+        return acc;
+      },
+      {} as Record<string, Notification>
+    );
+    expect(byCorr["entity-a"]!.message).toBe("a-2");
+    expect(byCorr["entity-a"]!.count).toBe(2);
+    expect(byCorr["entity-b"]!.count).toBeUndefined();
+    expect(byCorr["entity-c"]!.count).toBeUndefined();
+  });
+
+  it("five collapses of the same entity still show one toast and a monotonically increasing count", () => {
+    for (let i = 0; i < 5; i++) {
+      addToast({ correlationId: "entity-a", message: `m-${i}` });
+    }
+
+    const active = useNotificationStore.getState().notifications.filter((n) => !n.dismissed);
+    expect(active).toHaveLength(1);
+    expect(active[0]!.count).toBe(5);
+    expect(active[0]!.message).toBe("m-4");
+  });
+
+  it("empty actions array on incoming payload is treated as 'no actions' (preserves existing)", () => {
+    const id = addToast({
+      correlationId: "entity-a",
+      message: "m",
+      actions: [{ label: "Retry", onClick: () => {} }],
+    });
+
+    addToast({ correlationId: "entity-a", message: "m2", actions: [] });
+
+    const n = useNotificationStore.getState().notifications.find((x) => x.id === id)!;
+    expect(n.actions).toHaveLength(1);
+    expect(n.actions![0]!.label).toBe("Retry");
+  });
+
+  it("collapse does not re-trigger FIFO even when the cap is at the edge", () => {
+    // Fill the cap with three distinct entities
+    addToast({ correlationId: "entity-a", message: "a" });
+    addToast({ correlationId: "entity-b", message: "b" });
+    addToast({ correlationId: "entity-c", message: "c" });
+
+    // Another entity-a collapses — no FIFO eviction even though cap is already full.
+    addToast({ correlationId: "entity-a", message: "a-updated" });
+
+    const notifications = useNotificationStore.getState().notifications;
+    expect(notifications.filter((n) => n.dismissed)).toHaveLength(0);
+    expect(notifications).toHaveLength(3);
+  });
 });

@@ -8,6 +8,7 @@ interface MockNotification {
   id: string;
   dismissed?: boolean;
   onDismiss?: () => void;
+  correlationId?: string;
 }
 
 const notifyMock = vi.fn<(payload: NotifyPayload) => string>();
@@ -21,10 +22,19 @@ const addNotificationMock = vi.fn();
 
 const storeState: { notifications: MockNotification[] } = { notifications: [] };
 
-function addMockNotification(payload: { id: string; onDismiss?: () => void }): void {
+function addMockNotification(payload: {
+  id: string;
+  onDismiss?: () => void;
+  correlationId?: string;
+}): void {
   storeState.notifications = [
     ...storeState.notifications,
-    { id: payload.id, dismissed: false, onDismiss: payload.onDismiss },
+    {
+      id: payload.id,
+      dismissed: false,
+      onDismiss: payload.onDismiss,
+      correlationId: payload.correlationId,
+    },
   ];
 }
 
@@ -83,7 +93,11 @@ describe("useUpdateListener", () => {
     cleanupDownloaded.mockClear();
     notifyMock.mockClear().mockImplementation((payload) => {
       const id = `toast-${++toastCounter}`;
-      addMockNotification({ id, onDismiss: payload.onDismiss });
+      addMockNotification({
+        id,
+        onDismiss: payload.onDismiss,
+        correlationId: payload.correlationId,
+      });
       return id;
     });
     updateNotificationMock.mockClear().mockImplementation((id, patch) => {
@@ -91,9 +105,14 @@ describe("useUpdateListener", () => {
     });
     addNotificationMock.mockClear().mockImplementation((payload) => {
       const id = `fresh-toast-${++toastCounter}`;
+      const typed = payload as {
+        onDismiss?: () => void;
+        correlationId?: string;
+      };
       addMockNotification({
         id,
-        onDismiss: (payload as { onDismiss?: () => void }).onDismiss,
+        onDismiss: typed.onDismiss,
+        correlationId: typed.correlationId,
       });
       return id;
     });
@@ -278,21 +297,29 @@ describe("useUpdateListener", () => {
     );
   });
 
-  it("dedupes repeat update-available for the same version while the toast is still live", () => {
+  it("emits notify with the shared app-update correlationId so repeats collapse in the store", () => {
     renderHook(() => useUpdateListener());
 
     act(() => {
       capturedAvailable!({ version: "2.5.0" });
     });
-    expect(notifyMock).toHaveBeenCalledTimes(1);
+
+    // The hook no longer performs client-side version dedup — it emits
+    // notify() every time and relies on the store's correlationId collapse
+    // path to merge repeats into the same live toast. Verified indirectly
+    // here by asserting the stable correlationId is set on every call.
+    expect(notifyMock).toHaveBeenCalledWith(
+      expect.objectContaining({ correlationId: "app-update" })
+    );
 
     act(() => {
       capturedAvailable!({ version: "2.5.0" });
     });
-    expect(notifyMock).toHaveBeenCalledTimes(1);
+    expect(notifyMock).toHaveBeenCalledTimes(2);
+    expect(notifyMock.mock.calls.every((c) => c[0].correlationId === "app-update")).toBe(true);
   });
 
-  it("creates a fresh toast when update-available fires for a newer version", () => {
+  it("emits notify for a newer version with the same app-update correlationId", () => {
     renderHook(() => useUpdateListener());
 
     act(() => {
@@ -304,6 +331,7 @@ describe("useUpdateListener", () => {
       capturedAvailable!({ version: "2.5.1" });
     });
     expect(notifyMock).toHaveBeenCalledTimes(2);
+    expect(notifyMock.mock.calls[1]![0].correlationId).toBe("app-update");
   });
 
   it("allows a new toast if the prior same-version toast was already dismissed", () => {
@@ -383,6 +411,46 @@ describe("useUpdateListener", () => {
     });
 
     expect(notifyDismissMock).not.toHaveBeenCalled();
+  });
+
+  it("clears the restart action when update-available fires after update-ready (stage regression)", () => {
+    renderHook(() => useUpdateListener());
+
+    // Notify calls pass `action: undefined` explicitly so the store's
+    // collapse path wipes any "Restart to Update" button left over from a
+    // prior Update Ready toast — the user must not be offered a restart
+    // into a stale build while a newer one is still downloading.
+    act(() => {
+      capturedAvailable!({ version: "2.5.0" });
+    });
+    expect(notifyMock.mock.calls[0]![0]).toHaveProperty("action", undefined);
+  });
+
+  it("pending ref upgrades to downloaded but never downgrades back to available", () => {
+    const { rerender } = renderHook(({ suppress }) => useUpdateListener(suppress), {
+      initialProps: { suppress: true },
+    });
+
+    act(() => {
+      capturedDownloaded!({ version: "2.5.0" });
+    });
+    // Simulated quiet-period re-check: an "available" event arrives AFTER
+    // the download already completed. The pending slot must keep the
+    // "downloaded" state so the user is still shown "Update Ready" when
+    // toasts unmute, not a stale "Update Available: downloading..." view.
+    act(() => {
+      capturedAvailable!({ version: "2.5.0" });
+    });
+
+    rerender({ suppress: false });
+
+    expect(addNotificationMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "success",
+        title: "Update Ready",
+      })
+    );
+    expect(notifyMock).not.toHaveBeenCalled();
   });
 
   it("still creates the Update Ready toast after the Available toast was dismissed", () => {
