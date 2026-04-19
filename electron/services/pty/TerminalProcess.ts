@@ -36,13 +36,13 @@ import {
   splitTrailingNewlines,
   supportsBracketedPaste,
   getSoftNewlineSequence,
+  getSubmitEnterDelay,
   isBracketedPaste,
   chunkInput,
   delay,
   BRACKETED_PASTE_START,
   BRACKETED_PASTE_END,
   PASTE_THRESHOLD_CHARS,
-  SUBMIT_ENTER_DELAY_MS,
   OUTPUT_SETTLE_DEBOUNCE_MS,
   OUTPUT_SETTLE_MAX_WAIT_MS,
   OUTPUT_SETTLE_POLL_INTERVAL_MS,
@@ -617,7 +617,7 @@ export class TerminalProcess {
     if (useOutputSettle) {
       await this.waitForOutputSettle();
     } else {
-      await delay(SUBMIT_ENTER_DELAY_MS);
+      await delay(getSubmitEnterDelay(terminal));
     }
 
     if (!this.terminalInfo.ptyProcess) {

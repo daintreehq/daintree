@@ -129,4 +129,17 @@ describe("TerminalProcess.submit", () => {
     expect(ptyWriteMock).toHaveBeenLastCalledWith("\r");
     vi.useRealTimers();
   });
+
+  it("sends Enter immediately for Copilot with submitEnterDelayMs: 0", async () => {
+    vi.useFakeTimers();
+    const terminal = createTerminal({ kind: "agent", type: "copilot" });
+
+    terminal.submit("test");
+
+    expect(ptyWriteMock).toHaveBeenCalledTimes(1);
+    expect(ptyWriteMock).toHaveBeenLastCalledWith("test");
+    await vi.advanceTimersByTimeAsync(50);
+    expect(ptyWriteMock).toHaveBeenLastCalledWith("\r");
+    vi.useRealTimers();
+  });
 });

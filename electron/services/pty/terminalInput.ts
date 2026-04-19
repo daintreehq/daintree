@@ -53,6 +53,13 @@ export function getSoftNewlineSequence(terminal: TerminalInfo): string {
   return getSoftNewlineSequenceShared(agentId);
 }
 
+export function getSubmitEnterDelay(terminal: TerminalInfo): number {
+  const agentId = getEffectiveAgentId(terminal);
+  if (!agentId) return SUBMIT_ENTER_DELAY_MS;
+  const config = getEffectiveAgentConfig(agentId);
+  return config?.capabilities?.submitEnterDelayMs ?? SUBMIT_ENTER_DELAY_MS;
+}
+
 export function isBracketedPaste(data: string): boolean {
   return containsFullBracketedPaste(data);
 }

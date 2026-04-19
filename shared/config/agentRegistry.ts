@@ -192,6 +192,8 @@ export interface AgentConfig {
     softNewlineSequence?: string;
     /** Input sequences the activity monitor should ignore (default: ["\x1b\r"]) */
     ignoredInputSequences?: string[];
+    /** Delay in ms before sending Enter key after body write (default: 200) */
+    submitEnterDelayMs?: number;
   };
   /**
    * Configuration for pattern-based working state detection.
@@ -1309,6 +1311,7 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
       blockMouseReporting: true,
       resizeStrategy: "settled",
       supportsBracketedPaste: true,
+      submitEnterDelayMs: 0,
     },
     detection: {
       primaryPatterns: ["\\(Esc to cancel\\)", "[∙∘○◎◉]\\s+.+\\(Esc to cancel\\)"],
