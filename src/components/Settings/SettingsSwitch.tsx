@@ -59,7 +59,7 @@ export function SettingsSwitch({
       aria-labelledby={ariaLabelledby}
       aria-describedby={ariaDescribedby}
       className={cn(
-        "relative inline-flex shrink-0 rounded-full transition-colors duration-150 ease-in-out",
+        "relative inline-flex items-center shrink-0 rounded-full transition-colors duration-150 ease-in-out",
         "w-11 h-6",
         scheme.track,
         "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2",
