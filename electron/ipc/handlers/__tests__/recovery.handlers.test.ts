@@ -20,11 +20,13 @@ const browserWindowMock = vi.hoisted(() => ({
 
 const fsMock = vi.hoisted(() => ({
   promises: {
-    writeFile: vi.fn(async () => undefined),
-    access: vi.fn(async () => undefined),
-    mkdir: vi.fn(async () => undefined),
+    writeFile: vi.fn(async () => undefined) as ReturnType<typeof vi.fn>,
+    access: vi.fn(async () => undefined) as ReturnType<typeof vi.fn>,
+    mkdir: vi.fn(async () => undefined) as ReturnType<typeof vi.fn>,
   },
 }));
+
+const collectDiagnosticsMock = vi.hoisted(() => vi.fn());
 
 vi.mock("electron", () => ({
   ipcMain: ipcMainMock,
@@ -42,7 +44,7 @@ vi.mock("../../../services/CrashRecoveryService.js", () => ({
 }));
 
 vi.mock("../../../services/DiagnosticsCollector.js", () => ({
-  collectDiagnostics: vi.fn(async () => ({ version: "test", platform: "darwin" })),
+  collectDiagnostics: collectDiagnosticsMock,
 }));
 
 vi.mock("../../../utils/logger.js", () => ({
@@ -70,6 +72,9 @@ describe("registerRecoveryHandlers", () => {
     shellMock.openPath.mockResolvedValue("");
     browserWindowMock.fromWebContents.mockReturnValue(null);
     fsMock.promises.access.mockResolvedValue(undefined);
+    fsMock.promises.writeFile.mockResolvedValue(undefined);
+    fsMock.promises.mkdir.mockResolvedValue(undefined);
+    collectDiagnosticsMock.mockResolvedValue({ version: "test", platform: "darwin" });
   });
 
   it("registers export-diagnostics and open-logs via raw ipcMain.handle", () => {
@@ -89,14 +94,32 @@ describe("registerRecoveryHandlers", () => {
   });
 
   describe("recovery:export-diagnostics", () => {
-    it("rejects untrusted sender and does not write file", async () => {
+    it("rejects untrusted sender and does not collect diagnostics, show dialog, or write file", async () => {
       registerRecoveryHandlers(deps);
       const handler = getHandlerFn("recovery:export-diagnostics");
       await expect(handler({ senderFrame: { url: UNTRUSTED_URL } })).rejects.toThrow(
         "recovery:export-diagnostics rejected: untrusted sender"
       );
+      expect(collectDiagnosticsMock).not.toHaveBeenCalled();
       expect(dialogMock.showSaveDialog).not.toHaveBeenCalled();
       expect(fsMock.promises.writeFile).not.toHaveBeenCalled();
+    });
+
+    it("propagates fs.writeFile failures without calling showItemInFolder", async () => {
+      dialogMock.showSaveDialog.mockResolvedValue({
+        canceled: false,
+        filePath: "/tmp/diagnostics.json",
+      });
+      fsMock.promises.writeFile.mockRejectedValueOnce(
+        Object.assign(new Error("no space"), { code: "ENOSPC" })
+      );
+      registerRecoveryHandlers(deps);
+      const handler = getHandlerFn("recovery:export-diagnostics");
+
+      await expect(
+        handler({ senderFrame: { url: TRUSTED_RECOVERY_URL }, sender: {} })
+      ).rejects.toThrow("no space");
+      expect(shellMock.showItemInFolder).not.toHaveBeenCalled();
     });
 
     it("rejects the main renderer URL (not the recovery page)", async () => {
@@ -200,7 +223,7 @@ describe("registerRecoveryHandlers", () => {
       expect(shellMock.openPath).not.toHaveBeenCalled();
     });
 
-    it("opens the log file when it exists", async () => {
+    it("opens the log file exactly once when the file exists and openPath succeeds", async () => {
       fsMock.promises.access.mockResolvedValue(undefined);
       shellMock.openPath.mockResolvedValue("");
       registerRecoveryHandlers(deps);
@@ -208,6 +231,7 @@ describe("registerRecoveryHandlers", () => {
 
       await handler({ senderFrame: { url: TRUSTED_RECOVERY_URL } });
 
+      expect(shellMock.openPath).toHaveBeenCalledTimes(1);
       expect(shellMock.openPath).toHaveBeenCalledWith("/tmp/daintree/logs/main.log");
     });
 
@@ -256,6 +280,33 @@ describe("registerRecoveryHandlers", () => {
 
       expect(shellMock.openPath).toHaveBeenNthCalledWith(1, "/tmp/daintree/logs/main.log");
       expect(shellMock.openPath).toHaveBeenNthCalledWith(2, "/tmp/daintree/logs");
+    });
+
+    it("throws when every openPath attempt returns an error string", async () => {
+      fsMock.promises.access.mockResolvedValue(undefined);
+      shellMock.openPath.mockResolvedValue("Error: no association");
+      registerRecoveryHandlers(deps);
+      const handler = getHandlerFn("recovery:open-logs");
+
+      await expect(handler({ senderFrame: { url: TRUSTED_RECOVERY_URL } })).rejects.toThrow(
+        "recovery:open-logs failed"
+      );
+      expect(shellMock.openPath).toHaveBeenNthCalledWith(1, "/tmp/daintree/logs/main.log");
+      expect(shellMock.openPath).toHaveBeenNthCalledWith(2, "/tmp/daintree/logs");
+    });
+
+    it("throws when ENOENT recovery also fails to open the directory", async () => {
+      const enoent = Object.assign(new Error("not found"), { code: "ENOENT" });
+      fsMock.promises.access.mockRejectedValue(enoent);
+      fsMock.promises.mkdir.mockResolvedValue(undefined);
+      fsMock.promises.writeFile.mockResolvedValue(undefined);
+      shellMock.openPath.mockResolvedValue("Error: no association");
+      registerRecoveryHandlers(deps);
+      const handler = getHandlerFn("recovery:open-logs");
+
+      await expect(handler({ senderFrame: { url: TRUSTED_RECOVERY_URL } })).rejects.toThrow(
+        "recovery:open-logs failed"
+      );
     });
   });
 });

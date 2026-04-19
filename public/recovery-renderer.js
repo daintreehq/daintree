@@ -13,11 +13,39 @@
 
   var api = window.electron;
   var statusEl = document.getElementById("status");
+  var buttonIds = ["btn-reload", "btn-reset", "btn-export-diagnostics", "btn-open-logs"];
 
   function setStatus(message, isError) {
     if (!statusEl) return;
     statusEl.textContent = message || "";
     statusEl.className = "status" + (isError ? " error" : "");
+  }
+
+  function setAllButtonsDisabled(disabled) {
+    for (var i = 0; i < buttonIds.length; i++) {
+      var el = document.getElementById(buttonIds[i]);
+      if (el) el.disabled = disabled;
+    }
+  }
+
+  function runAsync(pendingMessage, promiseFactory, successMessage, failurePrefix) {
+    if (!api || !api.recovery) return;
+    setAllButtonsDisabled(true);
+    setStatus(pendingMessage, false);
+    promiseFactory()
+      .then(function (result) {
+        setStatus(
+          typeof successMessage === "function" ? successMessage(result) : successMessage,
+          false
+        );
+      })
+      .catch(function (err) {
+        var message = err && err.message ? err.message : String(err);
+        setStatus(failurePrefix + ": " + message, true);
+      })
+      .finally(function () {
+        setAllButtonsDisabled(false);
+      });
   }
 
   document.getElementById("btn-reload").addEventListener("click", function () {
@@ -35,42 +63,30 @@
   var exportBtn = document.getElementById("btn-export-diagnostics");
   if (exportBtn) {
     exportBtn.addEventListener("click", function () {
-      if (!api || !api.recovery) return;
-      exportBtn.disabled = true;
-      setStatus("Collecting diagnostics…", false);
-      api.recovery
-        .exportDiagnostics()
-        .then(function (saved) {
-          setStatus(saved ? "Diagnostics saved." : "Save cancelled.", false);
-        })
-        .catch(function (err) {
-          var message = err && err.message ? err.message : String(err);
-          setStatus("Failed to export diagnostics: " + message, true);
-        })
-        .finally(function () {
-          exportBtn.disabled = false;
-        });
+      runAsync(
+        "Collecting diagnostics…",
+        function () {
+          return api.recovery.exportDiagnostics();
+        },
+        function (saved) {
+          return saved ? "Diagnostics saved." : "Save cancelled.";
+        },
+        "Failed to export diagnostics"
+      );
     });
   }
 
   var openLogsBtn = document.getElementById("btn-open-logs");
   if (openLogsBtn) {
     openLogsBtn.addEventListener("click", function () {
-      if (!api || !api.recovery) return;
-      openLogsBtn.disabled = true;
-      setStatus("Opening logs…", false);
-      api.recovery
-        .openLogs()
-        .then(function () {
-          setStatus("Logs opened.", false);
-        })
-        .catch(function (err) {
-          var message = err && err.message ? err.message : String(err);
-          setStatus("Failed to open logs: " + message, true);
-        })
-        .finally(function () {
-          openLogsBtn.disabled = false;
-        });
+      runAsync(
+        "Opening logs…",
+        function () {
+          return api.recovery.openLogs();
+        },
+        "Logs opened.",
+        "Failed to open logs"
+      );
     });
   }
 })();

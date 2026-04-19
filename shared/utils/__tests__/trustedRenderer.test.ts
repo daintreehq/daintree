@@ -138,5 +138,12 @@ describe("trustedRenderer", () => {
       expect(isRecoveryPageUrl("app://daintree/recovery.html/evil")).toBe(false);
       expect(isRecoveryPageUrl("app://daintree/subdir/recovery.html")).toBe(false);
     });
+
+    it("rejects localhost recovery URLs in production mode", () => {
+      process.env.NODE_ENV = "production";
+      expect(isRecoveryPageUrl("http://localhost:5173/recovery.html")).toBe(false);
+      expect(isRecoveryPageUrl("http://127.0.0.1:5173/recovery.html")).toBe(false);
+      expect(isRecoveryPageUrl("app://daintree/recovery.html")).toBe(true);
+    });
   });
 });

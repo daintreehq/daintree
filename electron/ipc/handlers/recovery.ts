@@ -87,29 +87,38 @@ export function registerRecoveryHandlers(deps: HandlerDependencies): () => void 
     }
 
     const logFilePath = getLogFilePath();
+    const dir = dirname(logFilePath);
+    const attempts: string[] = [];
+
+    const tryOpen = async (target: string): Promise<boolean> => {
+      const result = await shell.openPath(target);
+      if (result) {
+        attempts.push(`${target}: ${result}`);
+        return false;
+      }
+      return true;
+    };
+
     try {
       await fs.access(logFilePath);
-      const openResult = await shell.openPath(logFilePath);
-      if (openResult) {
-        await shell.openPath(dirname(logFilePath));
-      }
+      if (await tryOpen(logFilePath)) return;
+      if (await tryOpen(dir)) return;
     } catch (error) {
-      const dir = dirname(logFilePath);
       if ((error as NodeJS.ErrnoException).code === "ENOENT") {
         try {
           await fs.mkdir(dir, { recursive: true });
           await fs.writeFile(logFilePath, "", "utf8");
-          const openResult = await shell.openPath(logFilePath);
-          if (openResult) {
-            await shell.openPath(dir);
-          }
-        } catch {
-          await shell.openPath(dir);
+          if (await tryOpen(logFilePath)) return;
+        } catch (createErr) {
+          attempts.push(`create ${logFilePath}: ${(createErr as Error).message}`);
         }
       } else {
-        await shell.openPath(dir);
+        attempts.push(`access ${logFilePath}: ${(error as Error).message}`);
       }
+      if (await tryOpen(dir)) return;
     }
+
+    throw new Error(`recovery:open-logs failed: ${attempts.join("; ") || "unknown error"}`);
   });
   handlers.push(() => ipcMain.removeHandler(CHANNELS.RECOVERY_OPEN_LOGS));
 
