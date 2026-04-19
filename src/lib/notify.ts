@@ -168,6 +168,12 @@ export function notify(payload: NotifyPayload): string {
   const historyMessage = inboxMessage ?? (typeof message === "string" ? message : undefined);
 
   const allActions = [...(payload.actions ?? []), ...(payload.action ? [payload.action] : [])];
+
+  // Action-bearing toasts persist by default so users can act; toaster's 3s fallback would otherwise dismiss them.
+  if (payload.duration === undefined && allActions.length > 0) {
+    payload = { ...payload, duration: 0 };
+  }
+
   const historyActions: NotificationHistoryAction[] = allActions
     .filter(
       (a): a is NotificationAction & { actionId: NonNullable<NotificationAction["actionId"]> } =>

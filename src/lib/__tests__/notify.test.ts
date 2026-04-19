@@ -316,6 +316,99 @@ describe("notify()", () => {
     });
   });
 
+  describe("default duration — action-bearing toasts persist", () => {
+    it("defaults duration to 0 when `action` is present and duration is undefined", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      notify({
+        type: "info",
+        message: "Undo?",
+        action: { label: "Undo", onClick: () => {} },
+      });
+      const notification = useNotificationStore.getState().notifications[0];
+      expect(notification!.duration).toBe(0);
+    });
+
+    it("defaults duration to 0 when `actions` is non-empty and duration is undefined", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      notify({
+        type: "warning",
+        message: "Retry?",
+        actions: [
+          { label: "Retry", onClick: () => {} },
+          { label: "Cancel", onClick: () => {} },
+        ],
+      });
+      const notification = useNotificationStore.getState().notifications[0];
+      expect(notification!.duration).toBe(0);
+    });
+
+    it("preserves an explicit positive duration when action is present", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      notify({
+        type: "info",
+        message: "Timed action",
+        action: { label: "Retry", onClick: () => {} },
+        duration: 5000,
+      });
+      const notification = useNotificationStore.getState().notifications[0];
+      expect(notification!.duration).toBe(5000);
+    });
+
+    it("preserves an explicit duration of 0 (redundant but valid)", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      notify({
+        type: "info",
+        message: "Persist",
+        action: { label: "Undo", onClick: () => {} },
+        duration: 0,
+      });
+      const notification = useNotificationStore.getState().notifications[0];
+      expect(notification!.duration).toBe(0);
+    });
+
+    it("leaves duration undefined when no action is present (render layer falls back to 3000ms)", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      notify({ type: "success", message: "Done" });
+      const notification = useNotificationStore.getState().notifications[0];
+      expect(notification!.duration).toBeUndefined();
+    });
+
+    it("leaves duration undefined when `actions` is an empty array", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      notify({ type: "info", message: "No actions", actions: [] });
+      const notification = useNotificationStore.getState().notifications[0];
+      expect(notification!.duration).toBeUndefined();
+    });
+
+    it("applies the persist default on the grid-bar placement path", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      notify({
+        type: "info",
+        message: "Inline",
+        placement: "grid-bar",
+        action: { label: "Dismiss", onClick: () => {} },
+      });
+      const notification = useNotificationStore.getState().notifications[0];
+      expect(notification!.placement).toBe("grid-bar");
+      expect(notification!.duration).toBe(0);
+    });
+
+    it("applies the persist default on the coalesce-create path", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      notify({
+        type: "info",
+        message: "First",
+        action: { label: "Open", onClick: () => {} },
+        coalesce: {
+          key: "coalesce-persist",
+          buildMessage: (n) => `${n} events`,
+        },
+      });
+      const notification = useNotificationStore.getState().notifications[0];
+      expect(notification!.duration).toBe(0);
+    });
+  });
+
   describe("return value", () => {
     it("returns notification id for toast notifications", () => {
       vi.spyOn(document, "hasFocus").mockReturnValue(true);
