@@ -98,15 +98,10 @@ export function useFindInNote(
         // View detached; ignore
       }
     }
-    setIsOpen((prev) => {
-      if (prev) {
-        requestAnimationFrame(() => {
-          inputRef.current?.focus();
-          inputRef.current?.select();
-        });
-        return prev;
-      }
-      return true;
+    setIsOpen(true);
+    requestAnimationFrame(() => {
+      inputRef.current?.focus();
+      inputRef.current?.select();
     });
   }, [editorViewRef]);
 
@@ -175,20 +170,16 @@ export function useFindInNote(
   );
 
   const toggleCase = useCallback(() => {
-    setCaseSensitive((prev) => {
-      const next = !prev;
-      applyQuery(query, { caseSensitive: next });
-      return next;
-    });
-  }, [applyQuery, query]);
+    const next = !caseSensitive;
+    setCaseSensitive(next);
+    applyQuery(query, { caseSensitive: next });
+  }, [applyQuery, caseSensitive, query]);
 
   const toggleRegexp = useCallback(() => {
-    setRegexp((prev) => {
-      const next = !prev;
-      applyQuery(query, { regexp: next });
-      return next;
-    });
-  }, [applyQuery, query]);
+    const next = !regexp;
+    setRegexp(next);
+    applyQuery(query, { regexp: next });
+  }, [applyQuery, regexp, query]);
 
   const goNext = useCallback(() => {
     const view = editorViewRef.current;
