@@ -684,7 +684,12 @@ export function AgentSettings({
                 { value: "false", label: "Off" },
               ];
 
-              const behavioralSettings = (
+              // Only build when a preset is selected — the aria-label template
+              // literals below dereference `selectedPreset.name`, so building
+              // this unconditionally would throw on the re-render that follows
+              // deleting the currently selected preset (presetId reset to
+              // undefined → selectedPreset becomes undefined).
+              const behavioralSettings = selectedPreset ? (
                 <div className="space-y-3">
                   <div id="agents-skip-permissions-preset" className="space-y-1.5">
                     <SettingsSelect
@@ -694,7 +699,7 @@ export function AgentSettings({
                       onValueChange={(v) => onDangerousOverrideChange(selectValueToBool(v))}
                       isModified={dangerousOverride !== undefined}
                       onReset={() => onDangerousOverrideChange(undefined)}
-                      resetAriaLabel={`Reset skip permissions override for ${selectedPreset!.name}`}
+                      resetAriaLabel={`Reset skip permissions override for ${selectedPreset.name}`}
                       options={dangerousSelectOptions}
                     />
                     {effectiveSkipPerms && defaultDangerousArg && (
@@ -716,7 +721,7 @@ export function AgentSettings({
                         onValueChange={(v) => onInlineOverrideChange(selectValueToBool(v))}
                         isModified={inlineOverride !== undefined}
                         onReset={() => onInlineOverrideChange(undefined)}
-                        resetAriaLabel={`Reset inline mode override for ${selectedPreset!.name}`}
+                        resetAriaLabel={`Reset inline mode override for ${selectedPreset.name}`}
                         options={inlineSelectOptions}
                       />
                     </div>
@@ -735,7 +740,7 @@ export function AgentSettings({
                           />
                           <button
                             type="button"
-                            aria-label={`Reset custom arguments override for ${selectedPreset!.name}`}
+                            aria-label={`Reset custom arguments override for ${selectedPreset.name}`}
                             className="p-0.5 rounded-sm text-daintree-text/40 hover:text-daintree-accent invisible group-hover:visible group-focus-within:visible focus-visible:visible focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent transition-colors"
                             onClick={onCustomFlagsOverrideReset}
                             data-testid="preset-custom-flags-reset"
@@ -763,7 +768,7 @@ export function AgentSettings({
                     </p>
                   </div>
                 </div>
-              );
+              ) : null;
 
               // ── env var reference (always shown) ─────────────────────────
               const agentEnvSuggestions = getAgentConfig(activeAgent.id)?.envSuggestions ?? [];
