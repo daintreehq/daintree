@@ -19,10 +19,10 @@ vi.mock("electron", () => ({
 // Mock ProjectStore for migration 003. Must be hoisted before barrel import.
 const { mockProjectStore } = vi.hoisted(() => ({
   mockProjectStore: {
-    getCurrentProjectId: vi.fn(() => null),
-    getProjectById: vi.fn(() => null),
-    getRecipes: vi.fn(async () => []),
-    saveRecipes: vi.fn(async () => {}),
+    getCurrentProjectId: vi.fn<() => string | null>(() => null),
+    getProjectById: vi.fn<() => Record<string, unknown> | null>(() => null),
+    getRecipes: vi.fn<() => Promise<unknown[]>>(async () => []),
+    saveRecipes: vi.fn<() => Promise<void>>(async () => {}),
   },
 }));
 vi.mock("../ProjectStore.js", () => ({
