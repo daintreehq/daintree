@@ -133,6 +133,13 @@ export function registerNotificationHandlers(_deps: HandlerDependencies): () => 
     agentNotificationService.acknowledgeWorkingPulse(p.terminalId);
   };
 
+  const handleSessionMuteSet = (_event: Electron.IpcMainEvent, payload: unknown): void => {
+    if (!payload || typeof payload !== "object") return;
+    const p = payload as Record<string, unknown>;
+    if (typeof p.timestampMs !== "number" || !Number.isFinite(p.timestampMs)) return;
+    agentNotificationService.setSessionMuteUntil(p.timestampMs);
+  };
+
   const handleShowNative = (_event: Electron.IpcMainEvent, payload: unknown): void => {
     if (!payload || typeof payload !== "object") return;
     const p = payload as Record<string, unknown>;
@@ -171,6 +178,7 @@ export function registerNotificationHandlers(_deps: HandlerDependencies): () => 
   ipcMain.on(CHANNELS.NOTIFICATION_SYNC_WATCHED, handleSyncWatched);
   ipcMain.on(CHANNELS.NOTIFICATION_WAITING_ACKNOWLEDGE, handleWaitingAcknowledge);
   ipcMain.on(CHANNELS.NOTIFICATION_WORKING_PULSE_ACKNOWLEDGE, handleWorkingPulseAcknowledge);
+  ipcMain.on(CHANNELS.NOTIFICATION_SESSION_MUTE_SET, handleSessionMuteSet);
 
   cleanups.push(typedHandle(CHANNELS.NOTIFICATION_SETTINGS_GET, handleSettingsGet));
   cleanups.push(typedHandle(CHANNELS.NOTIFICATION_SETTINGS_SET, handleSettingsSet));
@@ -188,6 +196,7 @@ export function registerNotificationHandlers(_deps: HandlerDependencies): () => 
       CHANNELS.NOTIFICATION_WORKING_PULSE_ACKNOWLEDGE,
       handleWorkingPulseAcknowledge
     );
+    ipcMain.removeListener(CHANNELS.NOTIFICATION_SESSION_MUTE_SET, handleSessionMuteSet);
     cleanups.forEach((c) => c());
   };
 }

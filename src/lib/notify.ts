@@ -100,6 +100,11 @@ export function _setQuietUntil(ts: number): void {
 /** Session-only mute helper used by the notification-center quick actions. */
 export function setSessionQuietUntil(ts: number): void {
   _quietUntil = ts;
+  // Mirror to main so completion watch notifications and working-pulse sounds
+  // are also suppressed until the timestamp.
+  if (typeof window !== "undefined") {
+    window.electron?.notification?.setSessionMuteUntil?.(ts);
+  }
 }
 
 export function muteForDuration(durationMs: number): number {

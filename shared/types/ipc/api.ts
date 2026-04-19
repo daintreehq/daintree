@@ -1024,6 +1024,12 @@ export interface ElectronAPI {
     acknowledgeWaiting(terminalId: string): void;
     /** Acknowledge working pulse (cancels periodic pulse sound for the terminal) */
     acknowledgeWorkingPulse(terminalId: string): void;
+    /**
+     * Synchronize the renderer's session-mute expiry (set by "Mute 1h" / "Until morning")
+     * to the main process so completion watch notifications and working-pulse sounds
+     * are also suppressed until the timestamp.
+     */
+    setSessionMuteUntil(timestampMs: number): void;
   };
   sound: {
     /** Listen for sound trigger events from main process */

@@ -38,10 +38,11 @@ export const useNotificationSettingsStore = create<NotificationSettingsState>((s
           quietHoursWeekdays: Array.isArray(settings.quietHoursWeekdays)
             ? settings.quietHoursWeekdays
             : [],
-          hydrated: true,
         });
       }
     } catch {
+      // fall through — always mark hydrated below so retries don't thrash IPC
+    } finally {
       set({ hydrated: true });
     }
   },

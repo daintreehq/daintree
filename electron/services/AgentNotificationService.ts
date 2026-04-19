@@ -70,9 +70,19 @@ class AgentNotificationService {
   private agentSpawnTimestamps = new Map<string, number>();
   /** Timestamp when the service was initialized — sounds are suppressed during boot */
   private initializedAt = 0;
+  /** Session-mute expiry mirrored from the renderer's quick-action buttons. */
+  private sessionMuteUntil = 0;
 
   syncWatchedPanels(panelIds: string[]): void {
     this.watchedTerminals = new Set(panelIds);
+  }
+
+  setSessionMuteUntil(timestampMs: number): void {
+    this.sessionMuteUntil = Number.isFinite(timestampMs) ? timestampMs : 0;
+  }
+
+  private isSessionMuted(): boolean {
+    return Date.now() < this.sessionMuteUntil;
   }
 
   initialize(): void {
@@ -500,9 +510,9 @@ class AgentNotificationService {
         this.clearWorkingPulse(terminalId);
         return;
       }
-      // During scheduled quiet hours, skip this tick's sound but keep the
-      // loop alive so pulses resume automatically when the window ends.
-      if (isScheduledQuietNow(currentSettings)) {
+      // During scheduled quiet hours or an active session mute, skip this tick's
+      // sound but keep the loop alive so pulses resume automatically after.
+      if (isScheduledQuietNow(currentSettings) || this.isSessionMuted()) {
         const jitter =
           WORKING_PULSE_MIN_INTERVAL_MS +
           Math.random() * (WORKING_PULSE_MAX_INTERVAL_MS - WORKING_PULSE_MIN_INTERVAL_MS);
@@ -564,9 +574,10 @@ class AgentNotificationService {
       return;
     }
 
-    // Quiet hours schedule suppresses completion/pulse alerts but not waiting
-    // alerts — waiting agents block user work and should page through.
-    if (isScheduledQuietNow(settings)) {
+    // Quiet hours schedule and renderer-driven session mute both suppress
+    // completion/pulse alerts but not waiting alerts — waiting agents block
+    // user work and should page through.
+    if (isScheduledQuietNow(settings) || this.isSessionMuted()) {
       if (this.notificationQueue.length > 0) {
         this.staggerTimer = setTimeout(() => {
           this.staggerTimer = null;

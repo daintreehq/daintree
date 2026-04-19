@@ -14,6 +14,7 @@ import { useNotificationHistoryStore } from "../../store/slices/notificationHist
 import { useNotificationSettingsStore } from "../../store/notificationSettingsStore";
 
 const mockShowNative = vi.fn();
+const mockSetSessionMute = vi.fn();
 
 beforeEach(() => {
   Object.defineProperty(window, "electron", {
@@ -21,11 +22,13 @@ beforeEach(() => {
       notification: {
         showNative: mockShowNative,
         setSettings: vi.fn().mockResolvedValue(undefined),
+        setSessionMuteUntil: mockSetSessionMute,
       },
     },
     writable: true,
     configurable: true,
   });
+  mockSetSessionMute.mockClear();
 });
 
 describe("notify()", () => {
@@ -1222,6 +1225,22 @@ describe("notify()", () => {
       notify({ type: "info", message: "Muted", priority: "high" });
       expect(useNotificationStore.getState().notifications).toHaveLength(0);
 
+      vi.useRealTimers();
+    });
+
+    it("muteForDuration mirrors the timestamp to the main process", () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date(2024, 0, 1, 12, 0));
+      const until = muteForDuration(60 * 60 * 1000);
+      expect(mockSetSessionMute).toHaveBeenCalledWith(until);
+      vi.useRealTimers();
+    });
+
+    it("muteUntilNextMorning mirrors the timestamp to the main process", () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date(2024, 0, 1, 23, 0));
+      const until = muteUntilNextMorning();
+      expect(mockSetSessionMute).toHaveBeenCalledWith(until);
       vi.useRealTimers();
     });
 

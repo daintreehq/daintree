@@ -306,7 +306,7 @@ export function NotificationSettingsTab() {
         <SettingsSection
           icon={Moon}
           title="Quiet Hours"
-          description="Suppress in-app toasts and OS notifications during a daily time window. History still records everything, and urgent alerts (errors, agents waiting) always come through."
+          description="Suppress in-app toasts and OS notifications during a daily time window. History still records everything, and agents waiting for input always page through."
         >
           <div className="space-y-4">
             <SettingsSwitchCard

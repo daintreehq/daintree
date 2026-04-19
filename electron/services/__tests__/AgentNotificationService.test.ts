@@ -1076,4 +1076,72 @@ describe("AgentNotificationService", () => {
       );
     });
   });
+
+  describe("quiet hours suppression", () => {
+    it("scheduled quiet hours suppresses completion watch notifications", () => {
+      const realDate = global.Date;
+      // Monday 23:00 falls inside 22:00 → 06:00 quiet window
+      vi.setSystemTime(new Date(2024, 0, 1, 23, 0));
+      mockStore({
+        completedEnabled: true,
+        quietHoursEnabled: true,
+        quietHoursStartMin: 22 * 60,
+        quietHoursEndMin: 6 * 60,
+        quietHoursWeekdays: [],
+      } as unknown as Partial<typeof DEFAULT_NOTIFICATION_SETTINGS>);
+
+      events.emit("agent:state-changed", makePayload("completed"));
+      vi.advanceTimersByTime(5000);
+
+      expect(notificationServiceMock.showWatchNotification).not.toHaveBeenCalled();
+      global.Date = realDate;
+    });
+
+    it("session mute suppresses completion watch notifications", () => {
+      vi.setSystemTime(new Date(2024, 0, 1, 12, 0));
+      mockStore({ completedEnabled: true });
+      agentNotificationService.setSessionMuteUntil(Date.now() + 60 * 60 * 1000);
+
+      events.emit("agent:state-changed", makePayload("completed"));
+      vi.advanceTimersByTime(5000);
+
+      expect(notificationServiceMock.showWatchNotification).not.toHaveBeenCalled();
+    });
+
+    it("session mute expires — notifications resume after the timestamp", () => {
+      vi.setSystemTime(new Date(2024, 0, 1, 12, 0));
+      mockStore({ completedEnabled: true });
+      agentNotificationService.setSessionMuteUntil(Date.now() + 1000);
+
+      vi.advanceTimersByTime(2000);
+      agentNotificationService.setSessionMuteUntil(0); // simulate renderer clearing
+
+      events.emit("agent:state-changed", makePayload("completed"));
+      vi.advanceTimersByTime(5000);
+
+      expect(notificationServiceMock.showWatchNotification).toHaveBeenCalled();
+    });
+
+    it("scheduled quiet hours does not suppress waiting alerts", () => {
+      vi.setSystemTime(new Date(2024, 0, 1, 23, 0));
+      mockStore({
+        waitingEnabled: true,
+        quietHoursEnabled: true,
+        quietHoursStartMin: 22 * 60,
+        quietHoursEndMin: 6 * 60,
+        quietHoursWeekdays: [],
+      } as unknown as Partial<typeof DEFAULT_NOTIFICATION_SETTINGS>);
+
+      events.emit("agent:state-changed", makePayload("waiting"));
+      vi.advanceTimersByTime(500);
+
+      expect(notificationServiceMock.showWatchNotification).toHaveBeenCalledWith(
+        "Agent waiting",
+        expect.any(String),
+        expect.any(Object),
+        "notification:watch-navigate",
+        true
+      );
+    });
+  });
 });

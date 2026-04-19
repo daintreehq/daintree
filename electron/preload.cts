@@ -2490,6 +2490,10 @@ const api: ElectronAPI = {
       workingPulseEnabled: boolean;
       workingPulseSoundFile: string;
       uiFeedbackSoundEnabled: boolean;
+      quietHoursEnabled: boolean;
+      quietHoursStartMin: number;
+      quietHoursEndMin: number;
+      quietHoursWeekdays: number[];
     }> => _unwrappingInvoke(CHANNELS.NOTIFICATION_SETTINGS_GET),
     setSettings: (
       settings: Partial<{
@@ -2505,8 +2509,14 @@ const api: ElectronAPI = {
         workingPulseEnabled: boolean;
         workingPulseSoundFile: string;
         uiFeedbackSoundEnabled: boolean;
+        quietHoursEnabled: boolean;
+        quietHoursStartMin: number;
+        quietHoursEndMin: number;
+        quietHoursWeekdays: number[];
       }>
     ) => _unwrappingInvoke(CHANNELS.NOTIFICATION_SETTINGS_SET, settings),
+    setSessionMuteUntil: (timestampMs: number) =>
+      ipcRenderer.send(CHANNELS.NOTIFICATION_SESSION_MUTE_SET, { timestampMs }),
     playSound: (soundFile: string) =>
       _unwrappingInvoke(CHANNELS.NOTIFICATION_PLAY_SOUND, soundFile),
     playUiEvent: (soundId: string) => _unwrappingInvoke(CHANNELS.SOUND_PLAY_UI_EVENT, soundId),
