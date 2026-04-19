@@ -11,7 +11,7 @@ import type {
   GitHubTokenConfig,
   GitHubTokenValidation,
 } from "../../types/index.js";
-import { gitHubRateLimitService } from "../../services/github/index.js";
+import { gitHubRateLimitService, gitHubTokenHealthService } from "../../services/github/index.js";
 import { getWorkspaceClient } from "../../services/WorkspaceClient.js";
 
 export function buildGitHubSearchQuery(
@@ -62,6 +62,22 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
     broadcastToRenderer(CHANNELS.GITHUB_RATE_LIMIT_CHANGED, state);
   });
   handlers.push(unsubscribeRateLimit);
+
+  // Main-process transport: push token-health state changes to every
+  // renderer so a "Reconnect to GitHub" banner can surface when the
+  // background probe detects a dead token.
+  const unsubscribeTokenHealth = gitHubTokenHealthService.onStateChange((state) => {
+    broadcastToRenderer(CHANNELS.GITHUB_TOKEN_HEALTH_CHANGED, state);
+  });
+  handlers.push(unsubscribeTokenHealth);
+
+  // Invoke handler: renderer subscribers call this on mount to replay the
+  // current state — guarantees a second window, or a window that mounts
+  // after the initial probe completed, can surface the banner without
+  // waiting for the next state transition (which might never come while
+  // the token stays unhealthy).
+  const handleGetTokenHealth = async () => gitHubTokenHealthService.getState();
+  handlers.push(typedHandle(CHANNELS.GITHUB_GET_TOKEN_HEALTH, handleGetTokenHealth));
 
   const handleGitHubGetRepoStats = async (
     cwd: string,
@@ -341,6 +357,11 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
       } catch {
         // WorkspaceClient may not be initialized yet
       }
+
+      // Reset any lingering health state so a previously-surfaced
+      // "Reconnect" banner is cleared before the next probe runs.
+      gitHubTokenHealthService.resetState();
+      void gitHubTokenHealthService.refresh({ force: true });
     }
 
     return validation;
@@ -358,6 +379,9 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
     } catch {
       // WorkspaceClient may not be initialized yet
     }
+
+    // Token removed: drop any lingering health state and banner.
+    gitHubTokenHealthService.resetState();
   };
   handlers.push(typedHandle(CHANNELS.GITHUB_CLEAR_TOKEN, handleGitHubClearToken));
 

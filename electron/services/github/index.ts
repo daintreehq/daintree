@@ -5,6 +5,14 @@ export { gitHubRateLimitService, GitHubRateLimitError } from "./GitHubRateLimitS
 export type { ShouldBlockResult } from "./GitHubRateLimitService.js";
 
 export {
+  gitHubTokenHealthService,
+  GitHubTokenHealthServiceImpl,
+  HEALTH_CHECK_INTERVAL_MS,
+  HEALTH_CHECK_FOCUS_COOLDOWN_MS,
+  HEALTH_CHECK_FETCH_TIMEOUT_MS,
+} from "./GitHubTokenHealthService.js";
+
+export {
   REPO_STATS_QUERY,
   PROJECT_HEALTH_QUERY,
   LIST_ISSUES_QUERY,

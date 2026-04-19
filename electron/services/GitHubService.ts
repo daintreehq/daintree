@@ -28,6 +28,7 @@ import {
   gitHubRateLimitService,
   GitHubRateLimitError,
 } from "./github/index.js";
+import { getLastAuthMetadata } from "./github/GitHubAuth.js";
 
 import type {
   RepoContext,
@@ -866,7 +867,7 @@ function formatCountdown(totalSeconds: number): string {
   return remMinutes > 0 ? `${hours}h ${remMinutes}m` : `${hours}h`;
 }
 
-function parseGitHubError(error: unknown): string {
+export function parseGitHubError(error: unknown): string {
   if (error instanceof GitHubRateLimitError) {
     return rateLimitMessage(error.kind, error.resumeAt);
   }
@@ -899,6 +900,23 @@ function parseGitHubError(error: unknown): string {
     return "Invalid GitHub token. Please update in Settings.";
   }
 
+  // Check SAML/SSO *before* the generic 403 branch — GitHub reports SSO
+  // enforcement failures as "Resource protected by organization SAML
+  // enforcement... (403)", so the substring "403" would otherwise swallow
+  // them into the generic permissions message and we'd lose the captured
+  // re-authorization URL.
+  if (message.includes("SAML") || message.includes("SSO")) {
+    // `rateLimitAwareFetch` captures the `X-GitHub-SSO: required; url=...`
+    // header passively. Surface the exact re-authorization URL when we have
+    // one so the user can re-authorize in a single click instead of hunting
+    // through github.com.
+    const ssoUrl = getLastAuthMetadata()?.ssoUrl;
+    if (ssoUrl) {
+      return `SSO authorization required. Re-authorize at: ${ssoUrl}`;
+    }
+    return "SSO authorization required. Re-authorize at github.com.";
+  }
+
   if (message.includes("403")) {
     return "Token lacks required permissions. Required scopes: repo, read:org";
   }
@@ -919,10 +937,6 @@ function parseGitHubError(error: unknown): string {
     message.includes("timed out")
   ) {
     return "Cannot reach GitHub. Check your internet connection.";
-  }
-
-  if (message.includes("SAML") || message.includes("SSO")) {
-    return "SSO authorization required. Re-authorize at github.com.";
   }
 
   return `GitHub API error: ${message}`;

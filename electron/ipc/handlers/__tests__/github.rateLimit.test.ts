@@ -88,6 +88,12 @@ vi.mock("../../../services/github/index.js", () => ({
     onStateChange: vi.fn().mockReturnValue(() => {}),
     getState: vi.fn().mockReturnValue({ blocked: false, kind: null }),
   },
+  gitHubTokenHealthService: {
+    onStateChange: vi.fn().mockReturnValue(() => {}),
+    getState: vi.fn().mockReturnValue({ status: "unknown", tokenVersion: -1, checkedAt: 0 }),
+    resetState: vi.fn(),
+    refresh: vi.fn().mockResolvedValue(undefined),
+  },
 }));
 
 vi.mock("../../../services/GitService.js", () => ({

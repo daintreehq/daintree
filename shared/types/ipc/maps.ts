@@ -100,6 +100,7 @@ import type {
   GitHubTokenConfig,
   GitHubTokenValidation,
   GitHubRateLimitPayload,
+  GitHubTokenHealthPayload,
   PRDetectedPayload,
   PRClearedPayload,
   IssueDetectedPayload,
@@ -1982,6 +1983,10 @@ export interface IpcInvokeMap {
       parsedRepo: { owner: string; repo: string } | null;
     }>;
   };
+  "github:get-token-health": {
+    args: [];
+    result: GitHubTokenHealthPayload;
+  };
 
   // Global env channels
   "global-env:get": {
@@ -2236,6 +2241,9 @@ export interface IpcEventMap {
 
   // GitHub rate-limit state push
   "github:rate-limit-changed": GitHubRateLimitPayload;
+
+  // GitHub token health state push (expiry/revocation detection)
+  "github:token-health-changed": GitHubTokenHealthPayload;
 
   // Error events
   "error:notify": AppError;

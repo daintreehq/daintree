@@ -4,6 +4,7 @@ import type { WorkspaceClient } from "../services/WorkspaceClient.js";
 import type { ProjectStatsService } from "../services/ProjectStatsService.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { getAppWebContents } from "./webContentsRegistry.js";
+import { gitHubTokenHealthService } from "../services/github/GitHubTokenHealthService.js";
 
 let resumeTimeout: NodeJS.Timeout | null = null;
 
@@ -58,6 +59,10 @@ export function setupPowerMonitor(deps: PowerMonitorDeps): void {
           workspaceClient.resumeHealthCheck();
           await workspaceClient.refresh();
         }
+        // Force an immediate token-health probe on wake — a PAT that expired
+        // during a long laptop sleep would otherwise sit undetected until the
+        // next 30-minute poll tick.
+        void gitHubTokenHealthService.refresh({ force: true });
         BrowserWindow.getAllWindows().forEach((win) => {
           if (win && !win.isDestroyed()) {
             const wc = getAppWebContents(win);
@@ -149,6 +154,11 @@ function removeThrottle(): void {
   if (ptyClient) {
     ptyClient.setProcessTreePollInterval(PROCESS_TREE_NORMAL);
   }
+
+  // Opportunistic token-health re-check on focus regain, gated by the
+  // service's own 5-minute cooldown so rapid window switching doesn't
+  // hammer the API.
+  void gitHubTokenHealthService.refresh();
 }
 
 export function setupWindowFocusThrottle(deps: WindowFocusThrottleDeps): void {
