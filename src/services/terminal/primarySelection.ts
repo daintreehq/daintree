@@ -33,7 +33,10 @@ export function installLinuxPrimarySelectionListeners(deps: PrimarySelectionDeps
     readSelection,
   } = deps;
 
-  const onMouseUp = () => {
+  const onMouseUp = (event: MouseEvent) => {
+    // Only respond to primary-button releases — middle/right-click releases
+    // after an existing selection would otherwise re-issue a redundant write.
+    if (event.button !== 0) return;
     const sel = getCachedSelection();
     if (!sel) return;
     void writeSelection(sel).catch(() => {

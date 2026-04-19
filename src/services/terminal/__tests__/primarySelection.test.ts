@@ -75,6 +75,19 @@ describe("installLinuxPrimarySelectionListeners", () => {
       await new Promise((r) => setTimeout(r, 0));
       // No assertion on side effects — the test passes if no unhandled rejection throws.
     });
+
+    it("ignores middle-button and right-button mouseup releases", () => {
+      cachedSelection = "hello";
+      hostElement.dispatchEvent(new MouseEvent("mouseup", { button: 1, bubbles: true }));
+      hostElement.dispatchEvent(new MouseEvent("mouseup", { button: 2, bubbles: true }));
+      expect(writeSelection).not.toHaveBeenCalled();
+    });
+
+    it("skips write after the cache was cleared (post-disposal race)", () => {
+      cachedSelection = undefined;
+      hostElement.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+      expect(writeSelection).not.toHaveBeenCalled();
+    });
   });
 
   describe("auxclick (middle-click paste)", () => {
@@ -164,6 +177,31 @@ describe("installLinuxPrimarySelectionListeners", () => {
       hostElement.dispatchEvent(new MouseEvent("auxclick", { button: 1, bubbles: true }));
       await flush();
       expect(writeToPty).not.toHaveBeenCalled();
+    });
+
+    it("fires when auxclick originates from a descendant element (capture phase)", async () => {
+      // xterm mounts its canvas/overlay as a child of hostElement. Capture phase
+      // on hostElement guarantees we see the event before xterm stopPropagation()s.
+      const child = document.createElement("div");
+      hostElement.appendChild(child);
+      readSelection.mockResolvedValueOnce({ ok: true, text: "pasted" });
+      child.dispatchEvent(new MouseEvent("auxclick", { button: 1, bubbles: true }));
+      await flush();
+      expect(readSelection).toHaveBeenCalledTimes(1);
+      expect(writeToPty).toHaveBeenCalledWith("term-1", "pasted");
+    });
+
+    it("handles two rapid middle-clicks without corrupting state", async () => {
+      readSelection
+        .mockResolvedValueOnce({ ok: true, text: "first" })
+        .mockResolvedValueOnce({ ok: true, text: "second" });
+      hostElement.dispatchEvent(new MouseEvent("auxclick", { button: 1, bubbles: true }));
+      hostElement.dispatchEvent(new MouseEvent("auxclick", { button: 1, bubbles: true }));
+      await flush();
+      expect(readSelection).toHaveBeenCalledTimes(2);
+      expect(writeToPty).toHaveBeenCalledTimes(2);
+      expect(writeToPty).toHaveBeenNthCalledWith(1, "term-1", "first");
+      expect(writeToPty).toHaveBeenNthCalledWith(2, "term-1", "second");
     });
   });
 
