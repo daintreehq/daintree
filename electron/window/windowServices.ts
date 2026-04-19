@@ -76,6 +76,7 @@ import { SCROLLBACK_BACKGROUND } from "../../shared/config/scrollback.js";
 import { logInfo } from "../utils/logger.js";
 import { PERF_MARKS } from "../../shared/perf/marks.js";
 import { isSmokeTest, isDemoMode, smokeTestStart, exposeGc } from "../setup/environment.js";
+import { shouldEnableEarlyRenderer } from "./earlyRenderer.js";
 import { extractCliPath, getPendingCliPath, setPendingCliPath } from "../lifecycle/appLifecycle.js";
 import type { WindowContext, WindowRegistry } from "./WindowRegistry.js";
 import { getProjectViewManager } from "./windowRef.js";
@@ -761,6 +762,61 @@ export async function setupWindowServices(
     }
   }
 
+  // Renderer load is gated by DAINTREE_EARLY_RENDERER. With the flag, the
+  // did-finish-load handler is registered and loadRenderer() is fired before
+  // the workspace/PTY init block — first paint stops waiting on the PTY
+  // handshake. Without the flag (default), the original serial order is kept:
+  // workspace init → handler → loadRenderer.
+  const earlyRendererEnabled = shouldEnableEarlyRenderer({ isSmokeTest, env: process.env });
+
+  let rendererLoadStarted = false;
+  const startRendererLoad = (reason: string): void => {
+    if (rendererLoadStarted) return;
+    rendererLoadStarted = true;
+
+    // Handle reloads (per-window) — listen on the app view's webContents.
+    // MUST be attached BEFORE loadRenderer() to avoid missing the first did-finish-load.
+    const appWc = getAppWebContents(win);
+    appWc.on("did-finish-load", () => {
+      const currentUrl = appWc.getURL();
+      if (currentUrl.includes("recovery.html")) {
+        console.log("[MAIN] Recovery page loaded, skipping normal renderer bootstrap");
+        return;
+      }
+      console.log("[MAIN] Renderer loaded, ensuring MessagePort connection...");
+      if (isSmokeTest) console.error("[SMOKE] CHECK: Renderer did-finish-load — OK");
+      markPerformance(PERF_MARKS.RENDERER_READY);
+      createAndDistributePorts(win, ctx);
+      // Refresh workspace direct port on reload (preload context is reset).
+      // Under DAINTREE_EARLY_RENDERER, workspaceClient may still be null on the
+      // first did-finish-load — the initial direct-port attach is performed by
+      // the loadProject() path below once the workspace host is ready.
+      if (workspaceClient) {
+        workspaceClient.attachDirectPort(win.id, appWc);
+
+        // Re-broker worktree port for initial view reload
+        if (worktreePortBroker) {
+          const host = workspaceClient.getHostForWindow(win.id);
+          if (host) {
+            worktreePortBroker.brokerPort(host, appWc);
+          }
+        }
+      }
+      flushPendingErrors();
+      const diskStatus = getCurrentDiskSpaceStatus();
+      if (diskStatus.status !== "normal") {
+        sendToRenderer(win, CHANNELS.WINDOW_DISK_SPACE_STATUS, diskStatus);
+      }
+    });
+
+    opts.loadRenderer(reason, opts.initialProjectId);
+  };
+
+  if (earlyRendererEnabled) {
+    console.log("[MAIN] DAINTREE_EARLY_RENDERER=1 — loading renderer in parallel with PTY init");
+    startRendererLoad("early-renderer");
+  }
+
   // Initialize workspace client (first window only) — per-project hosts
   // are started on-demand when loadProject() is called, not at init time.
   if (!workspaceClient) {
@@ -821,40 +877,12 @@ export async function setupWindowServices(
   const { armRestoreQuota } = await import("../ipc/utils.js");
   armRestoreQuota(50, 120_000);
 
-  // Handle reloads (per-window) — listen on the app view's webContents.
-  // MUST be attached BEFORE loadRenderer() to avoid missing the first did-finish-load.
-  const appWc = getAppWebContents(win);
-  appWc.on("did-finish-load", () => {
-    const currentUrl = appWc.getURL();
-    if (currentUrl.includes("recovery.html")) {
-      console.log("[MAIN] Recovery page loaded, skipping normal renderer bootstrap");
-      return;
-    }
-    console.log("[MAIN] Renderer loaded, ensuring MessagePort connection...");
-    if (isSmokeTest) console.error("[SMOKE] CHECK: Renderer did-finish-load — OK");
-    markPerformance(PERF_MARKS.RENDERER_READY);
-    createAndDistributePorts(win, ctx);
-    // Refresh workspace direct port on reload (preload context is reset)
-    if (workspaceClient) {
-      workspaceClient.attachDirectPort(win.id, appWc);
-
-      // Re-broker worktree port for initial view reload
-      if (worktreePortBroker) {
-        const host = workspaceClient.getHostForWindow(win.id);
-        if (host) {
-          worktreePortBroker.brokerPort(host, appWc);
-        }
-      }
-    }
-    flushPendingErrors();
-    const diskStatus = getCurrentDiskSpaceStatus();
-    if (diskStatus.status !== "normal") {
-      sendToRenderer(win, CHANNELS.WINDOW_DISK_SPACE_STATUS, diskStatus);
-    }
-  });
-
+  // Under DAINTREE_EARLY_RENDERER=1 the RENDERER_READY mark can fire before
+  // this point, since the renderer is loading concurrently with workspace init.
   markPerformance(PERF_MARKS.SERVICE_INIT_COMPLETE);
-  opts.loadRenderer("after-services-ready", opts.initialProjectId);
+  // Default path: renderer load happens here, after workspace + PTY are ready.
+  // With DAINTREE_EARLY_RENDERER=1 this is a no-op (already started above).
+  startRendererLoad("after-services-ready");
 
   // Error handlers also use ipcMain.handle — register once
   if (!cleanupErrorHandlers) {

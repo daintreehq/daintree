@@ -1,6 +1,6 @@
 {
-  "count": 1132,
-  "moduleCount": 1132,
+  "count": 1133,
+  "moduleCount": 1133,
   "allowlist": [
     "electron/ipc/errorHandlers.ts",
     "electron/ipc/handlers/agentCapabilities.ts",
@@ -1559,17 +1559,17 @@
     },
     {
       "file": "electron/window/windowServices.ts",
-      "line": 190,
+      "line": 191,
       "pattern": "sync-store-get"
     },
     {
       "file": "electron/window/windowServices.ts",
-      "line": 288,
+      "line": 289,
       "pattern": "sync-store-get"
     },
     {
       "file": "electron/window/windowServices.ts",
-      "line": 520,
+      "line": 521,
       "pattern": "sync-store-get"
     },
     {
