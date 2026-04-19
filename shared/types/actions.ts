@@ -180,6 +180,7 @@ export type BuiltInActionId =
   | "worktree.overview.open"
   | "worktree.overview.close"
   | "action.palette.open"
+  | "action.repeatLast"
   | "actions.list"
   | "actions.getContext"
   | "actions.persistedStores"
@@ -348,6 +349,13 @@ export interface ActionDefinition<
    * copied verbatim (no further sanitization), so the allowlist is the policy.
    */
   safeBreadcrumbArgs?: readonly string[];
+  /**
+   * When true, `action.repeatLast` will not record this action as the last
+   * dispatched action. Use for palette-openers, pure navigation, modal control,
+   * and settings-open actions whose intent is transient/UI rather than a
+   * repeatable operation.
+   */
+  nonRepeatable?: boolean;
 }
 
 export interface ActionManifestEntry {

@@ -531,6 +531,204 @@ describe("ActionService", () => {
     });
   });
 
+  describe("lastAction tracking", () => {
+    const makeAction = (
+      id: string,
+      overrides: Partial<ActionDefinition> = {}
+    ): ActionDefinition => ({
+      id: id as ActionId,
+      title: "Test",
+      description: "Test action",
+      category: "test",
+      kind: "command",
+      danger: "safe",
+      scope: "renderer",
+      run: vi.fn().mockResolvedValue(undefined),
+      ...overrides,
+    });
+
+    it("returns null before any action has been dispatched", () => {
+      expect(service.getLastAction()).toBeNull();
+    });
+
+    it("captures last action after a successful user dispatch", async () => {
+      service.register(makeAction("test.repeatable"));
+      await service.dispatch("test.repeatable" as ActionId, { foo: 1 }, { source: "user" });
+
+      expect(service.getLastAction()).toEqual({
+        actionId: "test.repeatable",
+        args: { foo: 1 },
+      });
+    });
+
+    it("captures after keybinding, menu, and context-menu dispatches", async () => {
+      service.register(makeAction("test.keybinding"));
+      service.register(makeAction("test.menu"));
+      service.register(makeAction("test.context"));
+
+      await service.dispatch("test.keybinding" as ActionId, undefined, { source: "keybinding" });
+      expect(service.getLastAction()?.actionId).toBe("test.keybinding");
+
+      await service.dispatch("test.menu" as ActionId, undefined, { source: "menu" });
+      expect(service.getLastAction()?.actionId).toBe("test.menu");
+
+      await service.dispatch("test.context" as ActionId, undefined, { source: "context-menu" });
+      expect(service.getLastAction()?.actionId).toBe("test.context");
+    });
+
+    it("does not capture agent-source dispatches", async () => {
+      service.register(makeAction("test.user"));
+      service.register(makeAction("test.agent"));
+
+      await service.dispatch("test.user" as ActionId, undefined, { source: "user" });
+      expect(service.getLastAction()?.actionId).toBe("test.user");
+
+      await service.dispatch("test.agent" as ActionId, undefined, { source: "agent" });
+      expect(service.getLastAction()?.actionId).toBe("test.user");
+    });
+
+    it("does not capture when dispatch fails via execution error", async () => {
+      service.register(makeAction("test.good"));
+      service.register(
+        makeAction("test.bad", { run: vi.fn().mockRejectedValue(new Error("boom")) })
+      );
+
+      await service.dispatch("test.good" as ActionId, undefined, { source: "user" });
+      expect(service.getLastAction()?.actionId).toBe("test.good");
+
+      const result = await service.dispatch("test.bad" as ActionId, undefined, { source: "user" });
+      expect(result.ok).toBe(false);
+      expect(service.getLastAction()?.actionId).toBe("test.good");
+    });
+
+    it("does not capture when dispatch fails validation", async () => {
+      const schema = z.object({ count: z.number() });
+      const action: ActionDefinition<typeof schema, void> = {
+        id: "test.validated" as ActionId,
+        title: "Test",
+        description: "Test action",
+        category: "test",
+        kind: "command",
+        danger: "safe",
+        scope: "renderer",
+        argsSchema: schema,
+        run: vi.fn().mockResolvedValue(undefined),
+      };
+      service.register(action);
+
+      await service.dispatch("test.validated" as ActionId, { count: "bad" }, { source: "user" });
+      expect(service.getLastAction()).toBeNull();
+    });
+
+    it("does not capture actions marked nonRepeatable", async () => {
+      service.register(makeAction("test.repeatable"));
+      service.register(makeAction("test.palette", { nonRepeatable: true }));
+
+      await service.dispatch("test.repeatable" as ActionId, undefined, { source: "user" });
+      expect(service.getLastAction()?.actionId).toBe("test.repeatable");
+
+      await service.dispatch("test.palette" as ActionId, undefined, { source: "user" });
+      expect(service.getLastAction()?.actionId).toBe("test.repeatable");
+    });
+
+    it("does not capture danger:confirm actions even from user-facing sources", async () => {
+      // Destructive actions (worktree.delete, git.push, project.remove, etc.) rely on
+      // originating UI dialogs for consent. Capturing them would let Cmd+Shift+. silently
+      // replay the destructive op without re-confirmation — explicitly disallowed.
+      service.register(makeAction("test.safe"));
+      service.register(makeAction("test.destructive", { danger: "confirm" }));
+
+      await service.dispatch("test.safe" as ActionId, undefined, { source: "user" });
+      expect(service.getLastAction()?.actionId).toBe("test.safe");
+
+      await service.dispatch(
+        "test.destructive" as ActionId,
+        { worktreeId: "wt-1" },
+        { source: "user" }
+      );
+      expect(service.getLastAction()?.actionId).toBe("test.safe");
+
+      await service.dispatch("test.destructive" as ActionId, undefined, { source: "keybinding" });
+      expect(service.getLastAction()?.actionId).toBe("test.safe");
+
+      await service.dispatch("test.destructive" as ActionId, undefined, { source: "menu" });
+      expect(service.getLastAction()?.actionId).toBe("test.safe");
+
+      await service.dispatch("test.destructive" as ActionId, undefined, { source: "context-menu" });
+      expect(service.getLastAction()?.actionId).toBe("test.safe");
+    });
+
+    it("replaces the stored action on each new eligible dispatch", async () => {
+      service.register(makeAction("test.first"));
+      service.register(makeAction("test.second"));
+
+      await service.dispatch("test.first" as ActionId, { a: 1 }, { source: "user" });
+      await service.dispatch("test.second" as ActionId, { b: 2 }, { source: "user" });
+
+      expect(service.getLastAction()).toEqual({
+        actionId: "test.second",
+        args: { b: 2 },
+      });
+    });
+
+    it("outer dispatch captures after inner dispatch completes (nested ordering)", async () => {
+      // Regression: when a user-dispatched action internally calls another
+      // dispatch with source: "user", the outer action must win the lastAction
+      // slot — otherwise Cmd+Shift+. replays the inner alias instead of the
+      // user's original intent.
+      service.register(makeAction("test.inner"));
+      service.register(
+        makeAction("test.outer", {
+          run: async () => {
+            await service.dispatch("test.inner" as ActionId, undefined, { source: "user" });
+          },
+        })
+      );
+
+      await service.dispatch("test.outer" as ActionId, { marker: "outer" }, { source: "user" });
+
+      expect(service.getLastAction()).toEqual({
+        actionId: "test.outer",
+        args: { marker: "outer" },
+      });
+    });
+
+    it("captured args are isolated from later caller mutation", async () => {
+      service.register(makeAction("test.mutable"));
+      const args = { list: [1, 2, 3] };
+
+      await service.dispatch("test.mutable" as ActionId, args, { source: "user" });
+      args.list.push(999);
+
+      expect(service.getLastAction()).toEqual({
+        actionId: "test.mutable",
+        args: { list: [1, 2, 3] },
+      });
+    });
+
+    it("stores validated args, not the raw input", async () => {
+      const schema = z.object({ name: z.string().default("default-name") });
+      const action: ActionDefinition<typeof schema, void> = {
+        id: "test.defaulted" as ActionId,
+        title: "Test",
+        description: "Test action",
+        category: "test",
+        kind: "command",
+        danger: "safe",
+        scope: "renderer",
+        argsSchema: schema,
+        run: vi.fn().mockResolvedValue(undefined),
+      };
+      service.register(action);
+
+      await service.dispatch("test.defaulted" as ActionId, {}, { source: "user" });
+      expect(service.getLastAction()).toEqual({
+        actionId: "test.defaulted",
+        args: { name: "default-name" },
+      });
+    });
+  });
+
   describe("dispatch resilience", () => {
     it("should complete dispatch even when events.emit never resolves", async () => {
       const originalWindow = (globalThis as Record<string, unknown>).window;

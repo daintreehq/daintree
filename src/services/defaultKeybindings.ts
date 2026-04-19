@@ -520,6 +520,14 @@ export const DEFAULT_KEYBINDINGS: KeybindingConfig[] = [
     category: "Navigation",
   },
   {
+    actionId: "action.repeatLast",
+    combo: "Cmd+Shift+.",
+    scope: "global",
+    priority: 0,
+    description: "Repeat last action",
+    category: "Navigation",
+  },
+  {
     actionId: "panel.diagnosticsLogs",
     combo: "Ctrl+Shift+L",
     scope: "global",

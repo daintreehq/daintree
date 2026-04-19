@@ -12,6 +12,7 @@ export function registerNavigationActions(
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    nonRepeatable: true,
     run: async () => {
       callbacks.onToggleSidebar();
     },
@@ -25,6 +26,7 @@ export function registerNavigationActions(
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    nonRepeatable: true,
     run: async () => {
       callbacks.onOpenActionPalette();
     },
@@ -38,6 +40,7 @@ export function registerNavigationActions(
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    nonRepeatable: true,
     run: async () => {
       callbacks.onToggleFocusMode();
     },
@@ -51,6 +54,7 @@ export function registerNavigationActions(
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    nonRepeatable: true,
     run: async () => {
       callbacks.onOpenQuickSwitcher();
     },
@@ -64,6 +68,7 @@ export function registerNavigationActions(
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    nonRepeatable: true,
     run: async () => {
       callbacks.onFocusRegionNext();
     },
@@ -77,6 +82,7 @@ export function registerNavigationActions(
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    nonRepeatable: true,
     run: async () => {
       callbacks.onFocusRegionPrev();
     },

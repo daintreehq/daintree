@@ -40,6 +40,7 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    nonRepeatable: true,
     run: async () => {
       callbacks.onOpenProjectSwitcherPalette();
     },

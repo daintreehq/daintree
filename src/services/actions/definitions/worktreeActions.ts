@@ -271,6 +271,7 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
       danger: "safe",
       scope: "renderer",
       argsSchema: z.object({ worktreeId: z.string().optional() }).optional(),
+      nonRepeatable: true,
       run: async (args, ctx: ActionContext) => {
         const worktreeId = args?.worktreeId;
         const targetWorktreeId = worktreeId ?? ctx.focusedWorktreeId ?? ctx.activeWorktreeId;
@@ -290,6 +291,7 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    nonRepeatable: true,
     run: async () => {
       const activeWorktreeId = callbacks.getActiveWorktreeId();
       const worktrees = getVisibleWorktreesForCycling(activeWorktreeId);
@@ -310,6 +312,7 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    nonRepeatable: true,
     run: async () => {
       const activeWorktreeId = callbacks.getActiveWorktreeId();
       const worktrees = getVisibleWorktreesForCycling(activeWorktreeId);
@@ -339,6 +342,7 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
       danger: "safe",
       scope: "renderer",
       argsSchema: z.object({ index: z.number().int().min(1).max(9) }),
+      nonRepeatable: true,
       run: async ({ index }) => {
         const activeWorktreeId = callbacks.getActiveWorktreeId();
         const worktrees = getVisibleWorktreesForCycling(activeWorktreeId);
@@ -360,6 +364,7 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
       kind: "command",
       danger: "safe",
       scope: "renderer",
+      nonRepeatable: true,
       run: async () => {
         const activeWorktreeId = callbacks.getActiveWorktreeId();
         const worktrees = getVisibleWorktreesForCycling(activeWorktreeId);
@@ -397,6 +402,7 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    nonRepeatable: true,
     run: async () => {
       selectWorktreeByOffset(-1);
     },
@@ -410,6 +416,7 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    nonRepeatable: true,
     run: async () => {
       selectWorktreeByOffset(1);
     },
@@ -423,6 +430,7 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    nonRepeatable: true,
     run: async () => {
       selectWorktreeByOffset(-1);
     },
@@ -436,6 +444,7 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    nonRepeatable: true,
     run: async () => {
       selectWorktreeByOffset(1);
     },
@@ -449,6 +458,7 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    nonRepeatable: true,
     run: async () => {
       const worktrees = getVisibleWorktreesForCycling(callbacks.getActiveWorktreeId());
       if (worktrees.length === 0) return;
@@ -464,6 +474,7 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    nonRepeatable: true,
     run: async () => {
       const worktrees = getVisibleWorktreesForCycling(callbacks.getActiveWorktreeId());
       if (worktrees.length === 0) return;
@@ -479,6 +490,7 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    nonRepeatable: true,
     run: async () => {
       const focused = useWorktreeSelectionStore.getState().focusedWorktreeId;
       if (!focused) return;
@@ -494,6 +506,7 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    nonRepeatable: true,
     run: async () => {
       callbacks.onOpenWorktreePalette();
     },
@@ -507,6 +520,7 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    nonRepeatable: true,
     run: async () => {
       callbacks.onToggleWorktreeOverview();
     },
@@ -520,6 +534,7 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    nonRepeatable: true,
     run: async () => {
       callbacks.onOpenWorktreeOverview();
     },
@@ -533,6 +548,7 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    nonRepeatable: true,
     run: async () => {
       callbacks.onCloseWorktreeOverview();
     },
@@ -546,6 +562,7 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    nonRepeatable: true,
     run: async () => {
       callbacks.onOpenWorktreePalette();
     },

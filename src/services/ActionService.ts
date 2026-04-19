@@ -41,9 +41,43 @@ function zodSchemaToJsonSchema(schema: z.ZodType): Record<string, unknown> | und
   }
 }
 
+/** Sources whose successful dispatches are eligible to be recorded as the "last action". */
+const REPEATABLE_SOURCES: ReadonlySet<ActionSource> = new Set<ActionSource>([
+  "user",
+  "keybinding",
+  "menu",
+  "context-menu",
+]);
+
+/**
+ * Snapshot args for replay. Structured clone isolates the captured copy from
+ * later mutation by the action's run body or the caller — non-cloneable values
+ * fall through unchanged.
+ */
+function cloneArgsForReplay(args: unknown): unknown {
+  if (args === undefined || args === null) return args;
+  if (typeof args !== "object") return args;
+  try {
+    return structuredClone(args);
+  } catch {
+    return args;
+  }
+}
+
+export interface LastDispatchedAction {
+  actionId: ActionId;
+  args: unknown;
+}
+
 export class ActionService {
   private registry = new Map<ActionId, AnyActionDefinition>();
   private contextProvider: (() => ActionContext) | null = null;
+  /**
+   * Last eligible {actionId, args} captured after a successful dispatch from a
+   * user-facing source. Lives in renderer memory only — intentionally does not
+   * survive reloads. Consumed by `action.repeatLast`.
+   */
+  private lastAction: LastDispatchedAction | null = null;
 
   register<S extends z.ZodTypeAny | undefined = undefined, Result = unknown>(
     definition: ActionDefinition<S, Result>
@@ -60,6 +94,10 @@ export class ActionService {
 
   getContext(): ActionContext {
     return this.getActionContext();
+  }
+
+  getLastAction(): LastDispatchedAction | null {
+    return this.lastAction;
   }
 
   async dispatch<Result = unknown>(
@@ -127,6 +165,16 @@ export class ActionService {
     try {
       const result = await definition.run(validatedArgs, context);
       const durationMs = Date.now() - startMs;
+      if (
+        REPEATABLE_SOURCES.has(source) &&
+        !definition.nonRepeatable &&
+        definition.danger === "safe"
+      ) {
+        // Only danger:"safe" actions are eligible for repeat. Confirm-gated actions
+        // rely on originating UI dialogs for consent — replaying them from a keybinding
+        // would silently bypass that UI and repeat a destructive op.
+        this.lastAction = { actionId, args: cloneArgsForReplay(validatedArgs) };
+      }
       void this.emitActionDispatchedEvent({
         actionId,
         args: this.redactSensitiveArgs(args),

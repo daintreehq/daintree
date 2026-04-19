@@ -102,6 +102,7 @@ export function registerPanelActions(actions: ActionRegistry, callbacks: ActionC
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    nonRepeatable: true,
     run: async () => {
       callbacks.onOpenPanelPalette();
     },

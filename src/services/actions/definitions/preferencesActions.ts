@@ -731,6 +731,7 @@ export function registerPreferencesActions(
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    nonRepeatable: true,
     run: async () => {
       // This is typically handled by the modal component itself via Escape key
       window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
