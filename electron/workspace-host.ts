@@ -10,7 +10,7 @@ for (const stream of [process.stdout, process.stderr]) {
 }
 
 import { MessagePort } from "node:worker_threads";
-import { initializeLogger } from "./utils/logger.js";
+import { initializeLogger, setLogLevelOverrides } from "./utils/logger.js";
 import { copyTreeService } from "./services/CopyTreeService.js";
 import { fileTreeService } from "./services/FileTreeService.js";
 import { projectPulseService } from "./services/ProjectPulseService.js";
@@ -413,6 +413,18 @@ port.on("message", async (rawMsg: any) => {
         shutdownController.abort();
         workspaceService.dispose();
         break;
+
+      case "set-log-level-overrides": {
+        const overrides = (request.overrides ?? {}) as Record<string, unknown>;
+        const sanitized: Record<string, string> = {};
+        for (const [key, value] of Object.entries(overrides)) {
+          if (typeof key === "string" && typeof value === "string") {
+            sanitized[key] = value;
+          }
+        }
+        setLogLevelOverrides(sanitized);
+        break;
+      }
 
       case "copytree:generate": {
         const { requestId, operationId, rootPath, options } = request;

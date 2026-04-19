@@ -10,12 +10,38 @@ import {
   logError,
   getLogFilePath,
   getPreviousSessionTail,
+  setLogLevelOverrides,
+  getRegisteredLoggerNames,
+  isValidLogOverrideLevel,
   type LogLevel,
 } from "../../utils/logger.js";
 import type { FilterOptions as LogFilterOptions } from "../../services/LogBuffer.js";
 import { typedHandle } from "../utils.js";
+import { store } from "../../store.js";
+import type { HandlerDependencies } from "../types.js";
 
-export function registerLogsHandlers(): () => void {
+function sanitizeOverrides(raw: unknown): Record<string, string> {
+  if (!raw || typeof raw !== "object") return {};
+  const clean: Record<string, string> = {};
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (!key || typeof key !== "string") continue;
+    if (!isValidLogOverrideLevel(value)) continue;
+    clean[key] = value;
+  }
+  return clean;
+}
+
+function fanOut(
+  overrides: Record<string, string>,
+  deps: Pick<HandlerDependencies, "ptyClient" | "worktreeService">
+): void {
+  deps.ptyClient?.setLogLevelOverrides(overrides);
+  deps.worktreeService?.setLogLevelOverrides(overrides);
+}
+
+export function registerLogsHandlers(
+  deps: Pick<HandlerDependencies, "ptyClient" | "worktreeService"> = {}
+): () => void {
   const handlers: Array<() => void> = [];
 
   const handleLogsGetAll = async (filters?: LogFilterOptions) => {
@@ -86,7 +112,19 @@ export function registerLogsHandlers(): () => void {
       logError("Invalid verbose logging payload", undefined, { payload: enabled });
       return { success: false };
     }
+    // Verbose toggle maps to the `"*"` wildcard override so it flows through
+    // the same persistence + utility-process propagation as explicit per-module
+    // overrides. This also makes the legacy toggle survive restarts.
+    const current = { ...(store.get("logLevelOverrides") ?? {}) };
+    if (enabled) {
+      current["*"] = "debug";
+    } else {
+      delete current["*"];
+    }
+    store.set("logLevelOverrides", current);
+    setLogLevelOverrides(current);
     setVerboseLogging(enabled);
+    fanOut(current, deps);
     logInfo(`Verbose logging ${enabled ? "enabled" : "disabled"} by user`);
     return { success: true };
   };
@@ -120,6 +158,48 @@ export function registerLogsHandlers(): () => void {
     }
   };
   handlers.push(typedHandle(CHANNELS.LOGS_WRITE, handleLogsWrite));
+
+  const handleGetLevelOverrides = async (): Promise<Record<string, string>> => {
+    return { ...(store.get("logLevelOverrides") ?? {}) };
+  };
+  handlers.push(typedHandle(CHANNELS.LOGS_GET_LEVEL_OVERRIDES, handleGetLevelOverrides));
+
+  const handleSetLevelOverrides = async (overrides: Record<string, string>) => {
+    const clean = sanitizeOverrides(overrides);
+    store.set("logLevelOverrides", clean);
+    setLogLevelOverrides(clean);
+    fanOut(clean, deps);
+    logInfo("Log level overrides updated", { count: Object.keys(clean).length });
+    return { success: true };
+  };
+  handlers.push(typedHandle(CHANNELS.LOGS_SET_LEVEL_OVERRIDES, handleSetLevelOverrides));
+
+  const handleClearLevelOverrides = async () => {
+    // electron-store v11: `set(..., undefined)` throws. Clear by writing the
+    // default empty object explicitly.
+    store.set("logLevelOverrides", {});
+    setLogLevelOverrides({});
+    fanOut({}, deps);
+    logInfo("Log level overrides cleared");
+    return { success: true };
+  };
+  handlers.push(typedHandle(CHANNELS.LOGS_CLEAR_LEVEL_OVERRIDES, handleClearLevelOverrides));
+
+  const handleGetRegistry = async (): Promise<string[]> => {
+    // Main-process registry only. Utility-process loggers are represented via
+    // the static manifest in `shared/config/loggerNames.ts`.
+    return getRegisteredLoggerNames();
+  };
+  handlers.push(typedHandle(CHANNELS.LOGS_GET_REGISTRY, handleGetRegistry));
+
+  // Re-hydrate in-process overrides from disk on handler registration — this
+  // is the canonical point where main-process logging is wired after `store`
+  // is ready, and catches the case where initializeLogger runs before store
+  // initialization during some test setups.
+  const stored = store.get("logLevelOverrides") ?? {};
+  const cleanStored = sanitizeOverrides(stored);
+  setLogLevelOverrides(cleanStored);
+  fanOut(cleanStored, deps);
 
   return () => handlers.forEach((cleanup) => cleanup());
 }

@@ -87,6 +87,7 @@ export type PtyHostRequest =
   | { type: "pause-all" }
   | { type: "resume-all" }
   | { type: "dispose" }
+  | { type: "set-log-level-overrides"; overrides: Record<string, string> }
   | { type: "get-terminals-for-project"; projectId: string; requestId: string }
   | { type: "get-terminal"; id: string; requestId: string }
   | { type: "replay-history"; id: string; maxLines: number; requestId: string }

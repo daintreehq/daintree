@@ -68,7 +68,12 @@ import {
 import { getProjectStatsService } from "./ipc/handlers/projectCrud.js";
 import { isSmokeTest } from "./setup/environment.js";
 import { store } from "./store.js";
-import { pruneOldLogs, initializeLogger, registerLoggerTransport } from "./utils/logger.js";
+import {
+  pruneOldLogs,
+  initializeLogger,
+  registerLoggerTransport,
+  setLogLevelOverrides,
+} from "./utils/logger.js";
 import { broadcastToRenderer } from "./ipc/utils.js";
 import { registerCommands } from "./services/commands/index.js";
 import { initializeCrashRecoveryService } from "./services/CrashRecoveryService.js";
@@ -145,6 +150,11 @@ if (!gotTheLock) {
   }
 
   initializeLogger(app.getPath("userData"));
+
+  // Seed per-module level overrides from persisted store so main-process
+  // logging filters correctly from the very first log line. Utility processes
+  // receive the same map after their first `ready` event.
+  setLogLevelOverrides(store.get("logLevelOverrides") ?? {});
 
   registerLoggerTransport(broadcastToRenderer, () => BrowserWindow.getAllWindows().length > 0);
 

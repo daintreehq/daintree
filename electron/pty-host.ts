@@ -30,6 +30,7 @@ import { RESOURCE_PROFILE_CONFIGS, type ResourceProfile } from "../shared/types/
 import { events } from "./services/events.js";
 import { SharedRingBuffer, PacketFramer } from "../shared/utils/SharedRingBuffer.js";
 import { selectShard } from "../shared/utils/shardSelection.js";
+import { setLogLevelOverrides } from "./utils/logger.js";
 import type { AgentEvent } from "./services/AgentStateMachine.js";
 import type { PtyHostEvent, SpawnResult } from "../shared/types/pty-host.js";
 import { normalizeScrollbackLines } from "../shared/config/scrollback.js";
@@ -1505,6 +1506,18 @@ port.on("message", async (rawMsg: any) => {
       case "dispose":
         cleanup();
         break;
+
+      case "set-log-level-overrides": {
+        const overrides = (msg.overrides ?? {}) as Record<string, unknown>;
+        const sanitized: Record<string, string> = {};
+        for (const [key, value] of Object.entries(overrides)) {
+          if (typeof key === "string" && typeof value === "string") {
+            sanitized[key] = value;
+          }
+        }
+        setLogLevelOverrides(sanitized);
+        break;
+      }
 
       default:
         console.warn("[PtyHost] Unknown message type:", (msg as { type: string }).type);

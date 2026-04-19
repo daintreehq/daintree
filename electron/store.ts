@@ -215,6 +215,13 @@ export interface StoreSchema {
   updateChannel: "stable" | "nightly";
   dismissedUpdateVersion?: string;
   dismissedUpdateAt?: number;
+  /**
+   * Per-logger level overrides keyed by stable `"<process>:Module"` names (or
+   * `"*"` / `"<process>:*"` wildcards). Values are `"debug" | "info" | "warn"
+   * | "error" | "off"`. Persisted so support sessions can reproduce boot-time
+   * issues without reconfiguring on every launch.
+   */
+  logLevelOverrides: Record<string, string>;
 }
 
 const storeOptions = {
@@ -343,6 +350,7 @@ const storeOptions = {
     orchestrationMilestones: {},
     shortcutHintCounts: {},
     updateChannel: "stable" as const,
+    logLevelOverrides: {},
   },
   cwd: process.env.DAINTREE_USER_DATA,
 };

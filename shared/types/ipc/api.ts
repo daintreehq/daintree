@@ -376,6 +376,10 @@ export interface ElectronAPI {
       message: string,
       context?: Record<string, unknown>
     ): Promise<void>;
+    getLevelOverrides(): Promise<Record<string, string>>;
+    setLevelOverrides(overrides: Record<string, string>): Promise<{ success: boolean }>;
+    clearLevelOverrides(): Promise<{ success: boolean }>;
+    getRegistry(): Promise<string[]>;
   };
   errors: {
     onError(callback: (error: AppError) => void): () => void;

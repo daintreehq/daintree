@@ -682,6 +682,10 @@ const CHANNELS = {
   LOGS_SET_VERBOSE: "logs:set-verbose",
   LOGS_GET_VERBOSE: "logs:get-verbose",
   LOGS_WRITE: "logs:write",
+  LOGS_GET_LEVEL_OVERRIDES: "logs:get-level-overrides",
+  LOGS_SET_LEVEL_OVERRIDES: "logs:set-level-overrides",
+  LOGS_CLEAR_LEVEL_OVERRIDES: "logs:clear-level-overrides",
+  LOGS_GET_REGISTRY: "logs:get-registry",
 
   // Error channels
   ERROR_NOTIFY: "error:notify",
@@ -1610,6 +1614,15 @@ const api: ElectronAPI = {
       message: string,
       context?: Record<string, unknown>
     ) => _unwrappingInvoke(CHANNELS.LOGS_WRITE, { level, message, context }),
+
+    getLevelOverrides: () => _unwrappingInvoke(CHANNELS.LOGS_GET_LEVEL_OVERRIDES),
+
+    setLevelOverrides: (overrides: Record<string, string>) =>
+      _unwrappingInvoke(CHANNELS.LOGS_SET_LEVEL_OVERRIDES, overrides),
+
+    clearLevelOverrides: () => _unwrappingInvoke(CHANNELS.LOGS_CLEAR_LEVEL_OVERRIDES),
+
+    getRegistry: () => _unwrappingInvoke(CHANNELS.LOGS_GET_REGISTRY),
   },
 
   // Error API

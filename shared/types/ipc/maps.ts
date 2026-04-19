@@ -650,6 +650,22 @@ export interface IpcInvokeMap {
     ];
     result: void;
   };
+  "logs:get-level-overrides": {
+    args: [];
+    result: Record<string, string>;
+  };
+  "logs:set-level-overrides": {
+    args: [overrides: Record<string, string>];
+    result: { success: boolean };
+  };
+  "logs:clear-level-overrides": {
+    args: [];
+    result: { success: boolean };
+  };
+  "logs:get-registry": {
+    args: [];
+    result: string[];
+  };
 
   // Error channels
   "error:retry": {

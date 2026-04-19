@@ -44,6 +44,10 @@ export class WorkspaceHostProcess extends EventEmitter {
   private readyResolve: (() => void) | null = null;
   private readyReject: ((error: Error) => void) | null = null;
 
+  /** Replayed on every `ready` — the child's message listener isn't attached
+   * until after `ready`, so pushing at fork time would silently drop. */
+  private logLevelOverridesCache: Record<string, string> = {};
+
   constructor(projectPath: string, config: Required<WorkspaceClientConfig>) {
     super();
     this.projectPath = projectPath;
@@ -151,6 +155,17 @@ export class WorkspaceHostProcess extends EventEmitter {
         reject(error instanceof Error ? error : new Error(String(error)));
       }
     });
+  }
+
+  /**
+   * Update the cached overrides and push immediately if initialized. On
+   * restart, `ready` replays the cached map automatically.
+   */
+  setLogLevelOverrides(overrides: Record<string, string>): void {
+    this.logLevelOverridesCache = { ...overrides };
+    if (this.isInitialized && this.child) {
+      this.send({ type: "set-log-level-overrides", overrides: this.logLevelOverridesCache });
+    }
   }
 
   pauseHealthCheck(): void {
@@ -277,6 +292,7 @@ export class WorkspaceHostProcess extends EventEmitter {
         env: {
           ...(process.env as Record<string, string>),
           DAINTREE_USER_DATA: app.getPath("userData"),
+          DAINTREE_UTILITY_PROCESS_KIND: "workspace-host",
         },
       });
     } catch (error) {
@@ -428,6 +444,9 @@ export class WorkspaceHostProcess extends EventEmitter {
         if (token) {
           this.send({ type: "update-github-token", token });
         }
+
+        // Replay cached log-level overrides on every ready (initial + restarts).
+        this.send({ type: "set-log-level-overrides", overrides: this.logLevelOverridesCache });
 
         if (this.readyResolve) {
           this.readyResolve();

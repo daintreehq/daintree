@@ -12,7 +12,8 @@ export type PaletteId =
   | "prompt-history"
   | "send-to-agent"
   | "bulk-command"
-  | "theme";
+  | "theme"
+  | "log-level";
 
 interface PaletteState {
   activePaletteId: PaletteId | null;

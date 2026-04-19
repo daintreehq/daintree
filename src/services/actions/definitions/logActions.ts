@@ -90,6 +90,75 @@ export function registerLogActions(actions: ActionRegistry, _callbacks: ActionCa
     },
   }));
 
+  actions.set("logs.setLogLevel", () => ({
+    id: "logs.setLogLevel",
+    title: "Set Log Level…",
+    description: "Open the log level picker to adjust verbosity for a specific module",
+    category: "logs",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    run: async () => {
+      window.dispatchEvent(new CustomEvent("daintree:open-log-level-palette"));
+    },
+  }));
+
+  actions.set("logs.getLevelOverrides", () => ({
+    id: "logs.getLevelOverrides",
+    title: "Get Log Level Overrides",
+    description: "Return the current map of per-module log level overrides",
+    category: "logs",
+    kind: "query",
+    danger: "safe",
+    scope: "renderer",
+    run: async () => {
+      return await logsClient.getLevelOverrides();
+    },
+  }));
+
+  actions.set("logs.setLevelOverrides", () => ({
+    id: "logs.setLevelOverrides",
+    title: "Set Log Level Overrides",
+    description: "Replace the full map of per-module log level overrides",
+    category: "logs",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    argsSchema: z.object({ overrides: z.record(z.string(), z.string()) }),
+    resultSchema: z.object({ success: z.boolean() }),
+    run: async (args: unknown) => {
+      const { overrides } = args as { overrides: Record<string, string> };
+      return await logsClient.setLevelOverrides(overrides);
+    },
+  }));
+
+  actions.set("logs.clearLevelOverrides", () => ({
+    id: "logs.clearLevelOverrides",
+    title: "Clear Log Level Overrides",
+    description: "Remove all per-module log level overrides",
+    category: "logs",
+    kind: "command",
+    danger: "confirm",
+    scope: "renderer",
+    resultSchema: z.object({ success: z.boolean() }),
+    run: async () => {
+      return await logsClient.clearLevelOverrides();
+    },
+  }));
+
+  actions.set("logs.getRegistry", () => ({
+    id: "logs.getRegistry",
+    title: "Get Logger Registry",
+    description: "Return the list of loggers registered in the main process",
+    category: "logs",
+    kind: "query",
+    danger: "safe",
+    scope: "renderer",
+    run: async () => {
+      return await logsClient.getRegistry();
+    },
+  }));
+
   actions.set("errors.openLogs", () => ({
     id: "errors.openLogs",
     title: "Open Error Logs",

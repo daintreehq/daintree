@@ -18,9 +18,41 @@ import { resilientRenameSync } from "./fs.js";
 
 export type LogLevel = "debug" | "info" | "warn" | "error";
 
+/**
+ * Override-only levels. `"off"` is a filter sentinel that suppresses all
+ * output from a logger; it is never stored on `LogEntry.level`.
+ */
+export type LogOverrideLevel = LogLevel | "off";
+
+export type LogLevelOverrides = Record<string, LogOverrideLevel>;
+
 interface LogContext {
   [key: string]: unknown;
 }
+
+export interface Logger {
+  debug(message: string, context?: LogContext): void;
+  info(message: string, context?: LogContext): void;
+  warn(message: string, context?: LogContext): void;
+  error(message: string, error?: unknown, context?: LogContext): void;
+  /** Stable identifier used for override lookups and `LogEntry.source`. */
+  readonly name: string;
+}
+
+/**
+ * Numeric ordering so level comparisons are O(1). Lower numbers are more
+ * verbose; a message at level X is suppressed when `LEVELS[X] < LEVELS[effective]`.
+ * "off" is highest — anything < Infinity is suppressed.
+ */
+const LEVELS: Record<LogOverrideLevel, number> = {
+  debug: 10,
+  info: 20,
+  warn: 30,
+  error: 40,
+  off: Number.POSITIVE_INFINITY,
+};
+
+const WILDCARD = "*";
 
 let storagePath: string | null = null;
 
@@ -178,6 +210,9 @@ export function resetLoggerStateForTesting(): void {
   previousSessionTail = null;
   isRotating = false;
   storagePath = null;
+  loggerRegistry.clear();
+  levelOverrides.clear();
+  defaultLevel = IS_DEBUG_BOOT ? "debug" : "info";
 }
 
 export function pruneOldLogs(basePath: string, retentionDays: number | 0): void {
@@ -250,14 +285,110 @@ const IS_DEBUG_BOOT = process.env.NODE_ENV === "development" || Boolean(process.
 const IS_TEST = process.env.NODE_ENV === "test";
 const ENABLE_FILE_LOGGING = !IS_TEST && process.env.DAINTREE_DISABLE_FILE_LOGGING !== "1";
 
-let verboseLogging = IS_DEBUG_BOOT;
+/**
+ * Effective level for a logger resolves in order:
+ *   exact name → process-scoped wildcard (`"<proc>:*"`) → global `"*"` → defaultLevel.
+ *
+ * The map is a single module-level singleton so live updates (e.g. from an IPC
+ * message received after boot) propagate to all loggers without recreating
+ * factory instances.
+ */
+const levelOverrides = new Map<string, LogOverrideLevel>();
+const loggerRegistry = new Set<string>();
 
-export function setVerboseLogging(enabled: boolean): void {
-  verboseLogging = enabled;
+let defaultLevel: LogOverrideLevel = IS_DEBUG_BOOT ? "debug" : "info";
+
+/** Detect the process this logger runs in — baked into generated names. */
+function detectProcessTag(): "main" | "pty-host" | "workspace-host" | "utility" {
+  // Utility processes have parentPort; main does not.
+  if (typeof process !== "undefined" && (process as { parentPort?: unknown }).parentPort) {
+    if (process.env.DAINTREE_UTILITY_PROCESS_KIND === "pty-host") return "pty-host";
+    if (process.env.DAINTREE_UTILITY_PROCESS_KIND === "workspace-host") return "workspace-host";
+    return "utility";
+  }
+  return "main";
 }
 
-export function isVerboseLogging(): boolean {
-  return verboseLogging;
+const PROCESS_TAG = detectProcessTag();
+
+function processWildcardKey(loggerName: string): string {
+  const colon = loggerName.indexOf(":");
+  if (colon <= 0) return `${PROCESS_TAG}:*`;
+  return `${loggerName.slice(0, colon)}:*`;
+}
+
+function resolveEffectiveLevel(loggerName: string): LogOverrideLevel {
+  const exact = levelOverrides.get(loggerName);
+  if (exact !== undefined) return exact;
+  const procWildcard = levelOverrides.get(processWildcardKey(loggerName));
+  if (procWildcard !== undefined) return procWildcard;
+  const globalWildcard = levelOverrides.get(WILDCARD);
+  if (globalWildcard !== undefined) return globalWildcard;
+  return defaultLevel;
+}
+
+function shouldLog(loggerName: string, level: LogLevel): boolean {
+  const effective = resolveEffectiveLevel(loggerName);
+  if (effective === "off") return false;
+  return LEVELS[level] >= LEVELS[effective];
+}
+
+/**
+ * Replace the entire override map atomically. Passing `{}` clears all
+ * overrides. Validates every value against the known level set; unknown
+ * values are dropped with a warning rather than rejected, so a malformed
+ * persisted entry doesn't brick the app.
+ */
+export function setLogLevelOverrides(overrides: Record<string, string>): void {
+  levelOverrides.clear();
+  if (!overrides || typeof overrides !== "object") return;
+
+  for (const [key, value] of Object.entries(overrides)) {
+    if (typeof key !== "string" || !key) continue;
+    if (!isValidLogOverrideLevel(value)) {
+      console.warn(`[logger] Dropping invalid override: ${key} = ${String(value)}`);
+      continue;
+    }
+    levelOverrides.set(key, value);
+  }
+}
+
+export function getLogLevelOverrides(): Record<string, LogOverrideLevel> {
+  return Object.fromEntries(levelOverrides.entries());
+}
+
+export function isValidLogOverrideLevel(value: unknown): value is LogOverrideLevel {
+  return (
+    value === "debug" ||
+    value === "info" ||
+    value === "warn" ||
+    value === "error" ||
+    value === "off"
+  );
+}
+
+/**
+ * Register a logger name and return an instance bound to that name. Callers
+ * pass a stable `"<process>:Module"` identifier — these survive minification
+ * (unlike the old stack-inference fallback).
+ */
+export function createLogger(name: string): Logger {
+  if (!name || typeof name !== "string") {
+    throw new Error("createLogger requires a non-empty name");
+  }
+  loggerRegistry.add(name);
+  return {
+    name,
+    debug: (message, context) => emit(name, "debug", message, context),
+    info: (message, context) => emit(name, "info", message, context),
+    warn: (message, context) => emit(name, "warn", message, context),
+    error: (message, error, context) => emitError(name, message, error, context),
+  };
+}
+
+/** Enumerate loggers registered in this process (e.g. for diagnostics UI). */
+export function getRegisteredLoggerNames(): string[] {
+  return Array.from(loggerRegistry).sort();
 }
 
 const LOG_THROTTLE_MS = 16;
@@ -339,31 +470,6 @@ function flushLogs(): void {
   }
 }
 
-function getCallerSource(): string | undefined {
-  const err = new Error();
-  const stack = err.stack?.split("\n");
-  if (!stack || stack.length < 4) return undefined;
-
-  const callerLine = stack[4];
-  if (!callerLine) return undefined;
-
-  const match = callerLine.match(/\(([^)]+)\)/) || callerLine.match(/at\s+(.+)$/);
-  if (!match) return undefined;
-
-  const fullPath = match[1];
-  const pathParts = fullPath.split(/[/\\]/);
-  const fileName = pathParts[pathParts.length - 1]?.split(":")[0];
-
-  if (fileName?.includes("WorktreeService")) return "WorktreeService";
-  if (fileName?.includes("WorktreeMonitor")) return "WorktreeMonitor";
-  if (fileName?.includes("PtyManager")) return "PtyManager";
-  if (fileName?.includes("CopyTreeService")) return "CopyTreeService";
-  if (fileName?.includes("main")) return "Main";
-  if (fileName?.includes("handlers")) return "IPC";
-
-  return fileName?.replace(/\.[tj]s$/, "");
-}
-
 function safeStringify(value: unknown): string {
   const seen = new WeakSet<object>();
   const sensitivePatterns = ["secret", "token", "password", "key"];
@@ -398,15 +504,6 @@ function safeStringify(value: unknown): string {
 function writeToLogFile(level: string, message: string, context?: LogContext): void {
   if (!ENABLE_FILE_LOGGING) return;
 
-  const normalizedLevel = level.toLowerCase() as LogLevel;
-  if (
-    normalizedLevel === "debug" &&
-    !isVerboseLogging() &&
-    process.env.NODE_ENV !== "development"
-  ) {
-    return;
-  }
-
   try {
     const logFile = getLogFilePath();
     const timestamp = new Date().toISOString();
@@ -425,26 +522,6 @@ function writeToLogFile(level: string, message: string, context?: LogContext): v
   } catch (_error) {
     // ignore
   }
-}
-
-function log(level: LogLevel, message: string, context?: LogContext): LogEntry {
-  // Only capture source in verbose mode or for errors/warnings
-  const source =
-    isVerboseLogging() || level === "warn" || level === "error" ? getCallerSource() : undefined;
-
-  const safeContext = context ? redactSensitiveData(context) : undefined;
-
-  const entry = logBuffer.push({
-    timestamp: Date.now(),
-    level,
-    message,
-    context: safeContext,
-    source,
-  });
-
-  sendLogToRenderer(entry);
-
-  return entry;
 }
 
 function redactSensitiveData(
@@ -496,41 +573,92 @@ function redactArrayWithCycleDetection(arr: unknown[], visited: WeakSet<object>)
   });
 }
 
-export function logDebug(message: string, context?: LogContext): void {
-  log("debug", message, context);
-  writeToLogFile("DEBUG", message, context);
-  if (isVerboseLogging() && !IS_TEST) {
-    console.log(`[DEBUG] ${message}`, context ? safeStringify(context) : "");
+function emit(source: string, level: LogLevel, message: string, context?: LogContext): void {
+  if (!shouldLog(source, level)) return;
+
+  const safeContext = context ? redactSensitiveData(context) : undefined;
+
+  const entry = logBuffer.push({
+    timestamp: Date.now(),
+    level,
+    message,
+    context: safeContext,
+    source,
+  });
+
+  sendLogToRenderer(entry);
+  writeToLogFile(level.toUpperCase(), message, safeContext);
+
+  if (!IS_TEST) {
+    const prefix = `[${level.toUpperCase()}] [${source}]`;
+    const consoleFn =
+      level === "error" ? console.error : level === "warn" ? console.warn : console.log;
+    consoleFn(`${prefix} ${message}`, context ? safeStringify(safeContext) : "");
   }
+}
+
+function emitError(source: string, message: string, error?: unknown, context?: LogContext): void {
+  if (!shouldLog(source, "error")) return;
+
+  const errorDetails = error ? getErrorDetails(error) : undefined;
+  const safeContext = redactSensitiveData({ ...context, error: errorDetails });
+
+  const entry = logBuffer.push({
+    timestamp: Date.now(),
+    level: "error",
+    message,
+    context: safeContext,
+    source,
+  });
+
+  sendLogToRenderer(entry);
+  writeToLogFile("ERROR", message, safeContext);
+
+  if (!IS_TEST) {
+    console.error(
+      `[ERROR] [${source}] ${message}`,
+      errorDetails ? safeStringify(errorDetails) : "",
+      context ? safeStringify(context) : ""
+    );
+  }
+}
+
+// --- Backward-compat shims --------------------------------------------------
+// The bare `logDebug/logInfo/logWarn/logError` free functions remain wired to
+// a shared `"main"` logger so unmigrated call-sites still compile and route
+// through the override machinery. Migrated modules should use `createLogger`
+// with a stable `"<process>:Module"` name instead.
+
+const defaultSharedLogger = createLogger(`${PROCESS_TAG}:default`);
+
+export function setVerboseLogging(enabled: boolean): void {
+  if (enabled) {
+    const copy = getLogLevelOverrides();
+    copy[WILDCARD] = "debug";
+    setLogLevelOverrides(copy);
+  } else {
+    const copy = getLogLevelOverrides();
+    delete copy[WILDCARD];
+    setLogLevelOverrides(copy);
+  }
+}
+
+export function isVerboseLogging(): boolean {
+  return levelOverrides.get(WILDCARD) === "debug";
+}
+
+export function logDebug(message: string, context?: LogContext): void {
+  defaultSharedLogger.debug(message, context);
 }
 
 export function logInfo(message: string, context?: LogContext): void {
-  log("info", message, context);
-  writeToLogFile("INFO", message, context);
-  if (isVerboseLogging() && !IS_TEST) {
-    console.log(`[INFO] ${message}`, context ? safeStringify(context) : "");
-  }
+  defaultSharedLogger.info(message, context);
 }
 
 export function logWarn(message: string, context?: LogContext): void {
-  log("warn", message, context);
-  writeToLogFile("WARN", message, context);
-  if (isVerboseLogging() && !IS_TEST) {
-    console.warn(`[WARN] ${message}`, context ? safeStringify(context) : "");
-  }
+  defaultSharedLogger.warn(message, context);
 }
 
 export function logError(message: string, error?: unknown, context?: LogContext): void {
-  const errorDetails = error ? getErrorDetails(error) : undefined;
-  const fullContext = { ...context, error: errorDetails };
-  log("error", message, fullContext);
-  writeToLogFile("ERROR", message, fullContext);
-
-  if (IS_TEST) return;
-
-  console.error(
-    `[ERROR] ${message}`,
-    errorDetails ? safeStringify(errorDetails) : "",
-    context ? safeStringify(context) : ""
-  );
+  defaultSharedLogger.error(message, error, context);
 }

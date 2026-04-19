@@ -11,9 +11,10 @@ import {
   RotateCw,
   Download,
   Monitor,
+  SlidersHorizontal,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { appClient, systemClient } from "@/clients";
+import { appClient, systemClient, logsClient } from "@/clients";
 import type { AppState, SystemHealthCheckResult } from "@shared/types";
 import { actionService } from "@/services/ActionService";
 import { SettingsSection } from "./SettingsSection";
@@ -167,6 +168,39 @@ export function TroubleshootingTab() {
   const [focusEventsTab, setFocusEventsTab] = useState(false);
   const [verboseLogging, setVerboseLogging] = useState(false);
   const [verboseLoggingPending, setVerboseLoggingPending] = useState(false);
+  const [logOverrides, setLogOverrides] = useState<Record<string, string>>({});
+  const [logOverridesRefreshKey, setLogOverridesRefreshKey] = useState(0);
+
+  useEffect(() => {
+    let cancelled = false;
+    void logsClient
+      .getLevelOverrides()
+      .then((overrides) => {
+        if (!cancelled) setLogOverrides(overrides);
+      })
+      .catch(() => {
+        if (!cancelled) setLogOverrides({});
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [logOverridesRefreshKey, verboseLogging]);
+
+  const handleOpenLogLevelPalette = useCallback(() => {
+    window.dispatchEvent(new CustomEvent("daintree:open-log-level-palette"));
+    // Refresh on a short delay after the palette closes; simplest approach is
+    // to re-fetch whenever the user clicks the button again.
+    setLogOverridesRefreshKey((k) => k + 1);
+  }, []);
+
+  const handleClearLogOverrides = useCallback(async () => {
+    try {
+      await logsClient.clearLevelOverrides();
+      setLogOverrides({});
+    } catch (error) {
+      console.error("Failed to clear log level overrides:", error);
+    }
+  }, []);
 
   useEffect(() => {
     appClient.getState().then((appState) => {
@@ -415,6 +449,54 @@ export function TroubleshootingTab() {
             DAINTREE_DEBUG=1 npm run dev
           </code>
         </div>
+      </SettingsSection>
+
+      <SettingsSection
+        icon={SlidersHorizontal}
+        title="Per-Module Log Levels"
+        description="Override the log level for a specific module (or a process-wide wildcard). Overrides persist across restarts."
+      >
+        <div className="flex gap-3">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleOpenLogLevelPalette}
+            className="text-daintree-text border-daintree-border hover:bg-daintree-border hover:text-daintree-text"
+          >
+            <SlidersHorizontal />
+            Set Log Level…
+          </Button>
+          {Object.keys(logOverrides).length > 0 && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => void handleClearLogOverrides()}
+              className="text-status-error border-daintree-border hover:bg-status-error/10 hover:text-status-error/70 hover:border-status-error/20"
+            >
+              <Trash2 />
+              Clear All Overrides
+            </Button>
+          )}
+        </div>
+
+        {Object.keys(logOverrides).length > 0 && (
+          <div className="space-y-1 mt-3">
+            <h5 className="text-xs font-medium text-daintree-text/80 mb-1">Active overrides</h5>
+            {Object.entries(logOverrides)
+              .sort(([a], [b]) => a.localeCompare(b))
+              .map(([name, level]) => (
+                <div
+                  key={name}
+                  className="flex items-center justify-between px-3 py-1.5 rounded-[var(--radius-md)] border border-daintree-border bg-daintree-bg/30"
+                >
+                  <span className="text-xs font-mono text-daintree-text truncate">{name}</span>
+                  <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-daintree-border/60 text-daintree-text/80">
+                    {level}
+                  </span>
+                </div>
+              ))}
+          </div>
+        )}
       </SettingsSection>
 
       <div className="space-y-2">

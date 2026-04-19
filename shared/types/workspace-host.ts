@@ -225,6 +225,9 @@ export type WorkspaceHostRequest =
   | { type: "health-check" }
   // Lifecycle
   | { type: "dispose" }
+  // Live log-level override updates from main (map of stable logger names to
+  // `debug|info|warn|error|off`). Empty map clears all overrides.
+  | { type: "set-log-level-overrides"; overrides: Record<string, string> }
   // CopyTree operations
   | {
       type: "copytree:generate";

@@ -1,6 +1,19 @@
 /** Log level */
 export type LogLevel = "debug" | "info" | "warn" | "error";
 
+/**
+ * Levels valid for per-logger overrides. `"off"` is a filter sentinel that
+ * suppresses all output from a logger; it is never stored on `LogEntry.level`.
+ */
+export type LogOverrideLevel = LogLevel | "off";
+
+/**
+ * Per-logger level overrides. Keys are stable `"<process>:Module"` identifiers,
+ * or the `"*"` wildcard which applies to every logger. A `"<process>:*"` key
+ * applies to all loggers in that process (e.g. `"pty-host:*"`).
+ */
+export type LogLevelOverrides = Record<string, LogOverrideLevel>;
+
 /** A log entry */
 export interface LogEntry {
   /** Unique identifier */

@@ -97,6 +97,7 @@ import { ConfirmDialog } from "./components/ui/ConfirmDialog";
 import { PanelLimitConfirmDialog } from "./components/Terminal/PanelLimitConfirmDialog";
 import { NotesPalette } from "./components/Notes";
 import { ThemePalette } from "./components/ThemePalette";
+import { LogLevelPalette } from "./components/LogLevelPalette";
 
 function preloadSettingsDialog() {
   return import("./components/Settings/SettingsDialog");
@@ -257,6 +258,7 @@ function App() {
   const [isShortcutsOpen, setIsShortcutsOpen] = useState(false);
   const isNotesPaletteOpen = usePaletteStore((state) => state.activePaletteId === "notes");
   const isThemePaletteOpen = usePaletteStore((state) => state.activePaletteId === "theme");
+  const isLogLevelPaletteOpen = usePaletteStore((state) => state.activePaletteId === "log-level");
   const {
     isWorktreeOverviewOpen,
     toggleWorktreeOverview,
@@ -358,6 +360,10 @@ function App() {
 
   const closeThemePalette = useCallback(() => {
     usePaletteStore.getState().closePalette("theme");
+  }, []);
+
+  const closeLogLevelPalette = useCallback(() => {
+    usePaletteStore.getState().closePalette("log-level");
   }, []);
 
   const overviewWorktreeActions = useWorktreeActions();
@@ -696,6 +702,8 @@ function App() {
       <NotesPalette isOpen={isNotesPaletteOpen} onClose={closeNotesPalette} />
 
       <ThemePalette isOpen={isThemePaletteOpen} onClose={closeThemePalette} />
+
+      <LogLevelPalette isOpen={isLogLevelPaletteOpen} onClose={closeLogLevelPalette} />
 
       <ActionPalette
         isOpen={actionPalette.isOpen}

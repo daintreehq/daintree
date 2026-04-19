@@ -169,6 +169,10 @@ export const CHANNELS = {
   LOGS_SET_VERBOSE: "logs:set-verbose",
   LOGS_GET_VERBOSE: "logs:get-verbose",
   LOGS_WRITE: "logs:write",
+  LOGS_GET_LEVEL_OVERRIDES: "logs:get-level-overrides",
+  LOGS_SET_LEVEL_OVERRIDES: "logs:set-level-overrides",
+  LOGS_CLEAR_LEVEL_OVERRIDES: "logs:clear-level-overrides",
+  LOGS_GET_REGISTRY: "logs:get-registry",
 
   ERROR_NOTIFY: "error:notify",
   ERROR_RETRY: "error:retry",

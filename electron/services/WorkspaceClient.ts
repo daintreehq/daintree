@@ -88,6 +88,13 @@ export class WorkspaceClient extends EventEmitter {
 
   private readonly _statesInflight = new Map<string, Promise<WorktreeSnapshot[]>>();
 
+  /**
+   * Cached log-level overrides, fanned out to every workspace host and
+   * primed on new hosts spawned after the cache was set. Each host's own
+   * `setLogLevelOverrides` handles push-on-ready replay internally.
+   */
+  private logLevelOverridesCache: Record<string, string> = {};
+
   constructor(config: WorkspaceClientConfig = {}) {
     super();
     this.config = { ...DEFAULT_CONFIG, ...config };
@@ -463,6 +470,7 @@ export class WorkspaceClient extends EventEmitter {
 
     // Create new per-project host
     const host = new WorkspaceHostProcess(normalizedPath, this.config);
+    host.setLogLevelOverrides(this.logLevelOverridesCache);
 
     const initPromise = (async () => {
       await host.waitForReady();
@@ -526,6 +534,7 @@ export class WorkspaceClient extends EventEmitter {
     if (this.entries.has(normalizedPath)) return;
 
     const host = new WorkspaceHostProcess(normalizedPath, this.config);
+    host.setLogLevelOverrides(this.logLevelOverridesCache);
 
     const initPromise = (async () => {
       await host.waitForReady();
@@ -818,6 +827,13 @@ export class WorkspaceClient extends EventEmitter {
   setPollingEnabled(enabled: boolean): void {
     for (const entry of this.entries.values()) {
       entry.host.send({ type: "set-polling-enabled", enabled });
+    }
+  }
+
+  setLogLevelOverrides(overrides: Record<string, string>): void {
+    this.logLevelOverridesCache = { ...overrides };
+    for (const entry of this.entries.values()) {
+      entry.host.setLogLevelOverrides(this.logLevelOverridesCache);
     }
   }
 
