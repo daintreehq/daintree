@@ -856,7 +856,7 @@ export function Toolbar({
   }, [projectSwitcher]);
 
   return (
-    <>
+    <header>
       <div
         ref={toolbarRef}
         role="toolbar"
@@ -983,6 +983,6 @@ export function Toolbar({
           <div className="app-no-drag">{buttonRegistry["portal-toggle"]!.render()}</div>
         </div>
       </div>
-    </>
+    </header>
   );
 }

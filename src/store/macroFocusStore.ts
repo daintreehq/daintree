@@ -56,7 +56,7 @@ export const useMacroFocusStore = create<MacroFocusState>((set, get) => ({
     }
 
     set({ focusedRegion: next });
-    refs.get(next)?.focus();
+    refs.get(next)?.focus({ preventScroll: true });
   },
 
   cyclePrev: () => {
@@ -73,7 +73,7 @@ export const useMacroFocusStore = create<MacroFocusState>((set, get) => ({
     }
 
     set({ focusedRegion: prev });
-    refs.get(prev)?.focus();
+    refs.get(prev)?.focus({ preventScroll: true });
   },
 
   clearFocus: () => {

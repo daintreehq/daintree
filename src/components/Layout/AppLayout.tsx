@@ -331,6 +331,7 @@ export function AppLayout({
           )}
           <ErrorBoundary variant="section" componentName="MainContent">
             <main
+              aria-label="Content"
               className="flex-1 flex flex-col overflow-hidden bg-daintree-bg relative"
               style={{
                 flex: 1,

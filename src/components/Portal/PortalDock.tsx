@@ -36,7 +36,7 @@ export function PortalDock() {
     }))
   );
   const contentRef = useRef<HTMLDivElement>(null);
-  const dockRef = useRef<HTMLDivElement>(null);
+  const dockRef = useRef<HTMLElement>(null);
   const [isResizing, setIsResizing] = useState(false);
   const [isSwitching, setIsSwitching] = useState(false);
   const [isFocused, setIsFocused] = useState(false);
@@ -378,9 +378,8 @@ export function PortalDock() {
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>
-        <div
+        <aside
           ref={dockRef}
-          role="region"
           aria-label="Portal"
           data-macro-focus={isMacroFocused ? "true" : undefined}
           className={cn(
@@ -446,7 +445,7 @@ export function PortalDock() {
               <div className="flex-1 bg-daintree-sidebar" id="portal-placeholder" />
             )}
           </div>
-        </div>
+        </aside>
       </ContextMenuTrigger>
       <ContextMenuContent>
         <ContextMenuItem
