@@ -16,6 +16,7 @@ import { useDiagnosticsStore, useDockStore, useFleetDeckStore, type PanelState }
 import { useProjectStore } from "@/store/projectStore";
 import { useMacroFocusStore } from "@/store/macroFocusStore";
 import { useCcrPresetsSubscription } from "@/hooks/useCcrPresetsSubscription";
+import { useProjectPresetsSubscription } from "@/hooks/useProjectPresetsSubscription";
 import type { RetryAction } from "@/store";
 import { appClient } from "@/clients";
 import type { CliAvailability, AgentSettings } from "@shared/types";
@@ -54,6 +55,7 @@ export function AppLayout({
   projectSwitcherPalette,
 }: AppLayoutProps) {
   useCcrPresetsSubscription();
+  useProjectPresetsSubscription();
   const [sidebarWidth, setSidebarWidth] = useState(DEFAULT_SIDEBAR_WIDTH);
   const currentProject = useProjectStore((state) => state.currentProject);
   const layout = useLayoutState();

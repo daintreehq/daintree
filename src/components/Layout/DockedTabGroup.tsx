@@ -25,6 +25,7 @@ import {
 } from "@/store";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
+import { useProjectPresetsStore } from "@/store/projectPresetsStore";
 import { getMergedPresets } from "@/config/agents";
 import { TerminalContextMenu } from "@/components/Terminal/TerminalContextMenu";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
@@ -358,6 +359,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
 
   const agentSettingsAll = useAgentSettingsStore((s) => s.settings);
   const ccrPresetsByAgent = useCcrPresetsStore((s) => s.ccrPresetsByAgent);
+  const projectPresetsByAgent = useProjectPresetsStore((s) => s.presetsByAgent);
 
   // Per-panel preset colors for tab bar
   const panelPresetColors = useMemo(() => {
@@ -368,13 +370,14 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
         const presets = getMergedPresets(
           p.agentId,
           agentSettingsAll?.agents?.[p.agentId]?.customPresets,
-          ccrPresetsByAgent[p.agentId]
+          ccrPresetsByAgent[p.agentId],
+          projectPresetsByAgent[p.agentId]
         );
         const preset = presets.find((f) => f.id === p.agentPresetId);
         return [p.id, preset?.color ?? p.agentPresetColor ?? fallbackColor] as const;
       })
     );
-  }, [panels, agentSettingsAll, ccrPresetsByAgent]);
+  }, [panels, agentSettingsAll, ccrPresetsByAgent, projectPresetsByAgent]);
 
   if (!activePanel || panels.length === 0) {
     return null;

@@ -50,6 +50,7 @@ import { InputTracker } from "@/services/clearCommandDetection";
 import { getAgentConfig, getMergedPresets, isRegisteredAgent } from "@/config/agents";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
+import { useProjectPresetsStore } from "@/store/projectPresetsStore";
 import { terminalClient } from "@/clients";
 import type { HybridInputBarHandle } from "./HybridInputBar";
 const LazyHybridInputBar = lazy(() =>
@@ -250,13 +251,26 @@ function TerminalPaneComponent({
   const presetCcrPresets = useCcrPresetsStore((s) =>
     agentId ? s.ccrPresetsByAgent[agentId] : undefined
   );
+  const presetProjectPresets = useProjectPresetsStore((s) =>
+    agentId ? s.presetsByAgent[agentId] : undefined
+  );
   const livePresetColor = useMemo(() => {
     if (!agentPresetId || !agentId) return presetColor;
-    const preset = getMergedPresets(agentId, presetCustomPresets, presetCcrPresets).find(
-      (f) => f.id === agentPresetId
-    );
+    const preset = getMergedPresets(
+      agentId,
+      presetCustomPresets,
+      presetCcrPresets,
+      presetProjectPresets
+    ).find((f) => f.id === agentPresetId);
     return preset?.color ?? presetColor;
-  }, [agentPresetId, agentId, presetCustomPresets, presetCcrPresets, presetColor]);
+  }, [
+    agentPresetId,
+    agentId,
+    presetCustomPresets,
+    presetCcrPresets,
+    presetProjectPresets,
+    presetColor,
+  ]);
 
   const pingedIdSelector = useMemo(
     () => (state: ReturnType<typeof usePanelStore.getState>) => state.pingedId === id,

@@ -1,5 +1,6 @@
 import type { ProjectSettings, TerminalRecipe } from "../types/index.js";
 import type { RunCommand, CopyTreeSettings } from "../../shared/types/project.js";
+import type { AgentPreset } from "../../shared/config/agentRegistry.js";
 import path from "path";
 import fs from "fs/promises";
 import { resilientAtomicWriteFile } from "../utils/fs.js";
@@ -12,6 +13,12 @@ const DAINTREE_DIR = ".daintree";
 const DAINTREE_PROJECT_JSON = `${DAINTREE_DIR}/project.json`;
 const DAINTREE_SETTINGS_JSON = `${DAINTREE_DIR}/settings.json`;
 const DAINTREE_RECIPES_DIR = `${DAINTREE_DIR}/recipes`;
+const DAINTREE_PRESETS_DIR = `${DAINTREE_DIR}/presets`;
+
+// Only accept safe agent subdirectory names: letters, numbers, dot, dash,
+// underscore. Prevents path traversal via a crafted `.daintree/presets/../x`
+// subdirectory entry.
+const SAFE_AGENT_ID = /^[a-zA-Z0-9_.-]+$/;
 
 export class ProjectIdentityFiles {
   async readInRepoProjectIdentity(
@@ -277,6 +284,83 @@ export class ProjectIdentityFiles {
       }
     }
     return recipes;
+  }
+
+  /**
+   * Reads per-team shared agent presets committed to `.daintree/presets/{agentId}/*.json`.
+   * Returns a map keyed by agent id; malformed or unrecognized files are skipped with a warn.
+   */
+  async readInRepoPresets(projectPath: string): Promise<Record<string, AgentPreset[]>> {
+    await ensureDaintreeDirMigrated(projectPath);
+    const presetsDir = path.join(projectPath, DAINTREE_PRESETS_DIR);
+    let agentDirs;
+    try {
+      agentDirs = await fs.readdir(presetsDir, { withFileTypes: true });
+    } catch (error) {
+      if (error instanceof Error && "code" in error && error.code === "ENOENT") return {};
+      throw error;
+    }
+
+    const result: Record<string, AgentPreset[]> = {};
+
+    for (const agentEntry of agentDirs) {
+      if (!agentEntry.isDirectory()) continue;
+      const agentId = agentEntry.name;
+      if (!SAFE_AGENT_ID.test(agentId)) {
+        console.warn(`[ProjectIdentityFiles] Skipping unsafe preset subdir: ${agentId}`);
+        continue;
+      }
+
+      const agentDir = path.join(presetsDir, agentId);
+      let fileEntries;
+      try {
+        fileEntries = await fs.readdir(agentDir, { withFileTypes: true });
+      } catch {
+        continue;
+      }
+
+      const presets: AgentPreset[] = [];
+      const seenIds = new Set<string>();
+      for (const entry of fileEntries) {
+        if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
+        try {
+          const content = await fs.readFile(path.join(agentDir, entry.name), "utf-8");
+          const parsed = JSON.parse(content);
+          if (
+            typeof parsed !== "object" ||
+            parsed === null ||
+            Array.isArray(parsed) ||
+            typeof parsed.id !== "string" ||
+            typeof parsed.name !== "string" ||
+            !parsed.id ||
+            !parsed.name
+          ) {
+            console.warn(
+              `[ProjectIdentityFiles] Skipping invalid preset: ${agentId}/${entry.name}`
+            );
+            continue;
+          }
+          if (seenIds.has(parsed.id)) {
+            // Filesystem readdir order is non-deterministic across machines,
+            // so a duplicate id would resolve differently on different dev
+            // machines. Keep the first occurrence and warn loudly so the
+            // contributor renames one.
+            console.warn(
+              `[ProjectIdentityFiles] Duplicate preset id "${parsed.id}" in ${agentId}/${entry.name} — keeping first occurrence, rename this file`
+            );
+            continue;
+          }
+          seenIds.add(parsed.id);
+          presets.push(parsed as AgentPreset);
+        } catch {
+          console.warn(`[ProjectIdentityFiles] Skipping malformed preset file: ${entry.name}`);
+        }
+      }
+
+      if (presets.length > 0) result[agentId] = presets;
+    }
+
+    return result;
   }
 
   async deleteInRepoRecipe(projectPath: string, recipeName: string): Promise<void> {

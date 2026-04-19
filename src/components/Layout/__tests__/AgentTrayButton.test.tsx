@@ -107,6 +107,12 @@ vi.mock("@/store/ccrPresetsStore", () => ({
   ) => selector({ ccrPresetsByAgent: mockCcrPresetsByAgent }),
 }));
 
+vi.mock("@/store/projectPresetsStore", () => ({
+  useProjectPresetsStore: (
+    selector: (s: { presetsByAgent: Record<string, unknown[]> }) => unknown
+  ) => selector({ presetsByAgent: {} }),
+}));
+
 vi.mock("@shared/config/agentIds", () => ({
   BUILT_IN_AGENT_IDS: ["claude", "gemini", "codex"] as const,
 }));

@@ -89,10 +89,12 @@ export function sanitizeAgentEnv(
 export function getMergedPresets(
   agentId: string,
   customPresets?: AgentPreset[],
-  ccrPresets?: AgentPreset[]
+  ccrPresets?: AgentPreset[],
+  projectPresets?: AgentPreset[]
 ): AgentPreset[] {
   const registryPresets = ccrPresets ?? getAgentConfig(agentId)?.presets ?? [];
   const custom = customPresets ?? [];
+  const project = projectPresets ?? [];
 
   // Validate and sanitize preset objects
   const validatePreset = (preset: AgentPreset): AgentPreset | null => {
@@ -167,13 +169,15 @@ export function getMergedPresets(
 
   const sanitizedRegistry = registryPresets.map(validatePreset).filter(Boolean) as AgentPreset[];
   const sanitizedCustom = custom.map(validatePreset).filter(Boolean) as AgentPreset[];
+  const sanitizedProject = project.map(validatePreset).filter(Boolean) as AgentPreset[];
 
-  // Remove duplicates by ID (custom presets take precedence)
+  // Precedence (first-seen-wins): custom > project > CCR/registry. Custom
+  // overrides team-shared project presets, which override CCR-discovered or
+  // built-in registry defaults on ID collision.
   const seenIds = new Set<string>();
   const result: AgentPreset[] = [];
 
-  // Add custom first (they override registry)
-  for (const preset of [...sanitizedCustom, ...sanitizedRegistry]) {
+  for (const preset of [...sanitizedCustom, ...sanitizedProject, ...sanitizedRegistry]) {
     if (!seenIds.has(preset.id)) {
       seenIds.add(preset.id);
       result.push(preset);
@@ -197,11 +201,17 @@ export function getMergedPreset(
   agentId: string,
   presetId: string | undefined,
   customPresets?: AgentPreset[],
-  ccrPresets?: AgentPreset[]
+  ccrPresets?: AgentPreset[],
+  projectPresets?: AgentPreset[]
 ): AgentPreset | undefined {
   if (presetId !== undefined && !presetId) return undefined;
   const config = getAgentConfig(agentId);
-  const merged = getMergedPresets(agentId, customPresets, ccrPresets ?? config?.presets ?? []);
+  const merged = getMergedPresets(
+    agentId,
+    customPresets,
+    ccrPresets ?? config?.presets ?? [],
+    projectPresets
+  );
   if (presetId === undefined) {
     const defaultId = config?.defaultPresetId;
     if (defaultId) return merged.find((f) => f.id === defaultId);

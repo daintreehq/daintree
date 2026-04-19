@@ -82,6 +82,11 @@ vi.mock("@/store/ccrPresetsStore", () => ({
     selector({ ccrPresetsByAgent: {} }),
 }));
 
+vi.mock("@/store/projectPresetsStore", () => ({
+  useProjectPresetsStore: (selector: (s: { presetsByAgent: Record<string, unknown> }) => unknown) =>
+    selector({ presetsByAgent: {} }),
+}));
+
 vi.mock("@/hooks/app/useAgentDiscoveryOnboarding", () => ({
   useAgentDiscoveryOnboarding: () => ({
     loaded: true,

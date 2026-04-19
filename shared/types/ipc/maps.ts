@@ -2073,6 +2073,10 @@ export interface IpcInvokeMap {
     args: [payload: { projectId: string; recipeName: string }];
     result: void;
   };
+  "project:get-inrepo-presets": {
+    args: [projectId: string];
+    result: Record<string, AgentPreset[]>;
+  };
 
   // Recipe import/export
   "recipe:export-file": {

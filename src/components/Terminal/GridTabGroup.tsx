@@ -2,6 +2,7 @@ import React, { useCallback, useMemo, useEffect, useEffectEvent, useRef } from "
 import { usePanelStore, type TerminalInstance } from "@/store";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
+import { useProjectPresetsStore } from "@/store/projectPresetsStore";
 import { getMergedPresets } from "@/config/agents";
 import { GridPanel } from "./GridPanel";
 import type { TabGroup } from "@/types";
@@ -153,6 +154,7 @@ export const GridTabGroup = React.memo(function GridTabGroup({
 
   const agentSettings = useAgentSettingsStore((s) => s.settings);
   const ccrPresetsByAgent = useCcrPresetsStore((s) => s.ccrPresetsByAgent);
+  const projectPresetsByAgent = useProjectPresetsStore((s) => s.presetsByAgent);
 
   // Build tabs array for PanelHeader
   const tabs: TabInfo[] = useMemo(() => {
@@ -163,7 +165,8 @@ export const GridTabGroup = React.memo(function GridTabGroup({
         const presets = getMergedPresets(
           p.agentId,
           agentSettings?.agents?.[p.agentId]?.customPresets,
-          ccrPresetsByAgent[p.agentId]
+          ccrPresetsByAgent[p.agentId],
+          projectPresetsByAgent[p.agentId]
         );
         const live = presets.find((f) => f.id === p.agentPresetId);
         if (live) presetColor = live.color ?? presetColor;
@@ -188,7 +191,7 @@ export const GridTabGroup = React.memo(function GridTabGroup({
         fallbackTooltip,
       };
     });
-  }, [panels, activeTabId, agentSettings, ccrPresetsByAgent]);
+  }, [panels, activeTabId, agentSettings, ccrPresetsByAgent, projectPresetsByAgent]);
 
   // Check if this group is currently focused
   const isGroupFocused = useMemo(() => panels.some((p) => p.id === focusedId), [panels, focusedId]);

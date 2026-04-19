@@ -31,6 +31,7 @@ import type { AgentAvailabilityState, AgentState } from "@shared/types";
 import { isAgentReady, isAgentInstalled } from "../../../shared/utils/agentAvailability";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
+import { useProjectPresetsStore } from "@/store/projectPresetsStore";
 import { usePanelStore } from "@/store/panelStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useShallow } from "zustand/react/shallow";
@@ -64,6 +65,7 @@ export function AgentButton({
   const displayCombo = useKeybindingDisplay(`agent.${type}`);
   const agentSettings = useAgentSettingsStore((s) => s.settings);
   const ccrPresets = useCcrPresetsStore((s) => s.ccrPresetsByAgent[type]);
+  const projectPresets = useProjectPresetsStore((s) => s.presetsByAgent[type]);
 
   const panelsById = usePanelStore(useShallow((s) => s.panelsById));
   const panelIds = usePanelStore(useShallow((s) => s.panelIds));
@@ -98,14 +100,30 @@ export function AgentButton({
   const dominantState = activeSession?.dominantState ?? null;
 
   const entry = agentSettings?.agents?.[type] ?? {};
-  const presets = getMergedPresets(type, entry.customPresets, ccrPresets);
+  const presets = getMergedPresets(type, entry.customPresets, ccrPresets, projectPresets);
   // Only show the split/chevron UI when there are at least 2 presets; a single
   // preset is implicitly the default and doesn't warrant a picker.
   const hasPresets = presets.length >= 2;
   const savedPresetId = agentSettings?.agents?.[type]?.presetId;
-  const ccrPresetGroup = presets.filter((f) => f.id.startsWith("ccr-"));
-  const customPresetGroup = presets.filter((f) => !f.id.startsWith("ccr-"));
-  const hasBothPresetGroups = ccrPresetGroup.length > 0 && customPresetGroup.length > 0;
+  // Group by source. Project presets are identified by membership so that a
+  // project preset whose id happens to start with "ccr-" still lands in
+  // "Project Shared" rather than being stolen by the CCR group. Everything
+  // that isn't CCR-prefixed or project-member falls through to the "Custom"
+  // bucket — this preserves the historical rendering for user-authored
+  // presets regardless of whether they're also in `entry.customPresets`.
+  const projectPresetIds = new Set((projectPresets ?? []).map((f) => f.id));
+  const projectPresetGroup = presets.filter((f) => projectPresetIds.has(f.id));
+  const ccrPresetGroup = presets.filter(
+    (f) => !projectPresetIds.has(f.id) && f.id.startsWith("ccr-")
+  );
+  const customPresetGroup = presets.filter(
+    (f) => !projectPresetIds.has(f.id) && !f.id.startsWith("ccr-")
+  );
+  const presetGroupCount =
+    (ccrPresetGroup.length > 0 ? 1 : 0) +
+    (projectPresetGroup.length > 0 ? 1 : 0) +
+    (customPresetGroup.length > 0 ? 1 : 0);
+  const hasMultiplePresetGroups = presetGroupCount > 1;
 
   const tooltipDetails = config.tooltip ? ` — ${config.tooltip}` : "";
   const shortcut = displayCombo ? ` (${displayCombo})` : "";
@@ -342,8 +360,10 @@ export function AgentButton({
                     </DropdownMenuItem>
                     {ccrPresetGroup.length > 0 && (
                       <>
-                        {hasBothPresetGroups && <DropdownMenuSeparator />}
-                        {hasBothPresetGroups && <DropdownMenuLabel>CCR Routes</DropdownMenuLabel>}
+                        {hasMultiplePresetGroups && <DropdownMenuSeparator />}
+                        {hasMultiplePresetGroups && (
+                          <DropdownMenuLabel>CCR Routes</DropdownMenuLabel>
+                        )}
                         {ccrPresetGroup.map((preset) => (
                           <DropdownMenuItem
                             key={preset.id}
@@ -364,10 +384,36 @@ export function AgentButton({
                         ))}
                       </>
                     )}
+                    {projectPresetGroup.length > 0 && (
+                      <>
+                        {hasMultiplePresetGroups && <DropdownMenuSeparator />}
+                        {hasMultiplePresetGroups && (
+                          <DropdownMenuLabel>Project Shared</DropdownMenuLabel>
+                        )}
+                        {projectPresetGroup.map((preset) => (
+                          <DropdownMenuItem
+                            key={preset.id}
+                            className={cn(savedPresetId === preset.id && "font-medium")}
+                            onSelect={() => {
+                              void actionService.dispatch(
+                                "agent.launch",
+                                { agentId: type, presetId: preset.id },
+                                { source: "user" }
+                              );
+                            }}
+                          >
+                            <span className="inline-flex h-4 w-4 items-center justify-center shrink-0 mr-1.5">
+                              <config.icon brandColor={preset.color ?? getBrandColorHex(type)} />
+                            </span>
+                            {preset.name}
+                          </DropdownMenuItem>
+                        ))}
+                      </>
+                    )}
                     {customPresetGroup.length > 0 && (
                       <>
-                        {hasBothPresetGroups && <DropdownMenuSeparator />}
-                        {hasBothPresetGroups && <DropdownMenuLabel>Custom</DropdownMenuLabel>}
+                        {hasMultiplePresetGroups && <DropdownMenuSeparator />}
+                        {hasMultiplePresetGroups && <DropdownMenuLabel>Custom</DropdownMenuLabel>}
                         {customPresetGroup.map((preset) => (
                           <DropdownMenuItem
                             key={preset.id}
