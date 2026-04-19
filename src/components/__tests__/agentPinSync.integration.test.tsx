@@ -271,19 +271,18 @@ describe("agent pin sync — Settings > Toolbar and Agent Tray share state (#511
     };
   });
 
-  it("unpinning in Settings > Toolbar makes the agent reappear in the tray's Launch list", () => {
+  it("unpinning in Settings > Toolbar flips the tray pin indicator for that agent", () => {
     const availability = {
       claude: "ready",
       gemini: "ready",
       codex: "ready",
     } as unknown as CliAvailability;
 
-    // Initial tray render: claude is pinned so it's excluded from Launch.
     const tray = render(<AgentTrayButton agentAvailability={availability} />);
-    expect(agentRows(tray.container)).toEqual(["gemini", "codex"]);
+    expect(agentRows(tray.container)).toEqual(["claude", "gemini", "codex"]);
+    expect(tray.getByTestId("agent-tray-pin-claude").getAttribute("data-pinned")).toBe("true");
     tray.unmount();
 
-    // User unchecks claude in Settings > Toolbar.
     const settings = render(<ToolbarSettingsTab />);
     const claudeCheckbox = settings.getByLabelText(
       "Toggle Claude Agent visibility"
@@ -293,10 +292,9 @@ describe("agent pin sync — Settings > Toolbar and Agent Tray share state (#511
     expect(setAgentPinnedMock).toHaveBeenCalledWith("claude", false);
     settings.unmount();
 
-    // Re-render the tray — claude should now appear in Launch because the
-    // shared settings store reflects the Settings-tab change.
     const tray2 = render(<AgentTrayButton agentAvailability={availability} />);
     expect(agentRows(tray2.container)).toEqual(["claude", "gemini", "codex"]);
+    expect(tray2.getByTestId("agent-tray-pin-claude").getAttribute("data-pinned")).toBe("false");
   });
 
   it("pinning in the tray makes the Settings > Toolbar checkbox flip to checked", () => {
@@ -304,7 +302,6 @@ describe("agent pin sync — Settings > Toolbar and Agent Tray share state (#511
       gemini: "ready",
       codex: "ready",
     } as unknown as CliAvailability;
-    // Start with gemini unpinned — it's in the tray.
     sharedSettings = {
       agents: {
         claude: { pinned: true },

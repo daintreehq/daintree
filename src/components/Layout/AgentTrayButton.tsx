@@ -370,10 +370,7 @@ export function AgentTrayButton({
 
       const state = agentAvailability?.[id];
       if (isAgentReady(state)) {
-        // Pinned agents already live in the main toolbar — listing them in
-        // the tray's Launch section wastes dropdown space. Users unpin via
-        // the main toolbar button or Settings > Toolbar.
-        if (!pinned) launchable.push(row);
+        launchable.push(row);
       } else if (isAgentInstalled(state)) {
         // "installed" means the CLI is on PATH but not fully authenticated
         // or configured yet. These belong in "Needs Setup" with a setup

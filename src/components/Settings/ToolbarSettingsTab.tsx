@@ -67,7 +67,7 @@ const BUTTON_METADATA: Partial<Record<AnyToolbarButtonId, ButtonMetadata>> = {
   "agent-tray": {
     label: "Agent Tray",
     icon: <Puzzle className="h-4 w-4" />,
-    description: "Overflow tray for installed-but-unpinned agents and setup links",
+    description: "Dropdown for launching any agent and jumping into setup",
   },
   ...Object.fromEntries(
     BUILT_IN_AGENT_IDS.map((id) => {

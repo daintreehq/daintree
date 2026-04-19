@@ -296,31 +296,30 @@ describe("AgentTrayButton", () => {
     expect(getByTestId("plug-icon")).toBeTruthy();
   });
 
-  it("lists ready, unpinned agents in the Launch section", () => {
+  it("lists all ready agents in the Launch section regardless of pin state", () => {
     const availability = {
       claude: "ready",
       gemini: "ready",
       codex: "ready",
     } as unknown as CliAvailability;
-    // Claude pinned -> already on the main toolbar, excluded from tray.
     mockSettings = settingsWith({
       claude: { pinned: true },
       gemini: { pinned: false },
     });
 
-    const { container, getAllByTestId } = render(
+    const { container, getAllByTestId, getByTestId } = render(
       <AgentTrayButton agentAvailability={availability} />
     );
 
     const labels = getAllByTestId("menu-label").map((el) => el.textContent);
     expect(labels).toContain("Launch");
 
-    const rows = agentRows(container);
-    // Claude pinned -> omitted; gemini and codex both unpinned -> listed.
-    expect(rows).toEqual(["gemini", "codex"]);
+    expect(agentRows(container)).toEqual(["claude", "gemini", "codex"]);
+    expect(getByTestId("agent-tray-pin-claude").getAttribute("data-pinned")).toBe("true");
+    expect(getByTestId("agent-tray-pin-gemini").getAttribute("data-pinned")).toBe("false");
   });
 
-  it("excludes all pinned agents from the Launch section", () => {
+  it("still renders the Launch section when every ready agent is pinned", () => {
     const availability = {
       claude: "ready",
       gemini: "ready",
@@ -332,14 +331,13 @@ describe("AgentTrayButton", () => {
       codex: { pinned: true },
     });
 
-    const { container, queryAllByTestId } = render(
+    const { container, getAllByTestId } = render(
       <AgentTrayButton agentAvailability={availability} />
     );
 
-    expect(agentRows(container)).toEqual([]);
-    // Launch section should not render at all when empty.
-    const labels = queryAllByTestId("menu-label").map((el) => el.textContent);
-    expect(labels).not.toContain("Launch");
+    expect(agentRows(container)).toEqual(["claude", "gemini", "codex"]);
+    const labels = getAllByTestId("menu-label").map((el) => el.textContent);
+    expect(labels).toContain("Launch");
   });
 
   it("sorts the Launch section by palette MRU", () => {
@@ -387,7 +385,6 @@ describe("AgentTrayButton", () => {
 
   it("always launches a new session even when agent already has one running", () => {
     const availability = { claude: "ready" } as unknown as CliAvailability;
-    // Unpinned so claude still appears in the tray's Launch list.
     mockSettings = settingsWith({ claude: { pinned: false } });
     mockPanelsById = {
       "panel-1": {
@@ -414,9 +411,8 @@ describe("AgentTrayButton", () => {
   });
 
   it("renders a hollow pin indicator on unpinned Launch rows", () => {
-    // Pinned agents are excluded from the Launch list entirely, so pin
-    // indicators only render for unpinned rows. They should read as
-    // `data-pinned="false"` and be clickable to promote to pinned.
+    // Unpinned rows should read as `data-pinned="false"` and be clickable
+    // to promote to pinned.
     const availability = {
       gemini: "ready",
       codex: "ready",
@@ -788,7 +784,6 @@ describe("AgentTrayButton", () => {
 
   it("ignores panels from other worktrees for session detection", () => {
     const availability = { claude: "ready" } as unknown as CliAvailability;
-    // Unpinned so claude still appears in the tray's Launch list.
     mockSettings = settingsWith({ claude: { pinned: false } });
     mockPanelsById = {
       "panel-1": {
