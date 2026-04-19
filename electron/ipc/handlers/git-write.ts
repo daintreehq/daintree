@@ -502,6 +502,8 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
   const withNonInteractiveEnv = (git: SimpleGit): SimpleGit =>
     git.env({
       ...process.env,
+      LC_MESSAGES: "C",
+      LANGUAGE: "",
       GIT_EDITOR: "true",
       GIT_MERGE_AUTOEDIT: "no",
       GIT_TERMINAL_PROMPT: "0",
