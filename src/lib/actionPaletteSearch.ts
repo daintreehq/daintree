@@ -18,15 +18,15 @@ export interface SearchableAction {
 
 function isBoundary(str: string, index: number): boolean {
   if (index === 0) return true;
-  const prev = str[index - 1];
-  const curr = str[index];
+  const prev = str.charAt(index - 1);
+  const curr = str.charAt(index);
   return /[/\\\-._\s]/.test(prev) || (/[a-z]/.test(prev) && /[A-Z]/.test(curr));
 }
 
 export function extractAcronym(field: string): string {
   let acronym = "";
   for (let i = 0; i < field.length; i++) {
-    const ch = field[i];
+    const ch = field.charAt(i);
     if (/[a-zA-Z0-9]/.test(ch) && isBoundary(field, i)) {
       acronym += ch.toLowerCase();
     }
@@ -48,7 +48,7 @@ function scoreSubsequence(lowerQuery: string, field: string, lowerField: string)
   let consecutiveRun = 0;
 
   for (let fi = 0; fi < lowerField.length && qi < lowerQuery.length; fi++) {
-    if (lowerField[fi] === lowerQuery[qi]) {
+    if (lowerField.charAt(fi) === lowerQuery.charAt(qi)) {
       if (lastMatchIndex >= 0) {
         const gap = fi - lastMatchIndex - 1;
         if (gap > 0) {

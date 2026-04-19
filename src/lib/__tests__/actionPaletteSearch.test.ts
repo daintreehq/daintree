@@ -142,7 +142,7 @@ describe("rankActionMatches", () => {
       makeAction({ id: "close", title: "Close Terminal" }),
     ];
     const results = rankActionMatches("terminal", items, ["close"]);
-    expect(results[0].id).toBe("close");
+    expect(results[0]!.id).toBe("close");
   });
 
   it("MRU bonus does not outrank a strong text match", () => {
@@ -151,7 +151,7 @@ describe("rankActionMatches", () => {
       makeAction({ id: "mru", title: "Something Else Git" }),
     ];
     const results = rankActionMatches("git commit", items, ["mru"]);
-    expect(results[0].id).toBe("exact");
+    expect(results[0]!.id).toBe("exact");
   });
 
   it("returns the original item references", () => {
@@ -185,7 +185,9 @@ describe("rankActionMatches", () => {
     const results = rankActionMatches("cp", items, []);
     expect(results).toHaveLength(2);
     // Both are valid matches — order must be deterministic (alphabetical on title)
-    expect(results[0].title < results[1].title || results[0].title === results[1].title).toBe(true);
+    expect(results[0]!.title < results[1]!.title || results[0]!.title === results[1]!.title).toBe(
+      true
+    );
   });
 
   it("full ranked list: prefix > acronym > substring > fuzzy > non-match", () => {
