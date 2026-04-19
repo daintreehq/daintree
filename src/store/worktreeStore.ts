@@ -528,13 +528,19 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
   exitFleetScope: () => {
     if (!get().isFleetScopeActive) return;
     const restoreId = get()._previousActiveWorktreeId;
+    const generation = get()._policyGeneration + 1;
     set({
       isFleetScopeActive: false,
       _previousActiveWorktreeId: null,
       activeWorktreeId: restoreId,
       focusedWorktreeId: restoreId,
+      _policyGeneration: generation,
     });
     persistActiveWorktree(restoreId);
+    // Reconcile terminal streaming tiers: consumers may have mutated
+    // activeWorktreeId during scope, so the renderer policy must be
+    // reapplied for the restored worktree.
+    applyWorktreeTerminalPolicy(get, set, restoreId, generation);
   },
 
   reset: () =>

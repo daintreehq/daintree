@@ -37,6 +37,19 @@ describe("fleetScopeFlagStore", () => {
       expect(state.isHydrated).toBe(true);
     });
 
+    it("normalizes malformed values to 'legacy'", () => {
+      // Defensive path — legacy persisted values or mid-migration garbage
+      // should not enable scoped mode.
+      useFleetScopeFlagStore.getState().hydrate("SCOPED" as never);
+      expect(useFleetScopeFlagStore.getState().mode).toBe("legacy");
+      resetStore();
+      useFleetScopeFlagStore.getState().hydrate(null as never);
+      expect(useFleetScopeFlagStore.getState().mode).toBe("legacy");
+      resetStore();
+      useFleetScopeFlagStore.getState().hydrate(42 as never);
+      expect(useFleetScopeFlagStore.getState().mode).toBe("legacy");
+    });
+
     it("is idempotent — later hydrate calls cannot clobber user interaction", () => {
       useFleetScopeFlagStore.getState().setMode("scoped");
       setStateMock.mockClear();

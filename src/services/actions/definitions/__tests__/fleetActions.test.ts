@@ -280,14 +280,23 @@ describe("fleet scope actions — flag gating", () => {
     });
   });
 
-  it("fleet.scope.enter is a no-op in legacy mode", async () => {
+  it("fleet.scope.enter is a full no-op in legacy mode (no side effects)", async () => {
     const { useFleetScopeFlagStore } = await import("@/store/fleetScopeFlagStore");
     const { useWorktreeSelectionStore } = await import("@/store/worktreeStore");
     useFleetScopeFlagStore.setState({ mode: "legacy", isHydrated: true });
-    useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-1" });
+    useWorktreeSelectionStore.setState({
+      activeWorktreeId: "wt-1",
+      focusedWorktreeId: "wt-1",
+      isFleetScopeActive: false,
+      _previousActiveWorktreeId: null,
+    });
     const registry = await buildRegistry();
     await run(registry, "fleet.scope.enter");
-    expect(useWorktreeSelectionStore.getState().isFleetScopeActive).toBe(false);
+    const state = useWorktreeSelectionStore.getState();
+    expect(state.isFleetScopeActive).toBe(false);
+    expect(state.activeWorktreeId).toBe("wt-1");
+    expect(state.focusedWorktreeId).toBe("wt-1");
+    expect(state._previousActiveWorktreeId).toBeNull();
   });
 
   it("fleet.scope.enter activates scope and captures worktree in scoped mode", async () => {
