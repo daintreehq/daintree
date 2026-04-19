@@ -361,6 +361,112 @@ export function AgentSettings({
               />
             </div>
 
+            {/* Agent-level Defaults — always visible */}
+            <div id="agents-defaults" className="space-y-3 pt-2 border-t border-daintree-border">
+              <div>
+                <label className="text-sm font-medium text-daintree-text">Defaults</label>
+                <p className="text-xs text-daintree-text/40 select-text">
+                  Base settings for every launch. Custom presets can override these.
+                </p>
+              </div>
+              <div className="space-y-3">
+                {(() => {
+                  const agentCfg = getAgentConfig(activeAgent.id);
+                  const supportsInlineMode = !!agentCfg?.capabilities?.inlineModeFlag;
+                  const skipPerms = activeEntry.dangerousEnabled ?? false;
+                  const inlineMode = activeEntry.inlineMode ?? true;
+                  const customFlags = activeEntry.customFlags ?? "";
+                  return (
+                    <>
+                      <div id="agents-skip-permissions" className="space-y-1.5">
+                        <SettingsSwitchCard
+                          variant="compact"
+                          title="Skip Permissions"
+                          subtitle="Auto-approve all file, command, and network actions"
+                          isEnabled={skipPerms}
+                          onChange={() => {
+                            void (async () => {
+                              await updateAgent(activeAgent.id, { dangerousEnabled: !skipPerms });
+                              onSettingsChange?.();
+                            })();
+                          }}
+                          ariaLabel={`Skip permissions for ${activeAgent.name}`}
+                          colorScheme="danger"
+                        />
+                        {skipPerms && defaultDangerousArg && (
+                          <div className="flex items-center gap-2 px-3 py-1.5 rounded-[var(--radius-md)] bg-status-error/10 border border-status-error/20">
+                            <code className="text-xs text-status-error font-mono">
+                              {defaultDangerousArg}
+                            </code>
+                            <span className="text-xs text-daintree-text/40">added to command</span>
+                          </div>
+                        )}
+                      </div>
+                      {supportsInlineMode && (
+                        <div id="agents-inline-mode">
+                          <SettingsSwitchCard
+                            variant="compact"
+                            title="Inline Mode"
+                            subtitle="Disable fullscreen TUI for better resize handling and scrollback"
+                            isEnabled={inlineMode}
+                            onChange={() => {
+                              void (async () => {
+                                await updateAgent(activeAgent.id, { inlineMode: !inlineMode });
+                                onSettingsChange?.();
+                              })();
+                            }}
+                            ariaLabel={`Inline mode for ${activeAgent.name}`}
+                          />
+                        </div>
+                      )}
+                      <div id="agents-custom-args" className="space-y-1.5">
+                        <label className="text-sm font-medium text-daintree-text">
+                          Custom Arguments
+                        </label>
+                        <input
+                          className="w-full rounded-[var(--radius-md)] border border-border-strong bg-daintree-bg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-daintree-accent/50 placeholder:text-text-muted"
+                          value={customFlags}
+                          onChange={(e) => {
+                            void updateAgent(activeAgent.id, { customFlags: e.target.value });
+                          }}
+                          placeholder="--verbose --max-tokens=4096"
+                        />
+                        <p className="text-xs text-daintree-text/40 select-text">
+                          Extra CLI flags appended when launching
+                        </p>
+                      </div>
+                    </>
+                  );
+                })()}
+                <div id="agents-global-env" className="space-y-2">
+                  <div>
+                    <label className="text-sm font-medium text-daintree-text">
+                      Global env vars
+                    </label>
+                    <p className="text-xs text-daintree-text/40 select-text">
+                      Applied to every launch. Preset-specific vars take precedence.
+                    </p>
+                  </div>
+                  <EnvVarEditor
+                    env={(activeEntry.globalEnv as Record<string, string>) ?? {}}
+                    onChange={(globalEnv) => {
+                      void (async () => {
+                        await updateAgent(activeAgent.id, {
+                          globalEnv: Object.keys(globalEnv).length > 0 ? globalEnv : undefined,
+                        });
+                        onSettingsChange?.();
+                      })();
+                    }}
+                    suggestions={getAgentConfig(activeAgent.id)?.envSuggestions ?? []}
+                    datalistId="env-key-suggestions-global"
+                    contextKey={`global-${activeAgent.id}`}
+                    valuePlaceholder="value"
+                    data-testid="global-env-editor"
+                  />
+                </div>
+              </div>
+            </div>
+
             {/* Preset section — picker + all per-preset settings inside */}
             {(() => {
               const ccrPresets = ccrPresetsByAgent[activeAgent.id];
@@ -442,34 +548,6 @@ export function AgentSettings({
                 })();
               };
 
-              if (allPresets.length === 0 && !customPresets?.length) {
-                return (
-                  <div
-                    id="agents-presets"
-                    className="space-y-3 pt-2 border-t border-daintree-border"
-                  >
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <label className="text-sm font-medium text-daintree-text">Presets</label>
-                        <p className="text-xs text-daintree-text/40 select-text">
-                          Variants with different env overrides and model routes
-                        </p>
-                      </div>
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        data-testid="preset-add-button"
-                        className="text-daintree-accent hover:text-daintree-accent/80"
-                        onClick={handleAddPreset}
-                      >
-                        <Plus size={14} />
-                        Add
-                      </Button>
-                    </div>
-                  </div>
-                );
-              }
-
               const handleDuplicatePreset = (preset: AgentPreset) => {
                 const id = `user-${Date.now()}`;
                 const updated = [
@@ -546,53 +624,29 @@ export function AgentSettings({
                 setEditName("");
               };
 
-              // ── reusable behavioral settings block ───────────────────────
-              // For default/CCR: reads from activeEntry and writes to agent.
-              // For custom: reads from the preset and writes via handleUpdatePreset.
+              // ── custom preset behavioral overrides ────────────────────────
+              // Only rendered inside the custom-preset detail panel. Reads
+              // from the preset and writes via handleUpdatePreset.
 
-              const skipPerms = selectedIsCustom
-                ? (selectedPreset!.dangerousEnabled ?? false)
-                : (activeEntry.dangerousEnabled ?? false);
+              const skipPerms = selectedPreset!.dangerousEnabled ?? false;
 
-              const inlineMode = selectedIsCustom
-                ? (selectedPreset!.inlineMode ?? activeEntry.inlineMode ?? true)
-                : (activeEntry.inlineMode ?? true);
+              const inlineMode = selectedPreset!.inlineMode ?? activeEntry.inlineMode ?? true;
 
-              const customFlags = selectedIsCustom
-                ? (selectedPreset!.customFlags ?? "")
-                : (activeEntry.customFlags ?? "");
+              const customFlags = selectedPreset!.customFlags ?? "";
 
               const onSkipPermsToggle = () => {
-                if (selectedIsCustom) {
-                  handleUpdatePreset(selectedPreset!.id, { dangerousEnabled: !skipPerms });
-                } else {
-                  void (async () => {
-                    await updateAgent(activeAgent.id, { dangerousEnabled: !skipPerms });
-                    onSettingsChange?.();
-                  })();
-                }
+                handleUpdatePreset(selectedPreset!.id, { dangerousEnabled: !skipPerms });
               };
 
               const onInlineModeToggle = () => {
-                if (selectedIsCustom) {
-                  handleUpdatePreset(selectedPreset!.id, { inlineMode: !inlineMode });
-                } else {
-                  void (async () => {
-                    await updateAgent(activeAgent.id, { inlineMode: !inlineMode });
-                    onSettingsChange?.();
-                  })();
-                }
+                handleUpdatePreset(selectedPreset!.id, { inlineMode: !inlineMode });
               };
 
               const onCustomFlagsChange = (value: string) => {
-                if (selectedIsCustom) {
-                  const updated = (activeEntry.customPresets ?? []).map((f) =>
-                    f.id === selectedPreset!.id ? { ...f, customFlags: value } : f
-                  );
-                  void updateAgent(activeAgent.id, { customPresets: updated });
-                } else {
-                  void updateAgent(activeAgent.id, { customFlags: value });
-                }
+                const updated = (activeEntry.customPresets ?? []).map((f) =>
+                  f.id === selectedPreset!.id ? { ...f, customFlags: value } : f
+                );
+                void updateAgent(activeAgent.id, { customPresets: updated });
               };
 
               const behavioralSettings = (
@@ -689,28 +743,32 @@ export function AgentSettings({
                     </Button>
                   </div>
 
-                  {/* Unified preset picker — Popover listbox with color swatches and grouping */}
-                  <PresetSelector
-                    selectedPresetId={activeEntry.presetId ?? undefined}
-                    allPresets={allPresets}
-                    ccrPresets={ccrPresets ?? []}
-                    projectPresets={projectPresets ?? []}
-                    customPresets={customPresets ?? []}
-                    onChange={(presetId) => {
-                      void (async () => {
-                        await updateAgent(activeAgent.id, { presetId: presetId ?? undefined });
-                        onSettingsChange?.();
-                      })();
-                    }}
-                    agentColor={getAgentConfig(activeAgent.id)?.color ?? "#888888"}
-                  />
+                  {allPresets.length > 0 && (
+                    <>
+                      {/* Unified preset picker — Popover listbox with color swatches and grouping */}
+                      <PresetSelector
+                        selectedPresetId={activeEntry.presetId ?? undefined}
+                        allPresets={allPresets}
+                        ccrPresets={ccrPresets ?? []}
+                        projectPresets={projectPresets ?? []}
+                        customPresets={customPresets ?? []}
+                        onChange={(presetId) => {
+                          void (async () => {
+                            await updateAgent(activeAgent.id, { presetId: presetId ?? undefined });
+                            onSettingsChange?.();
+                          })();
+                        }}
+                        agentColor={getAgentConfig(activeAgent.id)?.color ?? "#888888"}
+                      />
 
-                  {/* Hidden datalist retained for any remaining text inputs that still reference it */}
-                  <datalist id="env-key-suggestions">
-                    {(getAgentConfig(activeAgent.id)?.envSuggestions ?? []).map(({ key }) => (
-                      <option key={key} value={key} />
-                    ))}
-                  </datalist>
+                      {/* Hidden datalist retained for any remaining text inputs that still reference it */}
+                      <datalist id="env-key-suggestions">
+                        {(getAgentConfig(activeAgent.id)?.envSuggestions ?? []).map(({ key }) => (
+                          <option key={key} value={key} />
+                        ))}
+                      </datalist>
+                    </>
+                  )}
 
                   {/* Detail view for selected CCR preset */}
                   {selectedPreset && selectedIsCcr && (
@@ -755,7 +813,11 @@ export function AgentSettings({
                           </p>
                         )}
                       </div>
-                      <div className="px-3 py-2.5">{behavioralSettings}</div>
+                      <div className="px-3 py-2">
+                        <p className="text-xs text-daintree-text/40 select-text">
+                          Uses agent-level defaults above, unless overridden in a custom preset.
+                        </p>
+                      </div>
                     </div>
                   )}
 
@@ -805,7 +867,11 @@ export function AgentSettings({
                           Sourced from <code>.daintree/presets/</code> in this project.
                         </p>
                       </div>
-                      <div className="px-3 py-2.5">{behavioralSettings}</div>
+                      <div className="px-3 py-2">
+                        <p className="text-xs text-daintree-text/40 select-text">
+                          Uses agent-level defaults above, unless overridden in a custom preset.
+                        </p>
+                      </div>
                     </div>
                   )}
 
@@ -1005,48 +1071,9 @@ export function AgentSettings({
                       </div>
                     </div>
                   )}
-
-                  {/* Default settings */}
-                  {isDefault && (
-                    <div
-                      className={
-                        allPresets.length > 0
-                          ? "rounded-[var(--radius-md)] border border-daintree-border bg-daintree-bg/30 px-3 py-2.5"
-                          : ""
-                      }
-                    >
-                      {behavioralSettings}
-                    </div>
-                  )}
                 </div>
               );
             })()}
-
-            {/* Global env vars — agent-level, applied to every launch regardless of preset */}
-            <div id="agents-global-env" className="space-y-2 pt-2 border-t border-daintree-border">
-              <div>
-                <label className="text-sm font-medium text-daintree-text">Global env vars</label>
-                <p className="text-xs text-daintree-text/40 select-text">
-                  Applied to every launch of this agent. Preset-specific vars take precedence.
-                </p>
-              </div>
-              <EnvVarEditor
-                env={(activeEntry.globalEnv as Record<string, string>) ?? {}}
-                onChange={(globalEnv) => {
-                  void (async () => {
-                    await updateAgent(activeAgent.id, {
-                      globalEnv: Object.keys(globalEnv).length > 0 ? globalEnv : undefined,
-                    });
-                    onSettingsChange?.();
-                  })();
-                }}
-                suggestions={getAgentConfig(activeAgent.id)?.envSuggestions ?? []}
-                datalistId="env-key-suggestions-global"
-                contextKey={`global-${activeAgent.id}`}
-                valuePlaceholder="value"
-                data-testid="global-env-editor"
-              />
-            </div>
 
             {/* Share Clipboard Directory — Gemini only, always agent-level */}
             {activeAgent.id === "gemini" && (
