@@ -26,13 +26,15 @@ export function SettingsShortcutCapture({
   const [chordStep, setChordStep] = useState<"first" | "waiting" | "complete">("first");
   const chordTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const chordTokenRef = useRef(0);
+  const [conflictRefreshKey, setConflictRefreshKey] = useState(0);
+  const [isUnbinding, setIsUnbinding] = useState(false);
 
   const capturedCombo = capturedCombos.length > 0 ? capturedCombos.join(" ") : null;
 
   const conflicts = useMemo(() => {
     if (!capturedCombo) return [];
     return keybindingService.findConflicts(capturedCombo, excludeActionId);
-  }, [capturedCombo, excludeActionId]);
+  }, [capturedCombo, excludeActionId, conflictRefreshKey]);
 
   const clearChordTimeout = useCallback(() => {
     if (chordTimeoutRef.current) {
@@ -132,33 +134,117 @@ export function SettingsShortcutCapture({
 
   const handleUnbindConflict = async (conflict: { actionId: string; description?: string }) => {
     const { actionId } = conflict;
+    setIsUnbinding(true);
 
-    const result = await actionService.dispatch(
-      "keybinding.removeOverride",
-      { actionId },
-      { source: "user" }
-    );
+    try {
+      const currentOverride = keybindingService.getOverride(actionId);
+      const defaultCombo = keybindingService.getDefaultCombo(actionId);
 
-    if (!result.ok) {
-      console.error("Failed to remove conflicting keybinding:", result.error);
-      return;
-    }
+      let conflictingCombo: string | undefined;
+      let isOverrideConflict = false;
+      let newOverrideCombos: string[] | undefined;
 
-    useNotificationStore.getState().addNotification({
-      type: "success",
-      message: `Unbound ${conflict.description || conflict.actionId}`,
-      duration: 5000,
-      action: {
-        label: "Undo",
-        onClick: async () => {
-          await actionService.dispatch(
+      if (currentOverride) {
+        const matchingOverride = currentOverride.find(
+          (combo) => combo.trim().toLowerCase() === capturedCombo!.trim().toLowerCase()
+        );
+        if (matchingOverride) {
+          conflictingCombo = matchingOverride;
+          isOverrideConflict = true;
+          newOverrideCombos = currentOverride.filter(
+            (combo) => combo.trim().toLowerCase() !== capturedCombo!.trim().toLowerCase()
+          );
+        }
+      }
+
+      if (!conflictingCombo && defaultCombo) {
+        const normalizedDefault = defaultCombo.trim().toLowerCase();
+        const normalizedCaptured = capturedCombo!.trim().toLowerCase();
+        if (normalizedDefault === normalizedCaptured) {
+          conflictingCombo = defaultCombo;
+        }
+      }
+
+      if (isOverrideConflict) {
+        if (newOverrideCombos && newOverrideCombos.length > 0) {
+          const setResult = await actionService.dispatch(
             "keybinding.setOverride",
-            { actionId, combo: [capturedCombo!] },
+            { actionId, combo: newOverrideCombos },
             { source: "user" }
           );
+          if (!setResult.ok) {
+            throw new Error(setResult.error?.message || "Failed to update keybinding");
+          }
+        } else {
+          const removeResult = await actionService.dispatch(
+            "keybinding.removeOverride",
+            { actionId },
+            { source: "user" }
+          );
+          if (!removeResult.ok) {
+            throw new Error(removeResult.error?.message || "Failed to remove keybinding");
+          }
+        }
+      } else if (conflictingCombo) {
+        const setResult = await actionService.dispatch(
+          "keybinding.setOverride",
+          { actionId, combo: [] },
+          { source: "user" }
+        );
+        if (!setResult.ok) {
+          throw new Error(setResult.error?.message || "Failed to update keybinding");
+        }
+      } else {
+        console.error("Could not identify conflicting combo");
+        setIsUnbinding(false);
+        return;
+      }
+
+      setConflictRefreshKey((prev) => prev + 1);
+
+      const undoCombo = conflictingCombo!;
+
+      useNotificationStore.getState().addNotification({
+        type: "success",
+        message: `Unbound ${conflict.description || conflict.actionId}`,
+        duration: 5000,
+        action: {
+          label: "Undo",
+          onClick: async () => {
+            try {
+              const restoreResult = await actionService.dispatch(
+                "keybinding.setOverride",
+                {
+                  actionId,
+                  combo: isOverrideConflict && currentOverride ? currentOverride : [undoCombo],
+                },
+                { source: "user" }
+              );
+              if (!restoreResult.ok) {
+                throw new Error(restoreResult.error?.message || "Failed to undo");
+              }
+              setConflictRefreshKey((prev) => prev + 1);
+            } catch (err) {
+              console.error("Failed to undo keybinding change:", err);
+              useNotificationStore.getState().addNotification({
+                type: "error",
+                message: "Failed to undo keybinding change",
+                duration: 3000,
+              });
+            }
+          },
         },
-      },
-    });
+      });
+    } catch (err) {
+      console.error("Failed to unbind keybinding:", err);
+      useNotificationStore.getState().addNotification({
+        type: "error",
+        message: "Failed to unbind keybinding",
+        duration: 3000,
+      });
+    } finally {
+      setIsUnbinding(false);
+    }
   };
 
   const isChord = capturedCombos.length > 1;
@@ -211,7 +297,8 @@ export function SettingsShortcutCapture({
                 </span>
                 <button
                   onClick={() => handleUnbindConflict(conflict)}
-                  className="flex items-center gap-1 px-2 py-0.5 text-xs text-daintree-accent hover:bg-daintree-accent/10 rounded transition-colors"
+                  disabled={isUnbinding}
+                  className="flex items-center gap-1 px-2 py-0.5 text-xs text-daintree-accent hover:bg-daintree-accent/10 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   <X className="w-3 h-3" />
                   <span>Unbind</span>

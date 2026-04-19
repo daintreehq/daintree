@@ -9,6 +9,8 @@ vi.mock("@/services/KeybindingService", () => ({
   keybindingService: {
     findConflicts: vi.fn(() => []),
     formatComboForDisplay: vi.fn((combo: string) => combo),
+    getOverride: vi.fn(() => undefined),
+    getDefaultCombo: vi.fn(() => undefined),
   },
   normalizeKeyForBinding: vi.fn((e: KeyboardEvent) => e.key),
 }));
@@ -462,7 +464,7 @@ describe("SettingsShortcutCapture", () => {
       expect(screen.getAllByText("Unbind")).toHaveLength(2);
     });
 
-    it("dispatches removeOverride action when unbind button is clicked", async () => {
+    it("dispatches setOverride action when unbind button is clicked for override conflict", async () => {
       const { keybindingService } = await import("@/services/KeybindingService");
       const { actionService } = await import("@/services/ActionService");
       const { useNotificationStore } = await import("@/store/notificationStore");
@@ -476,6 +478,9 @@ describe("SettingsShortcutCapture", () => {
           priority: 0,
         },
       ]);
+
+      vi.mocked(keybindingService.getOverride).mockReturnValue(["Cmd+K"]);
+      vi.mocked(keybindingService.getDefaultCombo).mockReturnValue("Cmd+A");
 
       const addNotificationSpy = vi.fn();
       vi.mocked(useNotificationStore.getState).mockReturnValue({
@@ -504,8 +509,11 @@ describe("SettingsShortcutCapture", () => {
         vi.advanceTimersByTime(1100);
       });
 
-      const unbindButton = screen.getByText("Unbind");
-      fireEvent.click(unbindButton);
+      await act(async () => {
+        const unbindButton = screen.getByText("Unbind");
+        fireEvent.click(unbindButton);
+        await vi.advanceTimersByTimeAsync(0);
+      });
 
       expect(actionService.dispatch).toHaveBeenCalledWith(
         "keybinding.removeOverride",
@@ -527,6 +535,9 @@ describe("SettingsShortcutCapture", () => {
           priority: 0,
         },
       ]);
+
+      vi.mocked(keybindingService.getOverride).mockReturnValue(["Cmd+K"]);
+      vi.mocked(keybindingService.getDefaultCombo).mockReturnValue("Cmd+A");
 
       const addNotificationSpy = vi.fn();
       vi.mocked(useNotificationStore.getState).mockReturnValue({
@@ -592,6 +603,9 @@ describe("SettingsShortcutCapture", () => {
           priority: 0,
         },
       ]);
+
+      vi.mocked(keybindingService.getOverride).mockReturnValue(["Cmd+K"]);
+      vi.mocked(keybindingService.getDefaultCombo).mockReturnValue("Cmd+A");
 
       const addNotificationSpy = vi.fn();
       vi.mocked(useNotificationStore.getState).mockReturnValue({
