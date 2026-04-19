@@ -47,7 +47,13 @@ import {
 } from "lucide-react";
 import type { AggregateCounts } from "./MainWorktreeSummaryRows";
 import { useIssueTooltip, usePRTooltip } from "@/hooks/useGitHubTooltip";
-import { IssueTooltipContent, PRTooltipContent, TooltipLoading } from "./GitHubTooltipContent";
+import {
+  IssueTooltipContent,
+  PRTooltipContent,
+  TooltipLoading,
+  TokenMissingTooltip,
+} from "./GitHubTooltipContent";
+import { actionService } from "@/services/ActionService";
 
 const ENVIRONMENT_ICONS: Record<string, React.ComponentType<{ className?: string }>> = {
   Server,
@@ -92,7 +98,10 @@ const IssueBadge = memo(function IssueBadge({
   underlineOnHover,
 }: IssueBadgeProps) {
   const [isOpen, setIsOpen] = useState(false);
-  const { data, loading, error, fetchTooltip, reset } = useIssueTooltip(worktreePath, issueNumber);
+  const { data, loading, error, missingToken, fetchTooltip, reset } = useIssueTooltip(
+    worktreePath,
+    issueNumber
+  );
 
   const handleOpenChange = useCallback(
     (open: boolean) => {
@@ -106,23 +115,37 @@ const IssueBadge = memo(function IssueBadge({
     [fetchTooltip, reset]
   );
 
+  const handleClick = useCallback(() => {
+    if (!isActive) return;
+    if (missingToken) {
+      void actionService.dispatch(
+        "app.settings.openTab",
+        { tab: "github", sectionId: "github-token" },
+        { source: "user" }
+      );
+      return;
+    }
+    onOpen?.();
+  }, [isActive, missingToken, onOpen]);
+
   return (
     <Tooltip open={isOpen} onOpenChange={handleOpenChange} delayDuration={300}>
       <TooltipTrigger asChild>
         <button
           type="button"
-          onClick={() => {
-            if (isActive) onOpen?.();
-          }}
+          onClick={handleClick}
           className={cn(
             "flex items-center gap-1.5 text-left cursor-pointer transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent min-w-0",
-            isHeadline ? "text-[13px]" : "text-xs"
+            isHeadline ? "text-[13px]" : "text-xs",
+            missingToken && "opacity-60"
           )}
           aria-disabled={!isActive || undefined}
           aria-label={
-            issueTitle
-              ? `Open issue #${issueNumber}: ${issueTitle}`
-              : `Open issue #${issueNumber} on GitHub`
+            missingToken
+              ? "Configure GitHub token to see issue details"
+              : issueTitle
+                ? `Open issue #${issueNumber}: ${issueTitle}`
+                : `Open issue #${issueNumber} on GitHub`
           }
         >
           <CircleDot
@@ -145,7 +168,9 @@ const IssueBadge = memo(function IssueBadge({
         </button>
       </TooltipTrigger>
       <TooltipContent side="right" align="start" className="p-3">
-        {loading ? (
+        {missingToken ? (
+          <TokenMissingTooltip type="issue" />
+        ) : loading ? (
           <TooltipLoading type="issue" />
         ) : data ? (
           <IssueTooltipContent data={data} />
@@ -179,7 +204,10 @@ const PRBadge = memo(function PRBadge({
   underlineOnHover,
 }: PRBadgeProps) {
   const [isOpen, setIsOpen] = useState(false);
-  const { data, loading, error, fetchTooltip, reset } = usePRTooltip(worktreePath, prNumber);
+  const { data, loading, error, missingToken, fetchTooltip, reset } = usePRTooltip(
+    worktreePath,
+    prNumber
+  );
 
   const handleOpenChange = useCallback(
     (open: boolean) => {
@@ -192,6 +220,19 @@ const PRBadge = memo(function PRBadge({
     },
     [fetchTooltip, reset]
   );
+
+  const handleClick = useCallback(() => {
+    if (!isActive) return;
+    if (missingToken) {
+      void actionService.dispatch(
+        "app.settings.openTab",
+        { tab: "github", sectionId: "github-token" },
+        { source: "user" }
+      );
+      return;
+    }
+    onOpen?.();
+  }, [isActive, missingToken, onOpen]);
 
   const prStateColor =
     prState === "merged"
@@ -207,12 +248,17 @@ const PRBadge = memo(function PRBadge({
       <TooltipTrigger asChild>
         <button
           type="button"
-          onClick={() => {
-            if (isActive) onOpen?.();
-          }}
-          className="flex items-center gap-1 text-xs text-left cursor-pointer transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent min-w-0"
+          onClick={handleClick}
+          className={cn(
+            "flex items-center gap-1 text-xs text-left cursor-pointer transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent min-w-0",
+            missingToken && "opacity-60"
+          )}
           aria-disabled={!isActive || undefined}
-          aria-label={`Open ${prStateLabel} pull request #${prNumber} on GitHub`}
+          aria-label={
+            missingToken
+              ? "Configure GitHub token to see PR details"
+              : `Open ${prStateLabel} pull request #${prNumber} on GitHub`
+          }
         >
           {isSubordinate && (
             <CornerDownRight className="w-3 h-3 text-text-muted shrink-0" aria-hidden="true" />
@@ -224,7 +270,9 @@ const PRBadge = memo(function PRBadge({
         </button>
       </TooltipTrigger>
       <TooltipContent side="right" align="start" className="p-3">
-        {loading ? (
+        {missingToken ? (
+          <TokenMissingTooltip type="pr" />
+        ) : loading ? (
           <TooltipLoading type="pr" />
         ) : data ? (
           <PRTooltipContent data={data} />

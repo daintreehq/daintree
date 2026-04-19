@@ -1,6 +1,6 @@
 import { memo } from "react";
 import type { IssueTooltipData, PRTooltipData } from "@shared/types/github";
-import { User, Users, Calendar } from "lucide-react";
+import { User, Users, Calendar, KeyRound } from "lucide-react";
 import { Spinner } from "@/components/ui/Spinner";
 import { cn } from "@/lib/utils";
 
@@ -22,6 +22,21 @@ export const TooltipLoading = memo(function TooltipLoading({ type }: TooltipLoad
     <div className="flex items-center gap-2 text-daintree-text/70 py-1">
       <Spinner size="xs" />
       <span className="text-xs">Loading {type} details...</span>
+    </div>
+  );
+});
+
+interface TokenMissingTooltipProps {
+  type: "issue" | "pr";
+}
+
+export const TokenMissingTooltip = memo(function TokenMissingTooltip({
+  type,
+}: TokenMissingTooltipProps) {
+  return (
+    <div className="flex items-center gap-2 text-daintree-text/60 py-1">
+      <KeyRound className="w-3.5 h-3.5 shrink-0 text-daintree-accent/60" aria-hidden="true" />
+      <span className="text-xs">Configure GitHub token to see {type} details</span>
     </div>
   );
 });
