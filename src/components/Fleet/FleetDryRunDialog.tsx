@@ -37,46 +37,44 @@ export function FleetDryRunDialog({
   const handleSend = useCallback(async () => {
     if (isSending) return;
     setIsSending(true);
-    let result;
     try {
-      const targetIds = eligible.map((p) => p.terminalId);
-      result = await executeFleetBroadcast(draft, targetIds, overrides);
-    } catch (e) {
+      const currentPreviews = buildFleetTargetPreviews(draft);
+      const targetIds = currentPreviews.filter((p) => !p.excluded).map((p) => p.terminalId);
+      const result = await executeFleetBroadcast(draft, targetIds, overrides);
+
+      useNotificationStore.getState().addNotification({
+        type: result.failureCount > 0 ? "warning" : "success",
+        priority: "low",
+        message:
+          result.failureCount > 0
+            ? `Sent to ${result.successCount} agent${result.successCount === 1 ? "" : "s"} (${result.failureCount} failed)`
+            : `Sent to ${result.successCount} agent${result.successCount === 1 ? "" : "s"}`,
+        actions:
+          result.failureCount > 0
+            ? [
+                {
+                  label: "Retry failed",
+                  onClick: () => onSend(result.failedIds),
+                  variant: "primary" as const,
+                },
+              ]
+            : undefined,
+      });
+
+      const armedIds = Array.from(useFleetArmingStore.getState().armedIds);
+      const projectId = useProjectStore.getState().currentProject?.id;
+      const historyKey = getFleetBroadcastHistoryKey(projectId);
+      useCommandHistoryStore.getState().recordPrompt(historyKey, draft, null, { armedIds });
+
+      if (result.successCount > 0) {
+        useFleetComposerStore.getState().clearDraft();
+      }
+
+      onSend(result.failureCount > 0 ? result.failedIds : undefined);
+    } finally {
       setIsSending(false);
-      throw e;
     }
-    setIsSending(false);
-
-    useNotificationStore.getState().addNotification({
-      type: result.failureCount > 0 ? "warning" : "success",
-      priority: "low",
-      message:
-        result.failureCount > 0
-          ? `Sent to ${result.successCount} agent${result.successCount === 1 ? "" : "s"} (${result.failureCount} failed)`
-          : `Sent to ${result.successCount} agent${result.successCount === 1 ? "" : "s"}`,
-      actions:
-        result.failureCount > 0
-          ? [
-              {
-                label: "Retry failed",
-                onClick: () => onSend(result.failedIds),
-                variant: "primary" as const,
-              },
-            ]
-          : undefined,
-    });
-
-    const armedIds = Array.from(useFleetArmingStore.getState().armedIds);
-    const projectId = useProjectStore.getState().currentProject?.id;
-    const historyKey = getFleetBroadcastHistoryKey(projectId);
-    useCommandHistoryStore.getState().recordPrompt(historyKey, draft, null, { armedIds });
-
-    if (result.successCount > 0) {
-      useFleetComposerStore.getState().clearDraft();
-    }
-
-    onSend(result.failureCount > 0 ? result.failedIds : undefined);
-  }, [draft, eligible, overrides, isSending, onSend]);
+  }, [draft, overrides, isSending, onSend]);
 
   return (
     <div
