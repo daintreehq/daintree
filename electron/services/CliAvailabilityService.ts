@@ -260,8 +260,13 @@ export class CliAvailabilityService {
       const checkedPaths: string[] = [];
 
       // Check environment variable first (positive signal only)
-      if (authCheck.envVar && process.env[authCheck.envVar]) {
-        return "ready";
+      if (authCheck.envVar) {
+        const envVars = Array.isArray(authCheck.envVar) ? authCheck.envVar : [authCheck.envVar];
+        for (const envVar of envVars) {
+          if (process.env[envVar]) {
+            return "ready";
+          }
+        }
       }
 
       const home = homedir();

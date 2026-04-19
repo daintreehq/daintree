@@ -130,8 +130,8 @@ export interface AgentAuthCheck {
   configPaths?: Partial<Record<"darwin" | "linux" | "win32", string[]>>;
   /** Platform-independent config file paths (relative to os.homedir()) */
   configPathsAll?: string[];
-  /** Environment variable that indicates auth when present */
-  envVar?: string;
+  /** Environment variable(s) that indicate auth when present */
+  envVar?: string | string[];
   /** Fallback state when binary found but auth check is inconclusive */
   fallback?: "installed" | "ready";
 }
@@ -973,16 +973,12 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
       args: (sessionId: string) => ["-s", sessionId],
     },
     authCheck: {
-      configPaths: {
-        darwin: ["Library/Application Support/opencode/config.json"],
-        linux: [".config/opencode/config.json"],
-        win32: [".config/opencode/config.json"],
-      },
+      // OpenCode v1.4.6+ uses XDG-compliant config paths on all platforms
+      configPathsAll: [".config/opencode/opencode.json", ".local/share/opencode/auth.json"],
       // OpenCode is provider-agnostic and accepts provider credentials
-      // directly from env vars (ANTHROPIC_API_KEY / OPENAI_API_KEY), so
-      // either is a sufficient signal that the CLI is usable.
-      configPathsAll: [".local/share/opencode/auth.json"],
-      envVar: "ANTHROPIC_API_KEY",
+      // directly from env vars (ANTHROPIC_API_KEY / OPENAI_API_KEY / GOOGLE_API_KEY),
+      // so any of these is a sufficient signal that the CLI is usable.
+      envVar: ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GOOGLE_API_KEY"],
     },
     prerequisites: [
       {

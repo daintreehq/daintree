@@ -308,6 +308,137 @@ describe("CliAvailabilityService", () => {
     });
   });
 
+  describe("OpenCode auth check", () => {
+    it("returns ready when OpenCode config file exists at XDG path", async () => {
+      const { access } = await import("fs/promises");
+      const mockedAccess = vi.mocked(access);
+
+      // Only opencode binary found
+      mockedExecFileSync.mockImplementation((_file, args) => {
+        if (args?.[0] === "opencode") return Buffer.from("");
+        throw new Error("not found");
+      });
+
+      // XDG-compliant config file exists
+      const opencodeConfig = join(homedir(), ".config/opencode/opencode.json");
+      mockedAccess.mockImplementation(async (path) => {
+        if (String(path) === opencodeConfig) return;
+        throw new Error("ENOENT");
+      });
+
+      const result = await service.checkAvailability();
+      expect(result.opencode).toBe("ready");
+    });
+
+    it("returns ready when ANTHROPIC_API_KEY is set for OpenCode", async () => {
+      const origKey = process.env.ANTHROPIC_API_KEY;
+      process.env.ANTHROPIC_API_KEY = "sk-ant-test-key";
+
+      try {
+        // Only opencode binary found, no config file
+        mockedExecFileSync.mockImplementation((_file, args) => {
+          if (args?.[0] === "opencode") return Buffer.from("");
+          throw new Error("not found");
+        });
+
+        const result = await service.checkAvailability();
+        expect(result.opencode).toBe("ready");
+      } finally {
+        if (origKey === undefined) {
+          delete process.env.ANTHROPIC_API_KEY;
+        } else {
+          process.env.ANTHROPIC_API_KEY = origKey;
+        }
+      }
+    });
+
+    it("returns ready when OPENAI_API_KEY is set for OpenCode", async () => {
+      const origKey = process.env.OPENAI_API_KEY;
+      process.env.OPENAI_API_KEY = "sk-openai-test-key";
+
+      try {
+        // Only opencode binary found, no config file
+        mockedExecFileSync.mockImplementation((_file, args) => {
+          if (args?.[0] === "opencode") return Buffer.from("");
+          throw new Error("not found");
+        });
+
+        const result = await service.checkAvailability();
+        expect(result.opencode).toBe("ready");
+      } finally {
+        if (origKey === undefined) {
+          delete process.env.OPENAI_API_KEY;
+        } else {
+          process.env.OPENAI_API_KEY = origKey;
+        }
+      }
+    });
+
+    it("returns ready when GOOGLE_API_KEY is set for OpenCode", async () => {
+      const origKey = process.env.GOOGLE_API_KEY;
+      process.env.GOOGLE_API_KEY = "google-test-key";
+
+      try {
+        // Only opencode binary found, no config file
+        mockedExecFileSync.mockImplementation((_file, args) => {
+          if (args?.[0] === "opencode") return Buffer.from("");
+          throw new Error("not found");
+        });
+
+        const result = await service.checkAvailability();
+        expect(result.opencode).toBe("ready");
+      } finally {
+        if (origKey === undefined) {
+          delete process.env.GOOGLE_API_KEY;
+        } else {
+          process.env.GOOGLE_API_KEY = origKey;
+        }
+      }
+    });
+
+    it("returns installed when OpenCode binary found but no auth (no config, no env vars)", async () => {
+      // Only opencode binary found, no config file, no env vars
+      mockedExecFileSync.mockImplementation((_file, args) => {
+        if (args?.[0] === "opencode") return Buffer.from("");
+        throw new Error("not found");
+      });
+
+      const result = await service.checkAvailability();
+      expect(result.opencode).toBe("installed");
+    });
+
+    it("env vars take precedence over config file for OpenCode", async () => {
+      const { access } = await import("fs/promises");
+      const mockedAccess = vi.mocked(access);
+
+      const origKey = process.env.OPENAI_API_KEY;
+      process.env.OPENAI_API_KEY = "sk-precedence-test";
+
+      try {
+        // Only opencode binary found
+        mockedExecFileSync.mockImplementation((_file, args) => {
+          if (args?.[0] === "opencode") return Buffer.from("");
+          throw new Error("not found");
+        });
+
+        const result = await service.checkAvailability();
+        expect(result.opencode).toBe("ready");
+
+        // Verify config file was never checked (env var short-circuited)
+        const configChecked = mockedAccess.mock.calls.some((call) =>
+          String(call[0]).includes("opencode")
+        );
+        expect(configChecked).toBe(false);
+      } finally {
+        if (origKey === undefined) {
+          delete process.env.OPENAI_API_KEY;
+        } else {
+          process.env.OPENAI_API_KEY = origKey;
+        }
+      }
+    });
+  });
+
   describe("getAvailability", () => {
     it("returns null before first check", () => {
       const result = service.getAvailability();
