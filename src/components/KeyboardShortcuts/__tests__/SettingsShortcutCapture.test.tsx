@@ -575,6 +575,7 @@ describe("SettingsShortcutCapture", () => {
         type: "success",
         message: "Unbound Conflicting Action",
         duration: 5000,
+        priority: "low",
         action: expect.objectContaining({
           label: "Undo",
           onClick: expect.any(Function),
@@ -638,7 +639,7 @@ describe("SettingsShortcutCapture", () => {
       expect(unbindButtons).toHaveLength(2);
 
       await act(async () => {
-        fireEvent.click(unbindButtons[0]);
+        fireEvent.click(unbindButtons[0]!);
         await vi.advanceTimersByTimeAsync(0);
       });
 
@@ -649,7 +650,7 @@ describe("SettingsShortcutCapture", () => {
       );
 
       await act(async () => {
-        fireEvent.click(unbindButtons[1]);
+        fireEvent.click(unbindButtons[1]!);
         await vi.advanceTimersByTimeAsync(0);
       });
 

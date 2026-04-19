@@ -208,6 +208,7 @@ export function SettingsShortcutCapture({
         type: "success",
         message: `Unbound ${conflict.description || conflict.actionId}`,
         duration: 5000,
+        priority: "low",
         action: {
           label: "Undo",
           onClick: async () => {
@@ -230,6 +231,7 @@ export function SettingsShortcutCapture({
                 type: "error",
                 message: "Failed to undo keybinding change",
                 duration: 3000,
+                priority: "low",
               });
             }
           },
@@ -241,6 +243,7 @@ export function SettingsShortcutCapture({
         type: "error",
         message: "Failed to unbind keybinding",
         duration: 3000,
+        priority: "low",
       });
     } finally {
       setIsUnbinding(false);
