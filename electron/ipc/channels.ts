@@ -421,6 +421,8 @@ export const CHANNELS = {
   NOTES_DELETE: "notes:delete",
   NOTES_SEARCH: "notes:search",
   NOTES_UPDATED: "notes:updated",
+  NOTES_WRITE_ATTACHMENT: "notes:write-attachment",
+  NOTES_GET_DIR: "notes:get-dir",
 
   DEV_PREVIEW_ENSURE: "dev-preview:ensure",
   DEV_PREVIEW_RESTART: "dev-preview:restart",

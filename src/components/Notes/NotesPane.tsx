@@ -24,6 +24,13 @@ import { notesTypographyExtension } from "./codeBlockExtension";
 import { MarkdownPreview } from "./MarkdownPreview";
 import { MarkdownToolbar } from "./MarkdownToolbar";
 import { useNoteVoiceInput } from "./useNoteVoiceInput";
+import {
+  buildAttachmentExtension,
+  buildMarkdownSnippet,
+  NOTES_MAX_ATTACHMENT_BYTES,
+  type AttachItem,
+} from "./attachmentExtension";
+import { useNotificationStore } from "@/store/notificationStore";
 
 export interface NotesPaneProps extends BasePanelProps {
   notePath: string;
@@ -70,6 +77,11 @@ export function NotesPane({
   const editorViewRef = useRef<EditorView | null>(null);
   const previewRef = useRef<HTMLDivElement>(null);
   const isSyncingRef = useRef(false);
+  const attachHandlerRef = useRef<(items: AttachItem[]) => void>(() => {});
+  const attachRejectedRef = useRef<(items: AttachItem[], reason: "oversize" | "empty") => void>(
+    () => {}
+  );
+  const [notesDir, setNotesDir] = useState<string | null>(null);
 
   const currentProject = useProjectStore((s) => s.currentProject);
   const panelWorktree = useWorktreeStore((s) =>
@@ -83,6 +95,92 @@ export function NotesPane({
       editorViewRef.current = null;
     }
   }, [viewMode]);
+
+  useEffect(() => {
+    let cancelled = false;
+    notesClient
+      .getDir()
+      .then((dir) => {
+        if (!cancelled) setNotesDir(dir);
+      })
+      .catch((e) => {
+        console.error("Failed to resolve notes directory:", e);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const handleAttach = useCallback(async (items: AttachItem[]) => {
+    const view = editorViewRef.current;
+    if (!view || items.length === 0) return;
+
+    const notify = useNotificationStore.getState().addNotification;
+
+    const snippets = await Promise.all(
+      items.map(async (item) => {
+        try {
+          const buffer = await item.file.arrayBuffer();
+          const data = new Uint8Array(buffer);
+          const { relativePath } = await notesClient.saveAttachment(
+            data,
+            item.mimeType,
+            item.originalName
+          );
+          return buildMarkdownSnippet(item, relativePath);
+        } catch (err) {
+          console.error("Failed to save attachment:", err);
+          notify({
+            type: "error",
+            priority: "high",
+            message: `Failed to attach "${item.originalName}": ${err instanceof Error ? err.message : String(err)}`,
+          });
+          return null;
+        }
+      })
+    );
+
+    const text = snippets.filter((s): s is string => s !== null).join("\n\n");
+    if (!text) return;
+
+    const currentView = editorViewRef.current;
+    if (!currentView) return;
+
+    const { from, to } = currentView.state.selection.main;
+    currentView.dispatch({
+      changes: { from, to, insert: text },
+      selection: { anchor: from + text.length },
+      scrollIntoView: true,
+    });
+    currentView.focus();
+  }, []);
+
+  const handleAttachRejected = useCallback((items: AttachItem[], reason: "oversize" | "empty") => {
+    const notify = useNotificationStore.getState().addNotification;
+    const names = items.map((i) => i.originalName || "file").join(", ");
+    if (reason === "empty") {
+      notify({
+        type: "warning",
+        priority: "high",
+        message: `Skipped empty file${items.length === 1 ? "" : "s"}: ${names}`,
+      });
+    } else {
+      const limitMb = Math.round(NOTES_MAX_ATTACHMENT_BYTES / (1024 * 1024));
+      notify({
+        type: "error",
+        priority: "high",
+        message: `Attachment${items.length === 1 ? "" : "s"} exceed ${limitMb} MB limit: ${names}`,
+      });
+    }
+  }, []);
+
+  useEffect(() => {
+    attachHandlerRef.current = handleAttach;
+  }, [handleAttach]);
+
+  useEffect(() => {
+    attachRejectedRef.current = handleAttachRejected;
+  }, [handleAttachRejected]);
 
   useEffect(() => {
     let cancelled = false;
@@ -328,6 +426,10 @@ export function NotesPane({
       EditorView.lineWrapping,
       notesTypographyExtension(),
       EditorView.theme({ ".cm-content": { paddingBottom: "52px" } }),
+      buildAttachmentExtension({
+        onAttach: (items) => attachHandlerRef.current(items),
+        onRejected: (items, reason) => attachRejectedRef.current(items, reason),
+      }),
     ],
     []
   );
@@ -380,7 +482,7 @@ export function NotesPane({
           )}
 
           {viewMode === "preview" ? (
-            <MarkdownPreview content={content} className="flex-1" />
+            <MarkdownPreview content={content} notesDir={notesDir} className="flex-1" />
           ) : viewMode === "split" ? (
             <div className="flex flex-1 min-h-0 overflow-hidden">
               <div className="flex-1 flex flex-col min-h-0 border-r border-daintree-border">
@@ -424,7 +526,12 @@ export function NotesPane({
                   )}
                 </div>
               </div>
-              <MarkdownPreview ref={previewRef} content={content} className="flex-1" />
+              <MarkdownPreview
+                ref={previewRef}
+                content={content}
+                notesDir={notesDir}
+                className="flex-1"
+              />
             </div>
           ) : (
             <div className="flex-1 flex flex-col min-h-0">

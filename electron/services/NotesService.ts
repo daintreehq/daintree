@@ -1,9 +1,47 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import crypto from "node:crypto";
 import { resilientAtomicWriteFile, resilientUnlink } from "../utils/fs.js";
 import matter from "gray-matter";
 import { nanoid } from "nanoid";
 import { normalizeTags } from "../../shared/utils/noteTags.js";
+
+export const NOTES_MAX_ATTACHMENT_BYTES = 50 * 1024 * 1024;
+
+const MIME_TO_EXT: Record<string, string> = {
+  "image/png": ".png",
+  "image/jpeg": ".jpg",
+  "image/jpg": ".jpg",
+  "image/gif": ".gif",
+  "image/webp": ".webp",
+  "image/svg+xml": ".svg",
+  "image/bmp": ".bmp",
+  "image/x-icon": ".ico",
+  "application/pdf": ".pdf",
+  "text/plain": ".txt",
+  "text/markdown": ".md",
+  "application/json": ".json",
+  "application/zip": ".zip",
+};
+
+function sanitizeExtension(ext: string): string {
+  if (!ext) return "";
+  const lower = ext.toLowerCase();
+  const match = lower.match(/^\.[a-z0-9]{1,10}$/);
+  return match ? match[0] : "";
+}
+
+function deriveExtension(mimeType: string, originalName?: string): string {
+  const fromMime = MIME_TO_EXT[mimeType.toLowerCase()];
+  if (fromMime) return fromMime;
+
+  if (originalName) {
+    const ext = sanitizeExtension(path.extname(originalName));
+    if (ext) return ext;
+  }
+
+  return ".bin";
+}
 
 export interface NoteMetadata {
   id: string;
@@ -374,5 +412,47 @@ export class NotesService {
 
   getProjectId(): string {
     return this.projectId;
+  }
+
+  getDirPath(): string {
+    return this.getNotesDir();
+  }
+
+  getAttachmentsDir(): string {
+    return path.join(this.getNotesDir(), "attachments");
+  }
+
+  async saveAttachment(
+    data: Buffer,
+    mimeType: string,
+    originalName?: string
+  ): Promise<{ relativePath: string; isNew: boolean }> {
+    if (data.byteLength === 0) {
+      throw new Error("Attachment is empty");
+    }
+    if (data.byteLength > NOTES_MAX_ATTACHMENT_BYTES) {
+      throw new Error(
+        `Attachment too large (${data.byteLength} bytes, limit ${NOTES_MAX_ATTACHMENT_BYTES})`
+      );
+    }
+
+    const extension = deriveExtension(mimeType, originalName);
+    const hash = crypto.createHash("sha256").update(data).digest("hex");
+    const filename = `${hash}${extension}`;
+    const relativePath = `attachments/${filename}`;
+    const attachmentsDir = this.getAttachmentsDir();
+    const absolutePath = path.join(attachmentsDir, filename);
+
+    try {
+      await fs.access(absolutePath);
+      return { relativePath, isNew: false };
+    } catch {
+      // File doesn't exist — write it below
+    }
+
+    await fs.mkdir(attachmentsDir, { recursive: true });
+    await resilientAtomicWriteFile(absolutePath, data);
+
+    return { relativePath, isNew: true };
   }
 }

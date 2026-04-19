@@ -4,12 +4,13 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 import { MarkdownPreview } from "../MarkdownPreview";
 
 const mockOpenExternal = vi.fn();
+const mockOpenPath = vi.fn();
 
 beforeEach(() => {
   vi.clearAllMocks();
   Object.defineProperty(window, "electron", {
     value: {
-      system: { openExternal: mockOpenExternal },
+      system: { openExternal: mockOpenExternal, openPath: mockOpenPath },
     },
     writable: true,
     configurable: true,
@@ -63,5 +64,62 @@ describe("MarkdownPreview", () => {
     const ref = vi.fn();
     render(<MarkdownPreview ref={ref} content="text" />);
     expect(ref).toHaveBeenCalledWith(expect.any(HTMLDivElement));
+  });
+
+  describe("attachment URL rewriting", () => {
+    it("rewrites attachments/ image URLs to daintree-file:// when notesDir is provided", () => {
+      const { container } = render(
+        <MarkdownPreview content="![shot](attachments/abc.png)" notesDir="/Users/me/notes/p1" />
+      );
+      const img = container.querySelector("img");
+      expect(img).toBeTruthy();
+      expect(img!.getAttribute("src")).toContain("daintree-file://");
+      expect(img!.getAttribute("src")).toContain(
+        encodeURIComponent("/Users/me/notes/p1/attachments/abc.png")
+      );
+      expect(img!.getAttribute("src")).toContain(
+        `root=${encodeURIComponent("/Users/me/notes/p1")}`
+      );
+    });
+
+    it("leaves attachment URLs unchanged when notesDir is absent", () => {
+      const { container } = render(<MarkdownPreview content="![shot](attachments/abc.png)" />);
+      const img = container.querySelector("img");
+      expect(img).toBeTruthy();
+      expect(img!.getAttribute("src")).not.toContain("daintree-file://");
+    });
+
+    it("rewrites attachment link URLs and opens via openPath on click", () => {
+      render(
+        <MarkdownPreview content="[spec](attachments/xyz.pdf)" notesDir="/Users/me/notes/p1" />
+      );
+      const link = screen.getByText("spec");
+      fireEvent.click(link);
+      expect(mockOpenPath).toHaveBeenCalledWith("/Users/me/notes/p1/attachments/xyz.pdf");
+      expect(mockOpenExternal).not.toHaveBeenCalled();
+    });
+
+    it("does not rewrite http/https URLs in attachments prefix check", () => {
+      const { container } = render(
+        <MarkdownPreview
+          content="![ok](https://example.com/img.png)"
+          notesDir="/Users/me/notes/p1"
+        />
+      );
+      const img = container.querySelector("img");
+      expect(img!.getAttribute("src")).toBe("https://example.com/img.png");
+    });
+
+    it("ignores URLs containing .. as a defensive guard", () => {
+      const { container } = render(
+        <MarkdownPreview
+          content="![evil](attachments/../escape.png)"
+          notesDir="/Users/me/notes/p1"
+        />
+      );
+      const img = container.querySelector("img");
+      // Should NOT contain daintree-file:// since we reject .. paths
+      expect(img!.getAttribute("src")).not.toContain("daintree-file://");
+    });
   });
 });

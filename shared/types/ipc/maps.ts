@@ -1356,6 +1356,14 @@ export interface IpcInvokeMap {
       query: string;
     };
   };
+  "notes:write-attachment": {
+    args: [data: Uint8Array, mimeType: string, originalName?: string];
+    result: { relativePath: string; isNew: boolean };
+  };
+  "notes:get-dir": {
+    args: [];
+    result: string;
+  };
 
   // Plugin channels
   "plugin:list": {

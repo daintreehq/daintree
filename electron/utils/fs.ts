@@ -49,18 +49,20 @@ function generateTempPath(filePath: string): string {
 /**
  * Atomic writeFile: writes to a temp file with flush, then renames to the
  * target path. If any step fails the temp file is cleaned up best-effort.
+ * Accepts strings (encoded with `encoding`) or binary buffers.
  */
 export async function resilientAtomicWriteFile(
   filePath: string,
-  data: string,
+  data: string | Buffer | Uint8Array,
   encoding: BufferEncoding = "utf-8"
 ): Promise<void> {
   const tempPath = generateTempPath(filePath);
+  const writeOptions =
+    typeof data === "string"
+      ? ({ encoding, flush: true } as Parameters<typeof writeFileSync>[2])
+      : ({ flush: true } as Parameters<typeof writeFileSync>[2]);
   try {
-    await stubbornFs.retry.writeFile({ timeout: RETRY_TIMEOUT_MS })(tempPath, data, {
-      encoding,
-      flush: true,
-    } as Parameters<typeof writeFileSync>[2]);
+    await stubbornFs.retry.writeFile({ timeout: RETRY_TIMEOUT_MS })(tempPath, data, writeOptions);
     await resilientRename(tempPath, filePath);
   } catch (error) {
     fsUnlink(tempPath).catch(() => {});

@@ -734,6 +734,12 @@ export interface ElectronAPI {
       }>;
       query: string;
     }>;
+    writeAttachment(
+      data: Uint8Array,
+      mimeType: string,
+      originalName?: string
+    ): Promise<{ relativePath: string; isNew: boolean }>;
+    getDir(): Promise<string>;
     onUpdated(
       callback: (data: {
         notePath: string;

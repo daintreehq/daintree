@@ -139,6 +139,23 @@ export function registerNotesHandlers(_deps: HandlerDependencies): () => void {
   };
   handlers.push(typedHandle(CHANNELS.NOTES_SEARCH, handleNotesSearch));
 
+  const handleNotesWriteAttachment = async (
+    data: Uint8Array,
+    mimeType: string,
+    originalName?: string
+  ) => {
+    const service = getNotesService();
+    const buffer = Buffer.from(data.buffer, data.byteOffset, data.byteLength);
+    return await service.saveAttachment(buffer, mimeType, originalName);
+  };
+  handlers.push(typedHandle(CHANNELS.NOTES_WRITE_ATTACHMENT, handleNotesWriteAttachment));
+
+  const handleNotesGetDir = async () => {
+    const service = getNotesService();
+    return service.getDirPath();
+  };
+  handlers.push(typedHandle(CHANNELS.NOTES_GET_DIR, handleNotesGetDir));
+
   return () => {
     handlers.forEach((dispose) => dispose());
   };

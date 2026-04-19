@@ -201,4 +201,106 @@ describe("NotesService", () => {
     const raw = await fs.readFile(path.join(userDataDir, "notes", projectId, "no-tags.md"), "utf8");
     expect(raw).not.toContain("tags:");
   });
+
+  describe("saveAttachment", () => {
+    it("writes an attachment with a sha256 content-addressed filename", async () => {
+      const data = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+      const result = await service.saveAttachment(data, "image/png", "clipboard.png");
+
+      expect(result.relativePath).toMatch(/^attachments\/[0-9a-f]{64}\.png$/);
+      expect(result.isNew).toBe(true);
+
+      const absolutePath = path.join(userDataDir, "notes", projectId, result.relativePath);
+      const written = await fs.readFile(absolutePath);
+      expect(written.equals(data)).toBe(true);
+    });
+
+    it("dedups identical bytes and returns the same relative path", async () => {
+      const data = Buffer.from("hello attachment");
+      const first = await service.saveAttachment(data, "image/png");
+      const second = await service.saveAttachment(data, "image/png");
+
+      expect(second.relativePath).toBe(first.relativePath);
+      expect(first.isNew).toBe(true);
+      expect(second.isNew).toBe(false);
+
+      const attachmentsDir = path.join(userDataDir, "notes", projectId, "attachments");
+      const files = await fs.readdir(attachmentsDir);
+      expect(files.length).toBe(1);
+    });
+
+    it("produces different paths for different bytes", async () => {
+      const first = await service.saveAttachment(Buffer.from("alpha"), "image/png");
+      const second = await service.saveAttachment(Buffer.from("beta"), "image/png");
+      expect(second.relativePath).not.toBe(first.relativePath);
+    });
+
+    it("maps MIME types to correct extensions", async () => {
+      const png = await service.saveAttachment(Buffer.from("a"), "image/png");
+      const jpeg = await service.saveAttachment(Buffer.from("b"), "image/jpeg");
+      const webp = await service.saveAttachment(Buffer.from("c"), "image/webp");
+      const svg = await service.saveAttachment(Buffer.from("d"), "image/svg+xml");
+      const gif = await service.saveAttachment(Buffer.from("e"), "image/gif");
+
+      expect(png.relativePath.endsWith(".png")).toBe(true);
+      expect(jpeg.relativePath.endsWith(".jpg")).toBe(true);
+      expect(webp.relativePath.endsWith(".webp")).toBe(true);
+      expect(svg.relativePath.endsWith(".svg")).toBe(true);
+      expect(gif.relativePath.endsWith(".gif")).toBe(true);
+    });
+
+    it("falls back to original filename extension for unknown MIME types", async () => {
+      const result = await service.saveAttachment(
+        Buffer.from("pdf body"),
+        "application/x-unknown",
+        "spec.pdf"
+      );
+      expect(result.relativePath.endsWith(".pdf")).toBe(true);
+    });
+
+    it("uses .bin when MIME and filename are both unknown", async () => {
+      const result = await service.saveAttachment(Buffer.from("mystery"), "application/x-unknown");
+      expect(result.relativePath.endsWith(".bin")).toBe(true);
+    });
+
+    it("rejects empty buffers", async () => {
+      await expect(service.saveAttachment(Buffer.alloc(0), "image/png")).rejects.toThrow(
+        "Attachment is empty"
+      );
+    });
+
+    it("rejects attachments that exceed the size limit", async () => {
+      const oversized = Buffer.alloc(51 * 1024 * 1024);
+      await expect(service.saveAttachment(oversized, "image/png")).rejects.toThrow(
+        /Attachment too large/
+      );
+    });
+
+    it("creates the attachments directory on first call", async () => {
+      const attachmentsDir = path.join(userDataDir, "notes", projectId, "attachments");
+      await expect(fs.access(attachmentsDir)).rejects.toBeDefined();
+
+      await service.saveAttachment(Buffer.from("hello"), "image/png");
+      await expect(fs.access(attachmentsDir)).resolves.toBeUndefined();
+    });
+
+    it("rejects path-traversal attempts via malicious originalName extensions", async () => {
+      // Extensions must not contain slashes or dots
+      const result = await service.saveAttachment(
+        Buffer.from("payload"),
+        "application/x-unknown",
+        "../../escape.weird"
+      );
+      // Should accept the extension but sanitize to safe form
+      expect(result.relativePath.startsWith("attachments/")).toBe(true);
+      expect(result.relativePath.includes("..")).toBe(false);
+    });
+  });
+
+  describe("getDirPath", () => {
+    it("returns the absolute notes directory for the project", () => {
+      const dir = service.getDirPath();
+      expect(dir).toBe(path.join(userDataDir, "notes", projectId));
+    });
+  });
 });

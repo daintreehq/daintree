@@ -44,6 +44,11 @@ export interface WriteResult {
   currentLastModified?: number;
 }
 
+export interface SaveAttachmentResult {
+  relativePath: string;
+  isNew: boolean;
+}
+
 export const notesClient = {
   create: (
     title: string,
@@ -76,6 +81,18 @@ export const notesClient = {
 
   search: (query: string): Promise<SearchResult> => {
     return window.electron.notes.search(query);
+  },
+
+  saveAttachment: (
+    data: Uint8Array,
+    mimeType: string,
+    originalName?: string
+  ): Promise<SaveAttachmentResult> => {
+    return window.electron.notes.writeAttachment(data, mimeType, originalName);
+  },
+
+  getDir: (): Promise<string> => {
+    return window.electron.notes.getDir();
   },
 
   onUpdated: (callback: (payload: NoteUpdatedPayload) => void): (() => void) => {

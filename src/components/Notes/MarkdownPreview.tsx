@@ -1,5 +1,5 @@
-import { forwardRef } from "react";
-import ReactMarkdown from "react-markdown";
+import { forwardRef, useMemo } from "react";
+import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
 import { cn } from "@/lib/utils";
@@ -7,10 +7,28 @@ import { cn } from "@/lib/utils";
 interface MarkdownPreviewProps {
   content: string;
   className?: string;
+  /** Absolute path to the notes directory for this project — used to serve attachment URLs via daintree-file://. */
+  notesDir?: string | null;
+}
+
+const ATTACHMENT_PREFIX = "attachments/";
+
+function buildUrlTransform(notesDir: string | null | undefined): (url: string) => string {
+  return (url: string) => {
+    if (url && notesDir && url.startsWith(ATTACHMENT_PREFIX) && !url.includes("..")) {
+      const decoded = decodeURIComponent(url);
+      const sep = notesDir.endsWith("/") || notesDir.endsWith("\\") ? "" : "/";
+      const absolutePath = `${notesDir}${sep}${decoded}`;
+      return `daintree-file://daintree/?path=${encodeURIComponent(absolutePath)}&root=${encodeURIComponent(notesDir)}`;
+    }
+    return defaultUrlTransform(url);
+  };
 }
 
 export const MarkdownPreview = forwardRef<HTMLDivElement, MarkdownPreviewProps>(
-  ({ content, className }, ref) => {
+  ({ content, className, notesDir }, ref) => {
+    const urlTransform = useMemo(() => buildUrlTransform(notesDir), [notesDir]);
+
     return (
       <div
         ref={ref}
@@ -22,6 +40,7 @@ export const MarkdownPreview = forwardRef<HTMLDivElement, MarkdownPreviewProps>(
         <ReactMarkdown
           remarkPlugins={[remarkGfm]}
           rehypePlugins={[[rehypeHighlight, { detect: true }]]}
+          urlTransform={urlTransform}
           components={{
             a({ href, children }) {
               return (
@@ -29,8 +48,21 @@ export const MarkdownPreview = forwardRef<HTMLDivElement, MarkdownPreviewProps>(
                   href={href}
                   onClick={(e) => {
                     e.preventDefault();
-                    if (href && /^https?:\/\/|^mailto:/i.test(href)) {
+                    if (!href) return;
+                    if (/^https?:\/\/|^mailto:/i.test(href)) {
                       window.electron.system.openExternal(href);
+                      return;
+                    }
+                    if (href.startsWith("daintree-file://")) {
+                      try {
+                        const parsed = new URL(href);
+                        const filePath = parsed.searchParams.get("path");
+                        if (filePath) {
+                          window.electron.system.openPath(filePath);
+                        }
+                      } catch {
+                        // Ignore malformed daintree-file URLs
+                      }
                     }
                   }}
                 >

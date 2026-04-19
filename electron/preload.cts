@@ -658,6 +658,8 @@ const CHANNELS = {
   NOTES_DELETE: "notes:delete",
   NOTES_SEARCH: "notes:search",
   NOTES_UPDATED: "notes:updated",
+  NOTES_WRITE_ATTACHMENT: "notes:write-attachment",
+  NOTES_GET_DIR: "notes:get-dir",
 
   // Dev Preview channels
   DEV_PREVIEW_ENSURE: "dev-preview:ensure",
@@ -2070,6 +2072,11 @@ const api: ElectronAPI = {
     delete: (notePath: string) => _unwrappingInvoke(CHANNELS.NOTES_DELETE, notePath),
 
     search: (query: string) => _unwrappingInvoke(CHANNELS.NOTES_SEARCH, query),
+
+    writeAttachment: (data: Uint8Array, mimeType: string, originalName?: string) =>
+      _unwrappingInvoke(CHANNELS.NOTES_WRITE_ATTACHMENT, data, mimeType, originalName),
+
+    getDir: () => _unwrappingInvoke(CHANNELS.NOTES_GET_DIR),
 
     onUpdated: (
       callback: (data: {
