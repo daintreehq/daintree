@@ -57,7 +57,11 @@ export function getSubmitEnterDelay(terminal: TerminalInfo): number {
   const agentId = getEffectiveAgentId(terminal);
   if (!agentId) return SUBMIT_ENTER_DELAY_MS;
   const config = getEffectiveAgentConfig(agentId);
-  return config?.capabilities?.submitEnterDelayMs ?? SUBMIT_ENTER_DELAY_MS;
+  const delayMs = config?.capabilities?.submitEnterDelayMs;
+  if (delayMs === undefined || delayMs === null || isNaN(delayMs) || delayMs < 0) {
+    return SUBMIT_ENTER_DELAY_MS;
+  }
+  return Math.min(delayMs, 5000);
 }
 
 export function isBracketedPaste(data: string): boolean {
