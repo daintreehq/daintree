@@ -175,10 +175,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
 
       - name: Comment PR with bundle size summary
-        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+        if: always() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
         run: |
           if [ -f dist/renderer-bundle-size-summary.md ]; then
-            gh pr comment ${{ github.event.pull_request.number }} --body-file dist/renderer-bundle-size-summary.md --edit-last --create-if-none
+            { echo '<!-- renderer-bundle-budget -->'; cat dist/renderer-bundle-size-summary.md; } | \
+              gh pr comment ${{ github.event.pull_request.number }} --body-file -
           fi
         env:
           GH_TOKEN: ${{ github.token }}

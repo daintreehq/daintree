@@ -20,6 +20,11 @@ describe("validateReport", () => {
     expect(validateReport(makeReport())).toEqual([]);
   });
 
+  it("accepts entryChunk null", () => {
+    const r = makeReport({ entryChunk: null });
+    expect(validateReport(r)).toEqual([]);
+  });
+
   it("rejects non-object", () => {
     expect(validateReport(null).length).toBeGreaterThan(0);
     expect(validateReport("x").length).toBeGreaterThan(0);
@@ -82,7 +87,7 @@ describe("compareReports", () => {
     });
     const result = compareReports(current, baseline, 0.05);
     expect(result.ok).toBe(false);
-    expect(result.failures.some((f) => f.metric === "entry chunk gzip")).toBe(true);
+    expect(result.failures.some((f) => f.metric.includes("entry chunk gzip"))).toBe(true);
   });
 
   it("fails when total JS gzip exceeds threshold", () => {
@@ -171,6 +176,22 @@ describe("compareReports", () => {
     const result = compareReports(current, noCss, 0.05);
     expect(result.ok).toBe(false);
     expect(result.failures.some((f) => f.metric === "total CSS gzip")).toBe(true);
+  });
+
+  it("detects regression when entry chunk name changes", () => {
+    const current = makeReport({
+      entryChunk: "app",
+      chunks: {
+        app: { raw: 600_000, gzip: 200_000 },
+        vendor: { raw: 800_000, gzip: 250_000 },
+        "vendor-xterm": { raw: 300_000, gzip: 90_000 },
+      },
+      totals: { js: { raw: 1_700_000, gzip: 540_000 }, css: { raw: 200_000, gzip: 40_000 } },
+    });
+    const result = compareReports(current, baseline, 0.05);
+    // Both old entry ("main") and new entry ("app") should be checked
+    expect(result.ok).toBe(false);
+    expect(result.failures.some((f) => f.name === "app")).toBe(true);
   });
 });
 

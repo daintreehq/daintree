@@ -62,19 +62,23 @@ function writeBaseline(report, { force }) {
     },
   };
 
-  // Shrinkage guard: refuse to overwrite if total JS gzip would drop
+  // Shrinkage guard: refuse to overwrite if total JS or CSS gzip would drop
   // significantly. Catches logger/plugin bugs that produce partial reports.
   if (existsSync(BASELINE_FILE) && !force) {
     try {
       const prior = JSON.parse(readFileSync(BASELINE_FILE, "utf8"));
-      if (prior?.totals?.js?.gzip > 0) {
-        const drop = (prior.totals.js.gzip - report.totals.js.gzip) / prior.totals.js.gzip;
-        if (drop > UPDATE_SHRINKAGE_THRESHOLD) {
-          console.error(
-            `::error::refusing to update baseline — total JS gzip would drop from ${prior.totals.js.gzip} to ${report.totals.js.gzip} (${(drop * 100).toFixed(1)}% shrinkage > ${(UPDATE_SHRINKAGE_THRESHOLD * 100).toFixed(0)}% threshold).`
-          );
-          console.error("   If the shrinkage is intentional, re-run with --force.");
-          process.exit(1);
+      for (const kind of ["js", "css"]) {
+        const priorGzip = prior?.totals?.[kind]?.gzip ?? 0;
+        const newGzip = report.totals[kind].gzip;
+        if (priorGzip > 0) {
+          const drop = (priorGzip - newGzip) / priorGzip;
+          if (drop > UPDATE_SHRINKAGE_THRESHOLD) {
+            console.error(
+              `::error::refusing to update baseline — total ${kind.toUpperCase()} gzip would drop from ${priorGzip} to ${newGzip} (${(drop * 100).toFixed(1)}% shrinkage > ${(UPDATE_SHRINKAGE_THRESHOLD * 100).toFixed(0)}% threshold).`
+            );
+            console.error("   If the shrinkage is intentional, re-run with --force.");
+            process.exit(1);
+          }
         }
       }
     } catch {
@@ -96,11 +100,13 @@ function parseArgs(argv) {
     else if (arg === "--force") args.force = true;
     else if (arg === "--override") args.override = true;
     else if (arg === "--threshold" && argv[i + 1]) {
-      args.threshold = parseFloat(argv[++i]);
-      if (!Number.isFinite(args.threshold) || args.threshold < 0) {
-        console.error(`::error::invalid threshold: ${argv[i]}`);
+      const val = argv[i + 1];
+      args.threshold = parseFloat(val);
+      if (!Number.isFinite(args.threshold) || args.threshold < 0 || args.threshold > 1) {
+        console.error(`::error::invalid threshold: ${val} (must be 0–1)`);
         process.exit(1);
       }
+      i++;
     }
   }
   return args;

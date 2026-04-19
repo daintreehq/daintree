@@ -17,42 +17,55 @@ export function compareReports(current, baseline, threshold) {
   const improvements = [];
   const chunkDeltas = [];
 
-  const entryName = current.entryChunk || baseline.entryChunk;
+  const curEntry = current.entryChunk;
+  const baseEntry = baseline.entryChunk;
 
-  // Entry chunk gzip
-  if (entryName) {
-    const cur = current.chunks?.[entryName];
-    const base = baseline.chunks?.[entryName];
-    if (cur && base) {
-      const delta = cur.gzip - base.gzip;
-      const pct = base.gzip > 0 ? delta / base.gzip : 0;
-      chunkDeltas.push({
-        name: entryName,
-        isEntry: true,
-        baseline: base.gzip,
-        current: cur.gzip,
+  // Gate entry chunk gzip. Compare both entry chunks independently — if the
+  // entry chunk name changed, the old entry chunk is still checked for growth
+  // and the new entry chunk is also checked against a zero baseline.
+  for (const [name, side, baseGzip, curGzip] of [
+    ...(baseEntry
+      ? [
+          [
+            baseEntry,
+            "baseline entry",
+            baseline.chunks?.[baseEntry]?.gzip ?? 0,
+            current.chunks?.[baseEntry]?.gzip ?? 0,
+          ],
+        ]
+      : []),
+    ...(curEntry && curEntry !== baseEntry
+      ? [
+          [
+            curEntry,
+            "current entry",
+            baseline.chunks?.[curEntry]?.gzip ?? 0,
+            current.chunks?.[curEntry]?.gzip ?? 0,
+          ],
+        ]
+      : []),
+  ]) {
+    const delta = curGzip - baseGzip;
+    const pct = baseGzip > 0 ? delta / baseGzip : curGzip > 0 ? Infinity : 0;
+    chunkDeltas.push({ name, isEntry: true, baseline: baseGzip, current: curGzip, delta, pct });
+    if (pct > threshold) {
+      failures.push({
+        metric: `${side} chunk gzip`,
+        name,
+        baseline: baseGzip,
+        current: curGzip,
         delta,
         pct,
       });
-      if (pct > threshold) {
-        failures.push({
-          metric: "entry chunk gzip",
-          name: entryName,
-          baseline: base.gzip,
-          current: cur.gzip,
-          delta,
-          pct,
-        });
-      } else if (delta < 0) {
-        improvements.push({
-          metric: "entry chunk gzip",
-          name: entryName,
-          baseline: base.gzip,
-          current: cur.gzip,
-          delta,
-          pct,
-        });
-      }
+    } else if (delta < 0) {
+      improvements.push({
+        metric: `${side} chunk gzip`,
+        name,
+        baseline: baseGzip,
+        current: curGzip,
+        delta,
+        pct,
+      });
     }
   }
 
@@ -103,12 +116,13 @@ export function compareReports(current, baseline, threshold) {
   }
 
   // Per-chunk deltas (informational, not gating)
+  const entryNames = new Set([curEntry, baseEntry].filter(Boolean));
   const allNames = new Set([
     ...Object.keys(current.chunks ?? {}),
     ...Object.keys(baseline.chunks ?? {}),
   ]);
   for (const name of allNames) {
-    if (name === entryName) continue;
+    if (entryNames.has(name)) continue;
     const cur = current.chunks?.[name]?.gzip ?? 0;
     const base = baseline.chunks?.[name]?.gzip ?? 0;
     const delta = cur - base;
@@ -123,7 +137,7 @@ export function compareReports(current, baseline, threshold) {
     improvements,
     chunkDeltas,
     summary: {
-      entryChunk: entryName,
+      entryChunk: curEntry || baseEntry,
       js: { baseline: jsBase, current: jsCur, delta: jsDelta, pct: jsPct },
       css: { baseline: cssBase, current: cssCur, delta: cssDelta, pct: cssPct },
     },
@@ -210,8 +224,12 @@ export function validateReport(data) {
     errs.push("must be a JSON object");
     return errs;
   }
-  if (data.entryChunk !== undefined && typeof data.entryChunk !== "string") {
-    errs.push("`entryChunk` must be a string if present");
+  if (
+    data.entryChunk !== undefined &&
+    data.entryChunk !== null &&
+    typeof data.entryChunk !== "string"
+  ) {
+    errs.push("`entryChunk` must be a string or null");
   }
   if (!data.chunks || typeof data.chunks !== "object" || Array.isArray(data.chunks)) {
     errs.push("`chunks` must be an object");
