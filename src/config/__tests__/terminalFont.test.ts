@@ -53,3 +53,33 @@ describe("ensureTerminalFontLoaded", () => {
     await expect(ensureTerminalFontLoaded()).resolves.toBeUndefined();
   });
 });
+
+describe("terminalFontReady", () => {
+  let loadMock: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    vi.resetModules();
+    loadMock = vi.fn().mockResolvedValue([{ family: "JetBrains Mono" }]);
+    Object.defineProperty(globalThis, "document", {
+      value: { fonts: { load: loadMock } },
+      configurable: true,
+    });
+  });
+
+  it("is initialised eagerly at module import", async () => {
+    await import("../terminalFont");
+    // Module import alone should have triggered the font load so the
+    // shared promise is already in-flight before any component mounts.
+    expect(loadMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("is the same promise instance as ensureTerminalFontLoaded()", async () => {
+    const mod = await import("../terminalFont");
+    expect(mod.terminalFontReady).toBe(mod.ensureTerminalFontLoaded());
+  });
+
+  it("resolves to undefined (never rejects)", async () => {
+    const { terminalFontReady } = await import("../terminalFont");
+    await expect(terminalFontReady).resolves.toBeUndefined();
+  });
+});

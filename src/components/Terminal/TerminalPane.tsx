@@ -796,19 +796,21 @@ function TerminalPaneComponent({
             )}
             onPointerDownCapture={handleXtermPointerDownCapture}
           >
-            <XtermAdapter
-              key={`${id}-${restartKey}`}
-              terminalId={id}
-              terminalType={type}
-              isInputLocked={isInputLocked}
-              onReady={handleReady}
-              onExit={handleExit}
-              onInput={handleInput}
-              className="absolute inset-0"
-              getRefreshTier={getRefreshTierCallback}
-              cwd={cwd}
-              hasBottomBar={showHybridInputBar}
-            />
+            <Suspense fallback={null}>
+              <XtermAdapter
+                key={`${id}-${restartKey}`}
+                terminalId={id}
+                terminalType={type}
+                isInputLocked={isInputLocked}
+                onReady={handleReady}
+                onExit={handleExit}
+                onInput={handleInput}
+                className="absolute inset-0"
+                getRefreshTier={getRefreshTierCallback}
+                cwd={cwd}
+                hasBottomBar={showHybridInputBar}
+              />
+            </Suspense>
             <ArtifactOverlay terminalId={id} worktreeId={worktreeId} cwd={cwd} />
             {isSearchOpen && (
               <TerminalSearchBar

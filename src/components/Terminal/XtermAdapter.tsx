@@ -1,4 +1,12 @@
-import React, { useCallback, useLayoutEffect, useMemo, useRef, useEffect, useState } from "react";
+import React, {
+  use,
+  useCallback,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useEffect,
+  useState,
+} from "react";
 import "@xterm/xterm/css/xterm.css";
 import { cn } from "@/lib/utils";
 import { terminalClient } from "@/clients";
@@ -8,6 +16,7 @@ import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { useTerminalAppearance } from "@/hooks/useTerminalAppearance";
 import { getScrollbackForType, PERFORMANCE_MODE_SCROLLBACK } from "@/utils/scrollbackConfig";
 import { getXtermOptions } from "@/config/xtermConfig";
+import { terminalFontReady } from "@/config/terminalFont";
 import { getSoftNewlineSequence } from "../../../shared/utils/terminalInputProtocol.js";
 import { keybindingService } from "@/services/KeybindingService";
 import { actionService } from "@/services/ActionService";
@@ -42,6 +51,13 @@ function XtermAdapterComponent({
   restoreOnAttach = false,
   hasBottomBar = false,
 }: XtermAdapterProps) {
+  // Gate xterm's grid measurement (which happens at `terminal.open()` inside
+  // `terminalInstanceService.attach`) on the JetBrains Mono font being ready.
+  // xterm does not re-measure after open, so measuring with the fallback stack
+  // would leave a permanently mis-sized grid. The promise is a module-level
+  // singleton so `use()` sees a stable reference across re-renders.
+  use(terminalFontReady);
+
   const containerRef = useRef<HTMLDivElement>(null);
   const prevDimensionsRef = useRef<{ cols: number; rows: number } | null>(null);
   const exitUnsubRef = useRef<(() => void) | null>(null);

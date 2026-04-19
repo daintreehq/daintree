@@ -47,7 +47,12 @@ async function bootstrap() {
   // subscription never gets a chance to reconcile (see issue #5158).
   void useAgentSettingsStore.getState().initialize();
 
-  await ensureTerminalFontLoaded();
+  // Kick off the terminal font load eagerly without blocking first paint.
+  // The app shell (sidebar, toolbar, etc.) doesn't need the monospace font —
+  // only terminal panels do. `XtermAdapter` suspends locally on the same
+  // singleton promise (exported as `terminalFontReady`) so the grid
+  // measurement at `terminal.open()` still waits for the font.
+  void ensureTerminalFontLoaded();
 
   const { default: App } = await import("./App");
 
