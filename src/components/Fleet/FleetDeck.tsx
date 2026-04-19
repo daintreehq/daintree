@@ -26,6 +26,7 @@ import { computeLiveSlotIds } from "@/utils/fleetDeckLiveSlots";
 import { matchesDeckFilter, DECK_FILTER_ORDER, DECK_FILTER_LABELS } from "@/utils/agentStateFilter";
 import { ClusterAttentionPill } from "./ClusterAttentionPill";
 import { FleetComposer } from "./FleetComposer";
+import { FleetScopeBar } from "./FleetScopeBar";
 import { MirrorTile } from "./MirrorTile";
 
 interface ScopeOption {
@@ -264,6 +265,10 @@ export function FleetDeck(): ReactElement | null {
 
       <div className="px-3 pt-1">
         <ClusterAttentionPill />
+      </div>
+
+      <div className="px-3 py-1">
+        <FleetScopeBar />
       </div>
 
       <nav

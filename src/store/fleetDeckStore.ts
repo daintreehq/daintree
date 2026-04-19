@@ -22,6 +22,8 @@ interface FleetDeckState {
   stateFilter: FleetDeckStateFilter;
   pinnedLiveIds: Set<string>;
   isHydrated: boolean;
+  alwaysPreview: boolean;
+  quorumThreshold: number;
 
   open: () => void;
   openWithScope: (scope: FleetDeckScope) => void;
@@ -32,6 +34,8 @@ interface FleetDeckState {
   setHeight: (height: number) => void;
   setScope: (scope: FleetDeckScope) => void;
   setStateFilter: (filter: FleetDeckStateFilter) => void;
+  setAlwaysPreview: (value: boolean) => void;
+  setQuorumThreshold: (value: number) => void;
   pinLive: (id: string) => void;
   unpinLive: (id: string) => void;
   togglePinLive: (id: string) => void;
@@ -64,6 +68,8 @@ export const useFleetDeckStore = create<FleetDeckState>()((set, get) => ({
   stateFilter: "all",
   pinnedLiveIds: new Set<string>(),
   isHydrated: false,
+  alwaysPreview: false,
+  quorumThreshold: 5,
 
   open: () => {
     if (get().isOpen) return;
@@ -126,6 +132,19 @@ export const useFleetDeckStore = create<FleetDeckState>()((set, get) => ({
     set({ stateFilter: filter });
   },
 
+  setAlwaysPreview: (value) => {
+    if (get().alwaysPreview === value) return;
+    set({ alwaysPreview: value });
+    void persistAlwaysPreview(value);
+  },
+
+  setQuorumThreshold: (value) => {
+    const clamped = Math.max(2, Math.min(50, value));
+    if (get().quorumThreshold === clamped) return;
+    set({ quorumThreshold: clamped });
+    void persistQuorumThreshold(clamped);
+  },
+
   pinLive: (id) =>
     set((s) => {
       if (s.pinnedLiveIds.has(id)) return {};
@@ -183,3 +202,7 @@ const persistEdge = (edge: FleetDeckEdge): Promise<void> => fleetDeckController.
 const persistWidth = (width: number): Promise<void> => fleetDeckController.persistWidth(width);
 
 const persistHeight = (height: number): Promise<void> => fleetDeckController.persistHeight(height);
+
+const persistAlwaysPreview = (_value: boolean): Promise<void> => Promise.resolve();
+
+const persistQuorumThreshold = (_value: number): Promise<void> => Promise.resolve();

@@ -280,6 +280,17 @@ export type ResourceEnvironment = {
   icon?: string;
 };
 
+/** A saved fleet scope — a named selection of terminal IDs or filter preset */
+export interface FleetSavedScope {
+  id: string;
+  name: string;
+  /** Explicit terminal IDs — takes precedence over filter when present */
+  terminalIds?: string[];
+  /** Filter-based scope that is re-evaluated against current panels on recall */
+  filter?: { scope: "current" | "all"; stateFilter: string };
+  createdAt: number;
+}
+
 /** Per-project terminal configuration overrides */
 export interface ProjectTerminalSettings {
   /** Override shell executable path (machine-local, not stored in .daintree/settings.json) */
@@ -355,6 +366,8 @@ export interface ProjectSettings {
   githubRemote?: string;
   /** Per-project worktree path pattern override (uses global default when unset) */
   worktreePathPattern?: string;
+  /** Saved fleet scopes for quick arm/recall */
+  fleetSavedScopes?: FleetSavedScope[];
   /** Per-project terminal configuration overrides */
   terminalSettings?: ProjectTerminalSettings;
   /** Per-project notification overrides (machine-local, never written to .daintree/settings.json) */

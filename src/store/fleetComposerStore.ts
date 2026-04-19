@@ -3,14 +3,21 @@ import { useFleetArmingStore } from "./fleetArmingStore";
 
 interface FleetComposerState {
   draft: string;
+  /** When true, the FleetComposer should open the dry-run dialog on next render */
+  dryRunRequested: boolean;
   setDraft: (draft: string) => void;
   clearDraft: () => void;
+  requestDryRun: () => void;
+  clearDryRunRequest: () => void;
 }
 
 export const useFleetComposerStore = create<FleetComposerState>()((set) => ({
   draft: "",
+  dryRunRequested: false,
   setDraft: (draft) => set({ draft }),
   clearDraft: () => set({ draft: "" }),
+  requestDryRun: () => set({ dryRunRequested: true }),
+  clearDryRunRequest: () => set({ dryRunRequested: false }),
 }));
 
 /**

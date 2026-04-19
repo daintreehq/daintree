@@ -303,6 +303,11 @@ export type BuiltInActionId =
   | "fleet.deck.toggle"
   | "fleet.deck.open"
   | "fleet.deck.close"
+  | "fleet.scope.save"
+  | "fleet.scope.recall"
+  | "fleet.scope.delete"
+  | "fleet.dryRun"
+  | "fleet.retryFailed"
   | "terminal.focusFleetComposer";
 
 export type ActionId = BuiltInActionId | (string & {});

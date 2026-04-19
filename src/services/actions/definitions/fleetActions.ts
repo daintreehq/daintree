@@ -1,13 +1,25 @@
 import { z } from "zod";
 import type { ActionRegistry } from "../actionTypes";
 import { usePanelStore } from "@/store/panelStore";
-import { useFleetArmingStore, isFleetArmEligible } from "@/store/fleetArmingStore";
+import {
+  useFleetArmingStore,
+  isFleetArmEligible,
+  collectEligibleIds,
+} from "@/store/fleetArmingStore";
 import {
   useFleetPendingActionStore,
   type FleetPendingActionKind,
 } from "@/store/fleetPendingActionStore";
 import { useFleetDeckStore } from "@/store/fleetDeckStore";
+import { useFleetSavedScopesStore } from "@/store/fleetSavedScopesStore";
+import { useFleetComposerStore } from "@/store/fleetComposerStore";
+import { useProjectStore } from "@/store/projectStore";
 import { terminalClient } from "@/clients";
+import { executeFleetBroadcast } from "@/components/Fleet/fleetExecution";
+import { resolveFleetBroadcastTargetIds } from "@/components/Fleet/fleetBroadcast";
+import { useNotificationStore } from "@/store/notificationStore";
+import { useCommandHistoryStore } from "@/store/commandHistoryStore";
+import { FLEET_BROADCAST_HISTORY_KEY } from "@/components/Fleet/fleetBroadcast";
 import type { TerminalInstance } from "@shared/types";
 
 interface ArmedSnapshot {
@@ -284,6 +296,123 @@ export function registerFleetActions(actions: ActionRegistry): void {
     scope: "renderer",
     run: async () => {
       useFleetDeckStore.getState().close();
+    },
+  }));
+
+  actions.set("fleet.scope.save", () => ({
+    id: "fleet.scope.save",
+    title: "Fleet: Save Scope",
+    description: "Save the current armed set as a named scope for quick recall",
+    category: "terminal",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    argsSchema: z.object({ name: z.string().min(1) }).optional(),
+    run: async (args: unknown) => {
+      const projectId = useProjectStore.getState().currentProject?.id;
+      if (!projectId) return;
+      const armedIds = Array.from(useFleetArmingStore.getState().armedIds);
+      if (armedIds.length === 0) return;
+      const name = (args as { name?: string } | undefined)?.name ?? prompt("Save scope as:");
+      if (!name?.trim()) return;
+      await useFleetSavedScopesStore.getState().saveScope(projectId, {
+        name: name.trim(),
+        terminalIds: armedIds,
+      });
+    },
+  }));
+
+  actions.set("fleet.scope.recall", () => ({
+    id: "fleet.scope.recall",
+    title: "Fleet: Recall Scope",
+    description: "Arm the terminals from a saved scope by name or index",
+    category: "terminal",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    argsSchema: z
+      .object({ scopeId: z.string().optional(), index: z.number().optional() })
+      .optional(),
+    run: async (args: unknown) => {
+      const a = args as { scopeId?: string; index?: number } | undefined;
+      const scopes = useFleetSavedScopesStore.getState().scopes;
+      let scope = a?.scopeId ? scopes.find((s) => s.id === a.scopeId) : undefined;
+      if (!scope && a?.index != null && a.index >= 0 && a.index < scopes.length) {
+        scope = scopes[a.index];
+      }
+      if (!scope) return;
+      if (scope.terminalIds && scope.terminalIds.length > 0) {
+        useFleetArmingStore.getState().armIds(scope.terminalIds);
+        return;
+      }
+      if (scope.filter) {
+        const ids = collectEligibleIds(scope.filter.scope as "current" | "all", null);
+        useFleetArmingStore.getState().armIds(ids);
+      }
+    },
+  }));
+
+  actions.set("fleet.scope.delete", () => ({
+    id: "fleet.scope.delete",
+    title: "Fleet: Delete Scope",
+    description: "Remove a saved scope",
+    category: "terminal",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    argsSchema: z.object({ scopeId: z.string() }).optional(),
+    run: async (args: unknown) => {
+      const projectId = useProjectStore.getState().currentProject?.id;
+      if (!projectId) return;
+      const scopeId = (args as { scopeId?: string } | undefined)?.scopeId;
+      if (!scopeId) return;
+      await useFleetSavedScopesStore.getState().deleteScope(projectId, scopeId);
+    },
+  }));
+
+  actions.set("fleet.dryRun", () => ({
+    id: "fleet.dryRun",
+    title: "Fleet: Dry-Run Preview",
+    description: "Open dry-run preview showing resolved payload per target before sending",
+    category: "terminal",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    run: async () => {
+      const draft = useFleetComposerStore.getState().draft;
+      if (draft.trim().length === 0) return;
+      useFleetComposerStore.getState().requestDryRun();
+    },
+  }));
+
+  actions.set("fleet.retryFailed", () => ({
+    id: "fleet.retryFailed",
+    title: "Fleet: Retry Failed",
+    description:
+      "Re-arm the terminals that failed in the last broadcast and re-send the last prompt",
+    category: "terminal",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    run: async () => {
+      const draft = useFleetComposerStore.getState().draft;
+      const lastEntry = useCommandHistoryStore
+        .getState()
+        .getProjectHistory(FLEET_BROADCAST_HISTORY_KEY)[0];
+      const prompt = draft.trim() || lastEntry?.prompt;
+      if (!prompt) return;
+      const targetIds = resolveFleetBroadcastTargetIds();
+      if (targetIds.length === 0) return;
+
+      const result = await executeFleetBroadcast(prompt, targetIds);
+      useNotificationStore.getState().addNotification({
+        type: result.failureCount > 0 ? "warning" : "success",
+        priority: "low",
+        message:
+          result.failureCount > 0
+            ? `Retry: ${result.successCount} succeeded, ${result.failureCount} still failing`
+            : `Retry: sent to ${result.successCount} agent${result.successCount === 1 ? "" : "s"}`,
+      });
     },
   }));
 }
