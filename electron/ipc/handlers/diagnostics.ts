@@ -29,30 +29,48 @@ import { typedHandle } from "../utils.js";
 
 let eventLoopHistogram: IntervalHistogram | null = null;
 
-async function writeBundleZip(zipPath: string, jsonContent: string): Promise<void> {
+async function writeBundleZip(
+  zipPath: string,
+  jsonContent: string,
+  includeLogs: boolean,
+  replacements: ReplacementRule[]
+): Promise<void> {
   const logDir = getLogDirectory();
   const logFile = getLogFilePath();
+
+  const logEntries: Array<{ name: string; content: string }> = [];
+
+  if (includeLogs) {
+    if (existsSync(logFile)) {
+      const raw = await fs.readFile(logFile, "utf-8");
+      logEntries.push({ name: "daintree.log", content: applyReplacements(raw, replacements) });
+    }
+
+    for (let i = 1; i <= 5; i++) {
+      const rotated = path.join(logDir, `daintree.log.${i}`);
+      if (existsSync(rotated)) {
+        const raw = await fs.readFile(rotated, "utf-8");
+        logEntries.push({
+          name: `daintree.log.${i}`,
+          content: applyReplacements(raw, replacements),
+        });
+      }
+    }
+  }
 
   return new Promise((resolve, reject) => {
     const output = createWriteStream(zipPath);
     const archive = archiver("zip", { zlib: { level: 6 } });
 
     output.on("close", resolve);
+    output.on("error", reject);
     archive.on("error", reject);
 
     archive.pipe(output);
     archive.append(jsonContent, { name: "diagnostics.json" });
 
-    if (existsSync(logFile)) {
-      archive.file(logFile, { name: "daintree.log" });
-    }
-
-    // Include rotated logs (.1 through .5)
-    for (let i = 1; i <= 5; i++) {
-      const rotated = path.join(logDir, `daintree.log.${i}`);
-      if (existsSync(rotated)) {
-        archive.file(rotated, { name: `daintree.log.${i}` });
-      }
+    for (const entry of logEntries) {
+      archive.append(entry.content, { name: entry.name });
     }
 
     void archive.finalize();
@@ -180,10 +198,11 @@ export function registerDiagnosticsHandlers(deps: HandlerDependencies): () => vo
   const handleSaveDiagnosticsBundle = async (
     savePayload: DiagnosticsBundleSavePayload
   ): Promise<boolean> => {
-    const { payload } = await collectDiagnosticsWithKeys(deps);
-    const filtered = filterSections(payload, savePayload.enabledSections);
+    const filtered = filterSections(savePayload.payload, savePayload.enabledSections);
     let json = safeStringify(filtered, 2);
     json = applyReplacements(json, savePayload.replacements as ReplacementRule[]);
+
+    const includeLogs = savePayload.enabledSections.logs !== false;
 
     const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
     const win = deps.windowRegistry?.getPrimary()?.browserWindow ?? deps.mainWindow;
@@ -198,7 +217,12 @@ export function registerDiagnosticsHandlers(deps: HandlerDependencies): () => vo
 
     if (canceled || !filePath) return false;
 
-    await writeBundleZip(filePath, json);
+    await writeBundleZip(
+      filePath,
+      json,
+      includeLogs,
+      savePayload.replacements as ReplacementRule[]
+    );
     shell.showItemInFolder(filePath);
     return true;
   };

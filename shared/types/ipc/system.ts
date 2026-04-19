@@ -221,6 +221,8 @@ export interface DiagnosticsReviewPayload {
 
 /** User selections sent to the save-bundle IPC. */
 export interface DiagnosticsBundleSavePayload {
+  /** The reviewed and filtered payload (what the user saw in preview). */
+  payload: Record<string, unknown>;
   /** Sections the user chose to include. */
   enabledSections: Record<string, boolean>;
   /** Find-and-replace redaction rules. */

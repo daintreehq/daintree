@@ -114,15 +114,22 @@ function DownloadDiagnosticsSection() {
     async (enabledSections: Record<string, boolean>, replacements: ReplacementRule[]) => {
       setIsSaving(true);
       try {
-        await systemClient.saveDiagnosticsBundle({ enabledSections, replacements });
-        setReviewOpen(false);
+        const payload = reviewPayload?.payload ?? {};
+        const saved = await systemClient.saveDiagnosticsBundle({
+          payload,
+          enabledSections,
+          replacements,
+        });
+        if (saved) {
+          setReviewOpen(false);
+        }
       } catch (err) {
         setDownloadError(err instanceof Error ? err.message : "Failed to save diagnostics bundle");
       } finally {
         setIsSaving(false);
       }
     },
-    []
+    [reviewPayload]
   );
 
   return (
