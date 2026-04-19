@@ -91,6 +91,17 @@ describe("createActionDefinitions", () => {
     expect(missing).toEqual([]);
   });
 
+  it("registers action.repeatLast with nonRepeatable set", async () => {
+    const actions = await createRegistry();
+
+    expect(actions.has("action.repeatLast")).toBe(true);
+    const factory = actions.get("action.repeatLast");
+    expect(factory).toBeDefined();
+    const def = factory!();
+    expect(def.nonRepeatable).toBe(true);
+    expect(def.danger).toBe("safe");
+  });
+
   it("covers all configured keybindings", async () => {
     const actions = await createRegistry();
     const { keybindingService } = await import("../../KeybindingService");

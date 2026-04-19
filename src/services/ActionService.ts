@@ -49,6 +49,21 @@ const REPEATABLE_SOURCES: ReadonlySet<ActionSource> = new Set<ActionSource>([
   "context-menu",
 ]);
 
+/**
+ * Snapshot args for replay. Structured clone isolates the captured copy from
+ * later mutation by the action's run body or the caller — non-cloneable values
+ * fall through unchanged.
+ */
+function cloneArgsForReplay(args: unknown): unknown {
+  if (args === undefined || args === null) return args;
+  if (typeof args !== "object") return args;
+  try {
+    return structuredClone(args);
+  } catch {
+    return args;
+  }
+}
+
 export interface LastDispatchedAction {
   actionId: ActionId;
   args: unknown;
@@ -151,7 +166,7 @@ export class ActionService {
       const result = await definition.run(validatedArgs, context);
       const durationMs = Date.now() - startMs;
       if (REPEATABLE_SOURCES.has(source) && !definition.nonRepeatable) {
-        this.lastAction = { actionId, args: validatedArgs };
+        this.lastAction = { actionId, args: cloneArgsForReplay(validatedArgs) };
       }
       void this.emitActionDispatchedEvent({
         actionId,

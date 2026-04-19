@@ -644,6 +644,41 @@ describe("ActionService", () => {
       });
     });
 
+    it("outer dispatch captures after inner dispatch completes (nested ordering)", async () => {
+      // Regression: when a user-dispatched action internally calls another
+      // dispatch with source: "user", the outer action must win the lastAction
+      // slot — otherwise Cmd+Shift+. replays the inner alias instead of the
+      // user's original intent.
+      service.register(makeAction("test.inner"));
+      service.register(
+        makeAction("test.outer", {
+          run: async () => {
+            await service.dispatch("test.inner" as ActionId, undefined, { source: "user" });
+          },
+        })
+      );
+
+      await service.dispatch("test.outer" as ActionId, { marker: "outer" }, { source: "user" });
+
+      expect(service.getLastAction()).toEqual({
+        actionId: "test.outer",
+        args: { marker: "outer" },
+      });
+    });
+
+    it("captured args are isolated from later caller mutation", async () => {
+      service.register(makeAction("test.mutable"));
+      const args = { list: [1, 2, 3] };
+
+      await service.dispatch("test.mutable" as ActionId, args, { source: "user" });
+      args.list.push(999);
+
+      expect(service.getLastAction()).toEqual({
+        actionId: "test.mutable",
+        args: { list: [1, 2, 3] },
+      });
+    });
+
     it("stores validated args, not the raw input", async () => {
       const schema = z.object({ name: z.string().default("default-name") });
       const action: ActionDefinition<typeof schema, void> = {
