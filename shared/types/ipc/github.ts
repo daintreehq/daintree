@@ -33,6 +33,33 @@ export interface GitHubRateLimitPayload {
   resetAt?: number;
 }
 
+/**
+ * Current health of the configured GitHub token.
+ *
+ * - `unknown`: no token configured or no probe has completed yet
+ * - `healthy`: the most recent health probe returned 2xx
+ * - `unhealthy`: the most recent health probe returned 401 (token expired/revoked)
+ *
+ * Network failures and non-401 errors deliberately do not transition the
+ * state — only an authoritative 401 from GitHub flips to `unhealthy`.
+ */
+export type GitHubTokenHealthStatus = "unknown" | "healthy" | "unhealthy";
+
+/** Push payload describing the current GitHub token health state */
+export interface GitHubTokenHealthPayload {
+  /** Current health status */
+  status: GitHubTokenHealthStatus;
+  /** Token version at the time of the last completed probe */
+  tokenVersion: number;
+  /** Unix epoch milliseconds at which the last probe completed */
+  checkedAt: number;
+  /**
+   * Captured SSO re-authorization URL (`X-GitHub-SSO: required; url=...`) if
+   * one was observed on any recent response. Expires one hour after capture.
+   */
+  ssoUrl?: string;
+}
+
 /** Project health data from GitHub API */
 export interface ProjectHealthData {
   ciStatus: "success" | "failure" | "error" | "pending" | "expected" | "none";

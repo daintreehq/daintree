@@ -33,6 +33,7 @@ import type {
   IssueDetectedPayload,
   IssueNotFoundPayload,
   GitHubRateLimitPayload,
+  GitHubTokenHealthPayload,
   GitStatus,
   KeyAction,
   TerminalRecipe,
@@ -2030,6 +2031,9 @@ const api: ElectronAPI = {
 
     onRateLimitChanged: (callback: (data: GitHubRateLimitPayload) => void) =>
       _typedOn(CHANNELS.GITHUB_RATE_LIMIT_CHANGED, callback),
+
+    onTokenHealthChanged: (callback: (data: GitHubTokenHealthPayload) => void) =>
+      _typedOn(CHANNELS.GITHUB_TOKEN_HEALTH_CHANGED, callback),
   },
 
   // Notes API

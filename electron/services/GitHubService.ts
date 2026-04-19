@@ -28,6 +28,7 @@ import {
   gitHubRateLimitService,
   GitHubRateLimitError,
 } from "./github/index.js";
+import { getLastAuthMetadata } from "./github/GitHubAuth.js";
 
 import type {
   RepoContext,
@@ -922,6 +923,14 @@ function parseGitHubError(error: unknown): string {
   }
 
   if (message.includes("SAML") || message.includes("SSO")) {
+    // `rateLimitAwareFetch` captures the `X-GitHub-SSO: required; url=...`
+    // header passively. Surface the exact re-authorization URL when we have
+    // one so the user can re-authorize in a single click instead of hunting
+    // through github.com.
+    const ssoUrl = getLastAuthMetadata()?.ssoUrl;
+    if (ssoUrl) {
+      return `SSO authorization required. Re-authorize at: ${ssoUrl}`;
+    }
     return "SSO authorization required. Re-authorize at github.com.";
   }
 

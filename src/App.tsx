@@ -23,6 +23,7 @@ import {
 import { useHibernationNotifications } from "./hooks/useHibernationNotifications";
 import { useIdleTerminalNotifications } from "./hooks/useIdleTerminalNotifications";
 import { useDiskSpaceWarnings } from "./hooks/useDiskSpaceWarnings";
+import { useGitHubTokenHealth } from "./hooks/useGitHubTokenHealth";
 import { useActionRegistry } from "./hooks/useActionRegistry";
 import { useUpdateListener } from "./hooks/useUpdateListener";
 import { useMainProcessToastListener } from "./hooks/useMainProcessToastListener";
@@ -145,6 +146,7 @@ function App() {
   useHibernationNotifications();
   useIdleTerminalNotifications();
   useDiskSpaceWarnings();
+  useGitHubTokenHealth();
   useUnloadCleanup();
   useResourceProfile();
 

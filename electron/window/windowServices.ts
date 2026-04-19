@@ -26,6 +26,7 @@ import { LATEST_SCHEMA_VERSION, MigrationRunner } from "../services/StoreMigrati
 import { initializeTelemetry, setOnboardingCompleteTag } from "../services/TelemetryService.js";
 import { activationFunnelService } from "../services/ActivationFunnelService.js";
 import { GitHubAuth } from "../services/github/GitHubAuth.js";
+import { gitHubTokenHealthService } from "../services/github/GitHubTokenHealthService.js";
 import { secureStorage } from "../services/SecureStorage.js";
 import { notificationService } from "../services/NotificationService.js";
 import { agentNotificationService } from "../services/AgentNotificationService.js";
@@ -358,6 +359,12 @@ export async function setupWindowServices(
           });
       }
     }
+
+    // Start background token-health polling (30-minute interval + focus/wake
+    // re-checks). The service guards itself with the GitHubAuth.tokenVersion
+    // so a stale probe cannot clobber a freshly-set token.
+    gitHubTokenHealthService.start();
+    console.log("[MAIN] GitHubTokenHealthService started");
 
     // Notifications (global singletons)
     agentNotificationService.initialize();
@@ -1088,6 +1095,7 @@ export async function setupWindowServices(
     globalServicesInitialized = false;
 
     getSystemSleepService().dispose();
+    gitHubTokenHealthService.dispose();
     notificationService.dispose();
     agentNotificationService.dispose();
     activationFunnelService.dispose();
