@@ -35,6 +35,7 @@ import { useProjectPresetsStore } from "@/store/projectPresetsStore";
 import { usePanelStore } from "@/store/panelStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useShallow } from "zustand/react/shallow";
+import { resolveEffectivePresetId } from "@shared/types";
 import {
   getDominantAgentState,
   agentStateDotColor,
@@ -104,7 +105,9 @@ export function AgentButton({
   // Only show the split/chevron UI when there are at least 2 presets; a single
   // preset is implicitly the default and doesn't warrant a picker.
   const hasPresets = presets.length >= 2;
-  const savedPresetId = agentSettings?.agents?.[type]?.presetId;
+  // Worktree-scoped pick wins over the agent-level default so switching
+  // worktrees doesn't silently surface another worktree's selection.
+  const savedPresetId = resolveEffectivePresetId(entry, activeWorktreeId);
   // Group by source. Project presets are identified by membership so that a
   // project preset whose id happens to start with "ccr-" still lands in
   // "Project Shared" rather than being stolen by the CCR group. Everything
@@ -170,6 +173,17 @@ export function AgentButton({
 
   const handleUnpinFromToolbar = () => {
     void useAgentSettingsStore.getState().setAgentPinned(type, false);
+  };
+
+  // Persist the toolbar pick to the worktree-scoped slot so repeated launches
+  // on the same worktree stay stable, while other worktrees keep their own
+  // defaults. Pass `undefined` to clear the worktree override (returning the
+  // button to the agent-level default). Guard on activeWorktreeId — when no
+  // worktree is active we skip persistence entirely rather than polluting the
+  // global scope.
+  const persistWorktreePick = (presetId: string | undefined) => {
+    if (!activeWorktreeId) return;
+    void useAgentSettingsStore.getState().updateWorktreePreset(type, activeWorktreeId, presetId);
   };
 
   const iconElement = (
@@ -346,6 +360,7 @@ export function AgentButton({
                     <DropdownMenuItem
                       className={cn(!savedPresetId && "font-medium")}
                       onSelect={() => {
+                        persistWorktreePick(undefined);
                         void actionService.dispatch(
                           "agent.launch",
                           { agentId: type, presetId: null },
@@ -369,6 +384,7 @@ export function AgentButton({
                             key={preset.id}
                             className={cn(savedPresetId === preset.id && "font-medium")}
                             onSelect={() => {
+                              persistWorktreePick(preset.id);
                               void actionService.dispatch(
                                 "agent.launch",
                                 { agentId: type, presetId: preset.id },
@@ -395,6 +411,7 @@ export function AgentButton({
                             key={preset.id}
                             className={cn(savedPresetId === preset.id && "font-medium")}
                             onSelect={() => {
+                              persistWorktreePick(preset.id);
                               void actionService.dispatch(
                                 "agent.launch",
                                 { agentId: type, presetId: preset.id },
@@ -419,6 +436,7 @@ export function AgentButton({
                             key={preset.id}
                             className={cn(savedPresetId === preset.id && "font-medium")}
                             onSelect={() => {
+                              persistWorktreePick(preset.id);
                               void actionService.dispatch(
                                 "agent.launch",
                                 { agentId: type, presetId: preset.id },
@@ -474,13 +492,14 @@ export function AgentButton({
               {presets.map((preset) => (
                 <ContextMenuItem
                   key={preset.id}
-                  onSelect={() =>
+                  onSelect={() => {
+                    persistWorktreePick(preset.id);
                     void actionService.dispatch(
                       "agent.launch",
                       { agentId: type, presetId: preset.id },
                       { source: "context-menu" }
-                    )
-                  }
+                    );
+                  }}
                 >
                   {preset.name}
                   {savedPresetId === preset.id ? " ✓" : ""}

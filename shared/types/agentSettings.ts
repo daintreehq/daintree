@@ -89,8 +89,21 @@ export interface AgentSettingsEntry {
   shareClipboardDirectory?: boolean;
   /** Override the default model for this agent in assistant/help contexts (e.g., "claude-opus-4-6") */
   assistantModelId?: string;
-  /** Selected preset ID for this agent (persisted per-agent across sessions) */
+  /**
+   * Agent-level default preset ID (persists across worktrees). Used as the
+   * fallback when a worktree has no scoped override. Set from Settings →
+   * Presets; the toolbar dropdown writes to `worktreePresets` instead so
+   * picking a preset in one worktree doesn't silently change what launches
+   * in another.
+   */
   presetId?: string;
+  /**
+   * Per-worktree preset overrides, keyed by worktreeId. Wins over `presetId`
+   * when resolving the effective launch preset. Updates via
+   * `updateWorktreePreset` in the renderer store so the IPC shallow-merge
+   * doesn't clobber sibling worktree keys.
+   */
+  worktreePresets?: Record<string, string>;
   /** User-defined custom presets for this agent (persisted, editable from Settings) */
   customPresets?: Array<{
     id: string;
@@ -144,6 +157,22 @@ export function getAgentSettingsEntry(
 ): AgentSettingsEntry {
   if (!settings || !settings.agents) return {};
   return settings.agents[agentId] ?? {};
+}
+
+/**
+ * Resolves the effective preset ID for a launch: worktree-scoped override
+ * wins, then agent-level default, else `undefined`. Single source of truth
+ * shared by `useAgentLauncher` and the toolbar components so resolution
+ * can't drift between call sites.
+ */
+export function resolveEffectivePresetId(
+  entry: AgentSettingsEntry | null | undefined,
+  worktreeId: string | null | undefined
+): string | undefined {
+  if (!entry) return undefined;
+  const scoped =
+    worktreeId && entry.worktreePresets ? entry.worktreePresets[worktreeId] : undefined;
+  return scoped ?? entry.presetId;
 }
 
 export interface GenerateAgentFlagsOptions {

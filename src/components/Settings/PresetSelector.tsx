@@ -49,7 +49,7 @@ export function PresetSelector({
 
   const selectedItem = useMemo((): Item => {
     if (!selectedPresetId) {
-      return { id: "", label: "Default (no overrides)", color: agentColor, source: "default" };
+      return { id: "", label: "Default (all worktrees)", color: agentColor, source: "default" };
     }
     // Match precedence order from getMergedPresets: custom wins over project
     // wins over CCR on ID collision. Resolve the badge/label against the
@@ -147,7 +147,7 @@ export function PresetSelector({
         <div role="listbox" aria-label="Preset" className="overflow-y-auto max-h-80">
           <PresetOption
             id=""
-            label="Default (no overrides)"
+            label="Default (all worktrees)"
             color={agentColor}
             isSelected={!selectedPresetId}
             onSelect={handleSelect}

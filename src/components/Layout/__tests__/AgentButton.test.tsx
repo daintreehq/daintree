@@ -19,8 +19,10 @@ import { render, fireEvent } from "@testing-library/react";
 import type { AgentSettings, CliAvailability } from "@shared/types";
 
 const dispatchMock = vi.fn();
+const updateWorktreePresetMock = vi.fn();
 
 let mockSettings: AgentSettings | null = null;
+let mockActiveWorktreeId: string | null = null;
 let mockCcrPresetsByAgent: Record<string, Array<{ id: string; name: string }>> = {};
 let mockMergedPresetsFn: (
   agentId: string
@@ -35,7 +37,10 @@ vi.mock("@/store/agentSettingsStore", () => ({
     (selector: (s: { settings: AgentSettings | null }) => unknown) =>
       selector({ settings: mockSettings }),
     {
-      getState: () => ({ setAgentPinned: vi.fn() }),
+      getState: () => ({
+        setAgentPinned: vi.fn(),
+        updateWorktreePreset: updateWorktreePresetMock,
+      }),
     }
   ),
 }));
@@ -59,7 +64,7 @@ vi.mock("@/store/panelStore", () => ({
 
 vi.mock("@/store/worktreeStore", () => ({
   useWorktreeSelectionStore: (selector: (s: { activeWorktreeId: string | null }) => unknown) =>
-    selector({ activeWorktreeId: null }),
+    selector({ activeWorktreeId: mockActiveWorktreeId }),
 }));
 
 vi.mock("@/hooks/useWorktrees", () => ({
@@ -167,7 +172,9 @@ function settingsWith(agents: Record<string, unknown>): AgentSettings {
 describe("AgentButton preset UX", () => {
   beforeEach(() => {
     dispatchMock.mockClear();
+    updateWorktreePresetMock.mockClear();
     mockSettings = null;
+    mockActiveWorktreeId = null;
     mockCcrPresetsByAgent = {};
     mockMergedPresetsFn = () => [];
   });
@@ -289,6 +296,135 @@ describe("AgentButton preset UX", () => {
       const texts = labels.map((el) => el.textContent);
       expect(texts).toContain("CCR Routes");
       expect(texts).toContain("Custom");
+    });
+  });
+
+  describe("worktree-scoped preset", () => {
+    it("primary click reads the worktree override when present, not the agent-level default", () => {
+      mockActiveWorktreeId = "wt-A";
+      mockSettings = settingsWith({
+        claude: {
+          presetId: "user-global",
+          worktreePresets: { "wt-A": "user-scoped" },
+        },
+      });
+      mockMergedPresetsFn = () => [
+        { id: "user-global", name: "Global" },
+        { id: "user-scoped", name: "Scoped" },
+      ];
+
+      const { getAllByRole } = render(
+        <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
+      );
+      const [primaryBtn] = getAllByRole("button") as HTMLElement[];
+      fireEvent.click(primaryBtn!);
+
+      expect(dispatchMock).toHaveBeenCalledWith(
+        "agent.launch",
+        { agentId: "claude", presetId: "user-scoped" },
+        { source: "user" }
+      );
+    });
+
+    it("primary click falls back to agent-level default when the active worktree has no override", () => {
+      mockActiveWorktreeId = "wt-B";
+      mockSettings = settingsWith({
+        claude: {
+          presetId: "user-global",
+          worktreePresets: { "wt-A": "user-scoped" },
+        },
+      });
+      mockMergedPresetsFn = () => [
+        { id: "user-global", name: "Global" },
+        { id: "user-scoped", name: "Scoped" },
+      ];
+
+      const { getAllByRole } = render(
+        <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
+      );
+      const [primaryBtn] = getAllByRole("button") as HTMLElement[];
+      fireEvent.click(primaryBtn!);
+
+      expect(dispatchMock).toHaveBeenCalledWith(
+        "agent.launch",
+        { agentId: "claude", presetId: "user-global" },
+        { source: "user" }
+      );
+    });
+
+    it("dropdown preset selection persists the pick to the worktree slot before dispatch", () => {
+      mockActiveWorktreeId = "wt-A";
+      mockSettings = settingsWith({ claude: {} });
+      mockMergedPresetsFn = () => [
+        { id: "user-alpha", name: "Alpha" },
+        { id: "user-beta", name: "Beta" },
+      ];
+
+      const { getAllByTestId } = render(
+        <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
+      );
+      // Dropdown items: 0 = Default, 1 = Alpha, 2 = Beta (first occurrence only
+      // — presets list is unsorted in tests so take items in render order).
+      const items = getAllByTestId("preset-item") as HTMLElement[];
+      // Pick the preset that is not "Default". Items include one "Default"
+      // menu entry plus one per preset.
+      const alphaItem = items.find((el) => el.textContent?.includes("Alpha"))!;
+      fireEvent.click(alphaItem);
+
+      expect(updateWorktreePresetMock).toHaveBeenCalledWith("claude", "wt-A", "user-alpha");
+      expect(dispatchMock).toHaveBeenCalledWith(
+        "agent.launch",
+        { agentId: "claude", presetId: "user-alpha" },
+        { source: "user" }
+      );
+    });
+
+    it("dropdown Default clears the worktree override before dispatching null", () => {
+      mockActiveWorktreeId = "wt-A";
+      mockSettings = settingsWith({
+        claude: { worktreePresets: { "wt-A": "user-alpha" } },
+      });
+      mockMergedPresetsFn = () => [
+        { id: "user-alpha", name: "Alpha" },
+        { id: "user-beta", name: "Beta" },
+      ];
+
+      const { getAllByTestId } = render(
+        <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
+      );
+      const items = getAllByTestId("preset-item") as HTMLElement[];
+      const defaultItem = items.find((el) => el.textContent?.includes("Default"))!;
+      fireEvent.click(defaultItem);
+
+      expect(updateWorktreePresetMock).toHaveBeenCalledWith("claude", "wt-A", undefined);
+      expect(dispatchMock).toHaveBeenCalledWith(
+        "agent.launch",
+        { agentId: "claude", presetId: null },
+        { source: "user" }
+      );
+    });
+
+    it("no-ops the worktree persist when no active worktree is set", () => {
+      mockActiveWorktreeId = null;
+      mockSettings = settingsWith({ claude: {} });
+      mockMergedPresetsFn = () => [
+        { id: "user-alpha", name: "Alpha" },
+        { id: "user-beta", name: "Beta" },
+      ];
+
+      const { getAllByTestId } = render(
+        <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
+      );
+      const items = getAllByTestId("preset-item") as HTMLElement[];
+      const alphaItem = items.find((el) => el.textContent?.includes("Alpha"))!;
+      fireEvent.click(alphaItem);
+
+      expect(updateWorktreePresetMock).not.toHaveBeenCalled();
+      expect(dispatchMock).toHaveBeenCalledWith(
+        "agent.launch",
+        { agentId: "claude", presetId: "user-alpha" },
+        { source: "user" }
+      );
     });
   });
 

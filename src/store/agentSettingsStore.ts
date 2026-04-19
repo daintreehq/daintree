@@ -75,6 +75,18 @@ interface AgentSettingsActions {
   refresh: () => Promise<void>;
   updateAgent: (agentId: string, updates: Partial<AgentSettingsEntry>) => Promise<void>;
   setAgentPinned: (agentId: string, pinned: boolean) => Promise<void>;
+  /**
+   * Set or clear the worktree-scoped preset override for an agent. Reads the
+   * current `worktreePresets` map, spreads sibling keys, then writes the merged
+   * map — bypasses the IPC handler's shallow-merge clobber on the submap.
+   * Passing `undefined` removes the key; the map collapses to `undefined` when
+   * empty.
+   */
+  updateWorktreePreset: (
+    agentId: string,
+    worktreeId: string,
+    presetId: string | undefined
+  ) => Promise<void>;
   reset: (agentId?: string) => Promise<void>;
 }
 
@@ -190,6 +202,23 @@ export const useAgentSettingsStore = create<AgentSettingsStore>()((set, get) => 
 
   setAgentPinned: async (agentId: string, pinned: boolean) => {
     return get().updateAgent(agentId, { pinned });
+  },
+
+  updateWorktreePreset: async (
+    agentId: string,
+    worktreeId: string,
+    presetId: string | undefined
+  ) => {
+    if (!worktreeId) return;
+    const current = get().settings?.agents?.[agentId]?.worktreePresets ?? {};
+    const next: Record<string, string> = { ...current };
+    if (presetId === undefined) {
+      delete next[worktreeId];
+    } else {
+      next[worktreeId] = presetId;
+    }
+    const merged = Object.keys(next).length > 0 ? next : undefined;
+    await get().updateAgent(agentId, { worktreePresets: merged });
   },
 
   reset: async (agentId?: string) => {

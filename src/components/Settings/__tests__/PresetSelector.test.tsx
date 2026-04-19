@@ -31,7 +31,7 @@ describe("PresetSelector", () => {
     onChange = vi.fn<(presetId: string | undefined) => void>();
   });
 
-  it("trigger label shows 'Default (no overrides)' when no preset selected", () => {
+  it("trigger label shows the agent-default copy when no preset selected", () => {
     const { getByTestId } = render(
       <PresetSelector
         selectedPresetId={undefined}

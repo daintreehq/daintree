@@ -246,6 +246,7 @@ export function AgentTrayButton({
   const ccrPresetsByAgent = useCcrPresetsStore((s) => s.ccrPresetsByAgent);
   const projectPresetsByAgent = useProjectPresetsStore((s) => s.presetsByAgent);
   const setAgentPinned = useAgentSettingsStore((s) => s.setAgentPinned);
+  const updateWorktreePreset = useAgentSettingsStore((s) => s.updateWorktreePreset);
 
   const getSortedActionMruList = useActionMruStore(useShallow((s) => s.getSortedActionMruList));
 
@@ -444,14 +445,25 @@ export function AgentTrayButton({
     projectPresetsByAgent,
   ]);
 
-  const handleLaunch = useCallback((agentId: BuiltInAgentId, presetId?: string | null) => {
-    setOpen(false);
-    void actionService.dispatch(
-      "agent.launch",
-      { agentId, ...(presetId !== undefined ? { presetId } : {}) },
-      { source: "user" }
-    );
-  }, []);
+  const handleLaunch = useCallback(
+    (agentId: BuiltInAgentId, presetId?: string | null) => {
+      setOpen(false);
+      // Persist the pick to the worktree-scoped slot so a subsequent main-
+      // button press on this worktree relaunches the same preset while other
+      // worktrees keep their own. `null` clears the scoped override (and
+      // dispatches with presetId: null to force a preset-free launch);
+      // `undefined` is the plain MRU fall-through and writes nothing.
+      if (activeWorktreeId && presetId !== undefined) {
+        void updateWorktreePreset(agentId, activeWorktreeId, presetId ?? undefined);
+      }
+      void actionService.dispatch(
+        "agent.launch",
+        { agentId, ...(presetId !== undefined ? { presetId } : {}) },
+        { source: "user" }
+      );
+    },
+    [activeWorktreeId, updateWorktreePreset]
+  );
 
   const handleSetup = (agentId: BuiltInAgentId) => {
     void actionService.dispatch(

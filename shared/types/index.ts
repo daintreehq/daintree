@@ -278,6 +278,7 @@ export {
   DEFAULT_AGENT_SETTINGS,
   DEFAULT_DANGEROUS_ARGS,
   getAgentSettingsEntry,
+  resolveEffectivePresetId,
   generateAgentFlags,
   generateAgentCommand,
   buildAgentLaunchFlags,
