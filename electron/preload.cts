@@ -744,6 +744,7 @@ const CHANNELS = {
   PROJECT_SYNC_INREPO_RECIPES: "project:sync-inrepo-recipes",
   PROJECT_UPDATE_INREPO_RECIPE: "project:update-inrepo-recipe",
   PROJECT_DELETE_INREPO_RECIPE: "project:delete-inrepo-recipe",
+  PROJECT_GET_INREPO_PRESETS: "project:get-inrepo-presets",
   GLOBAL_GET_RECIPES: "global:get-recipes",
   GLOBAL_ADD_RECIPE: "global:add-recipe",
   GLOBAL_UPDATE_RECIPE: "global:update-recipe",
@@ -1818,6 +1819,11 @@ const api: ElectronAPI = {
 
     deleteInRepoRecipe: (projectId: string, recipeName: string): Promise<void> =>
       _unwrappingInvoke(CHANNELS.PROJECT_DELETE_INREPO_RECIPE, { projectId, recipeName }),
+
+    getInRepoPresets: (
+      projectId: string
+    ): Promise<Record<string, import("../shared/config/agentRegistry.js").AgentPreset[]>> =>
+      _unwrappingInvoke(CHANNELS.PROJECT_GET_INREPO_PRESETS, projectId),
 
     getTerminals: (
       projectId: string

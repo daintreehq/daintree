@@ -384,3 +384,100 @@ describe("deleteInRepoRecipe", () => {
     await expect(identityFiles.deleteInRepoRecipe(tmpDir, "Nonexistent")).resolves.toBeUndefined();
   });
 });
+
+describe("readInRepoPresets", () => {
+  let tmpDir: string;
+  let identityFiles: ProjectIdentityFiles;
+  const PRESETS_DIR = ".daintree/presets";
+
+  beforeEach(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "daintree-presets-read-test-"));
+    identityFiles = new ProjectIdentityFiles();
+  });
+
+  afterEach(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("returns empty object when presets directory is absent", async () => {
+    const result = await identityFiles.readInRepoPresets(tmpDir);
+    expect(result).toEqual({});
+  });
+
+  it("loads presets from per-agent subdirectories", async () => {
+    const agentDir = path.join(tmpDir, PRESETS_DIR, "claude");
+    await fs.mkdir(agentDir, { recursive: true });
+    await fs.writeFile(
+      path.join(agentDir, "team-opus.json"),
+      JSON.stringify({ id: "team-opus", name: "Team Opus", env: { MODEL: "opus" } })
+    );
+
+    const result = await identityFiles.readInRepoPresets(tmpDir);
+    expect(result).toHaveProperty("claude");
+    expect(result.claude).toHaveLength(1);
+    expect(result.claude?.[0]?.id).toBe("team-opus");
+    expect(result.claude?.[0]?.name).toBe("Team Opus");
+  });
+
+  it("groups presets by the agent subdirectory they live in", async () => {
+    const claudeDir = path.join(tmpDir, PRESETS_DIR, "claude");
+    const codexDir = path.join(tmpDir, PRESETS_DIR, "codex");
+    await fs.mkdir(claudeDir, { recursive: true });
+    await fs.mkdir(codexDir, { recursive: true });
+    await fs.writeFile(path.join(claudeDir, "a.json"), JSON.stringify({ id: "a", name: "A" }));
+    await fs.writeFile(path.join(codexDir, "b.json"), JSON.stringify({ id: "b", name: "B" }));
+
+    const result = await identityFiles.readInRepoPresets(tmpDir);
+    expect(result.claude?.map((p) => p.id)).toEqual(["a"]);
+    expect(result.codex?.map((p) => p.id)).toEqual(["b"]);
+  });
+
+  it("skips malformed JSON files without throwing", async () => {
+    const agentDir = path.join(tmpDir, PRESETS_DIR, "claude");
+    await fs.mkdir(agentDir, { recursive: true });
+    await fs.writeFile(path.join(agentDir, "broken.json"), "{ not valid json");
+    await fs.writeFile(
+      path.join(agentDir, "valid.json"),
+      JSON.stringify({ id: "valid", name: "Valid" })
+    );
+
+    const result = await identityFiles.readInRepoPresets(tmpDir);
+    expect(result.claude).toHaveLength(1);
+    expect(result.claude?.[0]?.id).toBe("valid");
+  });
+
+  it("skips files missing required id or name fields", async () => {
+    const agentDir = path.join(tmpDir, PRESETS_DIR, "claude");
+    await fs.mkdir(agentDir, { recursive: true });
+    await fs.writeFile(path.join(agentDir, "no-id.json"), JSON.stringify({ name: "No ID" }));
+    await fs.writeFile(path.join(agentDir, "no-name.json"), JSON.stringify({ id: "no-name" }));
+    await fs.writeFile(path.join(agentDir, "ok.json"), JSON.stringify({ id: "ok", name: "OK" }));
+
+    const result = await identityFiles.readInRepoPresets(tmpDir);
+    expect(result.claude).toHaveLength(1);
+    expect(result.claude?.[0]?.id).toBe("ok");
+  });
+
+  it("ignores non-.json files in agent directories", async () => {
+    const agentDir = path.join(tmpDir, PRESETS_DIR, "claude");
+    await fs.mkdir(agentDir, { recursive: true });
+    await fs.writeFile(path.join(agentDir, "README.md"), "# Notes");
+    await fs.writeFile(path.join(agentDir, "p.json"), JSON.stringify({ id: "p", name: "P" }));
+
+    const result = await identityFiles.readInRepoPresets(tmpDir);
+    expect(result.claude).toHaveLength(1);
+  });
+
+  it("rejects unsafe agent subdirectory names", async () => {
+    const presetsDir = path.join(tmpDir, PRESETS_DIR);
+    await fs.mkdir(presetsDir, { recursive: true });
+    // "bad/name" can't be created as a directory name but "..hidden" passes
+    // normal filesystem rules and must be rejected by the SAFE_AGENT_ID check.
+    const unsafeDir = path.join(presetsDir, "has space");
+    await fs.mkdir(unsafeDir, { recursive: true });
+    await fs.writeFile(path.join(unsafeDir, "x.json"), JSON.stringify({ id: "x", name: "X" }));
+
+    const result = await identityFiles.readInRepoPresets(tmpDir);
+    expect(result).not.toHaveProperty("has space");
+  });
+});

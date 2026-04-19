@@ -9,6 +9,7 @@ import type {
   TerminalSnapshot,
   TabGroup,
 } from "@shared/types";
+import type { AgentPreset } from "@shared/config/agentRegistry";
 import type { ProjectSwitchOutgoingState } from "@shared/types/ipc/project";
 import type {
   GitInitOptions,
@@ -225,6 +226,10 @@ export const projectClient = {
 
   deleteInRepoRecipe: (projectId: string, recipeName: string): Promise<void> => {
     return window.electron.project.deleteInRepoRecipe(projectId, recipeName);
+  },
+
+  getInRepoPresets: (projectId: string): Promise<Record<string, AgentPreset[]>> => {
+    return window.electron.project.getInRepoPresets(projectId);
   },
 
   getTerminals: (projectId: string): Promise<TerminalSnapshot[]> => {

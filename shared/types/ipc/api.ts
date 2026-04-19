@@ -12,6 +12,7 @@ import type {
 } from "../project.js";
 import type { OnboardingState, ChecklistState, ChecklistItemId } from "./maps.js";
 import type { AgentSettings, AgentSettingsEntry } from "../agentSettings.js";
+import type { AgentPreset } from "../../config/agentRegistry.js";
 import type { VoiceInputStatus } from "../voice.js";
 export type { VoiceInputStatus };
 import type { ResourceProfilePayload } from "../resourceProfile.js";
@@ -469,6 +470,7 @@ export interface ElectronAPI {
       previousName?: string
     ): Promise<void>;
     deleteInRepoRecipe(projectId: string, recipeName: string): Promise<void>;
+    getInRepoPresets(projectId: string): Promise<Record<string, AgentPreset[]>>;
     /**
      * Get saved terminal snapshots for a project (per-project panel state).
      * Used for restoring panel layout when switching projects.

@@ -18,12 +18,19 @@ export interface PresetSelectorProps {
   selectedPresetId: string | undefined;
   allPresets: AgentPreset[];
   ccrPresets: AgentPreset[];
+  /** Per-team shared presets sourced from `.daintree/presets/`. Defaults to empty. */
+  projectPresets?: AgentPreset[];
   customPresets: AgentPreset[];
   onChange: (presetId: string | undefined) => void;
   agentColor: string;
 }
 
-type Item = { id: string; label: string; color: string; source: "default" | "ccr" | "custom" };
+type Item = {
+  id: string;
+  label: string;
+  color: string;
+  source: "default" | "ccr" | "project" | "custom";
+};
 
 function stripCcrPrefix(name: string): string {
   return name.replace(/^CCR:\s*/, "");
@@ -33,6 +40,7 @@ export function PresetSelector({
   selectedPresetId,
   allPresets: _allPresets,
   ccrPresets,
+  projectPresets = [],
   customPresets,
   onChange,
   agentColor,
@@ -43,15 +51,9 @@ export function PresetSelector({
     if (!selectedPresetId) {
       return { id: "", label: "Default (no overrides)", color: agentColor, source: "default" };
     }
-    const ccr = ccrPresets.find((f) => f.id === selectedPresetId);
-    if (ccr) {
-      return {
-        id: ccr.id,
-        label: stripCcrPrefix(ccr.name),
-        color: ccr.color ?? agentColor,
-        source: "ccr",
-      };
-    }
+    // Match precedence order from getMergedPresets: custom wins over project
+    // wins over CCR on ID collision. Resolve the badge/label against the
+    // entry that actually wins so the trigger reflects the effective preset.
     const custom = customPresets.find((f) => f.id === selectedPresetId);
     if (custom) {
       return {
@@ -61,10 +63,28 @@ export function PresetSelector({
         source: "custom",
       };
     }
+    const project = projectPresets.find((f) => f.id === selectedPresetId);
+    if (project) {
+      return {
+        id: project.id,
+        label: project.name,
+        color: project.color ?? agentColor,
+        source: "project",
+      };
+    }
+    const ccr = ccrPresets.find((f) => f.id === selectedPresetId);
+    if (ccr) {
+      return {
+        id: ccr.id,
+        label: stripCcrPrefix(ccr.name),
+        color: ccr.color ?? agentColor,
+        source: "ccr",
+      };
+    }
     // Stale selection — fall back to default presentation but don't clear
     // state here (the parent clears stale IDs on launch).
     return { id: "", label: "Default (no overrides)", color: agentColor, source: "default" };
-  }, [selectedPresetId, ccrPresets, customPresets, agentColor]);
+  }, [selectedPresetId, ccrPresets, projectPresets, customPresets, agentColor]);
 
   const handleSelect = (id: string) => {
     onChange(id || undefined);
@@ -98,6 +118,14 @@ export function PresetSelector({
               aria-hidden="true"
             >
               CCR
+            </span>
+          )}
+          {selectedItem.source === "project" && (
+            <span
+              className="text-[9px] uppercase tracking-wide text-daintree-text/40 bg-daintree-text/5 px-1 py-0.5 rounded shrink-0"
+              aria-hidden="true"
+            >
+              Project
             </span>
           )}
           <ChevronDown
@@ -138,6 +166,23 @@ export function PresetSelector({
                   isSelected={selectedPresetId === f.id}
                   onSelect={handleSelect}
                   testid={`preset-option-${f.id}`}
+                />
+              ))}
+            </>
+          )}
+          {projectPresets.length > 0 && (
+            <>
+              <Divider label="Project Shared" />
+              {projectPresets.map((f) => (
+                <PresetOption
+                  key={`project-${f.id}`}
+                  id={f.id}
+                  label={f.name}
+                  color={f.color ?? agentColor}
+                  badge="Project"
+                  isSelected={selectedPresetId === f.id}
+                  onSelect={handleSelect}
+                  testid={`preset-option-project-${f.id}`}
                 />
               ))}
             </>

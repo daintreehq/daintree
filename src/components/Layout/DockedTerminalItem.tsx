@@ -13,6 +13,7 @@ import {
 } from "@/store";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
+import { useProjectPresetsStore } from "@/store/projectPresetsStore";
 import { getMergedPresets } from "@/config/agents";
 import { TerminalContextMenu } from "@/components/Terminal/TerminalContextMenu";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
@@ -189,12 +190,18 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
   const presetCcrPresets = useCcrPresetsStore((s) =>
     terminal.agentId ? s.ccrPresetsByAgent[terminal.agentId] : undefined
   );
+  const presetProjectPresets = useProjectPresetsStore((s) =>
+    terminal.agentId ? s.presetsByAgent[terminal.agentId] : undefined
+  );
   const brandColor = useMemo(() => {
     const fallbackColor = getBrandColorHex(terminal.agentId ?? terminal.type);
     if (!terminal.agentPresetId || !terminal.agentId) return fallbackColor;
-    const preset = getMergedPresets(terminal.agentId, presetCustomPresets, presetCcrPresets).find(
-      (f) => f.id === terminal.agentPresetId
-    );
+    const preset = getMergedPresets(
+      terminal.agentId,
+      presetCustomPresets,
+      presetCcrPresets,
+      presetProjectPresets
+    ).find((f) => f.id === terminal.agentPresetId);
     return preset?.color ?? terminal.agentPresetColor ?? fallbackColor;
   }, [
     terminal.agentId,
@@ -203,6 +210,7 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
     terminal.agentPresetColor,
     presetCustomPresets,
     presetCcrPresets,
+    presetProjectPresets,
   ]);
 
   const isWorking = terminal.agentState === "working";

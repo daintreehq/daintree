@@ -6,6 +6,7 @@ import type {
   TerminalRecipe,
 } from "../types/index.js";
 import type { NotificationSettings } from "../../shared/types/ipc/api.js";
+import type { AgentPreset } from "../../shared/config/agentRegistry.js";
 import path from "path";
 import fs from "fs/promises";
 import { existsSync } from "fs";
@@ -110,6 +111,10 @@ export class ProjectStore {
 
   async deleteInRepoRecipe(projectPath: string, recipeName: string): Promise<void> {
     return this.identityFiles.deleteInRepoRecipe(projectPath, recipeName);
+  }
+
+  async readInRepoPresets(projectPath: string): Promise<Record<string, AgentPreset[]>> {
+    return this.identityFiles.readInRepoPresets(projectPath);
   }
 
   // --- DB CRUD ---

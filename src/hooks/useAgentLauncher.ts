@@ -9,6 +9,7 @@ import { isElectronAvailable } from "./useElectron";
 import { agentSettingsClient, systemClient } from "@/clients";
 import { useHomeDir } from "@/hooks/app/useHomeDir";
 import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
+import { useProjectPresetsStore } from "@/store/projectPresetsStore";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import type { AgentSettings, CliAvailability } from "@shared/types";
 import { generateAgentCommand, buildAgentLaunchFlags } from "@shared/types";
@@ -176,9 +177,16 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
           ? undefined
           : (launchOptions?.presetId ?? entry.presetId);
         const ccrPresets = useCcrPresetsStore.getState().ccrPresetsByAgent[agentId];
+        const projectPresets = useProjectPresetsStore.getState().presetsByAgent[agentId];
         preset =
           isAgent && !explicitDefault
-            ? getMergedPreset(agentId, resolvedPresetId, entry.customPresets, ccrPresets)
+            ? getMergedPreset(
+                agentId,
+                resolvedPresetId,
+                entry.customPresets,
+                ccrPresets,
+                projectPresets
+              )
             : undefined;
 
         // Stale presetId cleanup: if saved preset no longer exists, clear it

@@ -46,6 +46,12 @@ vi.mock("@/store/ccrPresetsStore", () => ({
   ) => selector({ ccrPresetsByAgent: mockCcrPresetsByAgent }),
 }));
 
+vi.mock("@/store/projectPresetsStore", () => ({
+  useProjectPresetsStore: (
+    selector: (s: { presetsByAgent: Record<string, unknown[]> }) => unknown
+  ) => selector({ presetsByAgent: {} }),
+}));
+
 vi.mock("@/store/panelStore", () => ({
   usePanelStore: (selector: (s: Record<string, unknown>) => unknown) =>
     selector({ panelsById: {}, panelIds: [] }),

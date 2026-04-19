@@ -3,6 +3,7 @@ import { getAgentIds, getAgentConfig, getMergedPresets, type AgentPreset } from 
 import { useAgentSettingsStore, useCliAvailabilityStore, useAgentPreferencesStore } from "@/store";
 import { cliAvailabilityClient } from "@/clients";
 import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
+import { useProjectPresetsStore } from "@/store/projectPresetsStore";
 import { Button } from "@/components/ui/button";
 import {
   DEFAULT_AGENT_SETTINGS,
@@ -103,6 +104,7 @@ export function AgentSettings({
   const setDefaultAgent = useAgentPreferencesStore((state) => state.setDefaultAgent);
 
   const ccrPresetsByAgent = useCcrPresetsStore((s) => s.ccrPresetsByAgent);
+  const projectPresetsByAgent = useProjectPresetsStore((s) => s.presetsByAgent);
 
   // Rate limiting refs
   const lastAddTimeRef = useRef(0);
@@ -141,7 +143,8 @@ export function AgentSettings({
     const entry = settings?.agents?.[activeAgentId];
     if (!entry?.presetId) return;
     const ccr = ccrPresetsByAgent[activeAgentId];
-    const merged = getMergedPresets(activeAgentId, entry.customPresets, ccr);
+    const project = projectPresetsByAgent[activeAgentId];
+    const merged = getMergedPresets(activeAgentId, entry.customPresets, ccr, project);
     const stillExists = merged.some((f) => f.id === entry.presetId);
     if (!stillExists) {
       void (async () => {
@@ -154,8 +157,9 @@ export function AgentSettings({
     void activeAgentId;
     void settings;
     void ccrPresetsByAgent;
+    void projectPresetsByAgent;
     clearStalePreset();
-  }, [activeAgentId, settings, ccrPresetsByAgent]);
+  }, [activeAgentId, settings, ccrPresetsByAgent, projectPresetsByAgent]);
 
   const agentOptions = useMemo(
     () =>
@@ -360,14 +364,32 @@ export function AgentSettings({
             {/* Preset section — picker + all per-preset settings inside */}
             {(() => {
               const ccrPresets = ccrPresetsByAgent[activeAgent.id];
+              const projectPresets = projectPresetsByAgent[activeAgent.id];
               const customPresets = activeEntry.customPresets;
-              const allPresets = getMergedPresets(activeAgent.id, customPresets, ccrPresets);
+              const allPresets = getMergedPresets(
+                activeAgent.id,
+                customPresets,
+                ccrPresets,
+                projectPresets
+              );
               const agentCfg = getAgentConfig(activeAgent.id);
               const supportsInlineMode = !!agentCfg?.capabilities?.inlineModeFlag;
 
               const selectedPreset = allPresets.find((f) => f.id === activeEntry.presetId);
-              const selectedIsCcr = selectedPreset?.id.startsWith("ccr-") ?? false;
-              const selectedIsCustom = selectedPreset?.id.startsWith("user-") ?? false;
+              // A custom preset with the same ID overrides CCR/project in
+              // getMergedPresets, so membership in customPresets is the
+              // canonical signal for "selected is custom" — prefix-based
+              // checks would mis-classify a project preset that happened to
+              // start with "user-".
+              const selectedIsCustom =
+                !!selectedPreset && (customPresets ?? []).some((f) => f.id === selectedPreset.id);
+              const selectedIsCcr =
+                !!selectedPreset && !selectedIsCustom && selectedPreset.id.startsWith("ccr-");
+              const selectedIsProject =
+                !!selectedPreset &&
+                !selectedIsCustom &&
+                !selectedIsCcr &&
+                (projectPresets ?? []).some((f) => f.id === selectedPreset.id);
               const isDefault = !selectedPreset;
 
               // ── handlers ──────────────────────────────────────────────────
@@ -666,6 +688,7 @@ export function AgentSettings({
                     selectedPresetId={activeEntry.presetId ?? undefined}
                     allPresets={allPresets}
                     ccrPresets={ccrPresets ?? []}
+                    projectPresets={projectPresets ?? []}
                     customPresets={customPresets ?? []}
                     onChange={(presetId) => {
                       void (async () => {
@@ -725,6 +748,56 @@ export function AgentSettings({
                             {selectedPreset.description}
                           </p>
                         )}
+                      </div>
+                      <div className="px-3 py-2.5">{behavioralSettings}</div>
+                    </div>
+                  )}
+
+                  {/* Detail view for selected project-shared preset — read-only, mirrors CCR */}
+                  {selectedPreset && selectedIsProject && (
+                    <div className="rounded-[var(--radius-md)] border border-daintree-border bg-daintree-bg/30 divide-y divide-daintree-border/50">
+                      <div className="px-3 py-2.5 space-y-2">
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-xs font-medium text-daintree-text">
+                            {selectedPreset.name}
+                          </span>
+                          <span
+                            data-testid="preset-badge-project"
+                            className="text-[10px] text-daintree-text/40 bg-daintree-text/10 px-1.5 py-0.5 rounded"
+                          >
+                            project
+                          </span>
+                          <button
+                            className="ml-auto text-daintree-text/30 hover:text-daintree-text transition-colors"
+                            onClick={() => handleDuplicatePreset(selectedPreset)}
+                            aria-label={`Duplicate ${selectedPreset.name}`}
+                            title="Duplicate as custom"
+                          >
+                            <Copy size={13} />
+                          </button>
+                        </div>
+                        {selectedPreset.env && Object.keys(selectedPreset.env).length > 0 && (
+                          <div className="space-y-1">
+                            {Object.entries(selectedPreset.env).map(([k, v]) => (
+                              <div
+                                key={k}
+                                className="flex items-center gap-2 font-mono text-[11px]"
+                              >
+                                <span className="text-daintree-text/50 shrink-0">{k}</span>
+                                <span className="text-daintree-text/30">=</span>
+                                <span className="text-daintree-accent/70 truncate">{v}</span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                        {selectedPreset.description && (
+                          <p className="text-[11px] text-daintree-text/40 select-text">
+                            {selectedPreset.description}
+                          </p>
+                        )}
+                        <p className="text-[10px] text-daintree-text/40 select-text">
+                          Sourced from <code>.daintree/presets/</code> in this project.
+                        </p>
                       </div>
                       <div className="px-3 py-2.5">{behavioralSettings}</div>
                     </div>

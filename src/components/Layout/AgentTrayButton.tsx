@@ -35,6 +35,7 @@ import { useActionMruStore } from "@/store/actionMruStore";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
+import { useProjectPresetsStore } from "@/store/projectPresetsStore";
 import { usePanelStore } from "@/store/panelStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useShallow } from "zustand/react/shallow";
@@ -63,6 +64,8 @@ type AgentRow = {
   dominantState: AgentState | null;
   isNew: boolean;
   presets?: AgentPreset[];
+  customPresetIds: Set<string>;
+  projectPresetIds: Set<string>;
 };
 
 const ACTIVE_AGENT_STATES: ReadonlySet<AgentState | undefined> = new Set<AgentState | undefined>([
@@ -79,11 +82,12 @@ function buildAgentRow(
   dominantState: AgentState | null,
   isNew: boolean,
   customPresets?: AgentPreset[],
-  ccrPresets?: AgentPreset[]
+  ccrPresets?: AgentPreset[],
+  projectPresets?: AgentPreset[]
 ): AgentRow | null {
   const config = getAgentConfig(id);
   if (!config) return null;
-  const presets = getMergedPresets(id, customPresets, ccrPresets);
+  const presets = getMergedPresets(id, customPresets, ccrPresets, projectPresets);
   const hasPresets = presets.length > 1;
   return {
     id,
@@ -93,6 +97,8 @@ function buildAgentRow(
     dominantState,
     isNew,
     presets: hasPresets ? presets : undefined,
+    customPresetIds: new Set((customPresets ?? []).map((f) => f.id)),
+    projectPresetIds: new Set((projectPresets ?? []).map((f) => f.id)),
   };
 }
 
@@ -143,8 +149,18 @@ function SplitLaunchItem({ row, onLaunch }: SplitLaunchItemProps) {
   };
 
   const ccrPresets = (row.presets ?? []).filter((f) => f.id.startsWith("ccr-"));
-  const customPresets = (row.presets ?? []).filter((f) => !f.id.startsWith("ccr-"));
-  const hasBothGroups = ccrPresets.length > 0 && customPresets.length > 0;
+  const projectPresets = (row.presets ?? []).filter(
+    (f) =>
+      !f.id.startsWith("ccr-") && !row.customPresetIds.has(f.id) && row.projectPresetIds.has(f.id)
+  );
+  const customPresets = (row.presets ?? []).filter(
+    (f) => !f.id.startsWith("ccr-") && !projectPresets.includes(f)
+  );
+  const groupCount =
+    (ccrPresets.length > 0 ? 1 : 0) +
+    (projectPresets.length > 0 ? 1 : 0) +
+    (customPresets.length > 0 ? 1 : 0);
+  const hasMultipleGroups = groupCount > 1;
 
   return (
     <DropdownMenuSub>
@@ -176,8 +192,8 @@ function SplitLaunchItem({ row, onLaunch }: SplitLaunchItemProps) {
         </DropdownMenuItem>
         {ccrPresets.length > 0 && (
           <>
-            {hasBothGroups && <DropdownMenuSeparator />}
-            {hasBothGroups && <DropdownMenuLabel>CCR Routes</DropdownMenuLabel>}
+            {hasMultipleGroups && <DropdownMenuSeparator />}
+            {hasMultipleGroups && <DropdownMenuLabel>CCR Routes</DropdownMenuLabel>}
             {ccrPresets.map((preset) => (
               <DropdownMenuItem key={preset.id} onSelect={() => onLaunch(row.id, preset.id)}>
                 <span className="inline-flex h-4 w-4 items-center justify-center shrink-0 mr-1.5">
@@ -188,10 +204,24 @@ function SplitLaunchItem({ row, onLaunch }: SplitLaunchItemProps) {
             ))}
           </>
         )}
+        {projectPresets.length > 0 && (
+          <>
+            {hasMultipleGroups && <DropdownMenuSeparator />}
+            {hasMultipleGroups && <DropdownMenuLabel>Project Shared</DropdownMenuLabel>}
+            {projectPresets.map((preset) => (
+              <DropdownMenuItem key={preset.id} onSelect={() => onLaunch(row.id, preset.id)}>
+                <span className="inline-flex h-4 w-4 items-center justify-center shrink-0 mr-1.5">
+                  <row.Icon brandColor={preset.color ?? getBrandColorHex(row.id)} />
+                </span>
+                {preset.name}
+              </DropdownMenuItem>
+            ))}
+          </>
+        )}
         {customPresets.length > 0 && (
           <>
-            {hasBothGroups && <DropdownMenuSeparator />}
-            {hasBothGroups && <DropdownMenuLabel>Custom</DropdownMenuLabel>}
+            {hasMultipleGroups && <DropdownMenuSeparator />}
+            {hasMultipleGroups && <DropdownMenuLabel>Custom</DropdownMenuLabel>}
             {customPresets.map((preset) => (
               <DropdownMenuItem key={preset.id} onSelect={() => onLaunch(row.id, preset.id)}>
                 <span className="inline-flex h-4 w-4 items-center justify-center shrink-0 mr-1.5">
@@ -213,6 +243,7 @@ export function AgentTrayButton({
 }: AgentTrayButtonProps) {
   const agentSettings = useAgentSettingsStore((s) => s.settings);
   const ccrPresetsByAgent = useCcrPresetsStore((s) => s.ccrPresetsByAgent);
+  const projectPresetsByAgent = useProjectPresetsStore((s) => s.presetsByAgent);
   const setAgentPinned = useAgentSettingsStore((s) => s.setAgentPinned);
 
   const getSortedActionMruList = useActionMruStore(useShallow((s) => s.getSortedActionMruList));
@@ -358,13 +389,15 @@ export function AgentTrayButton({
       const dominant = agentDominantStates.get(id) ?? null;
       const customPresets = agentSettings?.agents?.[id]?.customPresets;
       const ccrPresets = ccrPresetsByAgent[id];
+      const projectPresets = projectPresetsByAgent[id];
       const row = buildAgentRow(
         id,
         pinned,
         dominant,
         newAgentIds.has(id),
         customPresets,
-        ccrPresets
+        ccrPresets,
+        projectPresets
       );
       if (!row) continue;
 
@@ -407,6 +440,7 @@ export function AgentTrayButton({
     getSortedActionMruList,
     newAgentIds,
     ccrPresetsByAgent,
+    projectPresetsByAgent,
   ]);
 
   const handleLaunch = useCallback((agentId: BuiltInAgentId, presetId?: string | null) => {

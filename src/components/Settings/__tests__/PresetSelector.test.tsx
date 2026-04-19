@@ -142,6 +142,39 @@ describe("PresetSelector", () => {
     expect(getByTestId("preset-option-default").getAttribute("aria-selected")).toBe("false");
   });
 
+  it("renders 'Project Shared' group and badge when project presets are present", () => {
+    const project = mkPreset("team-opus", "Team Opus");
+    const { getByTestId, queryByTestId } = render(
+      <PresetSelector
+        selectedPresetId="team-opus"
+        allPresets={[project]}
+        ccrPresets={[]}
+        projectPresets={[project]}
+        customPresets={[]}
+        onChange={onChange}
+        agentColor="#888"
+      />
+    );
+    expect(queryByTestId("preset-group-project-shared")).toBeTruthy();
+    expect(getByTestId("preset-selector-trigger").textContent).toContain("Project");
+    expect(getByTestId("preset-option-project-team-opus")).toBeTruthy();
+  });
+
+  it("project group is absent when projectPresets is empty", () => {
+    const { queryByTestId } = render(
+      <PresetSelector
+        selectedPresetId={undefined}
+        allPresets={[]}
+        ccrPresets={[]}
+        projectPresets={[]}
+        customPresets={[]}
+        onChange={onChange}
+        agentColor="#888"
+      />
+    );
+    expect(queryByTestId("preset-group-project-shared")).toBeNull();
+  });
+
   it("keyboard Enter on an option invokes onChange", () => {
     const custom = mkPreset("user-x", "X");
     const { getByTestId } = render(

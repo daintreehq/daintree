@@ -8,6 +8,7 @@ import { registerEditorConfigHandlers } from "./handlers/editorConfig.js";
 import { registerAgentCliHandlers } from "./handlers/agentCli.js";
 import { registerProjectCrudHandlers } from "./handlers/projectCrud.js";
 import { registerProjectRecipesHandlers } from "./handlers/projectRecipes.js";
+import { registerProjectPresetsHandlers } from "./handlers/projectPresets.js";
 import { registerGlobalRecipesHandlers } from "./handlers/globalRecipes.js";
 import { registerGlobalEnvHandlers } from "./handlers/globalEnv.js";
 import { registerTerminalLayoutHandlers } from "./handlers/terminalLayout.js";
@@ -106,6 +107,7 @@ export function registerIpcHandlers(deps: HandlerDependencies): () => void {
     register(() => registerAgentCliHandlers(deps));
     register(() => registerProjectCrudHandlers(deps));
     register(() => registerProjectRecipesHandlers(deps));
+    register(() => registerProjectPresetsHandlers(deps));
     register(() => registerGlobalRecipesHandlers(deps));
     register(() => registerGlobalEnvHandlers(deps));
     register(() => registerTerminalLayoutHandlers(deps));

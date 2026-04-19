@@ -25,6 +25,7 @@ const registerMocks = vi.hoisted(() => ({
   registerAgentCliHandlers: vi.fn(),
   registerProjectCrudHandlers: vi.fn(),
   registerProjectRecipesHandlers: vi.fn(),
+  registerProjectPresetsHandlers: vi.fn(),
   registerGlobalRecipesHandlers: vi.fn(),
   registerTerminalLayoutHandlers: vi.fn(),
   registerProjectInRepoSettingsHandlers: vi.fn(),
@@ -99,6 +100,9 @@ vi.mock("../handlers/projectCrud.js", () => ({
 }));
 vi.mock("../handlers/projectRecipes.js", () => ({
   registerProjectRecipesHandlers: registerMocks.registerProjectRecipesHandlers,
+}));
+vi.mock("../handlers/projectPresets.js", () => ({
+  registerProjectPresetsHandlers: registerMocks.registerProjectPresetsHandlers,
 }));
 vi.mock("../handlers/globalRecipes.js", () => ({
   registerGlobalRecipesHandlers: registerMocks.registerGlobalRecipesHandlers,
