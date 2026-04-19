@@ -2,6 +2,7 @@ export const PERF_MARKS = {
   APP_BOOT_START: "app_boot_start",
   MAIN_WINDOW_CREATED: "main_window_created",
   RENDERER_READY: "renderer_ready",
+  RENDERER_FIRST_INTERACTIVE: "renderer_first_interactive",
 
   SERVICE_INIT_START: "service_init_start",
   SERVICE_INIT_MIGRATIONS_DONE: "service_init_migrations_done",

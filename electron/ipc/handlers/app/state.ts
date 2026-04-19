@@ -13,7 +13,10 @@ import { isWebGLHardwareAccelerated } from "../../../utils/gpuDetection.js";
 import { isGpuDisabledByFlag } from "../../../services/GpuCrashMonitorService.js";
 import { getCrashLoopGuard } from "../../../services/CrashLoopGuardService.js";
 import { inferKind } from "../../../../shared/utils/inferPanelKind.js";
-import { typedHandle } from "../../utils.js";
+import { typedHandle, typedHandleWithContext } from "../../utils.js";
+import { signalFirstInteractive } from "../../../window/deferredInitQueue.js";
+import { markPerformance } from "../../../utils/performance.js";
+import { PERF_MARKS } from "../../../../shared/perf/marks.js";
 
 export function registerAppStateHandlers(): () => void {
   const handlers: Array<() => void> = [];
@@ -484,6 +487,15 @@ export function registerAppStateHandlers(): () => void {
     app.exit(0);
   };
   handlers.push(typedHandle(CHANNELS.APP_FORCE_QUIT, handleAppForceQuit));
+
+  handlers.push(
+    typedHandleWithContext(CHANNELS.APP_FIRST_INTERACTIVE, async (ctx) => {
+      markPerformance(PERF_MARKS.RENDERER_FIRST_INTERACTIVE, {
+        webContentsId: ctx.webContentsId,
+      });
+      signalFirstInteractive(ctx.webContentsId);
+    })
+  );
 
   return () => handlers.forEach((cleanup) => cleanup());
 }

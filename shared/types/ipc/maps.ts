@@ -574,6 +574,10 @@ export interface IpcInvokeMap {
     args: [];
     result: void;
   };
+  "app:first-interactive": {
+    args: [];
+    result: void;
+  };
   "app:reload-config": {
     args: [];
     result: { success: boolean };

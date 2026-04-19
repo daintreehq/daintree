@@ -79,6 +79,11 @@ import { isSmokeTest, isDemoMode, smokeTestStart, exposeGc } from "../setup/envi
 import { extractCliPath, getPendingCliPath, setPendingCliPath } from "../lifecycle/appLifecycle.js";
 import type { WindowContext, WindowRegistry } from "./WindowRegistry.js";
 import { getProjectViewManager } from "./windowRef.js";
+import {
+  registerDeferredTask,
+  finalizeDeferredRegistration,
+  resetDeferredQueue,
+} from "./deferredInitQueue.js";
 
 const DEFAULT_TERMINAL_ID = "default";
 
@@ -167,91 +172,41 @@ function createAndDistributePorts(win: BrowserWindow, ctx: WindowContext): void 
   distributePortsToView(win, ctx, wc, ptyClient);
 }
 
-async function initializeDeferredServices(
-  window: BrowserWindow,
-  cliService: CliAvailabilityService,
-  eventBuf: EventBuffer,
-  windowRegistry?: WindowRegistry
-): Promise<void> {
-  console.log("[MAIN] Initializing deferred services in background...");
-  markPerformance(PERF_MARKS.DEFERRED_SERVICES_START);
-  const startTime = Date.now();
+async function evictStaleSessionFiles(): Promise<void> {
+  try {
+    const allProjects = projectStore.getAllProjects();
+    const knownIds = new Set<string>();
 
-  const results = await Promise.allSettled([
-    cliService.checkAvailability().then((availability) => {
-      console.log("[MAIN] CLI availability checked:", availability);
-      console.log("[MAIN] Rebuilding menu with agent availability...");
-      createApplicationMenu(window, cliService);
-      return availability;
-    }),
-  ]);
-
-  results.forEach((result, index) => {
-    if (result.status === "rejected") {
-      const serviceName = ["CliAvailabilityService"][index];
-      console.error(`[MAIN] ${serviceName} initialization failed:`, result.reason);
-    }
-  });
-
-  initializeHibernationService();
-  console.log("[MAIN] HibernationService initialized");
-
-  initializeIdleTerminalNotificationService();
-  console.log("[MAIN] IdleTerminalNotificationService initialized");
-
-  initializeSystemSleepService();
-  console.log("[MAIN] SystemSleepService initialized");
-
-  eventBuf.start();
-  console.log("[MAIN] EventBuffer started");
-
-  if (windowRegistry) {
-    mcpServerService.start(windowRegistry).catch((err) => {
-      console.error("[MAIN] MCP server failed to start:", err);
-    });
-  }
-
-  // Fire-and-forget session file eviction
-  (async () => {
-    try {
-      const allProjects = projectStore.getAllProjects();
-      const knownIds = new Set<string>();
-
-      const states = await Promise.all(allProjects.map((p) => projectStore.getProjectState(p.id)));
-      for (const state of states) {
-        if (state?.terminals) {
-          for (const t of state.terminals) {
-            knownIds.add(t.id);
-          }
-        }
-      }
-
-      const appTerminals = store.get("appState")?.terminals;
-      if (Array.isArray(appTerminals)) {
-        for (const t of appTerminals) {
+    const states = await Promise.all(allProjects.map((p) => projectStore.getProjectState(p.id)));
+    for (const state of states) {
+      if (state?.terminals) {
+        for (const t of state.terminals) {
           knownIds.add(t.id);
         }
       }
-
-      const result = await evictSessionFiles({
-        ttlMs: SESSION_EVICTION_TTL_MS,
-        maxBytes: SESSION_EVICTION_MAX_BYTES,
-        knownIds,
-      });
-
-      if (result.deleted > 0) {
-        console.log(
-          `[MAIN] Session eviction: deleted ${result.deleted} file(s), freed ${(result.bytesFreed / 1024 / 1024).toFixed(1)} MB`
-        );
-      }
-    } catch (err) {
-      console.warn("[MAIN] Session eviction failed:", err);
     }
-  })();
 
-  const elapsed = Date.now() - startTime;
-  markPerformance(PERF_MARKS.DEFERRED_SERVICES_COMPLETE, { durationMs: elapsed });
-  console.log(`[MAIN] All deferred services initialized in ${elapsed}ms`);
+    const appTerminals = store.get("appState")?.terminals;
+    if (Array.isArray(appTerminals)) {
+      for (const t of appTerminals) {
+        knownIds.add(t.id);
+      }
+    }
+
+    const result = await evictSessionFiles({
+      ttlMs: SESSION_EVICTION_TTL_MS,
+      maxBytes: SESSION_EVICTION_MAX_BYTES,
+      knownIds,
+    });
+
+    if (result.deleted > 0) {
+      console.log(
+        `[MAIN] Session eviction: deleted ${result.deleted} file(s), freed ${(result.bytesFreed / 1024 / 1024).toFixed(1)} MB`
+      );
+    }
+  } catch (err) {
+    console.warn("[MAIN] Session eviction failed:", err);
+  }
 }
 
 export interface SetupWindowServicesOptions {
@@ -321,16 +276,19 @@ export async function setupWindowServices(
       return;
     }
 
-    // Initialize Sentry after migrations — reads privacy.telemetryLevel,
-    // which is guaranteed populated by migration014. Once the SDK is ready,
-    // stamp the `onboarding_complete` scope tag so every subsequent event
-    // (crashes, analytics) is filterable by whether the user has finished
-    // first-run onboarding.
-    void initializeTelemetry().then(() => {
-      setOnboardingCompleteTag(store.get("onboarding")?.completed === true);
+    // Sentry and GitHub token validation are deferred to after the renderer
+    // reports first-interactive to avoid contending for the event loop while
+    // React hydrates. GitHubAuth.initializeStorage must stay eager because
+    // other services read tokens synchronously during startup.
+    registerDeferredTask({
+      name: "telemetry",
+      run: async () => {
+        await initializeTelemetry();
+        setOnboardingCompleteTag(store.get("onboarding")?.completed === true);
+      },
     });
 
-    // Initialize GitHubAuth
+    // Initialize GitHubAuth storage (must stay eager — synchronous reads)
     GitHubAuth.initializeStorage({
       get: () => secureStorage.get("userConfig.githubToken"),
       set: (token) => secureStorage.set("userConfig.githubToken", token),
@@ -342,21 +300,25 @@ export async function setupWindowServices(
       const token = GitHubAuth.getToken();
       if (token) {
         const versionAtStart = GitHubAuth.getTokenVersion();
-        GitHubAuth.validate(token)
-          .then((validation) => {
-            if (validation.valid && validation.username) {
-              GitHubAuth.setValidatedUserInfo(
-                validation.username,
-                validation.avatarUrl,
-                validation.scopes,
-                versionAtStart
-              );
-              console.log("[MAIN] GitHubAuth user info cached for:", validation.username);
+        registerDeferredTask({
+          name: "github-auth-validate",
+          run: async () => {
+            try {
+              const validation = await GitHubAuth.validate(token);
+              if (validation.valid && validation.username) {
+                GitHubAuth.setValidatedUserInfo(
+                  validation.username,
+                  validation.avatarUrl,
+                  validation.scopes,
+                  versionAtStart
+                );
+                console.log("[MAIN] GitHubAuth user info cached for:", validation.username);
+              }
+            } catch (err) {
+              console.warn("[MAIN] Failed to validate stored GitHub token:", err);
             }
-          })
-          .catch((err) => {
-            console.warn("[MAIN] Failed to validate stored GitHub token:", err);
-          });
+          },
+        });
       }
     }
 
@@ -373,7 +335,12 @@ export async function setupWindowServices(
     getActionBreadcrumbService().initialize();
 
     // Auto-updater
-    autoUpdaterService.initialize();
+    registerDeferredTask({
+      name: "auto-updater",
+      run: () => {
+        autoUpdaterService.initialize();
+      },
+    });
 
     // CCR config — discover Claude Code Router models as agent presets
     try {
@@ -385,6 +352,192 @@ export async function setupWindowServices(
     } catch (err) {
       console.warn("[MAIN] CcrConfigService init failed (non-fatal):", err);
     }
+
+    // ── Deferred global service starts ──
+    // These were previously run on the same tick as loadRenderer(), contending
+    // with the renderer for event-loop time while React hydrated and painted.
+    // They now drain sequentially after the renderer signals first-interactive
+    // (or after a fallback timeout), with `setImmediate` interleaved between
+    // tasks so IPC from the renderer stays responsive during drain.
+
+    registerDeferredTask({
+      name: "crash-recovery-backup-timer",
+      run: () => {
+        getCrashRecoveryService().startBackupTimer();
+      },
+    });
+
+    registerDeferredTask({
+      name: "hibernation-service",
+      run: () => {
+        initializeHibernationService();
+      },
+    });
+
+    registerDeferredTask({
+      name: "idle-terminal-notification-service",
+      run: () => {
+        initializeIdleTerminalNotificationService();
+      },
+    });
+
+    registerDeferredTask({
+      name: "system-sleep-service",
+      run: () => {
+        initializeSystemSleepService();
+      },
+    });
+
+    registerDeferredTask({
+      name: "disk-space-monitor",
+      run: () => {
+        if (stopDiskSpaceMonitor) return;
+        stopDiskSpaceMonitor = startDiskSpaceMonitor({
+          sendStatus: (payload) => {
+            if (windowRegistry) {
+              for (const wCtx of windowRegistry.all()) {
+                if (!wCtx.browserWindow.isDestroyed()) {
+                  sendToRenderer(wCtx.browserWindow, CHANNELS.WINDOW_DISK_SPACE_STATUS, payload);
+                }
+              }
+            }
+          },
+          onCriticalChange: (isCritical) => {
+            if (isCritical) {
+              getCrashRecoveryService().stopBackupTimer();
+              ptyClient?.suppressSessionPersistence(true);
+            } else {
+              getCrashRecoveryService().startBackupTimer();
+              ptyClient?.suppressSessionPersistence(false);
+            }
+          },
+          showNativeNotification: (title, body) => {
+            notificationService.showNativeNotification(title, body);
+          },
+          isWindowFocused: () => notificationService.isWindowFocused(),
+        });
+      },
+    });
+
+    registerDeferredTask({
+      name: "event-loop-lag-monitor",
+      run: () => {
+        if (!stopEventLoopLagMonitor) {
+          stopEventLoopLagMonitor = startEventLoopLagMonitor();
+        }
+        if (process.env.DAINTREE_PERF_CAPTURE === "1" && !stopProcessMemoryMonitor) {
+          stopProcessMemoryMonitor = startProcessMemoryMonitor();
+        }
+      },
+    });
+
+    registerDeferredTask({
+      name: "app-metrics-monitor",
+      run: () => {
+        if (stopAppMetricsMonitor) return;
+        stopAppMetricsMonitor = startAppMetricsMonitor({
+          clearCaches: async () => {
+            try {
+              await session.defaultSession.clearCache();
+            } catch {
+              /* non-critical */
+            }
+            try {
+              await session.defaultSession.clearStorageData({
+                storages: ["shadercache", "cachestorage"],
+              });
+            } catch {
+              /* non-critical */
+            }
+            try {
+              exposeGc?.();
+            } catch {
+              /* non-critical */
+            }
+            if (windowRegistry) {
+              for (const wCtx of windowRegistry.all()) {
+                if (!wCtx.browserWindow.isDestroyed()) {
+                  try {
+                    sendToRenderer(wCtx.browserWindow, CHANNELS.WINDOW_RECLAIM_MEMORY, {
+                      reason: "memory-pressure",
+                    });
+                  } catch {
+                    /* non-critical */
+                  }
+                }
+              }
+            }
+          },
+          destroyHiddenWebviews: async (tier) => {
+            if (windowRegistry) {
+              for (const wCtx of windowRegistry.all()) {
+                if (wCtx.browserWindow.isDestroyed()) continue;
+                try {
+                  if (wCtx.services.portalManager) {
+                    const evictedTabIds = await wCtx.services.portalManager.destroyHiddenTabs();
+                    if (evictedTabIds.length > 0) {
+                      sendToRenderer(wCtx.browserWindow, CHANNELS.PORTAL_TABS_EVICTED, {
+                        tabIds: evictedTabIds,
+                      });
+                    }
+                  }
+                } catch {
+                  /* non-critical */
+                }
+                try {
+                  sendToRenderer(wCtx.browserWindow, CHANNELS.WINDOW_DESTROY_HIDDEN_WEBVIEWS, {
+                    tier,
+                  });
+                } catch {
+                  /* non-critical */
+                }
+              }
+            }
+          },
+          hibernateIdleProjects: async () => {
+            await getHibernationService().hibernateUnderMemoryPressure();
+          },
+          trimPtyHostState: () => {
+            ptyClient?.trimState(SCROLLBACK_BACKGROUND);
+          },
+        });
+      },
+    });
+
+    // Must register AFTER event-loop-lag and app-metrics monitors so it can
+    // read their data once its own start() fires.
+    registerDeferredTask({
+      name: "resource-profile-service",
+      run: () => {
+        if (resourceProfileService) return;
+        resourceProfileService = new ResourceProfileService({
+          getPtyClient: () => ptyClient,
+          getWorkspaceClient: () => workspaceClient,
+          getHibernationService: () => getHibernationService(),
+          getProjectViewManager: () => getProjectViewManager(),
+          getUserCachedViewLimit: () =>
+            store.get("terminalConfig")?.cachedProjectViews ??
+            (process.env.DAINTREE_E2E_MODE ? 4 : 1),
+        });
+        resourceProfileService.start();
+      },
+    });
+
+    if (windowRegistry) {
+      const registryRef = windowRegistry;
+      registerDeferredTask({
+        name: "mcp-server",
+        run: () =>
+          mcpServerService.start(registryRef).catch((err) => {
+            console.error("[MAIN] MCP server failed to start:", err);
+          }),
+      });
+    }
+
+    registerDeferredTask({
+      name: "session-eviction",
+      run: () => evictStaleSessionFiles(),
+    });
   }
 
   // ── Per-window initialization ──
@@ -395,6 +548,32 @@ export async function setupWindowServices(
     cliAvailabilityService = new CliAvailabilityService();
   }
   createApplicationMenu(win, cliAvailabilityService);
+
+  // Per-window deferred work. Menu is window-specific, so each window queues
+  // its own CLI check + menu rebuild. Registered here (before any awaits that
+  // could hang) so finalize below is guaranteed to run.
+  const cliService = cliAvailabilityService;
+  registerDeferredTask({
+    name: `cli-availability-check:${win.id}`,
+    run: async () => {
+      try {
+        const availability = await cliService.checkAvailability();
+        console.log("[MAIN] CLI availability checked:", availability);
+        if (!win.isDestroyed()) {
+          createApplicationMenu(win, cliService);
+        }
+      } catch (err) {
+        console.error("[MAIN] CliAvailabilityService initialization failed:", err);
+      }
+    },
+  });
+
+  // Arm the drain trigger immediately. All tasks for this window are now
+  // registered; any subsequent `await` in setupWindowServices could hang
+  // (PTY host, workspace loadProject, plugin init) and must not block the
+  // deferred queue from becoming drainable. The renderer's first-interactive
+  // IPC fires on the happy path; the 10s fallback drains on hang.
+  finalizeDeferredRegistration();
 
   if (windowRegistry) {
     notificationService.initialize(windowRegistry);
@@ -499,6 +678,10 @@ export async function setupWindowServices(
 
   // Per-window services
   ctx.services.eventBuffer = new EventBuffer(1000);
+  // EventBuffer.start() must run eagerly — it subscribes to the internal event
+  // bus so early-boot events (migrations, PTY init, hydration) reach the
+  // inspector. Deferring would drop those events.
+  ctx.services.eventBuffer.start();
   ctx.services.portalManager = new PortalManager(win);
   ctx.services.projectSwitchService = new ProjectSwitchService({
     mainWindow: win,
@@ -884,47 +1067,6 @@ export async function setupWindowServices(
     return;
   }
 
-  // Deferred services
-  initializeDeferredServices(
-    win,
-    cliAvailabilityService!,
-    ctx.services.eventBuffer!,
-    windowRegistry
-  ).catch((error) => {
-    console.error("[MAIN] Deferred services initialization failed:", error);
-  });
-
-  getCrashRecoveryService().startBackupTimer();
-
-  // Disk space monitor (global)
-  if (!stopDiskSpaceMonitor) {
-    stopDiskSpaceMonitor = startDiskSpaceMonitor({
-      sendStatus: (payload) => {
-        // Broadcast to all windows
-        if (windowRegistry) {
-          for (const wCtx of windowRegistry.all()) {
-            if (!wCtx.browserWindow.isDestroyed()) {
-              sendToRenderer(wCtx.browserWindow, CHANNELS.WINDOW_DISK_SPACE_STATUS, payload);
-            }
-          }
-        }
-      },
-      onCriticalChange: (isCritical) => {
-        if (isCritical) {
-          getCrashRecoveryService().stopBackupTimer();
-          ptyClient?.suppressSessionPersistence(true);
-        } else {
-          getCrashRecoveryService().startBackupTimer();
-          ptyClient?.suppressSessionPersistence(false);
-        }
-      },
-      showNativeNotification: (title, body) => {
-        notificationService.showNativeNotification(title, body);
-      },
-      isWindowFocused: () => notificationService.isWindowFocused(),
-    });
-  }
-
   // CLI path handling — skip if this window was opened with an explicit initialProjectPath
   if (!opts.initialProjectPath) {
     const firstLaunchCliPath = !processArgvCliHandled ? extractCliPath(process.argv) : null;
@@ -942,98 +1084,6 @@ export async function setupWindowServices(
     handleDirectoryOpen(opts.initialProjectPath, win, cliAvailabilityService ?? undefined).catch(
       (err) => console.error("[MAIN] Failed to open initial project path:", err)
     );
-  }
-
-  // Performance monitors (global)
-  if (!stopEventLoopLagMonitor) {
-    stopEventLoopLagMonitor = startEventLoopLagMonitor();
-  }
-  if (process.env.DAINTREE_PERF_CAPTURE === "1" && !stopProcessMemoryMonitor) {
-    stopProcessMemoryMonitor = startProcessMemoryMonitor();
-  }
-
-  if (!stopAppMetricsMonitor) {
-    stopAppMetricsMonitor = startAppMetricsMonitor({
-      clearCaches: async () => {
-        try {
-          await session.defaultSession.clearCache();
-        } catch {
-          /* non-critical */
-        }
-        try {
-          await session.defaultSession.clearStorageData({
-            storages: ["shadercache", "cachestorage"],
-          });
-        } catch {
-          /* non-critical */
-        }
-        try {
-          exposeGc?.();
-        } catch {
-          /* non-critical */
-        }
-        // Broadcast to all windows
-        if (windowRegistry) {
-          for (const wCtx of windowRegistry.all()) {
-            if (!wCtx.browserWindow.isDestroyed()) {
-              try {
-                sendToRenderer(wCtx.browserWindow, CHANNELS.WINDOW_RECLAIM_MEMORY, {
-                  reason: "memory-pressure",
-                });
-              } catch {
-                /* non-critical */
-              }
-            }
-          }
-        }
-      },
-      destroyHiddenWebviews: async (tier) => {
-        // Destroy hidden portal tabs for ALL windows
-        if (windowRegistry) {
-          for (const wCtx of windowRegistry.all()) {
-            if (wCtx.browserWindow.isDestroyed()) continue;
-            try {
-              if (wCtx.services.portalManager) {
-                const evictedTabIds = await wCtx.services.portalManager.destroyHiddenTabs();
-                if (evictedTabIds.length > 0) {
-                  sendToRenderer(wCtx.browserWindow, CHANNELS.PORTAL_TABS_EVICTED, {
-                    tabIds: evictedTabIds,
-                  });
-                }
-              }
-            } catch {
-              /* non-critical */
-            }
-            try {
-              sendToRenderer(wCtx.browserWindow, CHANNELS.WINDOW_DESTROY_HIDDEN_WEBVIEWS, {
-                tier,
-              });
-            } catch {
-              /* non-critical */
-            }
-          }
-        }
-      },
-      hibernateIdleProjects: async () => {
-        await getHibernationService().hibernateUnderMemoryPressure();
-      },
-      trimPtyHostState: () => {
-        ptyClient?.trimState(SCROLLBACK_BACKGROUND);
-      },
-    });
-  }
-
-  // Resource Profile Service
-  if (!resourceProfileService) {
-    resourceProfileService = new ResourceProfileService({
-      getPtyClient: () => ptyClient,
-      getWorkspaceClient: () => workspaceClient,
-      getHibernationService: () => getHibernationService(),
-      getProjectViewManager: () => getProjectViewManager(),
-      getUserCachedViewLimit: () =>
-        store.get("terminalConfig")?.cachedProjectViews ?? (process.env.DAINTREE_E2E_MODE ? 4 : 1),
-    });
-    resourceProfileService.start();
   }
 
   // ── Last-window-close: dispose global services ──
@@ -1093,6 +1143,7 @@ export async function setupWindowServices(
     }
     ipcHandlersRegistered = false;
     globalServicesInitialized = false;
+    resetDeferredQueue();
 
     getSystemSleepService().dispose();
     gitHubTokenHealthService.dispose();

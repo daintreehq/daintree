@@ -359,6 +359,7 @@ export interface ElectronAPI {
     hydrate(): Promise<HydrateResult>;
     quit(): Promise<void>;
     forceQuit(): Promise<void>;
+    notifyFirstInteractive(): Promise<void>;
     onMenuAction(callback: (action: string) => void): () => void;
     reloadConfig(): Promise<{ success: boolean }>;
     onConfigReloaded(callback: () => void): () => void;

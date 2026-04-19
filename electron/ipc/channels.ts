@@ -160,6 +160,7 @@ export const CHANNELS = {
   APP_HYDRATE: "app:hydrate",
   APP_QUIT: "app:quit",
   APP_FORCE_QUIT: "app:force-quit",
+  APP_FIRST_INTERACTIVE: "app:first-interactive",
   MENU_ACTION: "menu:action",
   MENU_SHOW_CONTEXT: "menu:show-context",
 
