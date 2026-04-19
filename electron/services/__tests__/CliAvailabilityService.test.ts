@@ -100,16 +100,26 @@ describe("CliAvailabilityService", () => {
   });
 
   describe("checkAvailability", () => {
-    it("returns 'installed' when binary found but no auth file (default)", async () => {
+    it("returns 'ready' when binary found even when no auth file exists (decoupled from auth)", async () => {
       // Mock all CLIs as available (binary found)
       mockedExecFileSync.mockImplementation(() => Buffer.from(""));
 
       const result = await service.checkAvailability();
 
-      // All agents have authCheck config, so without auth files they return "installed"
-      // (cursor has fallback: "installed" explicitly)
+      // Binary-on-PATH is sufficient for "ready"; auth discovery populates
+      // `detail.authConfirmed` but never blocks launch (see #5483).
       for (const state of Object.values(result)) {
-        expect(state).toBe("installed");
+        expect(state).toBe("ready");
+      }
+
+      const details = service.getDetails();
+      expect(details).not.toBeNull();
+      // All built-in agents ship with an authCheck config, so without any
+      // auth file or env var they surface `authConfirmed: false` for the
+      // onboarding nudge while still being launchable.
+      for (const detail of Object.values(details!)) {
+        expect(detail?.state).toBe("ready");
+        expect(detail?.authConfirmed).toBe(false);
       }
 
       // Should have called execFileSync 7 times (once for each CLI).
@@ -128,7 +138,7 @@ describe("CliAvailabilityService", () => {
       );
     });
 
-    it("returns 'ready' when binary found and auth file exists", async () => {
+    it("returns 'ready' with authConfirmed=true when binary found and auth file exists", async () => {
       const { access } = await import("fs/promises");
       const mockedAccess = vi.mocked(access);
 
@@ -141,6 +151,11 @@ describe("CliAvailabilityService", () => {
 
       for (const state of Object.values(result)) {
         expect(state).toBe("ready");
+      }
+
+      const details = service.getDetails();
+      for (const detail of Object.values(details!)) {
+        expect(detail?.authConfirmed).toBe(true);
       }
     });
 
@@ -396,7 +411,7 @@ describe("CliAvailabilityService", () => {
       }
     });
 
-    it("returns installed when OpenCode binary found but no auth (no config, no env vars)", async () => {
+    it("returns ready with authConfirmed=false when OpenCode binary found but no auth", async () => {
       // Only opencode binary found, no config file, no env vars
       mockedExecFileSync.mockImplementation((_file, args) => {
         if (args?.[0] === "opencode") return Buffer.from("");
@@ -404,7 +419,10 @@ describe("CliAvailabilityService", () => {
       });
 
       const result = await service.checkAvailability();
-      expect(result.opencode).toBe("installed");
+      // Binary on PATH is sufficient for `ready`; the missing credential
+      // surfaces as `authConfirmed: false` for onboarding UI.
+      expect(result.opencode).toBe("ready");
+      expect(service.getDetails()!.opencode?.authConfirmed).toBe(false);
     });
 
     it("env vars take precedence over config file for OpenCode", async () => {
@@ -454,7 +472,7 @@ describe("CliAvailabilityService", () => {
       expect(cached).not.toBeNull();
       // All agents should have some state (not null)
       for (const state of Object.values(cached!)) {
-        expect(["missing", "installed", "ready"]).toContain(state);
+        expect(["missing", "installed", "ready", "blocked"]).toContain(state);
       }
     });
   });
@@ -499,7 +517,7 @@ describe("CliAvailabilityService", () => {
       const result = await freshService.refresh();
 
       for (const state of Object.values(result)) {
-        expect(["missing", "installed", "ready"]).toContain(state);
+        expect(["missing", "installed", "ready", "blocked"]).toContain(state);
       }
       expect(freshService.getAvailability()).toEqual(result);
     });
@@ -578,9 +596,10 @@ describe("CliAvailabilityService", () => {
 
       const result = await service.checkAvailability();
 
-      // Without an SSO token cache, Kiro falls back to "installed" — non-SSO
-      // auth is keychain-based and not probed.
-      expect(result.kiro).toBe("installed");
+      // Binary on PATH is now always `ready`; the missing SSO token cache
+      // surfaces as `authConfirmed: false` for the setup nudge.
+      expect(result.kiro).toBe("ready");
+      expect(service.getDetails()!.kiro?.authConfirmed).toBe(false);
 
       const probedPaths = mockedAccess.mock.calls.map((call) => String(call[0]));
       // .kiro/credentials and .kiro/config.json are not real Kiro auth files
@@ -626,7 +645,11 @@ describe("CliAvailabilityService", () => {
       });
 
       const result = await service.checkAvailability();
-      expect(result.copilot).toBe("installed");
+      // Binary on PATH is launchable regardless of auth; keychain-auth users
+      // still reach `ready` and see `authConfirmed: false` until the CLI
+      // prompts them to sign in.
+      expect(result.copilot).toBe("ready");
+      expect(service.getDetails()!.copilot?.authConfirmed).toBe(false);
 
       const probedPaths = mockedAccess.mock.calls.map((call) => String(call[0]));
       expect(probedPaths).toContain(join(homedir(), ".copilot/config.json"));
@@ -655,18 +678,22 @@ describe("CliAvailabilityService", () => {
     });
   });
 
-  describe("diagnostic logging for auth fallback", () => {
-    it("logs exactly once when auth check falls through to fallback", async () => {
+  describe("diagnostic logging for auth discovery", () => {
+    it("logs exactly once when auth discovery finds no credential", async () => {
       mockedExecFileSync.mockImplementation((_file, args) => {
         if (args?.[0] === "copilot") return Buffer.from("");
         throw new Error("not found");
       });
 
       const result = await service.checkAvailability();
-      expect(result.copilot).toBe("installed");
+      // Binary on PATH = ready; authConfirmed: false drives the nudge.
+      expect(result.copilot).toBe("ready");
+      expect(service.getDetails()!.copilot?.authConfirmed).toBe(false);
 
       const copilotLogs = consoleLogSpy.mock.calls.filter((call: unknown[]) =>
-        String(call[0]).includes("GitHub Copilot: binary found, auth check fell through")
+        String(call[0]).includes(
+          "GitHub Copilot: binary found, auth discovery: no credential found"
+        )
       );
       // Must fire exactly once — guards against the Promise.race leak where
       // a slow fs.access would log after the timeout branch already resolved.
@@ -674,10 +701,9 @@ describe("CliAvailabilityService", () => {
       const message = String(copilotLogs[0][0]);
       expect(message).toContain("[CliAvailabilityService]");
       expect(message).toContain(join(".copilot", "config.json"));
-      expect(message).toContain('-> "installed"');
     });
 
-    it("logs Kiro fallback listing the AWS SSO token path that was checked", async () => {
+    it("logs Kiro auth discovery miss listing the AWS SSO token path that was checked", async () => {
       const { access } = await import("fs/promises");
       const mockedAccess = vi.mocked(access);
 
@@ -694,7 +720,7 @@ describe("CliAvailabilityService", () => {
       );
       expect(kiroLog).toBeDefined();
       expect(String(kiroLog![0])).toContain(join(".aws", "sso", "cache", "kiro-auth-token.json"));
-      expect(String(kiroLog![0])).toContain('-> "installed"');
+      expect(String(kiroLog![0])).toContain("no credential found");
     });
 
     it("does NOT log when auth check is short-circuited by envVar (OPENAI_API_KEY)", async () => {
@@ -706,6 +732,7 @@ describe("CliAvailabilityService", () => {
 
       const result = await service.checkAvailability();
       expect(result.codex).toBe("ready");
+      expect(service.getDetails()!.codex?.authConfirmed).toBe(true);
 
       const codexLog = consoleLogSpy.mock.calls.find((call: unknown[]) =>
         String(call[0]).includes("Codex")
@@ -713,7 +740,7 @@ describe("CliAvailabilityService", () => {
       expect(codexLog).toBeUndefined();
     });
 
-    it("does NOT emit a fallback log when the auth check timed out", async () => {
+    it("does NOT emit a discovery-miss log when the auth check timed out", async () => {
       const { access } = await import("fs/promises");
       const mockedAccess = vi.mocked(access);
 
@@ -741,12 +768,16 @@ describe("CliAvailabilityService", () => {
         await vi.advanceTimersByTimeAsync(4_000);
         const result = await checkPromise;
 
-        expect(result.copilot).toBe("installed");
+        // Binary found, auth inconclusive due to timeout → ready + authConfirmed: false.
+        expect(result.copilot).toBe("ready");
+        expect(service.getDetails()!.copilot?.authConfirmed).toBe(false);
 
         const copilotLogs = consoleLogSpy.mock.calls.filter((call: unknown[]) =>
-          String(call[0]).includes("GitHub Copilot: binary found, auth check fell through")
+          String(call[0]).includes(
+            "GitHub Copilot: binary found, auth discovery: no credential found"
+          )
         );
-        // No fallback log should fire — the timeout decided the state.
+        // No discovery-miss log should fire — the timeout decided the state.
         expect(copilotLogs).toHaveLength(0);
       } finally {
         vi.useRealTimers();
@@ -766,7 +797,7 @@ describe("CliAvailabilityService", () => {
       await service.checkAvailability();
 
       const copilotLog = consoleLogSpy.mock.calls.find((call: unknown[]) =>
-        String(call[0]).includes("GitHub Copilot: binary found, auth check fell through")
+        String(call[0]).includes("GitHub Copilot: binary found, auth discovery")
       );
       expect(copilotLog).toBeUndefined();
     });
@@ -875,12 +906,15 @@ describe("CliAvailabilityService", () => {
       });
 
       const result = await service.checkAvailability();
-      // No auth file found, but binary discovered via native path → "installed".
-      expect(result.claude).toBe("installed");
+      // Binary discovered via native path → "ready" (auth not a launch gate).
+      // The missing auth file surfaces as `authConfirmed: false` in the detail.
+      expect(result.claude).toBe("ready");
 
       const details = service.getDetails();
+      expect(details!.claude?.state).toBe("ready");
       expect(details!.claude?.resolvedPath).toBe(claudeNative);
       expect(details!.claude?.via).toBe("native");
+      expect(details!.claude?.authConfirmed).toBe(false);
     });
 
     it("captures the resolved path from `which` stdout", async () => {
@@ -976,9 +1010,13 @@ describe("CliAvailabilityService", () => {
       }) as never);
 
       const result = await service.checkAvailability();
-      expect(result.gemini).toBe("installed");
+      // npx-detected agents are now launchable (`ready`) — the npx probe
+      // confirms the binary is available via the cache, which is enough to
+      // route a launch through npx.
+      expect(result.gemini).toBe("ready");
 
       const details = service.getDetails();
+      expect(details!.gemini?.state).toBe("ready");
       expect(details!.gemini?.via).toBe("npx");
       expect(details!.gemini?.resolvedPath).toBe("npx:@google/gemini-cli");
 

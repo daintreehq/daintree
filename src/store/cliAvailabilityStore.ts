@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { subscribeWithSelector } from "zustand/middleware";
-import type { CliAvailability, AgentAvailabilityState } from "@shared/types";
+import type { CliAvailability, AgentAvailabilityState, AgentCliDetails } from "@shared/types";
 import { cliAvailabilityClient } from "@/clients";
 import { getAgentIds } from "@/config/agents";
 import { isElectronAvailable } from "@/hooks/useElectron";
@@ -8,6 +8,13 @@ import { safeJSONParse } from "./persistence/safeStorage";
 
 interface CliAvailabilityState {
   availability: CliAvailability;
+  /**
+   * Per-agent detection metadata (resolved path, probe source, authConfirmed).
+   * Populated alongside `availability` by each refresh. Kept separate from
+   * `availability` so the IPC surface stays stable and consumers that only
+   * need the coarse state don't subscribe to detail churn.
+   */
+  details: AgentCliDetails;
   isLoading: boolean;
   isRefreshing: boolean;
   error: string | null;
@@ -117,9 +124,30 @@ let epoch = 0;
 let initPromise: Promise<void> | null = null;
 let refreshPromise: Promise<void> | null = null;
 
+// Fetch availability and details in one pass so the UI never renders a
+// "Needs Setup" nudge for an agent whose availability already arrived as
+// ready. `getDetails` reads the cache populated by the same `refresh` call,
+// so no extra probe is triggered.
+async function fetchAvailabilityAndDetails(): Promise<{
+  availability: CliAvailability;
+  details: AgentCliDetails;
+}> {
+  const availability = await cliAvailabilityClient.refresh();
+  // Details are best-effort — a failure here must not break the availability
+  // flow. Consumers treat `undefined` authConfirmed as "no nudge".
+  let details: AgentCliDetails = {};
+  try {
+    details = await cliAvailabilityClient.getDetails();
+  } catch {
+    // Leave details empty; availability still drives launch behavior.
+  }
+  return { availability, details };
+}
+
 export const useCliAvailabilityStore = create<CliAvailabilityStore>()(
   subscribeWithSelector((set, get) => ({
     availability: defaultAvailability(),
+    details: {},
     isLoading: true,
     isRefreshing: false,
     error: null,
@@ -157,12 +185,13 @@ export const useCliAvailabilityStore = create<CliAvailabilityStore>()(
       initPromise = (async () => {
         try {
           set({ isLoading: true, error: null });
-          const availability = await cliAvailabilityClient.refresh();
+          const { availability, details } = await fetchAvailabilityAndDetails();
           if (epoch === myEpoch) {
             const now = Date.now();
             saveCache(availability, now);
             set({
               availability,
+              details,
               isLoading: false,
               isInitialized: true,
               lastCheckedAt: now,
@@ -209,12 +238,13 @@ export const useCliAvailabilityStore = create<CliAvailabilityStore>()(
       refreshPromise = (async () => {
         try {
           set({ isRefreshing: true, error: null });
-          const availability = await cliAvailabilityClient.refresh();
+          const { availability, details } = await fetchAvailabilityAndDetails();
           if (epoch === myEpoch) {
             const now = Date.now();
             saveCache(availability, now);
             set({
               availability,
+              details,
               isRefreshing: false,
               error: null,
               lastCheckedAt: now,
@@ -247,6 +277,7 @@ export function cleanupCliAvailabilityStore() {
   refreshPromise = null;
   useCliAvailabilityStore.setState({
     availability: defaultAvailability(),
+    details: {},
     isLoading: true,
     isRefreshing: false,
     error: null,
