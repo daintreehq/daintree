@@ -5,16 +5,11 @@ export function VoiceRecordingAnnouncer() {
   const announcement = useVoiceRecordingStore((state) => state.announcement);
   const ref = useRef<HTMLDivElement>(null);
 
-  const pendingSetRef = useRef<ReturnType<typeof queueMicrotask> | null>(null);
+  const pendingSetRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
-
-    if (pendingSetRef.current) {
-      pendingSetRef.current();
-      pendingSetRef.current = null;
-    }
 
     if (!announcement?.text) {
       el.textContent = "";
@@ -22,11 +17,17 @@ export function VoiceRecordingAnnouncer() {
     }
 
     el.textContent = "";
-    pendingSetRef.current = queueMicrotask(() => {
+    pendingSetRef.current = setTimeout(() => {
       if (ref.current) {
         ref.current.textContent = announcement.text;
       }
-    });
+    }, 0);
+
+    return () => {
+      if (pendingSetRef.current) {
+        clearTimeout(pendingSetRef.current);
+      }
+    };
   }, [announcement]);
 
   return <div ref={ref} className="sr-only" role="status" aria-live="polite" aria-atomic="false" />;

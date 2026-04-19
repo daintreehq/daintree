@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { render, cleanup } from "@testing-library/react";
 import { AccessibilityAnnouncer } from "../AccessibilityAnnouncer";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
@@ -32,24 +32,25 @@ describe("AccessibilityAnnouncer", () => {
     }
   });
 
-  it("displays polite announcement text", async () => {
+  it("displays polite announcement text", () => {
     useAnnouncerStore.setState({ polite: { msg: "Panel focused", id: 1 } });
     const { container } = render(<AccessibilityAnnouncer />);
-    await Promise.resolve();
+    vi.runAllTimers();
     const politeRegion = container.querySelector('[aria-live="polite"]');
     expect(politeRegion?.textContent).toBe("Panel focused");
   });
 
-  it("displays assertive announcement text", async () => {
+  it("displays assertive announcement text", () => {
     useAnnouncerStore.setState({ assertive: { msg: "Error occurred", id: 1 } });
     const { container } = render(<AccessibilityAnnouncer />);
-    await Promise.resolve();
+    vi.runAllTimers();
     const assertiveRegion = container.querySelector('[aria-live="assertive"]');
     expect(assertiveRegion?.textContent).toBe("Error occurred");
   });
 
   it("renders empty when no announcements", () => {
     const { container } = render(<AccessibilityAnnouncer />);
+    vi.runAllTimers();
     const politeRegion = container.querySelector('[aria-live="polite"]');
     const assertiveRegion = container.querySelector('[aria-live="assertive"]');
     expect(politeRegion?.textContent).toBe("");
@@ -59,28 +60,31 @@ describe("AccessibilityAnnouncer", () => {
   it("preserves DOM node identity across announcements", () => {
     useAnnouncerStore.setState({ polite: { msg: "First", id: 1 } });
     const { container, rerender } = render(<AccessibilityAnnouncer />);
+    vi.runAllTimers();
     const politeRegion = container.querySelector('[aria-live="polite"]');
 
     useAnnouncerStore.setState({ polite: { msg: "Second", id: 2 } });
     rerender(<AccessibilityAnnouncer />);
+    vi.runAllTimers();
     const politeRegionAfter = container.querySelector('[aria-live="polite"]');
 
     expect(politeRegion).toBe(politeRegionAfter);
   });
 
-  it("delivers duplicate messages via clear-then-set cycle", async () => {
+  it("delivers duplicate messages via clear-then-set cycle", () => {
     useAnnouncerStore.setState({ polite: { msg: "Panel focused", id: 1 } });
     const { container, rerender } = render(<AccessibilityAnnouncer />);
+    vi.runAllTimers();
     const politeRegion = container.querySelector('[aria-live="polite"]');
 
     useAnnouncerStore.setState({ polite: { msg: "Panel focused", id: 2 } });
     rerender(<AccessibilityAnnouncer />);
-    await Promise.resolve();
+    vi.runAllTimers();
 
     expect(politeRegion?.textContent).toBe("Panel focused");
   });
 
-  it("rapid announcements end with only newest text present", async () => {
+  it("rapid announcements end with only newest text present", () => {
     useAnnouncerStore.setState({ polite: { msg: "First", id: 1 } });
     const { container, rerender } = render(<AccessibilityAnnouncer />);
     const politeRegion = container.querySelector('[aria-live="polite"]');
@@ -90,7 +94,7 @@ describe("AccessibilityAnnouncer", () => {
 
     useAnnouncerStore.setState({ polite: { msg: "Third", id: 3 } });
     rerender(<AccessibilityAnnouncer />);
-    await Promise.resolve();
+    vi.runAllTimers();
 
     expect(politeRegion?.textContent).toBe("Third");
   });
@@ -98,6 +102,7 @@ describe("AccessibilityAnnouncer", () => {
   it("empty message clears the region", () => {
     useAnnouncerStore.setState({ polite: { msg: "Message", id: 1 } });
     const { container, rerender } = render(<AccessibilityAnnouncer />);
+    vi.runAllTimers();
     const politeRegion = container.querySelector('[aria-live="polite"]');
 
     useAnnouncerStore.setState({ polite: null });
@@ -106,13 +111,13 @@ describe("AccessibilityAnnouncer", () => {
     expect(politeRegion?.textContent).toBe("");
   });
 
-  it("handles both polite and assertive independently", async () => {
+  it("handles both polite and assertive independently", () => {
     useAnnouncerStore.setState({
       polite: { msg: "Polite message", id: 1 },
       assertive: { msg: "Assertive message", id: 1 },
     });
     const { container } = render(<AccessibilityAnnouncer />);
-    await Promise.resolve();
+    vi.runAllTimers();
     const politeRegion = container.querySelector('[aria-live="polite"]');
     const assertiveRegion = container.querySelector('[aria-live="assertive"]');
 

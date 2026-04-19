@@ -8,22 +8,12 @@ export function AccessibilityAnnouncer() {
   const politeRef = useRef<HTMLDivElement>(null);
   const assertiveRef = useRef<HTMLDivElement>(null);
 
-  const pendingClearRef = useRef<ReturnType<typeof queueMicrotask> | null>(null);
-  const pendingSetRef = useRef<ReturnType<typeof queueMicrotask> | null>(null);
+  const pendingSetRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     const announce = (msg: string | null, ref: React.RefObject<HTMLDivElement>) => {
       const el = ref.current;
       if (!el) return;
-
-      if (pendingClearRef.current) {
-        pendingClearRef.current();
-        pendingClearRef.current = null;
-      }
-      if (pendingSetRef.current) {
-        pendingSetRef.current();
-        pendingSetRef.current = null;
-      }
 
       if (!msg) {
         el.textContent = "";
@@ -31,22 +21,19 @@ export function AccessibilityAnnouncer() {
       }
 
       el.textContent = "";
-      pendingSetRef.current = queueMicrotask(() => {
+      pendingSetRef.current = setTimeout(() => {
         if (ref.current) {
           ref.current.textContent = msg;
         }
-      });
+      }, 0);
     };
 
     announce(polite?.msg ?? null, politeRef);
     announce(assertive?.msg ?? null, assertiveRef);
 
     return () => {
-      if (pendingClearRef.current) {
-        pendingClearRef.current();
-      }
       if (pendingSetRef.current) {
-        pendingSetRef.current();
+        clearTimeout(pendingSetRef.current);
       }
     };
   }, [polite, assertive]);
