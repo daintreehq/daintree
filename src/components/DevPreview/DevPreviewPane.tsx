@@ -637,16 +637,22 @@ export function DevPreviewPane({
     const handleDomReady = () => {
       setIsWebviewReady(true);
       webview.setZoomFactor(zoomFactor);
-      if (viewportPreset) {
-        const preset = getViewportPreset(viewportPreset);
-        try {
-          const wc = (
-            webview as unknown as { getWebContents(): { setUserAgent(ua: string): void } }
-          ).getWebContents();
-          wc.setUserAgent(preset.userAgent);
-        } catch {
-          // WebContents not available yet
+      // Capture original UA before any override
+      try {
+        const wc = (
+          webview as unknown as {
+            getWebContents(): { setUserAgent(ua: string): void; getUserAgent(): string };
+          }
+        ).getWebContents();
+        if (originalUaRef.current === null) {
+          originalUaRef.current = wc.getUserAgent();
         }
+        // Apply preset UA if active
+        if (viewportPreset) {
+          wc.setUserAgent(getViewportPreset(viewportPreset).userAgent);
+        }
+      } catch {
+        // WebContents not available yet
       }
       if (loadTimeoutRef.current) {
         clearTimeout(loadTimeoutRef.current);
@@ -671,16 +677,20 @@ export function DevPreviewPane({
       if (existingUrl && existingUrl !== "about:blank" && !webview.isLoading()) {
         setIsWebviewReady(true);
         webview.setZoomFactor(zoomFactor);
-        if (viewportPreset) {
-          const preset = getViewportPreset(viewportPreset);
-          try {
-            const wc = (
-              webview as unknown as { getWebContents(): { setUserAgent(ua: string): void } }
-            ).getWebContents();
-            wc.setUserAgent(preset.userAgent);
-          } catch {
-            // WebContents not available
+        try {
+          const wc = (
+            webview as unknown as {
+              getWebContents(): { setUserAgent(ua: string): void; getUserAgent(): string };
+            }
+          ).getWebContents();
+          if (originalUaRef.current === null) {
+            originalUaRef.current = wc.getUserAgent();
           }
+          if (viewportPreset) {
+            wc.setUserAgent(getViewportPreset(viewportPreset).userAgent);
+          }
+        } catch {
+          // WebContents not available
         }
       }
     } catch {
@@ -755,11 +765,16 @@ export function DevPreviewPane({
 
   useWebviewThrottle(id, location, isEvicted ? null : webviewElement, isWebviewReady && !isEvicted);
 
+  // Store the original guest UA so we can restore it when clearing a preset
+  const originalUaRef = useRef<string | null>(null);
+
   // Apply UA override when viewport preset changes on an already-ready webview
-  const prevViewportPresetRef = useRef<ViewportPresetId | undefined>(viewportPreset);
+  // Initialize to undefined so restored presets trigger the effect on first render
+  const prevViewportPresetRef = useRef<ViewportPresetId | undefined>(undefined);
   useEffect(() => {
     if (!isWebviewReady || !webviewElement) return;
     if (prevViewportPresetRef.current === viewportPreset) return;
+    const previousPreset = prevViewportPresetRef.current;
     prevViewportPresetRef.current = viewportPreset;
 
     try {
@@ -768,17 +783,23 @@ export function DevPreviewPane({
           getWebContents(): { setUserAgent(ua: string): void; getUserAgent(): string };
         }
       ).getWebContents();
+      // Capture original UA on first override
+      if (originalUaRef.current === null) {
+        originalUaRef.current = wc.getUserAgent();
+      }
       if (viewportPreset) {
         const preset = getViewportPreset(viewportPreset);
         wc.setUserAgent(preset.userAgent);
-      } else {
-        // Reset to default Chromium UA
-        const defaultUA = `Mozilla/5.0 (${navigator.platform}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${navigator.userAgent.match(/Chrome\/([\d.]+)/)?.[1] ?? "125.0.0.0"} Safari/537.36`;
-        wc.setUserAgent(defaultUA);
+      } else if (previousPreset !== undefined) {
+        // Only restore if we previously overrode (not first mount with no preset)
+        wc.setUserAgent(originalUaRef.current!);
       }
-      webviewElement.reload();
+      // Reload so the page re-evaluates with the new UA
+      if (previousPreset !== undefined) {
+        webviewElement.reload();
+      }
     } catch {
-      // WebContents not available
+      // WebContents not available (webview detached)
     }
   }, [viewportPreset, isWebviewReady, webviewElement]);
   const { currentDialog, handleDialogRespond } = useWebviewDialog(
@@ -1003,9 +1024,10 @@ export function DevPreviewPane({
             <div className={cn("h-full", viewportPreset && "flex items-start justify-center pt-5")}>
               <div
                 className={cn(
-                  "h-full relative",
-                  viewportPreset &&
-                    "rounded-lg border border-overlay/50 shadow-[var(--theme-shadow-floating)] overflow-hidden"
+                  "relative",
+                  viewportPreset
+                    ? "rounded-lg border border-overlay/50 shadow-[var(--theme-shadow-floating)] overflow-hidden"
+                    : "h-full"
                 )}
                 style={
                   viewportPreset
