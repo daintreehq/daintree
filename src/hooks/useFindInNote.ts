@@ -75,6 +75,7 @@ export function useFindInNote(
   editorViewRef: React.RefObject<EditorView | null>,
   isActive: boolean
 ): FindInNoteState {
+  "use no memo";
   const [isOpen, setIsOpen] = useState(false);
   const [query, setQueryState] = useState("");
   const [caseSensitive, setCaseSensitive] = useState(false);
@@ -84,7 +85,6 @@ export function useFindInNote(
 
   const inputRef = useRef<HTMLInputElement | null>(null);
   const isComposingRef = useRef(false);
-  const openRef = useRef<() => void>(() => {});
 
   const open = useCallback(() => {
     // Re-open the underlying CM search panel so match highlights render.
@@ -104,10 +104,6 @@ export function useFindInNote(
       inputRef.current?.select();
     });
   }, [editorViewRef]);
-
-  useEffect(() => {
-    openRef.current = open;
-  }, [open]);
 
   const applyQuery = useCallback(
     (text: string, opts?: { caseSensitive?: boolean; regexp?: boolean }) => {
@@ -234,7 +230,7 @@ export function useFindInNote(
           {
             key: "Mod-f",
             run: () => {
-              openRef.current();
+              open();
               return true;
             },
           },
@@ -250,15 +246,15 @@ export function useFindInNote(
         ])
       ),
     ],
-    [close, isOpen]
+    [close, isOpen, open]
   );
 
   useEffect(() => {
     if (!isActive) return;
-    const handler = () => openRef.current();
+    const handler = () => open();
     window.addEventListener("daintree:find-in-panel", handler);
     return () => window.removeEventListener("daintree:find-in-panel", handler);
-  }, [isActive]);
+  }, [isActive, open]);
 
   useEffect(() => {
     if (isOpen) {
