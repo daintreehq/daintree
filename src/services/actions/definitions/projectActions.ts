@@ -235,7 +235,7 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
     kind: "command",
     danger: "safe",
     scope: "renderer",
-    argsSchema: z.object({ projectId: z.string() }),
+    argsSchema: z.object({ projectId: z.string().min(1) }),
     run: async (args: unknown) => {
       const { projectId } = args as { projectId: string };
       try {

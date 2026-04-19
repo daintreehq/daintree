@@ -70,6 +70,9 @@ describe("project.muteNotifications", () => {
     expect(action.argsSchema).toBeDefined();
     expect(() => action.argsSchema!.parse({ projectId: "p1" })).not.toThrow();
     expect(() => action.argsSchema!.parse({})).toThrow();
+    // Empty projectId is treated as invalid — avoids masking upstream bugs
+    // where a caller forgot to pipe the ID through.
+    expect(() => action.argsSchema!.parse({ projectId: "" })).toThrow();
   });
 
   it("writes completedEnabled/waitingEnabled=false into notificationOverrides", async () => {

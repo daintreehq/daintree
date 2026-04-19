@@ -282,6 +282,13 @@ export function notify(payload: NotifyPayload): string {
         if (coalesce.buildAction) {
           patch.actions = undefined;
         }
+        // Clear context on coalesce: the combined toast now represents multiple
+        // events which may originate from different projects. A contextual
+        // affordance like "Mute project notifications" would otherwise dispatch
+        // with the first project's ID and silently mute the wrong target.
+        if (notification.context?.projectId !== context?.projectId) {
+          patch.context = undefined;
+        }
         useNotificationStore.getState().updateNotification(existing.id, patch);
 
         return existing.id;
