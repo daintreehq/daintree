@@ -180,10 +180,8 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
     }
   }, [isOpen]);
 
-  const find = useFindInNote(
-    editorViewRef,
-    isOpen && paletteViewMode === "edit" && !!selectedNote
-  );
+  const find = useFindInNote(editorViewRef, isOpen && paletteViewMode === "edit" && !!selectedNote);
+  const closeFind = find.close;
 
   // Reset view mode on selection change
   useEffect(() => {
@@ -192,9 +190,8 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
 
   // Reset find state when switching notes, closing, or switching to preview
   useEffect(() => {
-    find.close();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedNote?.id, paletteViewMode, isOpen]);
+    closeFind();
+  }, [selectedNote?.id, paletteViewMode, isOpen, closeFind]);
 
   // Scroll selected item into view
   useEffect(() => {

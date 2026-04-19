@@ -1,3 +1,4 @@
+import { useRef } from "react";
 import { ChevronUp, ChevronDown, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { FindInNoteState } from "@/hooks/useFindInNote";
@@ -14,17 +15,20 @@ export function NotesFindBar({ find }: NotesFindBarProps) {
     caseSensitive,
     regexp,
     inputRef,
-    isComposingRef,
     setQuery,
     toggleCase,
     toggleRegexp,
     goNext,
     goPrev,
     close,
+    onCompositionStart,
+    onCompositionEnd,
   } = find;
 
+  const localComposingRef = useRef(false);
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (isComposingRef.current) return;
+    if (localComposingRef.current) return;
     if (e.key === "Escape") {
       e.preventDefault();
       close();
@@ -54,11 +58,12 @@ export function NotesFindBar({ find }: NotesFindBarProps) {
         onChange={(e) => setQuery(e.target.value)}
         onKeyDown={handleKeyDown}
         onCompositionStart={() => {
-          isComposingRef.current = true;
+          localComposingRef.current = true;
+          onCompositionStart();
         }}
         onCompositionEnd={(e) => {
-          isComposingRef.current = false;
-          setQuery(e.currentTarget.value);
+          localComposingRef.current = false;
+          onCompositionEnd(e.currentTarget.value);
         }}
         placeholder="Find in note"
         className="w-44 bg-transparent text-xs text-daintree-text placeholder:text-daintree-text/40 outline-none"

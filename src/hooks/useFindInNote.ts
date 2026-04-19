@@ -21,7 +21,6 @@ export interface FindInNoteState {
   caseSensitive: boolean;
   regexp: boolean;
   inputRef: React.RefObject<HTMLInputElement | null>;
-  isComposingRef: React.RefObject<boolean>;
   searchExtension: Extension;
   open: () => void;
   close: () => void;
@@ -30,6 +29,8 @@ export interface FindInNoteState {
   toggleRegexp: () => void;
   goNext: () => void;
   goPrev: () => void;
+  onCompositionStart: () => void;
+  onCompositionEnd: (value: string) => void;
   handleEditorCreated: (view: EditorView) => void;
   handleEditorUpdate: (update: {
     state: import("@codemirror/state").EditorState;
@@ -161,6 +162,18 @@ export function useFindInNote(
     [applyQuery]
   );
 
+  const onCompositionStart = useCallback(() => {
+    isComposingRef.current = true;
+  }, []);
+
+  const onCompositionEnd = useCallback(
+    (value: string) => {
+      isComposingRef.current = false;
+      setQuery(value);
+    },
+    [setQuery]
+  );
+
   const toggleCase = useCallback(() => {
     setCaseSensitive((prev) => {
       const next = !prev;
@@ -189,16 +202,13 @@ export function useFindInNote(
     findPrevious(view);
   }, [editorViewRef, query]);
 
-  const handleEditorCreated = useCallback(
-    (view: EditorView) => {
-      try {
-        openSearchPanel(view);
-      } catch {
-        // Older CM versions may throw if panel state is not ready
-      }
-    },
-    []
-  );
+  const handleEditorCreated = useCallback((view: EditorView) => {
+    try {
+      openSearchPanel(view);
+    } catch {
+      // Older CM versions may throw if panel state is not ready
+    }
+  }, []);
 
   const handleEditorUpdate = useCallback(
     (update: {
@@ -276,7 +286,6 @@ export function useFindInNote(
     caseSensitive,
     regexp,
     inputRef,
-    isComposingRef,
     searchExtension,
     open,
     close,
@@ -285,6 +294,8 @@ export function useFindInNote(
     toggleRegexp,
     goNext,
     goPrev,
+    onCompositionStart,
+    onCompositionEnd,
     handleEditorCreated,
     handleEditorUpdate,
   };

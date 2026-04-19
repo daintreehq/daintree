@@ -94,19 +94,18 @@ export function NotesPane({
   useNoteVoiceInput(id, editorViewRef);
 
   const find = useFindInNote(editorViewRef, !!isFocused && viewMode !== "preview");
+  const closeFind = find.close;
 
   useEffect(() => {
     if (viewMode === "preview") {
       editorViewRef.current = null;
-      find.close();
+      closeFind();
     }
-  }, [viewMode, find]);
+  }, [viewMode, closeFind]);
 
   useEffect(() => {
-    find.close();
-    // Reset find state when switching notes
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [notePath]);
+    closeFind();
+  }, [notePath, closeFind]);
 
   useEffect(() => {
     let cancelled = false;

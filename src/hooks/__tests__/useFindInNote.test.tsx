@@ -94,13 +94,17 @@ describe("useFindInNote", () => {
 
     act(() => result.current.open());
     act(() => {
-      result.current.isComposingRef.current = true;
+      result.current.onCompositionStart();
       result.current.setQuery("partial");
     });
 
     expect(result.current.query).toBe("partial");
     const cur = getSearchQuery(view.state);
     expect(cur.search).toBe("");
+
+    act(() => result.current.onCompositionEnd("partial"));
+    const afterCommit = getSearchQuery(view.state);
+    expect(afterCommit.search).toBe("partial");
   });
 
   it("toggleCase updates state and reapplies query with new flag", () => {
