@@ -168,6 +168,17 @@ export interface AgentPreset {
 /** Max fallback presets that can be chained after the primary. */
 export const FALLBACK_CHAIN_MAX = 3;
 
+export interface AgentProviderTemplate {
+  id: string;
+  name: string;
+  description?: string;
+  env?: Record<string, string>;
+  args?: string[];
+  dangerousEnabled?: boolean;
+  customFlags?: string;
+  inlineMode?: boolean;
+}
+
 export interface AgentConfig {
   id: string;
   name: string;
@@ -326,10 +337,15 @@ export interface AgentConfig {
   defaultPresetId?: string;
   /**
    * Suggested environment variable overrides for this agent, shown as UI hints
-   * in the preset and global-env editors.
-   * `defaultValue` is pre-populated when a new preset is created for this agent.
+   * in the preset and global-env editors. Discovery-only — no default values.
    */
-  envSuggestions?: Array<{ key: string; hint: string; defaultValue?: string }>;
+  envSuggestions?: Array<{ key: string; hint: string }>;
+  /**
+   * Named provider templates for preset creation. When present, the "Add Preset"
+   * dialog offers a "From template" option that pre-fills non-secret env vars
+   * (base URL, model aliases, timeout) but leaves API-key fields blank.
+   */
+  providerTemplates?: AgentProviderTemplate[];
 }
 
 export const AGENT_REGISTRY: Record<string, AgentConfig> = {
@@ -492,28 +508,74 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
       },
     ],
     envSuggestions: [
-      { key: "ANTHROPIC_AUTH_TOKEN", hint: "your Z.AI API key", defaultValue: "" },
+      { key: "ANTHROPIC_AUTH_TOKEN", hint: "API key or auth token" },
       {
         key: "ANTHROPIC_BASE_URL",
-        hint: "https://api.z.ai/api/anthropic",
-        defaultValue: "https://api.z.ai/api/anthropic",
+        hint: "Override API base URL (e.g. https://api.z.ai/api/anthropic)",
       },
-      { key: "ANTHROPIC_DEFAULT_OPUS_MODEL", hint: "e.g. glm-5.1", defaultValue: "glm-5.1" },
+      { key: "ANTHROPIC_DEFAULT_OPUS_MODEL", hint: "Override Opus model ID" },
+      { key: "ANTHROPIC_DEFAULT_SONNET_MODEL", hint: "Override Sonnet model ID" },
+      { key: "ANTHROPIC_DEFAULT_HAIKU_MODEL", hint: "Override Haiku model ID" },
+      { key: "API_TIMEOUT_MS", hint: "Request timeout in ms (e.g. 3000000)" },
+      { key: "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", hint: "1 to disable telemetry" },
+    ],
+    providerTemplates: [
       {
-        key: "ANTHROPIC_DEFAULT_SONNET_MODEL",
-        hint: "e.g. glm-4.7",
-        defaultValue: "glm-4.7",
+        id: "anthropic-native",
+        name: "Anthropic (native)",
+        description:
+          "Direct connection to Anthropic's API. Requires ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN.",
+        env: {
+          CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
+        },
       },
       {
-        key: "ANTHROPIC_DEFAULT_HAIKU_MODEL",
-        hint: "e.g. glm-4.5-air",
-        defaultValue: "glm-4.5-air",
+        id: "zai",
+        name: "Z.AI",
+        description: "Route through Z.AI's Anthropic-compatible endpoint.",
+        env: {
+          ANTHROPIC_BASE_URL: "https://api.z.ai/api/anthropic",
+          ANTHROPIC_DEFAULT_OPUS_MODEL: "glm-5.1",
+          ANTHROPIC_DEFAULT_SONNET_MODEL: "glm-4.7",
+          ANTHROPIC_DEFAULT_HAIKU_MODEL: "glm-4.5-air",
+          API_TIMEOUT_MS: "3000000",
+          CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
+        },
       },
-      { key: "API_TIMEOUT_MS", hint: "e.g. 3000000", defaultValue: "3000000" },
       {
-        key: "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",
-        hint: "1 to disable telemetry",
-        defaultValue: "1",
+        id: "openrouter",
+        name: "OpenRouter",
+        description: "Route through OpenRouter's API endpoint.",
+        env: {
+          ANTHROPIC_BASE_URL: "https://openrouter.ai/api/v1",
+          CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
+        },
+      },
+      {
+        id: "deepseek",
+        name: "DeepSeek",
+        description: "Route through DeepSeek's OpenAI-compatible endpoint.",
+        env: {
+          ANTHROPIC_BASE_URL: "https://api.deepseek.com/v1",
+          CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
+        },
+      },
+      {
+        id: "ollama",
+        name: "Ollama (local)",
+        description: "Connect to a local Ollama instance. No API key required.",
+        env: {
+          ANTHROPIC_BASE_URL: "http://localhost:11434/v1",
+          CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
+        },
+      },
+      {
+        id: "custom-openai",
+        name: "Custom (OpenAI-compatible)",
+        description: "Any OpenAI-compatible endpoint. Set base URL and model aliases manually.",
+        env: {
+          CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
+        },
       },
     ],
   },

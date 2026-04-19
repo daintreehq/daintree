@@ -3,6 +3,7 @@ import {
   AGENT_REGISTRY as BASE_AGENT_REGISTRY,
   type AgentConfig as BaseAgentConfig,
   type AgentPreset,
+  type AgentProviderTemplate,
   FALLBACK_CHAIN_MAX,
   getEffectiveAgentConfig,
   getEffectiveAgentIds,
@@ -11,7 +12,7 @@ import {
 } from "../../shared/config/agentRegistry";
 
 export { getAgentDisplayTitle };
-export type { AgentPreset };
+export type { AgentPreset, AgentProviderTemplate };
 import { resolveAgentIcon } from "./agentIcons";
 
 export interface AgentIconProps {

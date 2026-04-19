@@ -21,6 +21,7 @@ import { SettingsSelect } from "./SettingsSelect";
 import { PresetSelector } from "./PresetSelector";
 import { PresetColorPicker } from "./PresetColorPicker";
 import { EnvVarEditor } from "./EnvVarEditor";
+import { AddPresetDialog } from "./AddPresetDialog";
 import { actionService } from "@/services/ActionService";
 import { AgentHelpOutput } from "./AgentHelpOutput";
 import { AgentCard, AgentInstallSection } from "@/components/agents/AgentCard";
@@ -113,6 +114,32 @@ export function AgentSettings({
   // Preset editing state
   const [editingPresetId, setEditingPresetId] = useState<string | null>(null);
   const [editName, setEditName] = useState("");
+  const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
+  const [addDialogAgentId, setAddDialogAgentId] = useState<string | null>(null);
+
+  const handleCreatePreset = async (presetData: Omit<AgentPreset, "id">) => {
+    if (!addDialogAgentId) return;
+    const now = Date.now();
+    const freshSettings = useAgentSettingsStore.getState().settings ?? DEFAULT_AGENT_SETTINGS;
+    const entry = getAgentSettingsEntry(freshSettings, addDialogAgentId);
+    const existing = entry.customPresets ?? [];
+    let id = `user-${now}`;
+    if (existing.some((f) => f.id === id)) {
+      let suffix = 1;
+      while (existing.some((f) => f.id === `user-${now}-${suffix}`)) suffix += 1;
+      id = `user-${now}-${suffix}`;
+    }
+    const updated = [...existing, { ...presetData, id }];
+    try {
+      await updateAgent(addDialogAgentId, { customPresets: updated, presetId: id });
+      onSettingsChange?.();
+      lastAddTimeRef.current = now;
+      setIsAddDialogOpen(false);
+      setAddDialogAgentId(null);
+    } catch (error) {
+      console.error("[AgentSettings] Failed to create preset:", error);
+    }
+  };
 
   // Reset preset-editing state when switching between agent subtabs. Without
   // this, an in-progress rename on one agent's preset would leak into a
@@ -505,46 +532,9 @@ export function AgentSettings({
 
               // ── handlers ──────────────────────────────────────────────────
 
-              const handleAddPreset = () => {
-                const now = Date.now();
-                // Rate limiting: max 5 adds per minute (12s between adds).
-                // Skip in E2E mode — tests need to add multiple presets in
-                // rapid succession and the real rate limit only defends
-                // against abusive renderer loops, not orchestrated tests.
-                const e2eMode =
-                  typeof window !== "undefined" && window.__DAINTREE_E2E_MODE__ === true;
-                if (!e2eMode && now - lastAddTimeRef.current < 12000) {
-                  console.warn("Rate limit exceeded for preset creation");
-                  return;
-                }
-                lastAddTimeRef.current = now;
-
-                // Disambiguate rapid-fire adds (E2E) where two clicks can
-                // land in the same millisecond — otherwise the IDs collide
-                // and the dedup in getMergedPresets drops one.
-                const existing = activeEntry.customPresets ?? [];
-                let id = `user-${now}`;
-                if (existing.some((f) => f.id === id)) {
-                  let suffix = 1;
-                  while (existing.some((f) => f.id === `user-${now}-${suffix}`)) suffix += 1;
-                  id = `user-${now}-${suffix}`;
-                }
-                const updated = [
-                  ...existing,
-                  {
-                    id,
-                    name: "New Preset",
-                    env: Object.fromEntries(
-                      (getAgentConfig(activeAgent.id)?.envSuggestions ?? [])
-                        .filter((s) => s.defaultValue !== undefined)
-                        .map((s) => [s.key, s.defaultValue!])
-                    ),
-                  },
-                ];
-                void (async () => {
-                  await updateAgent(activeAgent.id, { customPresets: updated, presetId: id });
-                  onSettingsChange?.();
-                })();
+              const openAddDialog = () => {
+                setAddDialogAgentId(activeAgent.id);
+                setIsAddDialogOpen(true);
               };
 
               const handleDuplicatePreset = (preset: AgentPreset) => {
@@ -741,7 +731,7 @@ export function AgentSettings({
                       variant="ghost"
                       data-testid="preset-add-button"
                       className="text-daintree-accent hover:text-daintree-accent/80"
-                      onClick={handleAddPreset}
+                      onClick={openAddDialog}
                     >
                       <Plus size={14} />
                       Add
@@ -1156,6 +1146,27 @@ export function AgentSettings({
           </AgentCard>
         )}
       </div>
+
+      {addDialogAgentId && (
+        <AddPresetDialog
+          isOpen={isAddDialogOpen}
+          onClose={() => {
+            setIsAddDialogOpen(false);
+            setAddDialogAgentId(null);
+          }}
+          agentId={addDialogAgentId}
+          currentPreset={(() => {
+            if (!addDialogAgentId) return null;
+            const entry = getAgentSettingsEntry(effectiveSettings, addDialogAgentId);
+            if (!entry.presetId) return null;
+            const ccr = ccrPresetsByAgent[addDialogAgentId];
+            const project = projectPresetsByAgent[addDialogAgentId];
+            const merged = getMergedPresets(addDialogAgentId, entry.customPresets, ccr, project);
+            return merged.find((f) => f.id === entry.presetId) ?? null;
+          })()}
+          onCreate={handleCreatePreset}
+        />
+      )}
     </div>
   );
 }
