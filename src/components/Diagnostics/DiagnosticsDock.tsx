@@ -12,7 +12,13 @@ import { useErrorStore } from "@/store";
 import { ProblemsContent } from "./ProblemsContent";
 import { LogsContent } from "./LogsContent";
 import { EventsContent } from "./EventsContent";
-import { ProblemsActions, LogsActions, EventsActions } from "./DiagnosticsActions";
+import { TelemetryContent } from "./TelemetryContent";
+import {
+  ProblemsActions,
+  LogsActions,
+  EventsActions,
+  TelemetryActions,
+} from "./DiagnosticsActions";
 import type { RetryAction } from "@/store";
 import { appClient } from "@/clients";
 
@@ -165,6 +171,7 @@ export function DiagnosticsDock({ onRetry, onCancelRetry, className }: Diagnosti
     { id: "problems", label: "Problems", badge: errorCount },
     { id: "logs", label: "Logs" },
     { id: "events", label: "Events" },
+    { id: "telemetry", label: "Telemetry" },
   ];
 
   return (
@@ -223,6 +230,7 @@ export function DiagnosticsDock({ onRetry, onCancelRetry, className }: Diagnosti
           {activeTab === "problems" && <ProblemsActions />}
           {activeTab === "logs" && <LogsActions />}
           {activeTab === "events" && <EventsActions />}
+          {activeTab === "telemetry" && <TelemetryActions />}
 
           <TooltipProvider>
             <Tooltip>
@@ -270,6 +278,16 @@ export function DiagnosticsDock({ onRetry, onCancelRetry, className }: Diagnosti
             className="h-full"
           >
             <EventsContent />
+          </div>
+        )}
+        {activeTab === "telemetry" && (
+          <div
+            id="diagnostics-telemetry-panel"
+            role="tabpanel"
+            aria-labelledby="diagnostics-telemetry-tab"
+            className="h-full"
+          >
+            <TelemetryContent />
           </div>
         )}
       </div>

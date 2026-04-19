@@ -134,6 +134,8 @@ export type BuiltInActionId =
   | "eventInspector.subscribe"
   | "eventInspector.unsubscribe"
   | "eventInspector.clear"
+  | "telemetry.togglePreview"
+  | "telemetry.clearPreview"
   | "worktree.refresh"
   | "worktree.refreshPullRequests"
   | "worktree.setActive"

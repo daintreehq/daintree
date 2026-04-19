@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { Signal, FolderOpen, Trash2, Clock, HardDrive, AlertTriangle } from "lucide-react";
+import { Signal, FolderOpen, Trash2, Clock, HardDrive, AlertTriangle, Eye } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { notify } from "@/lib/notify";
 import { Button } from "@/components/ui/button";
@@ -7,6 +7,7 @@ import { SettingsSection } from "./SettingsSection";
 import { SettingsSubtabBar } from "./SettingsSubtabBar";
 import type { SettingsSubtabItem } from "./SettingsSubtabBar";
 import { ANALYTICS_EVENTS } from "@shared/config/telemetry";
+import { actionService } from "@/services/ActionService";
 
 type TelemetryLevel = "off" | "errors" | "full";
 type LogRetention = 7 | 30 | 90 | 0;
@@ -184,6 +185,10 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
     window.electron.privacy.resetAllData();
   }, []);
 
+  const handleOpenTelemetryPreview = useCallback(() => {
+    void actionService.dispatch("telemetry.togglePreview", { active: true }, { source: "user" });
+  }, []);
+
   return (
     <div className="space-y-6">
       <SettingsSubtabBar
@@ -238,6 +243,20 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
           <p className="text-xs text-daintree-text/40 mt-2 select-text">
             Changes to telemetry level take effect on next app restart.
           </p>
+
+          <div className="mt-4 flex items-start gap-3 rounded-[var(--radius-md)] border border-daintree-border/60 bg-daintree-bg/40 p-3">
+            <Eye className="w-4 h-4 mt-0.5 text-daintree-accent/80 shrink-0" aria-hidden />
+            <div className="min-w-0 flex-1">
+              <p className="text-xs font-medium text-daintree-text">Preview outbound telemetry</p>
+              <p className="text-xs text-daintree-text/60 mt-0.5 select-text">
+                Inspect every sanitised payload Daintree would send — live, for this session only,
+                with no transmission to any server.
+              </p>
+            </div>
+            <Button variant="subtle" size="xs" onClick={handleOpenTelemetryPreview}>
+              Open preview
+            </Button>
+          </div>
 
           <div
             aria-labelledby="telemetry-disclosure-heading"

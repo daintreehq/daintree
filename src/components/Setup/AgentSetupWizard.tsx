@@ -21,6 +21,7 @@ import { BUILT_IN_APP_SCHEMES } from "@/config/appColorSchemes";
 import { useAppThemeStore } from "@/store/appThemeStore";
 import { appThemeClient } from "@/clients/appThemeClient";
 import type { AppColorScheme } from "@shared/types/appTheme";
+import { actionService } from "@/services/ActionService";
 
 const AGENT_ORDER = BUILT_IN_AGENT_IDS;
 const POLL_INTERVAL = 3000;
@@ -817,32 +818,47 @@ function SelectionStep({
       )}
 
       {isFirstRun && onTelemetryChange != null && (
-        <div className="flex items-center justify-between gap-3 pt-4 border-t border-daintree-border">
-          <div>
-            <p className="text-sm font-medium text-daintree-text">Help improve Daintree</p>
-            <p className="text-xs text-daintree-text/50">
-              Send anonymous crash reports. No file contents or credentials.
-            </p>
+        <div className="pt-4 border-t border-daintree-border space-y-2">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="text-sm font-medium text-daintree-text">Help improve Daintree</p>
+              <p className="text-xs text-daintree-text/50">
+                Send anonymous crash reports. No file contents or credentials.
+              </p>
+            </div>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={telemetryEnabled}
+              aria-label="Enable crash reporting"
+              onClick={() => onTelemetryChange(!telemetryEnabled)}
+              className={cn(
+                "relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full transition-colors",
+                telemetryEnabled ? "bg-daintree-accent" : "bg-daintree-border"
+              )}
+            >
+              <span
+                className={cn(
+                  "pointer-events-none inline-block h-4 w-4 rounded-full shadow transform transition-transform mt-0.5",
+                  telemetryEnabled
+                    ? "translate-x-4 ml-0.5 bg-text-inverse"
+                    : "translate-x-0 ml-0.5 bg-daintree-text"
+                )}
+              />
+            </button>
           </div>
           <button
             type="button"
-            role="switch"
-            aria-checked={telemetryEnabled}
-            aria-label="Enable crash reporting"
-            onClick={() => onTelemetryChange(!telemetryEnabled)}
-            className={cn(
-              "relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full transition-colors",
-              telemetryEnabled ? "bg-daintree-accent" : "bg-daintree-border"
-            )}
+            className="text-xs text-daintree-accent hover:underline focus-visible:outline-none focus-visible:underline"
+            onClick={() =>
+              void actionService.dispatch(
+                "telemetry.togglePreview",
+                { active: true },
+                { source: "user" }
+              )
+            }
           >
-            <span
-              className={cn(
-                "pointer-events-none inline-block h-4 w-4 rounded-full shadow transform transition-transform mt-0.5",
-                telemetryEnabled
-                  ? "translate-x-4 ml-0.5 bg-text-inverse"
-                  : "translate-x-0 ml-0.5 bg-daintree-text"
-              )}
-            />
+            Preview what would be sent
           </button>
         </div>
       )}

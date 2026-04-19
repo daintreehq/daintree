@@ -915,6 +915,127 @@ describe("addActionBreadcrumb", () => {
   });
 });
 
+describe("telemetry preview tap", () => {
+  async function loadFreshModule() {
+    vi.resetModules();
+    return await import("../TelemetryService.js");
+  }
+
+  async function loadBroadcaster() {
+    return await import("../TelemetryPreviewBroadcaster.js");
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    sentryInitMock.mockReset();
+    setPrivacy({ telemetryLevel: "off", hasSeenPrompt: false });
+  });
+
+  it("does not emit when preview is inactive", async () => {
+    const mod = await loadFreshModule();
+    const broadcaster = await loadBroadcaster();
+    const enqueue = vi.fn();
+    broadcaster.setTelemetryPreviewEnqueue(enqueue);
+    // preview inactive by default
+    mod.trackEvent("onboarding_step_viewed", { step: "telemetry" });
+    expect(enqueue).not.toHaveBeenCalled();
+  });
+
+  it("emits a sanitised analytics payload when preview is active (even with telemetry off)", async () => {
+    const mod = await loadFreshModule();
+    const broadcaster = await loadBroadcaster();
+    const enqueue = vi.fn();
+    broadcaster.setTelemetryPreviewEnqueue(enqueue);
+    broadcaster.setTelemetryPreviewActive(true);
+
+    try {
+      setPrivacy({ telemetryLevel: "off", hasSeenPrompt: false });
+      mod.trackEvent("onboarding_step_viewed", {
+        step: "telemetry",
+        note: "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef0123456",
+      });
+
+      expect(enqueue).toHaveBeenCalledTimes(1);
+      const record = enqueue.mock.calls[0]![0];
+      expect(record.kind).toBe("analytics");
+      expect(record.label).toBe("onboarding_step_viewed");
+      expect(typeof record.id).toBe("string");
+      const payload = record.payload as Record<string, unknown>;
+      // Post-sanitisation: the PAT should be redacted in the extra block
+      const extra = payload.extra as { note: string };
+      expect(extra.note).not.toContain("ghp_");
+      expect(extra.note).toContain("[REDACTED]");
+    } finally {
+      broadcaster.setTelemetryPreviewActive(false);
+      broadcaster.setTelemetryPreviewEnqueue(null);
+    }
+  });
+
+  it("emits a sentry-kind preview for events flowing through beforeSend", async () => {
+    const mod = await loadFreshModule();
+    const broadcaster = await loadBroadcaster();
+    const enqueue = vi.fn();
+    broadcaster.setTelemetryPreviewEnqueue(enqueue);
+    broadcaster.setTelemetryPreviewActive(true);
+
+    try {
+      setPrivacy({ telemetryLevel: "errors", hasSeenPrompt: true });
+      process.env.SENTRY_DSN = "https://test@sentry.io/123";
+      await mod.initializeTelemetry();
+      const init = sentryInitMock.mock.calls[0]?.[0] as {
+        beforeSend?: (event: unknown) => unknown;
+      };
+
+      init.beforeSend?.({
+        exception: { values: [{ type: "Error", value: "boom" }] },
+      });
+
+      expect(enqueue).toHaveBeenCalledTimes(1);
+      const record = enqueue.mock.calls[0]![0];
+      expect(record.kind).toBe("sentry");
+      expect(record.label).toContain("boom");
+    } finally {
+      broadcaster.setTelemetryPreviewActive(false);
+      broadcaster.setTelemetryPreviewEnqueue(null);
+      delete process.env.SENTRY_DSN;
+    }
+  });
+
+  it("does not double-emit when trackEvent flows through beforeSend at full level", async () => {
+    const mod = await loadFreshModule();
+    const broadcaster = await loadBroadcaster();
+    const enqueue = vi.fn();
+    broadcaster.setTelemetryPreviewEnqueue(enqueue);
+    broadcaster.setTelemetryPreviewActive(true);
+
+    try {
+      setPrivacy({ telemetryLevel: "full", hasSeenPrompt: true });
+      process.env.SENTRY_DSN = "https://test@sentry.io/123";
+      await mod.initializeTelemetry();
+      captureEventMock.mockClear();
+
+      // The real Sentry SDK would call beforeSend inside captureEvent; in the
+      // test harness captureEvent is mocked so we simulate it manually via
+      // the registered hook. Either way, `trackEvent` should never fire the
+      // preview twice.
+      mod.trackEvent("onboarding_completed", { totalSteps: 3 });
+      expect(captureEventMock).toHaveBeenCalledTimes(1);
+      // No direct preview emission from trackEvent — it relies on beforeSend.
+      expect(enqueue).not.toHaveBeenCalled();
+
+      const init = sentryInitMock.mock.calls[0]?.[0] as {
+        beforeSend?: (event: unknown) => unknown;
+      };
+      init.beforeSend?.(captureEventMock.mock.calls[0]![0]);
+      expect(enqueue).toHaveBeenCalledTimes(1);
+    } finally {
+      broadcaster.setTelemetryPreviewActive(false);
+      broadcaster.setTelemetryPreviewEnqueue(null);
+      delete process.env.SENTRY_DSN;
+    }
+  });
+});
+
 describe("beforeSend wrapper (end-to-end via initializeTelemetry)", () => {
   async function loadFreshModule() {
     vi.resetModules();

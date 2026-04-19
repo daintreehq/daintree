@@ -1,6 +1,7 @@
 import { useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { useLogsStore, useErrorStore } from "@/store";
+import { useTelemetryPreviewStore } from "@/store/telemetryPreviewStore";
 import { actionService } from "@/services/ActionService";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 
@@ -94,6 +95,55 @@ export function LogsActions() {
             </Button>
           </TooltipTrigger>
           <TooltipContent side="bottom">Clear logs</TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
+    </div>
+  );
+}
+
+export function TelemetryActions() {
+  const active = useTelemetryPreviewStore((state) => state.active);
+  const hasEvents = useTelemetryPreviewStore((state) => state.events.length > 0);
+
+  const handleToggle = useCallback(() => {
+    void actionService.dispatch("telemetry.togglePreview", undefined, { source: "user" });
+  }, []);
+
+  const handleClear = useCallback(() => {
+    void actionService.dispatch("telemetry.clearPreview", undefined, { source: "user" });
+  }, []);
+
+  return (
+    <div className="flex items-center gap-2">
+      <TooltipProvider>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant={active ? "info" : "subtle"}
+              size="xs"
+              onClick={handleToggle}
+              aria-pressed={active}
+            >
+              {active ? "Preview On" : "Preview Off"}
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">
+            {active
+              ? "Stop mirroring outbound telemetry payloads"
+              : "Start mirroring outbound telemetry payloads"}
+          </TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
+      <TooltipProvider>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span className="inline-flex">
+              <Button variant="subtle" size="xs" onClick={handleClear} disabled={!hasEvents}>
+                Clear
+              </Button>
+            </span>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">Clear captured events</TooltipContent>
         </Tooltip>
       </TooltipProvider>
     </div>
