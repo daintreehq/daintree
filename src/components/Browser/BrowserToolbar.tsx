@@ -46,6 +46,7 @@ interface BrowserToolbarProps {
   onBack: () => void;
   onForward: () => void;
   onReload: () => void;
+  onHardReload?: () => void;
   onOpenExternal: () => void;
   onZoomChange?: (zoomFactor: number) => void;
   onCaptureScreenshot?: () => void;
@@ -68,6 +69,7 @@ export function BrowserToolbar({
   onBack,
   onForward,
   onReload,
+  onHardReload,
   onOpenExternal,
   onZoomChange,
   onCaptureScreenshot,
@@ -293,7 +295,13 @@ export function BrowserToolbar({
           <TooltipTrigger asChild>
             <button
               type="button"
-              onClick={onReload}
+              onClick={(e) => {
+                if (e.shiftKey && onHardReload) {
+                  onHardReload();
+                } else {
+                  onReload();
+                }
+              }}
               className={cn(buttonClass, isLoading && "animate-spin")}
               aria-label="Reload"
               data-testid="browser-reload"
@@ -301,7 +309,9 @@ export function BrowserToolbar({
               <RotateCw className="w-4 h-4" />
             </button>
           </TooltipTrigger>
-          <TooltipContent side="bottom">Reload</TooltipContent>
+          <TooltipContent side="bottom">
+            {onHardReload ? "Reload (Shift+click for hard reload)" : "Reload"}
+          </TooltipContent>
         </Tooltip>
       </TooltipProvider>
 

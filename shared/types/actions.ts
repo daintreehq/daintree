@@ -214,6 +214,7 @@ export type BuiltInActionId =
   | "browser.toggleConsole"
   | "browser.clearConsole"
   | "browser.toggleDevTools"
+  | "browser.hardReload"
   | "nav.toggleFocusMode"
   | "nav.quickSwitcher"
   | "find.inFocusedPanel"

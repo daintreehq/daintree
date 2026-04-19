@@ -780,6 +780,19 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
     return { success: true };
   };
 
+  const handleReloadIgnoringCache = async (webContentsId: unknown): Promise<void> => {
+    if (typeof webContentsId !== "number") {
+      throw new Error("Invalid arguments: webContentsId must be number");
+    }
+
+    if (!getWebviewDialogService().getPanelId(webContentsId)) return;
+
+    const wc = webContents.fromId(webContentsId);
+    if (!wc || wc.isDestroyed()) return;
+
+    wc.reloadIgnoringCache();
+  };
+
   const cleanups: Array<() => void> = [
     typedHandle(CHANNELS.WEBVIEW_SET_LIFECYCLE_STATE, handleSetLifecycleState),
     typedHandle(CHANNELS.WEBVIEW_REGISTER_PANEL, handleRegisterPanel),
@@ -789,6 +802,7 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
     typedHandle(CHANNELS.WEBVIEW_CLEAR_CONSOLE_CAPTURE, handleClearConsoleCapture),
     typedHandle(CHANNELS.WEBVIEW_GET_CONSOLE_PROPERTIES, handleGetConsoleProperties),
     typedHandle(CHANNELS.WEBVIEW_OAUTH_LOOPBACK, handleOAuthLoopback),
+    typedHandle(CHANNELS.WEBVIEW_RELOAD_IGNORING_CACHE, handleReloadIgnoringCache),
   ];
 
   return () => {
