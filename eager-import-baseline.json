@@ -1559,17 +1559,17 @@
     },
     {
       "file": "electron/window/windowServices.ts",
-      "line": 189,
+      "line": 190,
       "pattern": "sync-store-get"
     },
     {
       "file": "electron/window/windowServices.ts",
-      "line": 287,
+      "line": 288,
       "pattern": "sync-store-get"
     },
     {
       "file": "electron/window/windowServices.ts",
-      "line": 519,
+      "line": 520,
       "pattern": "sync-store-get"
     },
     {
