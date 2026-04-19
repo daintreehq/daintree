@@ -240,17 +240,10 @@ export function setupBrowserWindow(
   // The app view's webContents is the "renderer" for all purposes
   const appWebContents = appView.webContents;
 
-  // Defer showing the window until first paint to prevent background flash
-  let isShown = false;
-  const showWindow = () => {
-    if (isShown || win.isDestroyed()) return;
-    isShown = true;
-    clearTimeout(showTimeout);
-    win.show();
-  };
-  appWebContents.once("did-finish-load", showWindow);
-  const showTimeout = setTimeout(showWindow, 2500);
-  win.once("closed", () => clearTimeout(showTimeout));
+  // Match the appView's background to the window chrome so the frame and
+  // content area reveal a single colour when the window is shown before the
+  // first paint; WebContentsView defaults to white otherwise.
+  appView.setBackgroundColor(windowBg);
 
   if (isSmokeTest) {
     win.on("unresponsive", () => {
@@ -302,7 +295,11 @@ export function setupBrowserWindow(
     if (!win || win.isDestroyed() || rendererLoadRequested) return;
     rendererLoadRequested = true;
 
-    injectSkeletonCss(appWebContents);
+    // insertCSS is navigation-scoped, so re-inject once the new document has
+    // parsed. The skeleton's inline fallbacks cover the gap before dom-ready.
+    appWebContents.once("dom-ready", () => {
+      injectSkeletonCss(appWebContents);
+    });
 
     const qs = projectId ? `?projectId=${encodeURIComponent(projectId)}` : "";
     console.log(`[MAIN] Loading renderer (${reason})...`);
@@ -314,6 +311,11 @@ export function setupBrowserWindow(
       console.log("[MAIN] Loading production build via app:// protocol");
       appWebContents.loadURL(`app://daintree/index.html${qs}`);
     }
+
+    // Show the window as soon as the navigation is in flight so the HTML
+    // skeleton in index.html paints during bundle parse instead of leaving
+    // the user with a blank background while JS loads.
+    if (!win.isDestroyed()) win.show();
   };
 
   // Window open handler — on the app view's webContents
