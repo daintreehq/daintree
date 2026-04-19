@@ -18,6 +18,8 @@ import { EditorView } from "@codemirror/view";
 import { daintreeTheme } from "./editorTheme";
 import { notesTypographyExtension } from "./codeBlockExtension";
 import { MarkdownToolbar } from "./MarkdownToolbar";
+import { NotesFindBar } from "./NotesFindBar";
+import { useFindInNote } from "@/hooks/useFindInNote";
 import {
   Plus,
   ExternalLink,
@@ -178,10 +180,21 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
     }
   }, [isOpen]);
 
+  const find = useFindInNote(
+    editorViewRef,
+    isOpen && paletteViewMode === "edit" && !!selectedNote
+  );
+
   // Reset view mode on selection change
   useEffect(() => {
     setPaletteViewMode("edit");
   }, [selectedNote]);
+
+  // Reset find state when switching notes, closing, or switching to preview
+  useEffect(() => {
+    find.close();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedNote?.id, paletteViewMode, isOpen]);
 
   // Scroll selected item into view
   useEffect(() => {
@@ -196,8 +209,9 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
       markdown({ base: markdownLanguage, codeLanguages: languages }),
       EditorView.lineWrapping,
       notesTypographyExtension(),
+      find.searchExtension,
     ],
-    []
+    [find.searchExtension]
   );
 
   if (!isOpen) return null;
@@ -555,7 +569,7 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
                       ) : (
                         <>
                           <MarkdownToolbar editorViewRef={editorViewRef} />
-                          <div className="flex-1 overflow-hidden text-[13px] [&_.cm-editor]:h-full [&_.cm-scroller]:p-4 [&_.cm-placeholder]:text-daintree-text/30 [&_.cm-placeholder]:italic">
+                          <div className="relative flex-1 overflow-hidden text-[13px] [&_.cm-editor]:h-full [&_.cm-scroller]:p-4 [&_.cm-placeholder]:text-daintree-text/30 [&_.cm-placeholder]:italic">
                             <CodeMirror
                               key={selectedNote?.id ?? "empty"}
                               value={editor.noteContent}
@@ -565,16 +579,20 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
                               onChange={editor.handleContentChange}
                               onCreateEditor={(view) => {
                                 editorViewRef.current = view;
+                                find.handleEditorCreated(view);
                               }}
+                              onUpdate={find.handleEditorUpdate}
                               basicSetup={{
                                 lineNumbers: false,
                                 foldGutter: false,
                                 highlightActiveLine: false,
                                 highlightActiveLineGutter: false,
+                                searchKeymap: false,
                               }}
                               className="h-full"
                               placeholder="Start writing..."
                             />
+                            {find.isOpen && <NotesFindBar find={find} />}
                           </div>
                         </>
                       )}
