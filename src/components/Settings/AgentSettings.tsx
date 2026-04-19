@@ -502,7 +502,6 @@ export function AgentSettings({
                 !selectedIsCustom &&
                 !selectedIsProject &&
                 selectedPreset.id.startsWith("ccr-");
-              const isDefault = !selectedPreset;
 
               // ── handlers ──────────────────────────────────────────────────
 
