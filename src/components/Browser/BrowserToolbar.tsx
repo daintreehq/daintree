@@ -216,7 +216,7 @@ export function BrowserToolbar({
       const maxZoom = ZOOM_VALUES[ZOOM_VALUES.length - 1]!;
       const clampedZoom = Math.max(minZoom, Math.min(maxZoom, zoomFactor));
       const exactIndex = ZOOM_VALUES.findIndex((value) => Math.abs(value - clampedZoom) < 0.01);
-      let nextZoom = clampedZoom;
+      let nextZoom: number;
 
       if (exactIndex !== -1) {
         const nextIndex =
