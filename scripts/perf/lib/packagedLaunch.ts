@@ -9,6 +9,7 @@ export interface PackagedLaunchResult {
   durationMs: number;
   metrics: Record<string, number>;
   ndjsonPath: string;
+  notes?: string;
 }
 
 interface MarkRecord {
@@ -77,17 +78,17 @@ export function findPackagedExecutable(projectRoot: string): string | null {
       if (process.platform === "darwin") {
         const appPath = path.join(
           entryPath,
-          `${PRODUCT_NAME}.app`,
+          `${productName}.app`,
           "Contents",
           "MacOS",
-          PRODUCT_NAME
+          productName
         );
         if (fs.existsSync(appPath)) return appPath;
       } else if (process.platform === "win32") {
-        const exePath = path.join(entryPath, `${PRODUCT_NAME}.exe`);
+        const exePath = path.join(entryPath, `${productName}.exe`);
         if (fs.existsSync(exePath)) return exePath;
       } else {
-        const unpacked = path.join(entryPath, "linux-unpacked", PRODUCT_NAME.toLowerCase());
+        const unpacked = path.join(entryPath, "linux-unpacked", productName.toLowerCase());
         if (fs.existsSync(unpacked)) return unpacked;
       }
     }
@@ -244,9 +245,15 @@ export async function launchPackagedAndMeasure(
 
     if (durationMs < 0) {
       metrics.wallClockMs = wallClockMs;
+      return {
+        durationMs: wallClockMs,
+        metrics,
+        ndjsonPath,
+        notes: "RENDERER_READY mark not captured — using wall-clock fallback",
+      };
     }
 
-    return { durationMs: durationMs >= 0 ? durationMs : wallClockMs, metrics, ndjsonPath };
+    return { durationMs, metrics, ndjsonPath };
   } finally {
     if (app) {
       try {

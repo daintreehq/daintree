@@ -37,6 +37,11 @@ interface RawSample {
   notes?: string;
 }
 
+interface BaselineArmData {
+  aggregates: ScenarioAggregate[];
+  durationsById: Map<string, number[]>;
+}
+
 const DEFAULT_ITERATIONS: Record<PerfMode, Record<ScenarioTier, number>> = {
   smoke: { fast: 8, heavy: 4, soak: 1 },
   ci: { fast: 16, heavy: 8, soak: 2 },
@@ -145,7 +150,8 @@ async function run(): Promise<void> {
     for (let iteration = 1; iteration <= iterations; iteration += 1) {
       const start = performance.now();
       const sample = (await scenario.run(context)) as ScenarioSample;
-      const durationMs = performance.now() - start;
+      const wallClockMs = performance.now() - start;
+      const durationMs = sample.durationMs >= 0 ? sample.durationMs : wallClockMs;
 
       const metrics = sample.metrics ?? {};
       const note = sample.notes?.trim();
@@ -265,6 +271,41 @@ async function run(): Promise<void> {
 
   aggregates.sort((a, b) => a.id.localeCompare(b.id));
 
+  // A/B comparison mode: run baseline arm and compare statistically
+  let comparisonAggregates: ComparisonAggregate[] = [];
+  if (cli.compare) {
+    const mergeBase = getMergeBase(cli.compareBase);
+    if (!mergeBase) {
+      console.warn("[perf:compare] Could not determine merge-base — skipping comparison");
+    } else {
+      console.log(`[perf:compare] Baseline ref: ${mergeBase.slice(0, 12)}`);
+
+      const baseOutDir = path.join(cli.outDir, "baseline-arm");
+      ensureDir(baseOutDir);
+
+      const baseArmData = await runBaselineArm(mergeBase, cli, baseOutDir);
+
+      comparisonAggregates = computeComparisons(aggregateById, baseArmData, budgetConfig);
+
+      for (const comp of comparisonAggregates) {
+        if (comp.comparison.regression) {
+          const headAgg = comp.head;
+          if (!failedScenarios.includes(headAgg.id)) {
+            failedScenarios.push(headAgg.id);
+          }
+          headAgg.failedBudget = true;
+          headAgg.budgetReason =
+            (headAgg.budgetReason ?? "")
+              ? `${headAgg.budgetReason}; A/B regression (p=${round(comp.comparison.pValue)}, d=${round(comp.comparison.effectSize)})`
+              : `A/B regression (p=${round(comp.comparison.pValue)}, d=${round(comp.comparison.effectSize)})`;
+        }
+      }
+
+      const comparisonJsonPath = path.join(cli.outDir, `${timestamp}-${cli.mode}.comparison.json`);
+      writeJson(comparisonJsonPath, comparisonAggregates);
+    }
+  }
+
   const summary: PerfRunSummary = {
     generatedAt: new Date().toISOString(),
     mode: cli.mode,
@@ -294,41 +335,6 @@ async function run(): Promise<void> {
       ),
     };
     writeJson(cli.baselinePath, baselineOut);
-  }
-
-  // A/B comparison mode: run baseline arm and compare statistically
-  let comparisonAggregates: ComparisonAggregate[] = [];
-  if (cli.compare) {
-    const mergeBase = getMergeBase(cli.compareBase);
-    if (!mergeBase) {
-      console.warn("[perf:compare] Could not determine merge-base — skipping comparison");
-    } else {
-      console.log(`[perf:compare] Baseline ref: ${mergeBase.slice(0, 12)}`);
-
-      const baseOutDir = path.join(cli.outDir, "baseline-arm");
-      ensureDir(baseOutDir);
-
-      const baseAggregates = await runBaselineArm(mergeBase, cli, baseOutDir);
-
-      comparisonAggregates = computeComparisons(aggregates, baseAggregates, budgetConfig);
-
-      for (const comp of comparisonAggregates) {
-        if (comp.comparison.regression) {
-          const headAgg = comp.head;
-          if (!failedScenarios.includes(headAgg.id)) {
-            failedScenarios.push(headAgg.id);
-          }
-          headAgg.failedBudget = true;
-          headAgg.budgetReason =
-            (headAgg.budgetReason ?? "")
-              ? `${headAgg.budgetReason}; A/B regression (p=${round(comp.comparison.pValue)}, d=${round(comp.comparison.effectSize)})`
-              : `A/B regression (p=${round(comp.comparison.pValue)}, d=${round(comp.comparison.effectSize)})`;
-        }
-      }
-
-      const comparisonJsonPath = path.join(cli.outDir, `${timestamp}-${cli.mode}.comparison.json`);
-      writeJson(comparisonJsonPath, comparisonAggregates);
-    }
   }
 
   const passed = failedScenarios.length === 0;
@@ -367,39 +373,57 @@ async function runBaselineArm(
   _mergeBase: string,
   _cli: CliOptions,
   _baseOutDir: string
-): Promise<ScenarioAggregate[]> {
+): Promise<BaselineArmData> {
   // In a full implementation, this would:
   // 1. Create a detached worktree at mergeBase
   // 2. Build the packaged binary in that worktree
   // 3. Run the same scenarios against the base binary
-  // 4. Return the aggregates
+  // 4. Return the aggregates + raw durations
   //
   // For the initial implementation, we load previously-saved baseline data
   // if available, or skip the comparison arm.
   console.warn(
     "[perf:compare] Baseline arm execution not yet implemented — use --baseline for static comparison"
   );
-  return [];
+  return { aggregates: [], durationsById: new Map() };
 }
 
 function computeComparisons(
-  headAggregates: ScenarioAggregate[],
-  baseAggregates: ScenarioAggregate[],
+  headAggregateById: Map<
+    string,
+    {
+      name: string;
+      description: string;
+      tier: ScenarioTier;
+      durations: number[];
+      metrics: Array<Record<string, number>>;
+      notes: string[];
+    }
+  >,
+  baseArmData: BaselineArmData,
   budgetConfig: import("./types").PerfBudgetConfig
 ): ComparisonAggregate[] {
   const results: ComparisonAggregate[] = [];
-  const baseById = new Map(baseAggregates.map((a) => [a.id, a]));
+  const baseById = new Map(baseArmData.aggregates.map((a) => [a.id, a]));
+  const baseDurationsById = baseArmData.durationsById;
 
-  for (const headAgg of headAggregates) {
-    const baseAgg = baseById.get(headAgg.id);
+  // Build head aggregates from raw durations for comparison
+  const headAggregates = buildAggregatesFromMap(headAggregateById);
+  const headById = new Map(headAggregates.map((a) => [a.id, a]));
+
+  for (const [scenarioId, headAgg] of headById) {
+    const baseAgg = baseById.get(scenarioId);
     if (!baseAgg) continue;
 
-    const budget = getScenarioBudget(budgetConfig, headAgg.id);
+    const budget = getScenarioBudget(budgetConfig, scenarioId);
     if (!budget.comparison) continue;
 
+    const headDurations = headAggregateById.get(scenarioId)?.durations ?? [headAgg.meanMs];
+    const baseDurations = baseDurationsById.get(scenarioId) ?? [baseAgg.meanMs];
+
     const comp = compareSamples(
-      { label: "head", durations: [headAgg.meanMs] },
-      { label: "base", durations: [baseAgg.meanMs] },
+      { label: "head", durations: headDurations },
+      { label: "base", durations: baseDurations },
       budget.comparison.maxPValue,
       budget.comparison.minEffectSize
     );
@@ -413,4 +437,46 @@ function computeComparisons(
   }
 
   return results;
+}
+
+function buildAggregatesFromMap(
+  aggregateById: Map<
+    string,
+    {
+      name: string;
+      description: string;
+      tier: ScenarioTier;
+      durations: number[];
+      metrics: Array<Record<string, number>>;
+      notes: string[];
+    }
+  >
+): ScenarioAggregate[] {
+  const aggregates: ScenarioAggregate[] = [];
+
+  for (const [scenarioId, aggregate] of aggregateById.entries()) {
+    const p50Ms = percentile(aggregate.durations, 50);
+    const p95Ms = percentile(aggregate.durations, 95);
+    const meanMs = mean(aggregate.durations);
+    const stdDevMs = stdDev(aggregate.durations);
+
+    aggregates.push({
+      id: scenarioId,
+      name: aggregate.name,
+      description: aggregate.description,
+      tier: aggregate.tier,
+      runs: aggregate.durations.length,
+      p50Ms: round(p50Ms),
+      p95Ms: round(p95Ms),
+      p99Ms: round(percentile(aggregate.durations, 99)),
+      maxMs: round(Math.max(...aggregate.durations)),
+      meanMs: round(meanMs),
+      stdDevMs: round(stdDevMs),
+      metricAverages: {},
+      failedBudget: false,
+      notes: [...new Set(aggregate.notes)].slice(0, 3),
+    });
+  }
+
+  return aggregates;
 }

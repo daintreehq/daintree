@@ -119,7 +119,7 @@ export const startupScenarios: PerfScenario[] = [
       return {
         durationMs: result.durationMs,
         metrics: result.metrics,
-        notes: result.durationMs < 0 ? "RENDERER_READY mark not captured" : undefined,
+        notes: result.notes,
       };
     },
   },
