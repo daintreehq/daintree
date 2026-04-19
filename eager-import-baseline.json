@@ -1,6 +1,6 @@
 {
-  "count": 1130,
-  "moduleCount": 1130,
+  "count": 1132,
+  "moduleCount": 1132,
   "allowlist": [
     "electron/ipc/errorHandlers.ts",
     "electron/ipc/handlers/agentCapabilities.ts",
@@ -154,17 +154,17 @@
     },
     {
       "file": "electron/ipc/handlers/git-write.ts",
-      "line": 225,
+      "line": 306,
       "pattern": "sync-store-get"
     },
     {
       "file": "electron/ipc/handlers/git-write.ts",
-      "line": 269,
+      "line": 350,
       "pattern": "sync-store-get"
     },
     {
       "file": "electron/ipc/handlers/git-write.ts",
-      "line": 274,
+      "line": 355,
       "pattern": "sync-store-get"
     },
     {
@@ -1104,32 +1104,32 @@
     },
     {
       "file": "electron/services/TelemetryService.ts",
-      "line": 227,
+      "line": 233,
       "pattern": "sync-store-get"
     },
     {
       "file": "electron/services/TelemetryService.ts",
-      "line": 235,
+      "line": 241,
       "pattern": "sync-store-get"
     },
     {
       "file": "electron/services/TelemetryService.ts",
-      "line": 243,
+      "line": 249,
       "pattern": "sync-store-get"
     },
     {
       "file": "electron/services/TelemetryService.ts",
-      "line": 250,
+      "line": 256,
       "pattern": "sync-store-get"
     },
     {
       "file": "electron/services/TelemetryService.ts",
-      "line": 299,
+      "line": 363,
       "pattern": "sync-store-get"
     },
     {
       "file": "electron/services/TelemetryService.ts",
-      "line": 349,
+      "line": 413,
       "pattern": "sync-store-get"
     },
     {
@@ -1544,7 +1544,7 @@
     },
     {
       "file": "electron/window/createWindow.ts",
-      "line": 133,
+      "line": 134,
       "pattern": "sync-store-get"
     },
     {
