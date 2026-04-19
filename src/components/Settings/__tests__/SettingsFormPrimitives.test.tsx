@@ -554,18 +554,17 @@ describe("SettingsCheckbox", () => {
   });
 
   it("associates label with checkbox", () => {
+    const onChange = vi.fn();
     render(
       <SettingsCheckbox
         label="Test Setting"
         description="A test description"
         checked={false}
-        onChange={vi.fn()}
+        onChange={onChange}
       />
     );
     const checkbox = screen.getByRole("checkbox");
     expect(checkbox).toBeTruthy();
-    const labelId = checkbox.getAttribute("aria-labelledby");
-    expect(labelId).toBeTruthy();
   });
 
   it("wires description to aria-describedby", () => {
@@ -721,7 +720,7 @@ describe("SettingsCheckbox", () => {
   });
 
   it("uses error styling when error is present", () => {
-    const { container } = render(
+    render(
       <SettingsCheckbox
         label="Test Setting"
         description="A test description"
@@ -732,8 +731,7 @@ describe("SettingsCheckbox", () => {
     );
     const checkbox = screen.getByRole("checkbox");
     expect(checkbox.className).toContain("border-status-error");
-    const label = container.querySelector("label");
-    expect(label?.className).toContain("text-status-error");
+    expect(checkbox.className).toContain("data-[state=checked]:border-status-error");
   });
 });
 

@@ -30,10 +30,10 @@ export function SettingsCheckbox({
   const errorId = useId();
 
   const describedBy = error ? errorId : descriptionId;
-  const isError = error !== undefined;
+  const isError = error !== undefined && error !== "";
 
   return (
-    <div className="flex items-start gap-3">
+    <label htmlFor={checkboxId} className="flex items-start gap-3 cursor-pointer">
       <Checkbox.Root
         id={checkboxId}
         checked={checked as CheckedState}
@@ -43,7 +43,6 @@ export function SettingsCheckbox({
           }
         }}
         disabled={disabled}
-        aria-labelledby={`label-${checkboxId}`}
         aria-describedby={describedBy}
         aria-invalid={isError}
         className={cn(
@@ -58,23 +57,21 @@ export function SettingsCheckbox({
         )}
       >
         <Checkbox.Indicator className="flex items-center justify-center w-full h-full text-text-inverse">
-          <CheckIcon className="w-3 h-3" data-state="checked" />
+          <CheckIcon className="w-3 h-3 block" data-state="checked" />
           <MinusIcon className="w-3 h-3 hidden" data-state="indeterminate" />
         </Checkbox.Indicator>
       </Checkbox.Root>
       <div className="flex-1">
-        <label
-          id={`label-${checkboxId}`}
-          htmlFor={checkboxId}
+        <span
           className={cn(
-            "text-sm font-medium block cursor-pointer",
+            "text-sm font-medium block",
             "text-daintree-text",
             disabled && "cursor-not-allowed opacity-50",
             isError && "text-status-error"
           )}
         >
           {label}
-        </label>
+        </span>
         {!isError && (
           <p id={descriptionId} className="text-xs text-text-muted mt-0.5 select-text">
             {description}
@@ -86,6 +83,6 @@ export function SettingsCheckbox({
           </p>
         )}
       </div>
-    </div>
+    </label>
   );
 }

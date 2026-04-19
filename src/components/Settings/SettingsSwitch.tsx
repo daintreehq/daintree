@@ -25,7 +25,11 @@ interface SettingsSwitchProps {
   checked: boolean;
   onCheckedChange: (checked: boolean) => void;
   disabled?: boolean;
-  "aria-label": string;
+  "aria-label"?: string;
+  "aria-labelledby"?: string;
+  "aria-describedby"?: string;
+  id?: string;
+  name?: string;
   colorScheme?: ColorScheme;
   className?: string;
 }
@@ -35,6 +39,10 @@ export function SettingsSwitch({
   onCheckedChange,
   disabled,
   "aria-label": ariaLabel,
+  "aria-labelledby": ariaLabelledby,
+  "aria-describedby": ariaDescribedby,
+  id,
+  name,
   colorScheme = "accent",
   className,
 }: SettingsSwitchProps) {
@@ -42,10 +50,14 @@ export function SettingsSwitch({
 
   return (
     <Switch.Root
+      id={id}
+      name={name}
       checked={checked}
       onCheckedChange={onCheckedChange}
       disabled={disabled}
       aria-label={ariaLabel}
+      aria-labelledby={ariaLabelledby}
+      aria-describedby={ariaDescribedby}
       className={cn(
         "relative inline-flex shrink-0 rounded-full transition-colors duration-150 ease-in-out",
         "w-11 h-6",

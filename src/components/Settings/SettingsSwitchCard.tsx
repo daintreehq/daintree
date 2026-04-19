@@ -44,16 +44,24 @@ export function SettingsSwitchCard({
   const isCard = variant === "card";
   const showReset = isModified && onReset && !disabled;
 
+  const handleCardClick = (e: React.MouseEvent) => {
+    const target = e.target as HTMLElement;
+    if (target.closest('[role="switch"]') || target.closest('button[type="button"]')) {
+      return;
+    }
+    onChange();
+  };
+
   const card = (
     <div
       className={cn(
-        "relative w-full flex items-center justify-between transition focus-within:outline focus-within:outline-2 focus-within:outline-offset-2",
+        "relative w-full flex items-center justify-between transition",
         isCard ? "p-4 rounded-[var(--radius-lg)] border hover:bg-tint/5" : "py-2",
         "border-daintree-border text-daintree-text/70",
         isEnabled && "border-daintree-border text-daintree-text",
-        "focus-within:outline-daintree-accent",
         disabled && "opacity-50"
       )}
+      onClick={disabled ? undefined : handleCardClick}
     >
       {isModified && isCard && (
         <div
