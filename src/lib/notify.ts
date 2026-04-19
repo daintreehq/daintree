@@ -277,13 +277,14 @@ export function notify(payload: NotifyPayload): string {
         // coalesce — clear any per-item `actions` array from the initial toast
         // so stale buttons (e.g. "Close project-1") don't linger after we
         // collapse multiple notifications together.
+        const patchAction = coalesce.buildAction?.(count) ?? payload.action;
         const patch: Parameters<
           ReturnType<typeof useNotificationStore.getState>["updateNotification"]
         >[1] = {
           message: coalesce.buildMessage(count),
           title: coalesce.buildTitle?.(count) ?? title,
           inboxMessage: coalesce.buildInboxMessage?.(count),
-          action: coalesce.buildAction?.(count) ?? payload.action,
+          action: patchAction,
         };
         if (coalesce.buildAction) {
           patch.actions = undefined;
@@ -294,6 +295,13 @@ export function notify(payload: NotifyPayload): string {
         // with the first project's ID and silently mute the wrong target.
         if (notification.context?.projectId !== context?.projectId) {
           patch.context = undefined;
+        }
+        // Mirror the create-path rule: if the updated toast will be action-bearing
+        // and the stored duration is still `undefined`, persist it.
+        const resultingActionsCount =
+          (patchAction ? 1 : 0) + (coalesce.buildAction ? 0 : (notification.actions?.length ?? 0));
+        if (notification.duration === undefined && resultingActionsCount > 0) {
+          patch.duration = 0;
         }
         useNotificationStore.getState().updateNotification(existing.id, patch);
 

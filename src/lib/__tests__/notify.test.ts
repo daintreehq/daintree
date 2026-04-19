@@ -407,6 +407,61 @@ describe("notify()", () => {
       const notification = useNotificationStore.getState().notifications[0];
       expect(notification!.duration).toBe(0);
     });
+
+    it("applies the persist default on coalesce-update when buildAction introduces an action", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      // First event: no action → duration stays undefined.
+      notify({
+        type: "info",
+        message: "First",
+        coalesce: {
+          key: "coalesce-add-action",
+          buildMessage: (n) => `${n} events`,
+          buildAction: (n) => (n > 1 ? { label: "Review", onClick: () => {} } : undefined),
+        },
+      });
+      expect(useNotificationStore.getState().notifications[0]!.duration).toBeUndefined();
+
+      // Second event: buildAction now returns an action → duration should become 0.
+      notify({
+        type: "info",
+        message: "Second",
+        coalesce: {
+          key: "coalesce-add-action",
+          buildMessage: (n) => `${n} events`,
+          buildAction: (n) => (n > 1 ? { label: "Review", onClick: () => {} } : undefined),
+        },
+      });
+      const notification = useNotificationStore.getState().notifications[0];
+      expect(notification!.action).toBeDefined();
+      expect(notification!.duration).toBe(0);
+    });
+
+    it("preserves stored duration on coalesce-update when duration was explicitly set", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      // First event sets duration explicitly to 5000 — update must not override.
+      notify({
+        type: "info",
+        message: "First",
+        duration: 5000,
+        coalesce: {
+          key: "coalesce-keep-duration",
+          buildMessage: (n) => `${n} events`,
+          buildAction: () => ({ label: "Review", onClick: () => {} }),
+        },
+      });
+      notify({
+        type: "info",
+        message: "Second",
+        coalesce: {
+          key: "coalesce-keep-duration",
+          buildMessage: (n) => `${n} events`,
+          buildAction: () => ({ label: "Review", onClick: () => {} }),
+        },
+      });
+      const notification = useNotificationStore.getState().notifications[0];
+      expect(notification!.duration).toBe(5000);
+    });
   });
 
   describe("return value", () => {
