@@ -32,16 +32,19 @@ import {
   Play,
   Plug,
   RefreshCw,
-  RotateCcw,
   Save,
   Server,
   Pause,
   SquareTerminal,
   Trash2,
   Undo2,
-  X,
 } from "lucide-react";
-import { MoveToDockIcon, CopyTreeIcon, TerminalRecipeIcon } from "@/components/icons";
+import {
+  MoveToDockIcon,
+  CopyTreeIcon,
+  TerminalRecipeIcon,
+  BroadcastTerminalIcon,
+} from "@/components/icons";
 
 type MenuComponent = React.ElementType;
 type LaunchAgentIcon = React.ComponentType<{ className?: string }>;
@@ -80,7 +83,6 @@ export interface WorktreeMenuItemsProps {
   launchAgents: WorktreeLaunchAgentItem[];
   recipes: Array<{ id: string; name: string }>;
   runningRecipeId: string | null;
-  isRestartValidating: boolean;
   isPinned?: boolean;
   counts: {
     grid: number;
@@ -110,11 +112,8 @@ export interface WorktreeMenuItemsProps {
   isCollapsed?: boolean;
   onDockAll: () => void;
   onMaximizeAll: () => void;
-  onRestartAll: () => void;
   onResetRenderers: () => void;
-  onCloseCompleted: () => void;
-  onCloseAll: () => void;
-  onEndAll: () => void;
+  onBroadcastToAgents: () => void;
   onOpenPanelPalette?: () => void;
   onDeleteWorktree?: () => void;
   onRevertAgentChanges?: () => void;
@@ -138,7 +137,6 @@ export function WorktreeMenuItems({
   launchAgents,
   recipes,
   runningRecipeId,
-  isRestartValidating,
   isPinned,
   counts,
   onLaunchAgent,
@@ -162,11 +160,8 @@ export function WorktreeMenuItems({
   isCollapsed,
   onDockAll,
   onMaximizeAll,
-  onRestartAll,
   onResetRenderers,
-  onCloseCompleted,
-  onCloseAll,
-  onEndAll,
+  onBroadcastToAgents,
   onOpenPanelPalette,
   onDeleteWorktree,
   onRevertAgentChanges,
@@ -187,7 +182,6 @@ export function WorktreeMenuItems({
   const hasIssueOrPrSection = hasIssueSub || hasPRSub;
   const hasRecipes = recipes.length > 0;
   const hasRecipeSection = hasRecipes || (onSaveLayout && counts.active > 0);
-  const hasSessions = counts.all > 0;
 
   return (
     <>
@@ -256,16 +250,6 @@ export function WorktreeMenuItems({
             Maximize All
             <C.Shortcut>({counts.dock})</C.Shortcut>
           </C.Item>
-
-          <C.Separator />
-
-          <C.Item onSelect={onRestartAll} disabled={counts.active === 0 || isRestartValidating}>
-            <RotateCcw
-              className={`w-3.5 h-3.5 mr-2 ${isRestartValidating ? "animate-spin" : ""}`}
-            />
-            {isRestartValidating ? "Checking..." : "Restart All"}
-            <C.Shortcut>({counts.active})</C.Shortcut>
-          </C.Item>
           <C.Item onSelect={onResetRenderers} disabled={counts.active === 0}>
             <RefreshCw className="w-3.5 h-3.5 mr-2" />
             Reset All Renderers
@@ -274,21 +258,10 @@ export function WorktreeMenuItems({
 
           <C.Separator />
 
-          <C.Item onSelect={onCloseCompleted} disabled={counts.completed === 0}>
-            Close Completed
-            <C.Shortcut>({counts.completed})</C.Shortcut>
-          </C.Item>
-          <C.Separator />
-
-          <C.Item onSelect={onCloseAll} disabled={counts.active === 0}>
-            <Trash2 className="w-3.5 h-3.5 mr-2" />
-            Close All (Trash)
+          <C.Item onSelect={onBroadcastToAgents} disabled={counts.active === 0}>
+            <BroadcastTerminalIcon className="w-3.5 h-3.5 mr-2" />
+            Broadcast to agents…
             <C.Shortcut>({counts.active})</C.Shortcut>
-          </C.Item>
-          <C.Item onSelect={onEndAll} disabled={!hasSessions} destructive>
-            <X className="w-3.5 h-3.5 mr-2" />
-            End All (Kill)
-            <C.Shortcut>({counts.all})</C.Shortcut>
           </C.Item>
         </C.SubContent>
       </C.Sub>

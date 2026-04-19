@@ -93,7 +93,6 @@ import { ActionPalette } from "./components/ActionPalette";
 import { QuickSwitcher } from "./components/QuickSwitcher";
 import { SendToAgentPalette } from "./components/Terminal/SendToAgentPalette";
 import { useSendToAgentPalette } from "./hooks/useSendToAgentPalette";
-import { BulkCommandPalette } from "./components/BulkCommandCenter";
 import { ConfirmDialog } from "./components/ui/ConfirmDialog";
 import { PanelLimitConfirmDialog } from "./components/Terminal/PanelLimitConfirmDialog";
 import { NotesPalette } from "./components/Notes";
@@ -546,7 +545,6 @@ function App() {
         selectItem={sendToAgentPalette.selectItem}
         confirmSelection={sendToAgentPalette.confirmSelection}
       />
-      <BulkCommandPalette />
       <NewTerminalPalette
         isOpen={newTerminalPalette.isOpen}
         query={newTerminalPalette.query}

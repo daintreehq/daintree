@@ -932,18 +932,18 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
                 <TooltipTrigger asChild>
                   <button
                     onClick={() =>
-                      actionService.dispatch("fleet.deck.toggle", undefined, {
+                      actionService.dispatch("terminal.bulkCommand", undefined, {
                         source: "user",
                       })
                     }
                     className="p-1 text-daintree-text/40 hover:text-daintree-text hover:bg-tint/[0.06] rounded transition-colors"
-                    aria-label="Toggle Fleet Deck"
+                    aria-label="Open Fleet Deck"
                   >
                     <BroadcastTerminalIcon className="w-3.5 h-3.5" />
                   </button>
                 </TooltipTrigger>
                 <TooltipContent side="bottom">
-                  {createTooltipWithShortcut("Toggle Fleet Deck", "Cmd+Alt+Shift+B")}
+                  {createTooltipWithShortcut("Fleet Deck", "Cmd+Shift+B")}
                 </TooltipContent>
               </Tooltip>
               <Tooltip>

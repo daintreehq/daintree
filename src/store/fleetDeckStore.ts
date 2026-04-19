@@ -24,6 +24,7 @@ interface FleetDeckState {
   isHydrated: boolean;
 
   open: () => void;
+  openWithScope: (scope: FleetDeckScope) => void;
   close: () => void;
   toggle: () => void;
   setEdge: (edge: FleetDeckEdge) => void;
@@ -71,6 +72,15 @@ export const useFleetDeckStore = create<FleetDeckState>()((set, get) => ({
     // hydrate call).
     set({ isOpen: true, isHydrated: true });
     void persistOpen(true);
+  },
+
+  openWithScope: (scope) => {
+    const s = get();
+    if (s.scope !== scope) set({ scope });
+    if (!s.isOpen) {
+      set({ isOpen: true, isHydrated: true });
+      void persistOpen(true);
+    }
   },
 
   close: () => {

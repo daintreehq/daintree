@@ -1,7 +1,7 @@
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import { z } from "zod";
 import { terminalClient } from "@/clients";
-import { openBulkCommandPalette } from "@/components/BulkCommandCenter/BulkCommandPalette";
+import { useFleetDeckStore } from "@/store/fleetDeckStore";
 import { openSendToAgentPalette } from "@/hooks/useSendToAgentPalette";
 import { openPanelContextMenu } from "@/lib/panelContextMenu";
 import { terminalInstanceService } from "@/services/terminal/TerminalInstanceService";
@@ -155,15 +155,15 @@ export function registerTerminalInputActions(
 
   actions.set("terminal.bulkCommand", () => ({
     id: "terminal.bulkCommand",
-    title: "Bulk Operations",
-    description: "Send keystrokes or commands to multiple agent terminals",
+    title: "Fleet Deck",
+    description: "Open the Fleet Deck to broadcast to multiple agent terminals",
     category: "terminal",
     kind: "command",
     danger: "safe",
     scope: "renderer",
     keywords: ["broadcast", "fleet", "multi"],
     run: async () => {
-      openBulkCommandPalette();
+      useFleetDeckStore.getState().openWithScope("all");
     },
   }));
 
