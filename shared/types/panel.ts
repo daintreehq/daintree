@@ -297,6 +297,9 @@ export interface NotesPanelData extends BasePanelData {
   createdAt: number;
 }
 
+/** Viewport preset IDs for dev-preview responsive emulation */
+export type ViewportPresetId = "iphone" | "pixel" | "ipad";
+
 export interface DevPreviewPanelData extends BasePanelData {
   kind: "dev-preview";
   /** Current working directory for the dev server */
@@ -321,6 +324,8 @@ export interface DevPreviewPanelData extends BasePanelData {
   devServerTerminalId?: string;
   /** Behavior when dev server exits */
   exitBehavior?: PanelExitBehavior;
+  /** Active viewport preset (undefined = fill/full-width) */
+  viewportPreset?: ViewportPresetId;
 }
 
 export type PanelInstance = PtyPanelData | BrowserPanelData | NotesPanelData | DevPreviewPanelData;
@@ -418,6 +423,8 @@ export interface TerminalInstance {
   devServerTerminalId?: string;
   /** Whether the dev-preview console drawer is open */
   devPreviewConsoleOpen?: boolean;
+  /** Active viewport preset for dev-preview responsive emulation (undefined = fill) */
+  viewportPreset?: ViewportPresetId;
   /** Behavior when terminal exits: "keep" preserves for review, "trash" sends to trash, "remove" deletes completely */
   exitBehavior?: PanelExitBehavior;
   /** Whether this terminal has an active PTY process (false for orphaned terminals that exited) */

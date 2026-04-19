@@ -1,4 +1,4 @@
-import type { PanelKind } from "@/types";
+import type { PanelKind, ViewportPresetId } from "@/types";
 import type { AddTerminalArgs, SavedTerminalData } from "@/utils/stateHydration/statePatcher";
 
 type PanelKindDeserializer = (saved: SavedTerminalData) => Partial<AddTerminalArgs>;
@@ -27,6 +27,7 @@ const DESERIALIZERS: Record<string, PanelKindDeserializer> = {
       browserHistory: saved.browserHistory,
       browserZoom: saved.browserZoom,
       devPreviewConsoleOpen: saved.devPreviewConsoleOpen,
+      viewportPreset: saved.viewportPreset as ViewportPresetId | undefined,
       createdAt: saved.createdAt,
     };
   },

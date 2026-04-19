@@ -6,6 +6,7 @@ import type {
   PanelLocation,
   TabGroup,
   PanelExitBehavior,
+  ViewportPresetId,
 } from "./panel.js";
 import type { CommandOverride } from "./commands.js";
 import type { EditorConfig } from "./editor.js";
@@ -86,6 +87,8 @@ export interface PanelSnapshot {
   devServerTerminalId?: string;
   /** Whether the dev-preview console drawer is open */
   devPreviewConsoleOpen?: boolean;
+  /** Active viewport preset for dev-preview responsive emulation */
+  viewportPreset?: ViewportPresetId;
   /** Path to note file (kind === 'notes') */
   notePath?: string;
   /** Note ID (kind === 'notes') */

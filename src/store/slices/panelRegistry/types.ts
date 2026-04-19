@@ -158,6 +158,10 @@ export interface PanelRegistrySlice {
   setBrowserZoom: (id: string, zoom: number) => void;
   setBrowserConsoleOpen: (id: string, isOpen: boolean) => void;
   setDevPreviewConsoleOpen: (id: string, isOpen: boolean) => void;
+  setViewportPreset: (
+    id: string,
+    preset: import("@shared/types/panel.js").ViewportPresetId | undefined
+  ) => void;
   setDevServerState: (
     id: string,
     status: "stopped" | "starting" | "installing" | "running" | "error",

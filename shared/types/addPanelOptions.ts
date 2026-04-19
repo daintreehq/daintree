@@ -1,4 +1,10 @@
-import type { PanelKind, PanelLocation, TerminalType, PanelExitBehavior } from "./panel.js";
+import type {
+  PanelKind,
+  PanelLocation,
+  TerminalType,
+  PanelExitBehavior,
+  ViewportPresetId,
+} from "./panel.js";
 import type { BrowserHistory } from "./browser.js";
 import type { AgentState } from "./agent.js";
 import type { TerminalSpawnSource } from "./panel.js";
@@ -117,6 +123,8 @@ export interface DevPreviewPanelOptions extends AddPanelOptionsBase {
   devServerTerminalId?: string;
   /** Whether the dev-preview console drawer is open */
   devPreviewConsoleOpen?: boolean;
+  /** Active viewport preset for responsive emulation (undefined = fill) */
+  viewportPreset?: ViewportPresetId;
 }
 
 /**

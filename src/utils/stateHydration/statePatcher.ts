@@ -41,6 +41,7 @@ export interface AddTerminalArgs extends AddPanelOptionsBase {
   devServerError?: { type: string; message: string } | null;
   devServerTerminalId?: string | null;
   devPreviewConsoleOpen?: boolean;
+  viewportPreset?: string;
 }
 
 export interface SavedTerminalData {
@@ -64,6 +65,7 @@ export interface SavedTerminalData {
   createdAt?: number;
   devCommand?: string;
   devPreviewConsoleOpen?: boolean;
+  viewportPreset?: string;
   exitBehavior?: PanelExitBehavior;
   agentSessionId?: string;
   agentLaunchFlags?: string[];
