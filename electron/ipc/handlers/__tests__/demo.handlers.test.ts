@@ -302,11 +302,6 @@ describe("registerDemoHandlers", () => {
       outputPath: "/tmp/capture/out.webm",
     };
 
-    function simulateCommandDone(requestId = "test-request-id") {
-      const doneListener = getIpcListener("demo:command-done");
-      doneListener?.({}, { requestId });
-    }
-
     it("startCapture creates write stream, sends exec start, returns outputPath", async () => {
       const fsMod = await import("fs");
       const deps = makeDeps(true);
