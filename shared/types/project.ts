@@ -367,4 +367,6 @@ export interface ProjectSettings {
   activeResourceEnvironment?: string;
   /** Default worktree mode for new worktrees ("local" or an environment key from resourceEnvironments) */
   defaultWorktreeMode?: string;
+  /** Hostnames the user approved for the browser panel beyond the implicit local/private allow-list */
+  browserAllowedHosts?: string[];
 }

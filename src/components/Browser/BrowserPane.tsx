@@ -26,6 +26,7 @@ import { useConsoleCaptureStore } from "@/store/consoleCaptureStore";
 import type { SerializedConsoleRow } from "@shared/types/ipc/webviewConsole";
 import { useProjectStore } from "@/store";
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
+import { useProjectSettings } from "@/hooks/useProjectSettings";
 import { useUrlHistoryStore } from "@/store/urlHistoryStore";
 import { useFindInPage } from "@/hooks/useFindInPage";
 
@@ -82,6 +83,11 @@ export function BrowserPane({
     (state) => state.settings?.devServerLoadTimeout
   );
   const loadTimeoutMs = Math.min(Math.max(devServerLoadTimeout ?? 30, 1), 120) * 1000;
+  const { settings: projectSettings, saveSettings: saveProjectSettings } = useProjectSettings();
+  const allowedHosts = useMemo(
+    () => projectSettings?.browserAllowedHosts ?? [],
+    [projectSettings?.browserAllowedHosts]
+  );
 
   const isConsoleOpen = usePanelStore(
     (state) => state.getTerminal(id)?.browserConsoleOpen ?? false
@@ -98,7 +104,10 @@ export function BrowserPane({
   }>(() => {
     const terminal = usePanelStore.getState().getTerminal(id);
     const saved = terminal?.browserHistory;
-    const normalized = normalizeBrowserUrl(initialUrl);
+    // Use extended mode (empty allowedHosts) so private/LAN URLs in session state
+    // are recognized as valid-syntax and return a normalized string; restored URLs
+    // bypass the approval prompt since being in history implies prior approval.
+    const normalized = normalizeBrowserUrl(initialUrl, { allowedHosts: [] });
     const fallbackPresent = terminal?.browserUrl || normalized.url || initialUrl;
     return {
       history: initializeBrowserHistory(saved, fallbackPresent),
@@ -125,6 +134,10 @@ export function BrowserPane({
   const [blockedNav, setBlockedNav] = useState<{
     url: string;
     canOpenExternal: boolean;
+  } | null>(null);
+  const [pendingApproval, setPendingApproval] = useState<{
+    url: string;
+    hostname: string;
   } | null>(null);
   const blockedNavTimerRef = useRef<NodeJS.Timeout | null>(null);
   // Track the last URL we set on the webview to detect in-webview navigation
@@ -405,26 +418,58 @@ export function BrowserPane({
     evictingRef,
   ]);
 
-  const handleNavigate = useCallback(
+  const commitNavigation = useCallback(
     (url: string) => {
-      const result = normalizeBrowserUrl(url);
-      if (result.error || !result.url) return;
-
       isInitialRestoredLoadRef.current = false;
       setBlockedNav(null);
-      setHistory((prev) => pushBrowserHistory(prev, result.url!));
+      setPendingApproval(null);
+      setHistory((prev) => pushBrowserHistory(prev, url));
       setIsLoading(true);
       setLoadError(null);
-      lastSetUrlRef.current = result.url!;
+      lastSetUrlRef.current = url;
 
-      // Navigate webview to new URL
       const webview = webviewRef.current;
       if (webview && isWebviewReady) {
-        webview.loadURL(result.url!);
+        webview.loadURL(url);
       }
     },
     [isWebviewReady]
   );
+
+  const handleNavigate = useCallback(
+    (url: string) => {
+      const result = normalizeBrowserUrl(url, { allowedHosts });
+      if (result.error || !result.url) return;
+
+      if (result.requiresConfirmation && result.hostname) {
+        setPendingApproval({ url: result.url, hostname: result.hostname });
+        return;
+      }
+
+      commitNavigation(result.url);
+    },
+    [allowedHosts, commitNavigation]
+  );
+
+  const handleApproveHost = useCallback(async () => {
+    if (!pendingApproval) return;
+    const { url, hostname } = pendingApproval;
+    const baseSettings = projectSettings ?? { runCommands: [] };
+    const nextAllowed = Array.from(
+      new Set([...(baseSettings.browserAllowedHosts ?? []), hostname])
+    );
+    try {
+      await saveProjectSettings({ ...baseSettings, browserAllowedHosts: nextAllowed });
+    } catch (err) {
+      console.error("[BrowserPane] Failed to save approved host", err);
+      return;
+    }
+    commitNavigation(url);
+  }, [pendingApproval, projectSettings, saveProjectSettings, commitNavigation]);
+
+  const handleDismissApproval = useCallback(() => {
+    setPendingApproval(null);
+  }, []);
 
   const handleBack = useCallback(() => {
     isInitialRestoredLoadRef.current = false;
@@ -800,13 +845,38 @@ export function BrowserPane({
           isConsoleOpen && "min-h-0"
         )}
       >
+        {pendingApproval && (
+          <div className="absolute top-0 left-0 right-0 z-20 flex items-center gap-2 px-3 py-1.5 text-xs bg-status-info/10 border-b border-status-info/30 text-daintree-text/90">
+            <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-status-info" />
+            <span className="truncate flex-1">
+              Allow browser panel to load{" "}
+              <span className="font-mono">{pendingApproval.hostname}</span>?
+            </span>
+            <button
+              type="button"
+              onClick={() => void handleApproveHost()}
+              className="shrink-0 px-2 py-0.5 rounded text-xs bg-status-info/20 hover:bg-status-info/30 text-daintree-text/90 transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-daintree-accent/50"
+            >
+              Allow
+            </button>
+            <button
+              type="button"
+              onClick={handleDismissApproval}
+              className="shrink-0 text-daintree-text/40 hover:text-daintree-text/70 transition-colors"
+              aria-label="Dismiss"
+            >
+              ×
+            </button>
+          </div>
+        )}
         {!hasValidUrl ? (
           <div className="absolute inset-0 flex flex-col items-center justify-center bg-daintree-bg text-daintree-text p-6">
             <div className="flex flex-col items-center text-center max-w-md">
-              <h3 className="text-sm font-medium text-daintree-text/70 mb-1">Localhost Browser</h3>
+              <h3 className="text-sm font-medium text-daintree-text/70 mb-1">Browser</h3>
               <p className="text-xs text-daintree-text/50 mb-4 leading-relaxed">
-                Preview your local development server. Enter a localhost URL in the address bar
-                above to get started.
+                Preview your local development server. Enter a URL in the address bar above —
+                localhost, LAN, Docker, and RFC-reserved TLDs (.local, .test, .internal) are all
+                supported.
               </p>
               <div className="flex flex-wrap justify-center gap-2">
                 {["localhost:3000", "localhost:5173", "localhost:8080"].map((example) => (

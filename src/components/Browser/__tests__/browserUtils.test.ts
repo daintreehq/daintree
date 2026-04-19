@@ -103,9 +103,14 @@ describe("isValidBrowserUrl", () => {
     expect(isValidBrowserUrl("127.0.0.1:8080")).toBe(true);
   });
 
-  it("should return false for invalid URLs", () => {
-    expect(isValidBrowserUrl("example.com")).toBe(false);
-    expect(isValidBrowserUrl("http://example.com")).toBe(false);
+  it("should return true for syntactically valid non-loopback URLs (approval pending)", () => {
+    // Non-loopback hosts are now valid-syntax URLs that need approval before loading
+    // — the placeholder should stay hidden while the approval banner is shown.
+    expect(isValidBrowserUrl("http://example.com")).toBe(true);
+    expect(isValidBrowserUrl("http://192.168.1.1")).toBe(true);
+  });
+
+  it("should return false for empty or missing URLs", () => {
     expect(isValidBrowserUrl("")).toBe(false);
     expect(isValidBrowserUrl(null)).toBe(false);
     expect(isValidBrowserUrl(undefined)).toBe(false);
