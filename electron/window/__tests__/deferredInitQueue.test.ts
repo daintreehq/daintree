@@ -187,4 +187,62 @@ describe("deferredInitQueue", () => {
     expect(t1).toHaveBeenCalledTimes(1);
     expect(t2).toHaveBeenCalledTimes(1);
   });
+
+  it("reset during in-flight drain does not corrupt the fresh cycle", async () => {
+    // Task that never settles — holds the drain chain open indefinitely.
+    let releaseFirst: () => void = () => {};
+    const firstRun = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseFirst = resolve;
+        })
+    );
+    const secondRun = vi.fn();
+
+    registerDeferredTask({ name: "hang", run: firstRun });
+    registerDeferredTask({ name: "never", run: secondRun });
+    finalizeDeferredRegistration(10_000);
+    signalFirstInteractive(1);
+
+    // Let the first task start but not finish
+    await vi.advanceTimersByTimeAsync(0);
+    expect(firstRun).toHaveBeenCalledTimes(1);
+    expect(getDeferredQueueState().drainState).toBe("draining");
+
+    // Simulate last-window-close
+    resetDeferredQueue();
+    expect(getDeferredQueueState().drainState).toBe("idle");
+
+    // Register a fresh task for the next cycle
+    const freshTask = vi.fn();
+    registerDeferredTask({ name: "fresh", run: freshTask });
+    finalizeDeferredRegistration(10_000);
+    signalFirstInteractive(99);
+    await waitForDrain();
+    expect(freshTask).toHaveBeenCalledTimes(1);
+
+    // Now release the stale promise from the previous cycle. The stale
+    // scheduleNext callback must NOT corrupt the fresh cycle's state.
+    releaseFirst();
+    await vi.advanceTimersByTimeAsync(100);
+
+    // secondRun from the old cycle must never run
+    expect(secondRun).not.toHaveBeenCalled();
+    // Fresh cycle stays drained
+    expect(getDeferredQueueState().drainState).toBe("drained");
+  });
+
+  it("does not drain if finalize is never called, even after signal", async () => {
+    const task = vi.fn();
+    registerDeferredTask({ name: "orphan", run: task });
+
+    // Signal arrives (renderer painted) but finalize never happens
+    signalFirstInteractive(42);
+
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    expect(task).not.toHaveBeenCalled();
+    expect(getDeferredQueueState().drainState).toBe("idle");
+    expect(getDeferredQueueState().firstInteractiveReceived).toBe(true);
+  });
 });

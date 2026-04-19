@@ -527,11 +527,10 @@ export async function setupWindowServices(
       const registryRef = windowRegistry;
       registerDeferredTask({
         name: "mcp-server",
-        run: () => {
+        run: () =>
           mcpServerService.start(registryRef).catch((err) => {
             console.error("[MAIN] MCP server failed to start:", err);
-          });
-        },
+          }),
       });
     }
 
@@ -549,6 +548,32 @@ export async function setupWindowServices(
     cliAvailabilityService = new CliAvailabilityService();
   }
   createApplicationMenu(win, cliAvailabilityService);
+
+  // Per-window deferred work. Menu is window-specific, so each window queues
+  // its own CLI check + menu rebuild. Registered here (before any awaits that
+  // could hang) so finalize below is guaranteed to run.
+  const cliService = cliAvailabilityService;
+  registerDeferredTask({
+    name: `cli-availability-check:${win.id}`,
+    run: async () => {
+      try {
+        const availability = await cliService.checkAvailability();
+        console.log("[MAIN] CLI availability checked:", availability);
+        if (!win.isDestroyed()) {
+          createApplicationMenu(win, cliService);
+        }
+      } catch (err) {
+        console.error("[MAIN] CliAvailabilityService initialization failed:", err);
+      }
+    },
+  });
+
+  // Arm the drain trigger immediately. All tasks for this window are now
+  // registered; any subsequent `await` in setupWindowServices could hang
+  // (PTY host, workspace loadProject, plugin init) and must not block the
+  // deferred queue from becoming drainable. The renderer's first-interactive
+  // IPC fires on the happy path; the 10s fallback drains on hang.
+  finalizeDeferredRegistration();
 
   if (windowRegistry) {
     notificationService.initialize(windowRegistry);
@@ -1042,25 +1067,6 @@ export async function setupWindowServices(
     return;
   }
 
-  // Per-window deferred work. The menu is window-specific, so each window
-  // queues its own CLI-availability check + menu rebuild. Second-window
-  // registrations arrive after the global queue has drained; the queue runs
-  // late tasks inline, which is fine for a cheap per-window operation.
-  registerDeferredTask({
-    name: `cli-availability-check:${win.id}`,
-    run: async () => {
-      try {
-        const availability = await cliAvailabilityService!.checkAvailability();
-        console.log("[MAIN] CLI availability checked:", availability);
-        if (!win.isDestroyed()) {
-          createApplicationMenu(win, cliAvailabilityService!);
-        }
-      } catch (err) {
-        console.error("[MAIN] CliAvailabilityService initialization failed:", err);
-      }
-    },
-  });
-
   // CLI path handling — skip if this window was opened with an explicit initialProjectPath
   if (!opts.initialProjectPath) {
     const firstLaunchCliPath = !processArgvCliHandled ? extractCliPath(process.argv) : null;
@@ -1079,11 +1085,6 @@ export async function setupWindowServices(
       (err) => console.error("[MAIN] Failed to open initial project path:", err)
     );
   }
-
-  // All deferred tasks for this window have been registered. Arm the drain
-  // trigger: either the renderer's `app:first-interactive` IPC fires (happy
-  // path) or the 10s fallback timer runs the queue anyway.
-  finalizeDeferredRegistration();
 
   // ── Last-window-close: dispose global services ──
   // Per-window cleanup is handled by ctx.cleanup (run by WindowRegistry.unregister).
