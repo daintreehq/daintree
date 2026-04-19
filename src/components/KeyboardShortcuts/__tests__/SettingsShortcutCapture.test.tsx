@@ -485,7 +485,13 @@ describe("SettingsShortcutCapture", () => {
       const addNotificationSpy = vi.fn();
       vi.mocked(useNotificationStore.getState).mockReturnValue({
         addNotification: addNotificationSpy,
-      } as any);
+        notifications: [],
+        updateNotification: vi.fn(),
+        dismissNotification: vi.fn(),
+        removeNotification: vi.fn(),
+        clearNotifications: vi.fn(),
+        reset: vi.fn(),
+      });
 
       render(
         <SettingsShortcutCapture
@@ -542,7 +548,13 @@ describe("SettingsShortcutCapture", () => {
       const addNotificationSpy = vi.fn();
       vi.mocked(useNotificationStore.getState).mockReturnValue({
         addNotification: addNotificationSpy,
-      } as any);
+        notifications: [],
+        updateNotification: vi.fn(),
+        dismissNotification: vi.fn(),
+        removeNotification: vi.fn(),
+        clearNotifications: vi.fn(),
+        reset: vi.fn(),
+      });
 
       render(
         <SettingsShortcutCapture
@@ -611,7 +623,13 @@ describe("SettingsShortcutCapture", () => {
       const addNotificationSpy = vi.fn();
       vi.mocked(useNotificationStore.getState).mockReturnValue({
         addNotification: addNotificationSpy,
-      } as any);
+        notifications: [],
+        updateNotification: vi.fn(),
+        dismissNotification: vi.fn(),
+        removeNotification: vi.fn(),
+        clearNotifications: vi.fn(),
+        reset: vi.fn(),
+      });
 
       render(
         <SettingsShortcutCapture

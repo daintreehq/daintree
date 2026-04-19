@@ -26,7 +26,7 @@ export function SettingsShortcutCapture({
   const [chordStep, setChordStep] = useState<"first" | "waiting" | "complete">("first");
   const chordTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const chordTokenRef = useRef(0);
-  const [conflictRefreshKey, setConflictRefreshKey] = useState(0);
+  const [_conflictRefreshKey, setConflictRefreshKey] = useState(0);
   const [isUnbinding, setIsUnbinding] = useState(false);
 
   const capturedCombo = capturedCombos.length > 0 ? capturedCombos.join(" ") : null;
@@ -34,7 +34,7 @@ export function SettingsShortcutCapture({
   const conflicts = useMemo(() => {
     if (!capturedCombo) return [];
     return keybindingService.findConflicts(capturedCombo, excludeActionId);
-  }, [capturedCombo, excludeActionId, conflictRefreshKey]);
+  }, [capturedCombo, excludeActionId]);
 
   const clearChordTimeout = useCallback(() => {
     if (chordTimeoutRef.current) {
