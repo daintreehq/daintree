@@ -484,6 +484,70 @@ describe("useNoteEditor", () => {
     expect(result.current.isLoadingContent).toBe(false);
   });
 
+  it("drops late write results when the user has switched notes", async () => {
+    const noteA = makeNote({ id: "a", path: "/notes/a.md" });
+    const noteB = makeNote({ id: "b", path: "/notes/b.md" });
+
+    vi.mocked(notesClient.read).mockImplementation(async (p: string) =>
+      p === "/notes/a.md"
+        ? makeContent({
+            metadata: { id: "a", title: "A", scope: "project", createdAt: 1000 },
+            content: "A body",
+            path: "/notes/a.md",
+            lastModified: 5000,
+          })
+        : makeContent({
+            metadata: { id: "b", title: "B", scope: "project", createdAt: 2000 },
+            content: "B body",
+            path: "/notes/b.md",
+            lastModified: 6000,
+          })
+    );
+
+    let resolveWrite: (v: { lastModified?: number; conflictPath?: string }) => void = () => {};
+    vi.mocked(notesClient.write).mockImplementation(() => new Promise((r) => (resolveWrite = r)));
+
+    const { result, rerender } = renderHook(
+      ({ selectedNote }: { selectedNote: NoteListItem | null }) =>
+        useNoteEditor({
+          selectedNote,
+          refresh: vi.fn(),
+          setLastSelectedNoteId: vi.fn(),
+        }),
+      { initialProps: { selectedNote: noteA } }
+    );
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    act(() => {
+      result.current.handleContentChange("edit A");
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(500);
+    });
+
+    // Switch to note B before note A's write resolves.
+    rerender({ selectedNote: noteB });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    // Now resolve note A's write with a conflict payload. Note B must not be
+    // contaminated by these fields.
+    await act(async () => {
+      resolveWrite({
+        lastModified: 9999,
+        conflictPath: "a-conflict.md",
+      });
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    expect(result.current.conflictCopyPath).toBeNull();
+    expect(result.current.noteLastModified).toBe(6000);
+  });
+
   it("cancels pending save when adding a tag", async () => {
     const { result } = renderHook(() => useNoteEditor(defaultProps()));
 

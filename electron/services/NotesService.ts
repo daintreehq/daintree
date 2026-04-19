@@ -299,20 +299,34 @@ export class NotesService {
     const posixDir = path.posix.dirname(notePath.replace(/\\/g, "/"));
     const relDir = posixDir === "." ? "" : posixDir;
     const base = path.posix.basename(notePath.replace(/\\/g, "/"), ".md");
-    const date = new Date().toISOString().slice(0, 10);
+    // Use local date: the filename should match the day the user experienced
+    // the conflict, not a UTC date that can skew by a calendar day in the
+    // evening in western timezones.
+    const now = new Date();
+    const date = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(
+      now.getDate()
+    ).padStart(2, "0")}`;
     const notesDir = path.resolve(this.getNotesDir());
 
+    // Atomically reserve a free filename via exclusive create (O_CREAT|O_EXCL)
+    // so two concurrent conflict saves on the same note cannot both pick the
+    // same slot and overwrite each other's preserved copy.
     let conflictRelativePath = "";
+    await fs.mkdir(path.join(notesDir, relDir), { recursive: true });
     for (let i = 0; i < 1000; i++) {
       const suffix = i === 0 ? "" : `-${i + 1}`;
       const conflictName = `${base} (conflict ${date}${suffix}).md`;
       const candidateRelative = relDir ? `${relDir}/${conflictName}` : conflictName;
       const candidateAbs = path.join(notesDir, relDir, conflictName);
       try {
-        await fs.access(candidateAbs);
-      } catch {
+        const handle = await fs.open(candidateAbs, "wx");
+        await handle.close();
         conflictRelativePath = candidateRelative;
         break;
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== "EEXIST") {
+          throw err;
+        }
       }
     }
 

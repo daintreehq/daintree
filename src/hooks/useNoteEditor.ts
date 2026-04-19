@@ -161,6 +161,9 @@ export function useNoteEditor({
             latestMetadataRef.current!,
             latestLastModifiedRef.current ?? undefined
           );
+          // Drop late writes whose note has been deselected/switched; the new
+          // note owns the editor state now.
+          if (latestSelectedNoteRef.current?.id !== note.id) return;
           applyWriteResult(result, note.id);
         } catch (e) {
           console.error("Failed to save note:", e);

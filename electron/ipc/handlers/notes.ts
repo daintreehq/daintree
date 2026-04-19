@@ -122,7 +122,21 @@ export function registerNotesHandlers(_deps: HandlerDependencies): () => void {
         action: "created",
       });
 
-      const result = await service.write(notePath, content, validatedMetadata);
+      let result: { lastModified: number };
+      try {
+        result = await service.write(notePath, content, validatedMetadata);
+      } catch (forceErr) {
+        // The conflict copy is on disk but the user's buffer failed to save.
+        // Annotate the rethrown error with the preserved path so the caller
+        // can tell the user their disk version is safe while asking them to
+        // retry the save.
+        const message = forceErr instanceof Error ? forceErr.message : "Failed to save note";
+        const wrapped = new Error(
+          `${message} (previous disk version preserved at ${conflictPath})`
+        );
+        (wrapped as Error & { conflictPath?: string }).conflictPath = conflictPath;
+        throw wrapped;
+      }
       broadcastUpdate({ notePath, title: validatedMetadata.title, action: "updated" });
 
       return { ...result, conflictPath };

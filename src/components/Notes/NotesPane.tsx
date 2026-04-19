@@ -65,6 +65,8 @@ export function NotesPane({
   const isMountedRef = useRef(true);
   const saveVersionRef = useRef(0);
   const contentRef = useRef<string>("");
+  const metadataRef = useRef<NoteMetadata | null>(null);
+  const lastModifiedRef = useRef<number | null>(null);
   const editorViewRef = useRef<EditorView | null>(null);
   const previewRef = useRef<HTMLDivElement>(null);
   const isSyncingRef = useRef(false);
@@ -73,6 +75,14 @@ export function NotesPane({
     () => {}
   );
   const [notesDir, setNotesDir] = useState<string | null>(null);
+
+  // Keep refs in sync so the debounced save always reads the freshest values,
+  // avoiding stale-closure conflicts when rapid edits overlap with an in-flight
+  // write that hasn't yet updated `lastModified` state.
+  useEffect(() => {
+    metadataRef.current = metadata;
+    lastModifiedRef.current = lastModified;
+  });
 
   const currentProject = useProjectStore((s) => s.currentProject);
   const panelWorktree = useWorktreeStore((s) =>
@@ -218,39 +228,12 @@ export function NotesPane({
     };
   }, [notePath]);
 
-  const saveNote = useCallback(
-    async (newContent: string, version: number) => {
-      if (!notePath || !metadata) return;
-
-      try {
-        const result = await notesClient.write(
-          notePath,
-          newContent,
-          metadata,
-          lastModified ?? undefined
-        );
-        if (!isMountedRef.current) return;
-
-        if (result.lastModified) {
-          setLastModified(result.lastModified);
-          if (version === saveVersionRef.current) {
-            lastSavedContentRef.current = newContent;
-          }
-        }
-        if (result.conflictPath) {
-          setConflictCopyPath(result.conflictPath);
-        }
-      } catch (e) {
-        console.error("Failed to save note:", e);
-      }
-    },
-    [notePath, metadata, lastModified]
-  );
-
   const handleContentChange = useCallback(
     (value: string) => {
       setContent(value);
       contentRef.current = value;
+
+      if (!notePath) return;
 
       if (saveTimeoutRef.current) {
         clearTimeout(saveTimeoutRef.current);
@@ -259,11 +242,34 @@ export function NotesPane({
       saveVersionRef.current += 1;
       const version = saveVersionRef.current;
 
-      saveTimeoutRef.current = setTimeout(() => {
-        saveNote(value, version);
+      saveTimeoutRef.current = setTimeout(async () => {
+        const currentMetadata = metadataRef.current;
+        if (!currentMetadata) return;
+
+        try {
+          const result = await notesClient.write(
+            notePath,
+            value,
+            currentMetadata,
+            lastModifiedRef.current ?? undefined
+          );
+          if (!isMountedRef.current) return;
+
+          if (result.lastModified) {
+            setLastModified(result.lastModified);
+            if (version === saveVersionRef.current) {
+              lastSavedContentRef.current = value;
+            }
+          }
+          if (result.conflictPath) {
+            setConflictCopyPath(result.conflictPath);
+          }
+        } catch (e) {
+          console.error("Failed to save note:", e);
+        }
       }, 1000);
     },
-    [saveNote]
+    [notePath]
   );
 
   const dismissConflictNotice = useCallback(() => {
