@@ -617,46 +617,87 @@ export function AgentSettings({
               // Only rendered inside the custom-preset detail panel. Reads
               // from the preset, falling back to agent-level defaults when
               // the preset omits an override. Writes via handleUpdatePreset.
+              //
+              // Booleans render as tri-state selects (Inherit/On/Off): a
+              // `boolean | undefined` override where `undefined` inherits the
+              // agent-level default at launch. Custom Arguments uses a text
+              // input with a reset button that clears the override.
 
-              const presetSkipPerms =
-                selectedPreset?.dangerousEnabled ?? activeEntry.dangerousEnabled ?? false;
+              const agentDefaultDangerous = activeEntry.dangerousEnabled ?? false;
+              const agentDefaultInline = activeEntry.inlineMode ?? true;
+              const agentDefaultCustomFlags = activeEntry.customFlags ?? "";
 
-              const presetInlineMode = selectedPreset?.inlineMode ?? activeEntry.inlineMode ?? true;
+              const dangerousOverride = selectedPreset?.dangerousEnabled;
+              const inlineOverride = selectedPreset?.inlineMode;
+              const customFlagsOverride = selectedPreset?.customFlags;
 
-              const presetCustomFlags =
-                selectedPreset?.customFlags ?? activeEntry.customFlags ?? "";
+              // Effective (merged) values — the dangerous-arg strip must
+              // reflect what actually gets passed to the CLI at launch.
+              const effectiveSkipPerms = dangerousOverride ?? agentDefaultDangerous;
 
-              const onPresetSkipPermsToggle = () => {
+              const onDangerousOverrideChange = (value: boolean | undefined) => {
                 if (!selectedPreset) return;
-                handleUpdatePreset(selectedPreset.id, { dangerousEnabled: !presetSkipPerms });
+                handleUpdatePreset(selectedPreset.id, { dangerousEnabled: value });
               };
 
-              const onPresetInlineModeToggle = () => {
+              const onInlineOverrideChange = (value: boolean | undefined) => {
                 if (!selectedPreset) return;
-                handleUpdatePreset(selectedPreset.id, { inlineMode: !presetInlineMode });
+                handleUpdatePreset(selectedPreset.id, { inlineMode: value });
               };
 
-              const onPresetCustomFlagsChange = (value: string) => {
+              const onCustomFlagsOverrideChange = (value: string) => {
                 if (!selectedPreset) return;
-                const updated = (activeEntry.customPresets ?? []).map((f) =>
-                  f.id === selectedPreset.id ? { ...f, customFlags: value } : f
-                );
-                void updateAgent(activeAgent.id, { customPresets: updated });
+                handleUpdatePreset(selectedPreset.id, { customFlags: value });
               };
+
+              const onCustomFlagsOverrideReset = () => {
+                if (!selectedPreset) return;
+                handleUpdatePreset(selectedPreset.id, { customFlags: undefined });
+              };
+
+              // Tri-state select serialization: `""` (always a string, so the
+              // select stays controlled in React 19) ↔ `undefined`.
+              const boolToSelectValue = (v: boolean | undefined): string =>
+                v === undefined ? "" : v ? "true" : "false";
+              // Defensively fall back to `undefined` for unexpected strings so
+              // a future option-value typo can't silently write `false`.
+              const selectValueToBool = (s: string): boolean | undefined =>
+                s === "true" ? true : s === "false" ? false : undefined;
+
+              const dangerousSelectOptions = (
+                <>
+                  <option value="">Inherit ({agentDefaultDangerous ? "On" : "Off"})</option>
+                  <option value="true">On</option>
+                  <option value="false">Off</option>
+                </>
+              );
+
+              const inlineSelectOptions = (
+                <>
+                  <option value="">Inherit ({agentDefaultInline ? "On" : "Off"})</option>
+                  <option value="true">On</option>
+                  <option value="false">Off</option>
+                </>
+              );
 
               const behavioralSettings = (
                 <div className="space-y-3">
                   <div id="agents-skip-permissions-preset" className="space-y-1.5">
-                    <SettingsSwitchCard
-                      variant="compact"
-                      title="Skip Permissions"
-                      subtitle="Override the default setting for this preset"
-                      isEnabled={presetSkipPerms}
-                      onChange={onPresetSkipPermsToggle}
-                      ariaLabel={`Skip permissions override for ${activeAgent.name}`}
-                      colorScheme="danger"
-                    />
-                    {presetSkipPerms && defaultDangerousArg && (
+                    <SettingsSelect
+                      label="Skip Permissions"
+                      description="Auto-approve all file, command, and network actions"
+                      value={boolToSelectValue(dangerousOverride)}
+                      onChange={(e) =>
+                        onDangerousOverrideChange(selectValueToBool(e.target.value))
+                      }
+                      isModified={dangerousOverride !== undefined}
+                      onReset={() => onDangerousOverrideChange(undefined)}
+                      resetAriaLabel={`Reset skip permissions override for ${selectedPreset!.name}`}
+                      data-testid="preset-dangerous-select"
+                    >
+                      {dangerousSelectOptions}
+                    </SettingsSelect>
+                    {effectiveSkipPerms && defaultDangerousArg && (
                       <div className="flex items-center gap-2 px-3 py-1.5 rounded-[var(--radius-md)] bg-status-error/10 border border-status-error/20">
                         <code className="text-xs text-status-error font-mono">
                           {defaultDangerousArg}
@@ -668,29 +709,61 @@ export function AgentSettings({
 
                   {supportsInlineMode && (
                     <div id="agents-inline-mode-preset">
-                      <SettingsSwitchCard
-                        variant="compact"
-                        title="Inline Mode"
-                        subtitle="Override the default setting for this preset"
-                        isEnabled={presetInlineMode}
-                        onChange={onPresetInlineModeToggle}
-                        ariaLabel={`Inline mode override for ${activeAgent.name}`}
-                      />
+                      <SettingsSelect
+                        label="Inline Mode"
+                        description="Disable fullscreen TUI for better resize handling and scrollback"
+                        value={boolToSelectValue(inlineOverride)}
+                        onChange={(e) =>
+                          onInlineOverrideChange(selectValueToBool(e.target.value))
+                        }
+                        isModified={inlineOverride !== undefined}
+                        onReset={() => onInlineOverrideChange(undefined)}
+                        resetAriaLabel={`Reset inline mode override for ${selectedPreset!.name}`}
+                        data-testid="preset-inline-select"
+                      >
+                        {inlineSelectOptions}
+                      </SettingsSelect>
                     </div>
                   )}
 
-                  <div id="agents-custom-args-preset" className="space-y-1.5">
-                    <label className="text-sm font-medium text-daintree-text">
-                      Custom Arguments
-                    </label>
+                  <div id="agents-custom-args-preset" className="group space-y-1.5">
+                    <div className="flex items-center gap-2">
+                      <label className="text-sm font-medium text-daintree-text">
+                        Custom Arguments
+                      </label>
+                      {customFlagsOverride !== undefined && (
+                        <>
+                          <span
+                            className="w-1.5 h-1.5 rounded-full bg-daintree-accent"
+                            aria-hidden="true"
+                          />
+                          <button
+                            type="button"
+                            aria-label={`Reset custom arguments override for ${selectedPreset!.name}`}
+                            className="p-0.5 rounded-sm text-daintree-text/40 hover:text-daintree-accent invisible group-hover:visible group-focus-within:visible focus-visible:visible focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent transition-colors"
+                            onClick={onCustomFlagsOverrideReset}
+                            data-testid="preset-custom-flags-reset"
+                          >
+                            <RotateCcw className="w-3 h-3" />
+                          </button>
+                        </>
+                      )}
+                    </div>
                     <input
                       className="w-full rounded-[var(--radius-md)] border border-border-strong bg-daintree-bg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-daintree-accent/50 placeholder:text-text-muted"
-                      value={presetCustomFlags}
-                      onChange={(e) => onPresetCustomFlagsChange(e.target.value)}
-                      placeholder="--verbose --max-tokens=4096"
+                      value={customFlagsOverride ?? ""}
+                      onChange={(e) => onCustomFlagsOverrideChange(e.target.value)}
+                      placeholder={
+                        customFlagsOverride === undefined
+                          ? agentDefaultCustomFlags || "Inherit (no flags)"
+                          : "--verbose --max-tokens=4096"
+                      }
+                      data-testid="preset-custom-flags-input"
                     />
                     <p className="text-xs text-daintree-text/40 select-text">
-                      Extra CLI flags for this preset
+                      {customFlagsOverride === undefined
+                        ? "Inheriting from agent default. Type to override."
+                        : "Extra CLI flags for this preset"}
                     </p>
                   </div>
                 </div>
@@ -951,6 +1024,48 @@ export function AgentSettings({
                         <span className="text-[11px] text-daintree-text/50 font-medium uppercase tracking-wide block">
                           Env overrides
                         </span>
+                        {(() => {
+                          const globalEnv =
+                            (activeEntry.globalEnv as Record<string, string> | undefined) ?? {};
+                          const presetEnv = selectedPreset.env ?? {};
+                          const inheritedEntries = Object.entries(globalEnv).filter(
+                            ([k]) => !(k in presetEnv)
+                          );
+                          if (inheritedEntries.length === 0) return null;
+                          return (
+                            <div
+                              className="space-y-1 rounded-[var(--radius-md)] border border-daintree-border/50 bg-daintree-bg/20 p-2"
+                              data-testid="preset-env-inherited-strip"
+                            >
+                              <p className="text-[10px] text-daintree-text/50 uppercase tracking-wide">
+                                Inherited from global env
+                              </p>
+                              {inheritedEntries.map(([key, value]) => (
+                                <div
+                                  key={key}
+                                  className="flex items-center gap-2 font-mono text-[11px] text-daintree-text/50"
+                                >
+                                  <span className="shrink-0">{key}</span>
+                                  <span className="text-daintree-text/30">=</span>
+                                  <span className="truncate text-daintree-text/40">{value}</span>
+                                  <button
+                                    type="button"
+                                    className="ml-auto text-[10px] text-daintree-accent hover:text-daintree-accent/80 transition-colors shrink-0"
+                                    onClick={() =>
+                                      handleUpdatePreset(selectedPreset.id, {
+                                        env: { ...presetEnv, [key]: value },
+                                      })
+                                    }
+                                    aria-label={`Override ${key} in this preset`}
+                                    data-testid="preset-env-inherited-override"
+                                  >
+                                    + Override
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
+                          );
+                        })()}
                         <EnvVarEditor
                           env={selectedPreset.env ?? {}}
                           onChange={(env) => handleUpdatePreset(selectedPreset.id, { env })}
