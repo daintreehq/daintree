@@ -12,12 +12,15 @@ import {
   Camera,
   SquareTerminal,
   Code,
+  Smartphone,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { normalizeBrowserUrl, getDisplayUrl } from "./browserUtils";
 import { actionService } from "@/services/ActionService";
 import { useUrlHistoryStore, getFrecencySuggestions } from "@/store/urlHistoryStore";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
+import type { ViewportPresetId } from "@shared/types/panel";
+import { VIEWPORT_PRESET_LIST, getViewportPreset } from "@/panels/dev-preview/viewportPresets";
 
 const ZOOM_PRESETS = [
   { value: 0.25, label: "25%" },
@@ -42,6 +45,7 @@ interface BrowserToolbarProps {
   zoomFactor?: number;
   isConsoleOpen?: boolean;
   isWebviewReady?: boolean;
+  viewportPreset?: ViewportPresetId;
   onNavigate: (url: string) => void;
   onBack: () => void;
   onForward: () => void;
@@ -52,6 +56,7 @@ interface BrowserToolbarProps {
   onCaptureScreenshot?: () => void;
   onToggleConsole?: () => void;
   onToggleDevTools?: () => void;
+  onViewportPresetChange?: (preset: ViewportPresetId | undefined) => void;
 }
 
 export function BrowserToolbar({
@@ -65,6 +70,7 @@ export function BrowserToolbar({
   zoomFactor = 1.0,
   isConsoleOpen = false,
   isWebviewReady = false,
+  viewportPreset,
   onNavigate,
   onBack,
   onForward,
@@ -75,6 +81,7 @@ export function BrowserToolbar({
   onCaptureScreenshot,
   onToggleConsole,
   onToggleDevTools,
+  onViewportPresetChange,
 }: BrowserToolbarProps) {
   const [inputValue, setInputValue] = useState(getDisplayUrl(url));
   const [isEditing, setIsEditing] = useState(false);
@@ -376,6 +383,65 @@ export function BrowserToolbar({
               <TooltipContent side="bottom">Zoom in</TooltipContent>
             </Tooltip>
           </TooltipProvider>
+        </div>
+      )}
+
+      {/* Viewport preset selector (dev-preview only) */}
+      {onViewportPresetChange && (
+        <div className="flex items-center">
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (viewportPreset) {
+                      onViewportPresetChange(undefined);
+                    } else {
+                      onViewportPresetChange("iphone");
+                    }
+                  }}
+                  className={cn(
+                    buttonClass,
+                    viewportPreset && "bg-overlay-emphasis text-daintree-text"
+                  )}
+                  aria-label="Viewport preset"
+                  aria-pressed={!!viewportPreset}
+                >
+                  <Smartphone className="w-4 h-4" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">
+                {viewportPreset
+                  ? `Viewport: ${getViewportPreset(viewportPreset).label}`
+                  : "Responsive viewport"}
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+          {viewportPreset && (
+            <div className="flex items-center ml-0.5">
+              {VIEWPORT_PRESET_LIST.map((preset) => (
+                <button
+                  key={preset.id}
+                  type="button"
+                  onClick={() =>
+                    onViewportPresetChange(viewportPreset === preset.id ? undefined : preset.id)
+                  }
+                  className={cn(
+                    "px-1.5 py-1 rounded text-[10px] font-medium transition-colors",
+                    "hover:bg-overlay-medium",
+                    viewportPreset === preset.id
+                      ? "bg-overlay-emphasis text-daintree-text"
+                      : "text-daintree-text/50"
+                  )}
+                  aria-label={preset.label}
+                  aria-pressed={viewportPreset === preset.id}
+                >
+                  {preset.label}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
       )}
 

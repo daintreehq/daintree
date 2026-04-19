@@ -52,6 +52,7 @@ export type {
   DockMode,
   DockRenderState,
   PanelExitBehavior,
+  ViewportPresetId,
 } from "./panel.js";
 
 // Panel type guards and enums (value exports)

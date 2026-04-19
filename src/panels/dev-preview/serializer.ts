@@ -21,6 +21,7 @@ export function serializeDevPreview(t: DevPreviewSerializeInput): Partial<PanelS
     ...(t.devPreviewConsoleOpen !== undefined && {
       devPreviewConsoleOpen: t.devPreviewConsoleOpen,
     }),
+    ...(t.viewportPreset !== undefined && { viewportPreset: t.viewportPreset }),
     ...(t.createdAt !== undefined && { createdAt: t.createdAt }),
     ...(t.exitBehavior !== undefined && { exitBehavior: t.exitBehavior }),
   };

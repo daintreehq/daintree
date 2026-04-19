@@ -16,5 +16,6 @@ export function createDevPreviewDefaults(
     devServerTerminalId: options.devServerTerminalId,
     devPreviewConsoleOpen: options.devPreviewConsoleOpen,
     exitBehavior: options.exitBehavior,
+    viewportPreset: options.viewportPreset,
   };
 }

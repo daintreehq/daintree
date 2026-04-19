@@ -31,6 +31,8 @@ import { useWebviewDialog } from "@/hooks/useWebviewDialog";
 import { WebviewDialog } from "../Browser/WebviewDialog";
 import { FindBar } from "../Browser/FindBar";
 import { useFindInPage } from "@/hooks/useFindInPage";
+import { getViewportPreset } from "@/panels/dev-preview/viewportPresets";
+import type { ViewportPresetId } from "@shared/types/panel";
 
 const scrollCache = new Map<string, { url: string; scrollY: number }>();
 
@@ -191,6 +193,7 @@ export function DevPreviewPane({
   const setBrowserHistory = usePanelStore((state) => state.setBrowserHistory);
   const setBrowserZoom = usePanelStore((state) => state.setBrowserZoom);
   const setDevPreviewConsoleOpen = usePanelStore((state) => state.setDevPreviewConsoleOpen);
+  const setViewportPreset = usePanelStore((state) => state.setViewportPreset);
   const currentProjectId = useProjectStore((state) => state.currentProject?.id);
   const projectSettings = useProjectSettingsStore((state) => state.settings);
   const projectEnv = projectSettings?.environmentVariables;
@@ -199,6 +202,7 @@ export function DevPreviewPane({
   const terminal = usePanelStore((state) => state.getTerminal(id));
   const devCommand =
     terminal?.devCommand?.trim() || projectSettings?.devServerCommand?.trim() || "";
+  const viewportPreset = terminal?.viewportPreset;
 
   const { status, url, terminalId, error, start, restart, isRestarting } = useDevServer({
     panelId: id,
@@ -470,6 +474,13 @@ export function DevPreviewPane({
     void actionService.dispatch("project.settings.open", undefined, { source: "user" });
   }, []);
 
+  const handleViewportPresetChange = useCallback(
+    (preset: ViewportPresetId | undefined) => {
+      setViewportPreset(id, preset);
+    },
+    [id, setViewportPreset]
+  );
+
   useEffect(() => {
     const webview = webviewElement;
     if (!webview) {
@@ -626,6 +637,17 @@ export function DevPreviewPane({
     const handleDomReady = () => {
       setIsWebviewReady(true);
       webview.setZoomFactor(zoomFactor);
+      if (viewportPreset) {
+        const preset = getViewportPreset(viewportPreset);
+        try {
+          const wc = (
+            webview as unknown as { getWebContents(): { setUserAgent(ua: string): void } }
+          ).getWebContents();
+          wc.setUserAgent(preset.userAgent);
+        } catch {
+          // WebContents not available yet
+        }
+      }
       if (loadTimeoutRef.current) {
         clearTimeout(loadTimeoutRef.current);
         loadTimeoutRef.current = null;
@@ -649,6 +671,17 @@ export function DevPreviewPane({
       if (existingUrl && existingUrl !== "about:blank" && !webview.isLoading()) {
         setIsWebviewReady(true);
         webview.setZoomFactor(zoomFactor);
+        if (viewportPreset) {
+          const preset = getViewportPreset(viewportPreset);
+          try {
+            const wc = (
+              webview as unknown as { getWebContents(): { setUserAgent(ua: string): void } }
+            ).getWebContents();
+            wc.setUserAgent(preset.userAgent);
+          } catch {
+            // WebContents not available
+          }
+        }
       }
     } catch {
       // Webview not yet attached to DOM - dom-ready handler will take over
@@ -658,7 +691,7 @@ export function DevPreviewPane({
     return () => {
       webview.removeEventListener("dom-ready", handleDomReady);
     };
-  }, [id, zoomFactor, webviewElement]);
+  }, [id, zoomFactor, webviewElement, viewportPreset]);
 
   useEffect(() => {
     if (isWebviewReady && currentUrl && currentUrl !== lastSetUrlRef.current) {
@@ -721,6 +754,33 @@ export function DevPreviewPane({
   }, [isEvicted, id]);
 
   useWebviewThrottle(id, location, isEvicted ? null : webviewElement, isWebviewReady && !isEvicted);
+
+  // Apply UA override when viewport preset changes on an already-ready webview
+  const prevViewportPresetRef = useRef<ViewportPresetId | undefined>(viewportPreset);
+  useEffect(() => {
+    if (!isWebviewReady || !webviewElement) return;
+    if (prevViewportPresetRef.current === viewportPreset) return;
+    prevViewportPresetRef.current = viewportPreset;
+
+    try {
+      const wc = (
+        webviewElement as unknown as {
+          getWebContents(): { setUserAgent(ua: string): void; getUserAgent(): string };
+        }
+      ).getWebContents();
+      if (viewportPreset) {
+        const preset = getViewportPreset(viewportPreset);
+        wc.setUserAgent(preset.userAgent);
+      } else {
+        // Reset to default Chromium UA
+        const defaultUA = `Mozilla/5.0 (${navigator.platform}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${navigator.userAgent.match(/Chrome\/([\d.]+)/)?.[1] ?? "125.0.0.0"} Safari/537.36`;
+        wc.setUserAgent(defaultUA);
+      }
+      webviewElement.reload();
+    } catch {
+      // WebContents not available
+    }
+  }, [viewportPreset, isWebviewReady, webviewElement]);
   const { currentDialog, handleDialogRespond } = useWebviewDialog(
     id,
     isEvicted ? null : webviewElement,
@@ -813,6 +873,7 @@ export function DevPreviewPane({
           canGoForward={canGoForward}
           isLoading={isLoading}
           zoomFactor={zoomFactor}
+          viewportPreset={viewportPreset}
           onNavigate={handleNavigate}
           onBack={handleBack}
           onForward={handleForward}
@@ -820,9 +881,16 @@ export function DevPreviewPane({
           onHardReload={handleHardReload}
           onOpenExternal={handleOpenExternal}
           onZoomChange={handleZoomChange}
+          onViewportPresetChange={handleViewportPresetChange}
         />
 
-        <div className="relative flex-1 min-h-0 bg-surface-canvas">
+        <div className="relative flex-1 min-h-0 bg-surface-canvas overflow-auto">
+          {viewportPreset && (
+            <div className="absolute top-1 left-1/2 -translate-x-1/2 z-10 px-1.5 py-0.5 rounded text-[10px] font-medium bg-surface/90 text-daintree-text/60 border border-overlay/50">
+              {getViewportPreset(viewportPreset).label} · {getViewportPreset(viewportPreset).width}×
+              {getViewportPreset(viewportPreset).height}
+            </div>
+          )}
           {isRestarting || status === "starting" || status === "installing" ? (
             <div className="absolute inset-0 flex flex-col items-center justify-center bg-daintree-bg">
               <Spinner size="2xl" className="text-status-info mb-4" />
@@ -932,50 +1000,69 @@ export function DevPreviewPane({
               <p className="text-xs text-daintree-text/50">Reclaimed for memory</p>
             </div>
           ) : (
-            <>
-              {webviewLoadError && (
-                <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-daintree-bg text-daintree-text p-6">
-                  <AlertTriangle className="w-6 h-6 text-status-warning mb-3" />
-                  <h3 className="text-sm font-medium text-daintree-text/70 mb-1">
-                    Dev Server Unreachable
-                  </h3>
-                  <p className="text-xs text-daintree-text/50 text-center mb-3 max-w-md">
-                    {webviewLoadError}
-                  </p>
-                  <Button
-                    onClick={handleHardRestart}
-                    variant="ghost"
-                    size="sm"
-                    className="gap-1.5 px-2.5 py-1.5 group text-daintree-accent/70 hover:text-daintree-accent"
-                  >
-                    <RotateCw className="h-3.5 w-3.5" />
-                    <span className="text-xs">Hard Restart</span>
-                  </Button>
-                </div>
-              )}
-              {blockedNav && (
-                <BlockedNavBanner
-                  blockedNav={blockedNav}
-                  panelId={id}
-                  webviewElement={webviewElement}
-                  onDismiss={() => setBlockedNav(null)}
-                />
-              )}
-              {isDragging && <div className="absolute inset-0 z-10 bg-transparent" />}
-              {findInPage.isOpen && <FindBar find={findInPage} />}
-              <webview
-                ref={setWebviewNode}
-                src={currentUrl}
-                partition={webviewPartition}
-                // @ts-expect-error React 19 requires "" to emit the attribute; boolean true is silently dropped
-                allowpopups=""
+            <div className={cn("h-full", viewportPreset && "flex items-start justify-center pt-5")}>
+              <div
                 className={cn(
-                  "w-full h-full border-0",
-                  isDragging && "invisible pointer-events-none"
+                  "h-full relative",
+                  viewportPreset &&
+                    "rounded-lg border border-overlay/50 shadow-[var(--theme-shadow-floating)] overflow-hidden"
                 )}
-              />
-              <WebviewDialog dialog={currentDialog} onRespond={handleDialogRespond} />
-            </>
+                style={
+                  viewportPreset
+                    ? {
+                        maxWidth: getViewportPreset(viewportPreset).width,
+                        width: "100%",
+                        aspectRatio: `${getViewportPreset(viewportPreset).width} / ${getViewportPreset(viewportPreset).height}`,
+                      }
+                    : undefined
+                }
+              >
+                <>
+                  {webviewLoadError && (
+                    <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-daintree-bg text-daintree-text p-6">
+                      <AlertTriangle className="w-6 h-6 text-status-warning mb-3" />
+                      <h3 className="text-sm font-medium text-daintree-text/70 mb-1">
+                        Dev Server Unreachable
+                      </h3>
+                      <p className="text-xs text-daintree-text/50 text-center mb-3 max-w-md">
+                        {webviewLoadError}
+                      </p>
+                      <Button
+                        onClick={handleHardRestart}
+                        variant="ghost"
+                        size="sm"
+                        className="gap-1.5 px-2.5 py-1.5 group text-daintree-accent/70 hover:text-daintree-accent"
+                      >
+                        <RotateCw className="h-3.5 w-3.5" />
+                        <span className="text-xs">Hard Restart</span>
+                      </Button>
+                    </div>
+                  )}
+                  {blockedNav && (
+                    <BlockedNavBanner
+                      blockedNav={blockedNav}
+                      panelId={id}
+                      webviewElement={webviewElement}
+                      onDismiss={() => setBlockedNav(null)}
+                    />
+                  )}
+                  {isDragging && <div className="absolute inset-0 z-10 bg-transparent" />}
+                  {findInPage.isOpen && <FindBar find={findInPage} />}
+                  <webview
+                    ref={setWebviewNode}
+                    src={currentUrl}
+                    partition={webviewPartition}
+                    // @ts-expect-error React 19 requires "" to emit the attribute; boolean true is silently dropped
+                    allowpopups=""
+                    className={cn(
+                      "w-full h-full border-0",
+                      isDragging && "invisible pointer-events-none"
+                    )}
+                  />
+                  <WebviewDialog dialog={currentDialog} onRespond={handleDialogRespond} />
+                </>
+              </div>
+            </div>
           )}
         </div>
 
