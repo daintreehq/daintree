@@ -1,23 +1,27 @@
 /**
  * @vitest-environment jsdom
  */
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { WorktreeHeader, type WorktreeHeaderProps } from "../WorktreeHeader";
 import type { WorktreeState } from "@shared/types";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { actionService } from "@/services/ActionService";
 
 vi.mock("react-dom", async () => {
   const actual = await vi.importActual<typeof import("react-dom")>("react-dom");
   return { ...actual, createPortal: (children: ReactNode) => children };
 });
 
+let mockMissingToken = false;
+
 vi.mock("@/hooks/useGitHubTooltip", () => ({
   useIssueTooltip: () => ({
     data: null,
     loading: false,
     error: null,
+    missingToken: mockMissingToken,
     fetchTooltip: vi.fn(),
     reset: vi.fn(),
   }),
@@ -25,9 +29,16 @@ vi.mock("@/hooks/useGitHubTooltip", () => ({
     data: null,
     loading: false,
     error: null,
+    missingToken: mockMissingToken,
     fetchTooltip: vi.fn(),
     reset: vi.fn(),
   }),
+}));
+
+vi.mock("@/services/ActionService", () => ({
+  actionService: {
+    dispatch: vi.fn(),
+  },
 }));
 
 const noop = () => {};
@@ -879,5 +890,116 @@ describe("WorktreeHeader icon button hit targets", () => {
     renderHeader();
     const menuButton = screen.getByTestId("worktree-actions-menu");
     expect(menuButton.className).toContain("p-1.5");
+  });
+});
+
+describe("WorktreeHeader token-missing badge behavior", () => {
+  beforeEach(() => {
+    mockMissingToken = false;
+    vi.mocked(actionService.dispatch).mockClear();
+  });
+
+  it("issue badge shows token-missing aria-label when no token configured", () => {
+    mockMissingToken = true;
+    renderHeader({
+      worktree: { ...baseWorktree, issueNumber: 42, issueTitle: "Test issue" },
+      badges: { onOpenIssue: noop },
+      isActive: true,
+    });
+
+    const issueButton = screen.getByRole("button", {
+      name: /Configure GitHub token to see issue details/,
+    });
+    expect(issueButton).toBeDefined();
+    expect(issueButton.className).toContain("opacity-60");
+  });
+
+  it("issue badge dispatches settings action on click when no token configured", () => {
+    mockMissingToken = true;
+    const onOpenIssue = vi.fn();
+    renderHeader({
+      worktree: { ...baseWorktree, issueNumber: 42, issueTitle: "Test issue" },
+      badges: { onOpenIssue },
+      isActive: true,
+    });
+
+    const issueButton = screen.getByRole("button", {
+      name: /Configure GitHub token to see issue details/,
+    });
+    fireEvent.click(issueButton);
+    expect(actionService.dispatch).toHaveBeenCalledWith(
+      "app.settings.openTab",
+      { tab: "github", sectionId: "github-token" },
+      { source: "user" }
+    );
+    expect(onOpenIssue).not.toHaveBeenCalled();
+  });
+
+  it("PR badge shows token-missing aria-label when no token configured", () => {
+    mockMissingToken = true;
+    renderHeader({
+      worktree: { ...baseWorktree, prNumber: 101, prState: "open" },
+      badges: { onOpenPR: noop },
+      isActive: true,
+    });
+
+    const prButton = screen.getByRole("button", {
+      name: /Configure GitHub token to see PR details/,
+    });
+    expect(prButton).toBeDefined();
+    expect(prButton.className).toContain("opacity-60");
+  });
+
+  it("PR badge dispatches settings action on click when no token configured", () => {
+    mockMissingToken = true;
+    const onOpenPR = vi.fn();
+    renderHeader({
+      worktree: { ...baseWorktree, prNumber: 101, prState: "open" },
+      badges: { onOpenPR },
+      isActive: true,
+    });
+
+    const prButton = screen.getByRole("button", {
+      name: /Configure GitHub token to see PR details/,
+    });
+    fireEvent.click(prButton);
+    expect(actionService.dispatch).toHaveBeenCalledWith(
+      "app.settings.openTab",
+      { tab: "github", sectionId: "github-token" },
+      { source: "user" }
+    );
+    expect(onOpenPR).not.toHaveBeenCalled();
+  });
+
+  it("issue badge calls onOpenIssue normally when token is present", () => {
+    mockMissingToken = false;
+    const onOpenIssue = vi.fn();
+    renderHeader({
+      worktree: { ...baseWorktree, issueNumber: 42, issueTitle: "Test issue" },
+      badges: { onOpenIssue },
+      isActive: true,
+    });
+
+    const issueButton = screen.getByRole("button", {
+      name: /Open issue #42/,
+    });
+    fireEvent.click(issueButton);
+    expect(actionService.dispatch).not.toHaveBeenCalled();
+    expect(onOpenIssue).toHaveBeenCalledOnce();
+  });
+
+  it("token-missing badge click does nothing on inactive card", () => {
+    mockMissingToken = true;
+    renderHeader({
+      worktree: { ...baseWorktree, issueNumber: 42, issueTitle: "Test issue" },
+      badges: { onOpenIssue: noop },
+      isActive: false,
+    });
+
+    const issueButton = screen.getByRole("button", {
+      name: /Configure GitHub token/,
+    });
+    fireEvent.click(issueButton);
+    expect(actionService.dispatch).not.toHaveBeenCalled();
   });
 });

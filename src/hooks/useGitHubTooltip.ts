@@ -1,11 +1,13 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import type { IssueTooltipData, PRTooltipData } from "@shared/types/github";
 import { TtlCache } from "@/utils/ttlCache";
+import { useGitHubConfigStore } from "@/store/githubConfigStore";
 
 type TooltipState<T> = {
   data: T | null;
   loading: boolean;
   error: boolean;
+  missingToken: boolean;
 };
 
 const TOOLTIP_CACHE_MAX = 100;
@@ -19,31 +21,42 @@ export function useIssueTooltip(cwd: string | undefined, issueNumber: number | u
     data: null,
     loading: false,
     error: false,
+    missingToken: false,
   });
   const fetchingKeyRef = useRef<string | null>(null);
   const mountedRef = useRef(true);
+  const hasToken = useGitHubConfigStore((s) => s.config?.hasToken);
+  const storeInitialized = useGitHubConfigStore((s) => s.isInitialized);
 
   useEffect(() => {
     mountedRef.current = true;
+    if (!storeInitialized) {
+      void useGitHubConfigStore.getState().initialize();
+    }
     return () => {
       mountedRef.current = false;
     };
-  }, []);
+  }, [storeInitialized]);
 
   const fetchTooltip = useCallback(async () => {
     if (!cwd || !issueNumber) return;
 
+    if (!hasToken) {
+      setState({ data: null, loading: false, error: false, missingToken: true });
+      return;
+    }
+
     const cacheKey = `${cwd}:${issueNumber}`;
     const cached = issueCache.get(cacheKey);
     if (cached) {
-      setState({ data: cached, loading: false, error: false });
+      setState({ data: cached, loading: false, error: false, missingToken: false });
       return;
     }
 
     if (fetchingKeyRef.current === cacheKey) return;
 
     fetchingKeyRef.current = cacheKey;
-    setState((prev) => ({ ...prev, loading: true, error: false }));
+    setState((prev) => ({ ...prev, loading: true, error: false, missingToken: false }));
 
     try {
       const data = await window.electron.github.getIssueTooltip(cwd, issueNumber);
@@ -51,23 +64,23 @@ export function useIssueTooltip(cwd: string | undefined, issueNumber: number | u
 
       if (data) {
         issueCache.set(cacheKey, data);
-        setState({ data, loading: false, error: false });
+        setState({ data, loading: false, error: false, missingToken: false });
       } else {
-        setState({ data: null, loading: false, error: true });
+        setState({ data: null, loading: false, error: true, missingToken: false });
       }
     } catch {
       if (!mountedRef.current || fetchingKeyRef.current !== cacheKey) return;
-      setState({ data: null, loading: false, error: true });
+      setState({ data: null, loading: false, error: true, missingToken: false });
     } finally {
       if (fetchingKeyRef.current === cacheKey) {
         fetchingKeyRef.current = null;
       }
     }
-  }, [cwd, issueNumber]);
+  }, [cwd, issueNumber, hasToken]);
 
   const reset = useCallback(() => {
     if (!fetchingKeyRef.current) {
-      setState({ data: null, loading: false, error: false });
+      setState({ data: null, loading: false, error: false, missingToken: false });
     }
   }, []);
 
@@ -79,31 +92,42 @@ export function usePRTooltip(cwd: string | undefined, prNumber: number | undefin
     data: null,
     loading: false,
     error: false,
+    missingToken: false,
   });
   const fetchingKeyRef = useRef<string | null>(null);
   const mountedRef = useRef(true);
+  const hasToken = useGitHubConfigStore((s) => s.config?.hasToken);
+  const storeInitialized = useGitHubConfigStore((s) => s.isInitialized);
 
   useEffect(() => {
     mountedRef.current = true;
+    if (!storeInitialized) {
+      void useGitHubConfigStore.getState().initialize();
+    }
     return () => {
       mountedRef.current = false;
     };
-  }, []);
+  }, [storeInitialized]);
 
   const fetchTooltip = useCallback(async () => {
     if (!cwd || !prNumber) return;
 
+    if (!hasToken) {
+      setState({ data: null, loading: false, error: false, missingToken: true });
+      return;
+    }
+
     const cacheKey = `${cwd}:${prNumber}`;
     const cached = prCache.get(cacheKey);
     if (cached) {
-      setState({ data: cached, loading: false, error: false });
+      setState({ data: cached, loading: false, error: false, missingToken: false });
       return;
     }
 
     if (fetchingKeyRef.current === cacheKey) return;
 
     fetchingKeyRef.current = cacheKey;
-    setState((prev) => ({ ...prev, loading: true, error: false }));
+    setState((prev) => ({ ...prev, loading: true, error: false, missingToken: false }));
 
     try {
       const data = await window.electron.github.getPRTooltip(cwd, prNumber);
@@ -111,23 +135,23 @@ export function usePRTooltip(cwd: string | undefined, prNumber: number | undefin
 
       if (data) {
         prCache.set(cacheKey, data);
-        setState({ data, loading: false, error: false });
+        setState({ data, loading: false, error: false, missingToken: false });
       } else {
-        setState({ data: null, loading: false, error: true });
+        setState({ data: null, loading: false, error: true, missingToken: false });
       }
     } catch {
       if (!mountedRef.current || fetchingKeyRef.current !== cacheKey) return;
-      setState({ data: null, loading: false, error: true });
+      setState({ data: null, loading: false, error: true, missingToken: false });
     } finally {
       if (fetchingKeyRef.current === cacheKey) {
         fetchingKeyRef.current = null;
       }
     }
-  }, [cwd, prNumber]);
+  }, [cwd, prNumber, hasToken]);
 
   const reset = useCallback(() => {
     if (!fetchingKeyRef.current) {
-      setState({ data: null, loading: false, error: false });
+      setState({ data: null, loading: false, error: false, missingToken: false });
     }
   }, []);
 
