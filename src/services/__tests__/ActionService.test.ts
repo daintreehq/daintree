@@ -631,6 +631,33 @@ describe("ActionService", () => {
       expect(service.getLastAction()?.actionId).toBe("test.repeatable");
     });
 
+    it("does not capture danger:confirm actions even from user-facing sources", async () => {
+      // Destructive actions (worktree.delete, git.push, project.remove, etc.) rely on
+      // originating UI dialogs for consent. Capturing them would let Cmd+Shift+. silently
+      // replay the destructive op without re-confirmation — explicitly disallowed.
+      service.register(makeAction("test.safe"));
+      service.register(makeAction("test.destructive", { danger: "confirm" }));
+
+      await service.dispatch("test.safe" as ActionId, undefined, { source: "user" });
+      expect(service.getLastAction()?.actionId).toBe("test.safe");
+
+      await service.dispatch(
+        "test.destructive" as ActionId,
+        { worktreeId: "wt-1" },
+        { source: "user" }
+      );
+      expect(service.getLastAction()?.actionId).toBe("test.safe");
+
+      await service.dispatch("test.destructive" as ActionId, undefined, { source: "keybinding" });
+      expect(service.getLastAction()?.actionId).toBe("test.safe");
+
+      await service.dispatch("test.destructive" as ActionId, undefined, { source: "menu" });
+      expect(service.getLastAction()?.actionId).toBe("test.safe");
+
+      await service.dispatch("test.destructive" as ActionId, undefined, { source: "context-menu" });
+      expect(service.getLastAction()?.actionId).toBe("test.safe");
+    });
+
     it("replaces the stored action on each new eligible dispatch", async () => {
       service.register(makeAction("test.first"));
       service.register(makeAction("test.second"));

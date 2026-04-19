@@ -165,7 +165,14 @@ export class ActionService {
     try {
       const result = await definition.run(validatedArgs, context);
       const durationMs = Date.now() - startMs;
-      if (REPEATABLE_SOURCES.has(source) && !definition.nonRepeatable) {
+      if (
+        REPEATABLE_SOURCES.has(source) &&
+        !definition.nonRepeatable &&
+        definition.danger !== "confirm"
+      ) {
+        // danger:"confirm" actions rely on originating UI dialogs (e.g. WorktreeDeleteDialog)
+        // to gather consent — replaying them from a keybinding would bypass that UI and
+        // silently repeat a destructive operation. Exclude from capture entirely.
         this.lastAction = { actionId, args: cloneArgsForReplay(validatedArgs) };
       }
       void this.emitActionDispatchedEvent({
