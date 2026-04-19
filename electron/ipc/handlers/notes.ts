@@ -1,9 +1,9 @@
 import { app } from "electron";
 import { CHANNELS } from "../channels.js";
-import { broadcastToRenderer, typedHandle } from "../utils.js";
+import { broadcastToRenderer, typedHandleWithContext } from "../utils.js";
 import type { HandlerDependencies } from "../types.js";
+import type { IpcContext } from "../types.js";
 import { NotesService, NoteConflictError, type NoteMetadata } from "../../services/NotesService.js";
-import { projectStore } from "../../services/ProjectStore.js";
 
 export interface NoteUpdatedPayload {
   notePath: string;
@@ -50,19 +50,23 @@ function validateNoteMetadata(metadata: unknown): NoteMetadata {
   };
 }
 
-let notesService: NotesService | null = null;
+const notesServices = new Map<string, NotesService>();
 
-function getNotesService(): NotesService {
-  const currentProject = projectStore.getCurrentProject();
-  if (!currentProject) {
+function resolveNotesService(ctx: IpcContext): NotesService {
+  if (!ctx.projectId) {
     throw new Error("No active project");
   }
 
-  if (!notesService || notesService.getProjectId() !== currentProject.id) {
-    notesService = new NotesService(app.getPath("userData"), currentProject.id);
+  let service = notesServices.get(ctx.projectId);
+  if (!service) {
+    service = new NotesService(app.getPath("userData"), ctx.projectId);
+    notesServices.set(ctx.projectId, service);
   }
+  return service;
+}
 
-  return notesService;
+export function _resetNotesServicesForTest(): void {
+  notesServices.clear();
 }
 
 export function registerNotesHandlers(_deps: HandlerDependencies): () => void {
@@ -73,30 +77,32 @@ export function registerNotesHandlers(_deps: HandlerDependencies): () => void {
   };
 
   const handleNotesCreate = async (
+    ctx: IpcContext,
     title: string,
     scope: "worktree" | "project",
     worktreeId?: string
   ) => {
-    const service = getNotesService();
+    const service = resolveNotesService(ctx);
     const result = await service.create(title, scope, worktreeId);
     broadcastUpdate({ notePath: result.path, title, action: "created" });
     return result;
   };
-  handlers.push(typedHandle(CHANNELS.NOTES_CREATE, handleNotesCreate));
+  handlers.push(typedHandleWithContext(CHANNELS.NOTES_CREATE, handleNotesCreate));
 
-  const handleNotesRead = async (notePath: string) => {
-    const service = getNotesService();
+  const handleNotesRead = async (ctx: IpcContext, notePath: string) => {
+    const service = resolveNotesService(ctx);
     return await service.read(notePath);
   };
-  handlers.push(typedHandle(CHANNELS.NOTES_READ, handleNotesRead));
+  handlers.push(typedHandleWithContext(CHANNELS.NOTES_READ, handleNotesRead));
 
   const handleNotesWrite = async (
+    ctx: IpcContext,
     notePath: string,
     content: string,
     metadata: unknown,
     expectedLastModified?: number
   ) => {
-    const service = getNotesService();
+    const service = resolveNotesService(ctx);
     const validatedMetadata = validateNoteMetadata(metadata);
     try {
       const result = await service.write(
@@ -142,43 +148,46 @@ export function registerNotesHandlers(_deps: HandlerDependencies): () => void {
       return { ...result, conflictPath };
     }
   };
-  handlers.push(typedHandle(CHANNELS.NOTES_WRITE, handleNotesWrite));
+  handlers.push(typedHandleWithContext(CHANNELS.NOTES_WRITE, handleNotesWrite));
 
-  const handleNotesList = async () => {
-    const service = getNotesService();
+  const handleNotesList = async (ctx: IpcContext) => {
+    const service = resolveNotesService(ctx);
     return await service.list();
   };
-  handlers.push(typedHandle(CHANNELS.NOTES_LIST, handleNotesList));
+  handlers.push(typedHandleWithContext(CHANNELS.NOTES_LIST, handleNotesList));
 
-  const handleNotesDelete = async (notePath: string) => {
-    const service = getNotesService();
+  const handleNotesDelete = async (ctx: IpcContext, notePath: string) => {
+    const service = resolveNotesService(ctx);
     await service.delete(notePath);
     broadcastUpdate({ notePath, title: "", action: "deleted" });
   };
-  handlers.push(typedHandle(CHANNELS.NOTES_DELETE, handleNotesDelete));
+  handlers.push(typedHandleWithContext(CHANNELS.NOTES_DELETE, handleNotesDelete));
 
-  const handleNotesSearch = async (query: string) => {
-    const service = getNotesService();
+  const handleNotesSearch = async (ctx: IpcContext, query: string) => {
+    const service = resolveNotesService(ctx);
     return await service.search(query);
   };
-  handlers.push(typedHandle(CHANNELS.NOTES_SEARCH, handleNotesSearch));
+  handlers.push(typedHandleWithContext(CHANNELS.NOTES_SEARCH, handleNotesSearch));
 
   const handleNotesWriteAttachment = async (
+    ctx: IpcContext,
     data: Uint8Array,
     mimeType: string,
     originalName?: string
   ) => {
-    const service = getNotesService();
+    const service = resolveNotesService(ctx);
     const buffer = Buffer.from(data.buffer, data.byteOffset, data.byteLength);
     return await service.saveAttachment(buffer, mimeType, originalName);
   };
-  handlers.push(typedHandle(CHANNELS.NOTES_WRITE_ATTACHMENT, handleNotesWriteAttachment));
+  handlers.push(
+    typedHandleWithContext(CHANNELS.NOTES_WRITE_ATTACHMENT, handleNotesWriteAttachment)
+  );
 
-  const handleNotesGetDir = async () => {
-    const service = getNotesService();
+  const handleNotesGetDir = async (ctx: IpcContext) => {
+    const service = resolveNotesService(ctx);
     return service.getDirPath();
   };
-  handlers.push(typedHandle(CHANNELS.NOTES_GET_DIR, handleNotesGetDir));
+  handlers.push(typedHandleWithContext(CHANNELS.NOTES_GET_DIR, handleNotesGetDir));
 
   return () => {
     handlers.forEach((dispose) => dispose());

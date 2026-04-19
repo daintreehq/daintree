@@ -205,6 +205,9 @@ export function NotesPane({
 
     async function loadNote() {
       if (!notePath) {
+        setError(
+          "Note path is missing — the panel state may be corrupt. Close it and create a new note."
+        );
         setIsLoading(false);
         return;
       }

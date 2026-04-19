@@ -30,16 +30,27 @@ describe("panelKindRegistry createDefaults (co-located)", () => {
     expect(result.browserConsoleOpen).toBe(true);
   });
 
-  it("notes factory defaults notePath and noteId to empty strings", () => {
+  it("notes factory omits notePath and noteId when not provided", () => {
     const config = getPanelKindConfig("notes")!;
     const result = config.createDefaults!({ kind: "notes" } as AddPanelOptions);
-    expect(result.notePath).toBe("");
-    expect(result.noteId).toBe("");
+    expect(result.notePath).toBeUndefined();
+    expect(result.noteId).toBeUndefined();
     expect(result.scope).toBe("project");
     expect(result.createdAt).toBeGreaterThan(0);
     expect(result.cwd).toBeUndefined();
     expect(result.cols).toBeUndefined();
     expect(result.rows).toBeUndefined();
+  });
+
+  it("notes factory omits notePath and noteId when provided empty strings", () => {
+    const config = getPanelKindConfig("notes")!;
+    const result = config.createDefaults!({
+      kind: "notes",
+      notePath: "",
+      noteId: "",
+    } as AddPanelOptions);
+    expect(result.notePath).toBeUndefined();
+    expect(result.noteId).toBeUndefined();
   });
 
   it("notes factory preserves provided fields", () => {
