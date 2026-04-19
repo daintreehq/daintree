@@ -453,6 +453,13 @@ export function BrowserPane({
 
   const handleApproveHost = useCallback(async () => {
     if (!pendingApproval) return;
+    // Guard against save silently no-oping when projectId is transiently null
+    // (startup, project switch) — without this, the banner would clear and the
+    // webview would load without the hostname ever being persisted.
+    if (!projectId) {
+      console.warn("[BrowserPane] Cannot approve host without an active project");
+      return;
+    }
     const { url, hostname } = pendingApproval;
     const baseSettings = projectSettings ?? { runCommands: [] };
     const nextAllowed = Array.from(
@@ -465,7 +472,7 @@ export function BrowserPane({
       return;
     }
     commitNavigation(url);
-  }, [pendingApproval, projectSettings, saveProjectSettings, commitNavigation]);
+  }, [pendingApproval, projectId, projectSettings, saveProjectSettings, commitNavigation]);
 
   const handleDismissApproval = useCallback(() => {
     setPendingApproval(null);
