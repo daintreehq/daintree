@@ -330,16 +330,13 @@ export function PortalSettingsTab() {
                     ? "custom"
                     : defaultNewTabUrl
             }
-            onChange={(e) => handleDefaultAgentChange(e.target.value)}
-          >
-            <option value="none">None (show Launchpad)</option>
-            {enabledLinks.map((link) => (
-              <option key={link.id} value={link.url}>
-                {link.title}
-              </option>
-            ))}
-            <option value="custom">Custom URL...</option>
-          </SettingsSelect>
+            onValueChange={(v) => handleDefaultAgentChange(v)}
+            options={[
+              { value: "none", label: "None (show Launchpad)" },
+              ...enabledLinks.map((link) => ({ value: link.url, label: link.title })),
+              { value: "custom", label: "Custom URL..." },
+            ]}
+          />
 
           {showCustomUrlInput && (
             <div className="flex gap-2">

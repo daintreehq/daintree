@@ -89,44 +89,67 @@ describe("SettingsInput", () => {
 });
 
 describe("SettingsSelect", () => {
-  it("renders label associated to select", () => {
+  const EN_OPTIONS = [{ value: "en", label: "English" }];
+  const DEFAULT_OPTIONS = [{ value: "d", label: "Default" }];
+
+  it("renders label associated to combobox trigger", () => {
     render(
-      <SettingsSelect label="Language">
-        <option value="en">English</option>
-      </SettingsSelect>
+      <SettingsSelect label="Language" value="en" onValueChange={() => {}} options={EN_OPTIONS} />
     );
-    expect(screen.getByLabelText("Language")).toBeTruthy();
-    expect(screen.getByLabelText("Language").tagName).toBe("SELECT");
+    const trigger = screen.getByLabelText("Language");
+    expect(trigger).toBeTruthy();
+    expect(trigger.getAttribute("role")).toBe("combobox");
   });
 
   it("wires description to aria-describedby", () => {
     render(
-      <SettingsSelect label="Theme" description="Choose a color theme">
-        <option>Default</option>
-      </SettingsSelect>
+      <SettingsSelect
+        label="Theme"
+        description="Choose a color theme"
+        value="d"
+        onValueChange={() => {}}
+        options={DEFAULT_OPTIONS}
+      />
     );
-    const select = screen.getByLabelText("Theme");
-    const descId = select.getAttribute("aria-describedby");
+    const trigger = screen.getByLabelText("Theme");
+    const descId = trigger.getAttribute("aria-describedby");
     expect(descId).toBeTruthy();
     expect(document.getElementById(descId!)?.textContent).toBe("Choose a color theme");
   });
 
-  it("includes pr-8 right padding for native chevron clearance", () => {
+  it("displays the selected option label in the trigger", () => {
     render(
-      <SettingsSelect label="Theme">
-        <option>Default</option>
-      </SettingsSelect>
+      <SettingsSelect label="Language" value="en" onValueChange={() => {}} options={EN_OPTIONS} />
     );
-    const select = screen.getByLabelText("Theme");
-    expect(select.className).toContain("pr-8");
+    expect(screen.getByLabelText("Language").textContent).toContain("English");
+  });
+
+  it("sets aria-invalid when error is provided", () => {
+    render(
+      <SettingsSelect
+        label="Lang"
+        error="Required"
+        value="en"
+        onValueChange={() => {}}
+        options={EN_OPTIONS}
+      />
+    );
+    const trigger = screen.getByLabelText("Lang");
+    expect(trigger.getAttribute("aria-invalid")).toBe("true");
+    expect(screen.getByRole("alert")?.textContent).toBe("Required");
   });
 
   it("shows reset button when modified", () => {
     const onReset = vi.fn();
     render(
-      <SettingsSelect label="Lang" isModified onReset={onReset}>
-        <option>EN</option>
-      </SettingsSelect>
+      <SettingsSelect
+        label="Lang"
+        isModified
+        onReset={onReset}
+        value="en"
+        onValueChange={() => {}}
+        options={EN_OPTIONS}
+      />
     );
     expect(screen.getByLabelText("Reset Lang to default")).toBeTruthy();
   });

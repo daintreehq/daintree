@@ -36,7 +36,6 @@ import {
   Bell,
   Search,
   ChevronRight,
-  ChevronDown,
   KeyRound,
   Shield,
   FileCode,
@@ -52,6 +51,13 @@ import {
 } from "@/components/icons";
 import { cn } from "@/lib/utils";
 import { ScrollShadow } from "@/components/ui/ScrollShadow";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { appClient } from "@/clients";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { GeneralTab } from "./GeneralTab";
@@ -669,24 +675,21 @@ function SettingsDialogInner({
           <div className="flex items-center justify-between mb-3 pl-2">
             <h2 className="text-sm font-semibold text-daintree-text">Settings</h2>
             {hasProject && (
-              <div className="relative flex items-center">
-                <select
-                  value={activeScope}
+              <Select
+                value={activeScope}
+                onValueChange={(v) => handleScopeSwitch(v as SettingsScope)}
+              >
+                <SelectTrigger
                   aria-label="Settings scope"
-                  onChange={(e) => {
-                    handleScopeSwitch(e.target.value as SettingsScope);
-                    e.target.blur();
-                  }}
-                  className="appearance-none text-xs py-1 pl-2 pr-6 rounded-[var(--radius-md)] bg-transparent border border-border-strong text-text-secondary hover:text-daintree-text hover:border-daintree-text/30 focus:border-daintree-accent focus:ring-1 focus:ring-daintree-accent/20 outline-none cursor-pointer transition-colors"
+                  className="text-xs py-1 pl-2 pr-2 h-auto w-auto gap-1 bg-transparent text-text-secondary hover:text-daintree-text hover:border-daintree-text/30"
                 >
-                  <option value="global">Global</option>
-                  <option value="project">Project</option>
-                </select>
-                <ChevronDown
-                  size={12}
-                  className="pointer-events-none absolute right-1.5 text-text-secondary"
-                />
-              </div>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="global">Global</SelectItem>
+                  <SelectItem value="project">Project</SelectItem>
+                </SelectContent>
+              </Select>
             )}
           </div>
 

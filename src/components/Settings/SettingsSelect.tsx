@@ -1,12 +1,23 @@
 import { useId } from "react";
-import type { ComponentPropsWithoutRef, ReactNode, Ref } from "react";
+import type { ReactNode } from "react";
 import { RotateCcw } from "lucide-react";
 import { cn } from "@/lib/utils";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 
-const SELECT_CLASSES =
-  "w-full bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-3 pr-8 py-1.5 text-sm text-daintree-text focus:outline-none focus:border-daintree-accent transition-colors disabled:opacity-50 disabled:cursor-not-allowed";
+export interface SettingsSelectOption {
+  value: string;
+  label: string;
+  description?: string;
+  disabled?: boolean;
+}
 
-interface SettingsSelectProps extends Omit<ComponentPropsWithoutRef<"select">, "id"> {
+interface SettingsSelectProps {
   label: string;
   description?: ReactNode;
   error?: string;
@@ -14,7 +25,13 @@ interface SettingsSelectProps extends Omit<ComponentPropsWithoutRef<"select">, "
   onReset?: () => void;
   resetAriaLabel?: string;
   scope?: "default" | "global" | "project";
-  ref?: Ref<HTMLSelectElement>;
+  disabled?: boolean;
+  className?: string;
+  value: string;
+  onValueChange: (value: string) => void;
+  options: SettingsSelectOption[];
+  placeholder?: string;
+  name?: string;
 }
 
 export function SettingsSelect({
@@ -27,9 +44,11 @@ export function SettingsSelect({
   scope,
   disabled,
   className,
-  children,
-  ref,
-  ...props
+  value,
+  onValueChange,
+  options,
+  placeholder,
+  name,
 }: SettingsSelectProps) {
   const id = useId();
   const descriptionId = useId();
@@ -81,21 +100,28 @@ export function SettingsSelect({
           </button>
         )}
       </div>
-      <select
-        id={id}
-        ref={ref}
-        disabled={disabled}
-        aria-describedby={describedBy}
-        aria-invalid={error ? true : undefined}
-        className={cn(
-          SELECT_CLASSES,
-          error && "border-status-error focus:border-status-error",
-          className
-        )}
-        {...props}
-      >
-        {children}
-      </select>
+      <Select value={value} onValueChange={onValueChange} disabled={disabled} name={name}>
+        <SelectTrigger
+          id={id}
+          aria-describedby={describedBy}
+          aria-invalid={error ? true : undefined}
+          className={cn(error && "border-status-error focus:border-status-error", className)}
+        >
+          <SelectValue placeholder={placeholder} />
+        </SelectTrigger>
+        <SelectContent>
+          {options.map((option) => (
+            <SelectItem
+              key={option.value}
+              value={option.value}
+              description={option.description}
+              disabled={option.disabled}
+            >
+              {option.label}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
       {description && !error && (
         <p id={descriptionId} className="text-xs text-daintree-text/40 select-text">
           {description}

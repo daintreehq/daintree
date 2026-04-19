@@ -239,28 +239,20 @@ export function VoiceInputSettingsTab() {
             <SettingsSelect
               label="Language"
               value={settings.language}
-              onChange={(e) => update({ language: e.target.value })}
-            >
-              {LANGUAGES.map(({ code, label }) => (
-                <option key={code} value={code}>
-                  {label}
-                </option>
-              ))}
-            </SettingsSelect>
+              onValueChange={(v) => update({ language: v })}
+              options={LANGUAGES.map(({ code, label }) => ({ value: code, label }))}
+            />
 
             <SettingsSelect
               label="Transcription Model"
               value={settings.transcriptionModel}
-              onChange={(e) =>
-                update({ transcriptionModel: e.target.value as VoiceTranscriptionModel })
-              }
-            >
-              {TRANSCRIPTION_MODELS.map(({ value, label, description }) => (
-                <option key={value} value={value}>
-                  {label} — {description}
-                </option>
-              ))}
-            </SettingsSelect>
+              onValueChange={(v) => update({ transcriptionModel: v as VoiceTranscriptionModel })}
+              options={TRANSCRIPTION_MODELS.map(({ value, label, description }) => ({
+                value,
+                label,
+                description,
+              }))}
+            />
 
             <ParagraphingStrategyRow
               value={settings.paragraphingStrategy ?? "spoken-command"}
@@ -312,16 +304,13 @@ export function VoiceInputSettingsTab() {
               <SettingsSelect
                 label="Correction Model"
                 value={settings.correctionModel}
-                onChange={(e) =>
-                  update({ correctionModel: e.target.value as VoiceCorrectionModel })
-                }
-              >
-                {CORRECTION_MODELS.map(({ value, label, description }) => (
-                  <option key={value} value={value}>
-                    {label} — {description}
-                  </option>
-                ))}
-              </SettingsSelect>
+                onValueChange={(v) => update({ correctionModel: v as VoiceCorrectionModel })}
+                options={CORRECTION_MODELS.map(({ value, label, description }) => ({
+                  value,
+                  label,
+                  description,
+                }))}
+              />
 
               {settings.correctionApiKey && (
                 <>
@@ -667,11 +656,12 @@ function ParagraphingStrategyRow({
       label="Paragraph Breaks"
       description={description}
       value={value}
-      onChange={(e) => onChange(e.target.value as VoiceParagraphingStrategy)}
-    >
-      <option value="spoken-command">Spoken commands</option>
-      <option value="manual">Manual Enter only</option>
-    </SettingsSelect>
+      onValueChange={(v) => onChange(v as VoiceParagraphingStrategy)}
+      options={[
+        { value: "spoken-command", label: "Spoken commands" },
+        { value: "manual", label: "Manual Enter only" },
+      ]}
+    />
   );
 }
 

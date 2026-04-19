@@ -1,6 +1,12 @@
 import { useEffect, useId, useMemo, useState } from "react";
 import { Palette, Type, CaseSensitive, Eye, PanelBottom } from "lucide-react";
-import { cn } from "@/lib/utils";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { useTerminalFontStore } from "@/store";
 import { DEFAULT_TERMINAL_FONT_FAMILY } from "@/config/terminalFont";
 import { actionService } from "@/services/ActionService";
@@ -217,20 +223,21 @@ export function TerminalAppearanceTab({
               title="Font Family"
               description="JetBrains Mono is bundled with Daintree. If it is not available on your system, the terminal will fall back to your platform's monospace font."
             >
-              <select
+              <Select
                 value={selectedFontFamilyId}
-                onChange={(e) => handleFontFamilyChange(e.target.value)}
-                className={cn(
-                  "bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-daintree-text w-full focus:border-daintree-accent focus:outline-none transition-colors"
-                )}
-                aria-label="Terminal font family"
+                onValueChange={(v) => void handleFontFamilyChange(v)}
               >
-                {FONT_FAMILY_OPTIONS.map((option) => (
-                  <option key={option.id} value={option.id}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
+                <SelectTrigger aria-label="Terminal font family">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {FONT_FAMILY_OPTIONS.map((option) => (
+                    <SelectItem key={option.id} value={option.id}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </SettingsSection>
           </>
         )}

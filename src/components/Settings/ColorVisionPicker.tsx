@@ -1,5 +1,11 @@
 import { useCallback, useEffect, useState } from "react";
-import { cn } from "@/lib/utils";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { useAppThemeStore } from "@/store/appThemeStore";
 import { appThemeClient } from "@/clients/appThemeClient";
 import type { ColorVisionMode } from "@shared/types";
@@ -75,20 +81,18 @@ export function ColorVisionPicker() {
 
   return (
     <div>
-      <select
-        value={colorVisionMode}
-        onChange={(e) => handleChange(e.target.value)}
-        className={cn(
-          "bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-daintree-text w-full focus:border-daintree-accent focus:outline-none transition-colors"
-        )}
-        aria-label="Color vision mode"
-      >
-        {COLOR_VISION_OPTIONS.map((option) => (
-          <option key={option.id} value={option.id}>
-            {option.label} — {option.description}
-          </option>
-        ))}
-      </select>
+      <Select value={colorVisionMode} onValueChange={(v) => void handleChange(v)}>
+        <SelectTrigger aria-label="Color vision mode">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          {COLOR_VISION_OPTIONS.map((option) => (
+            <SelectItem key={option.id} value={option.id} description={option.description}>
+              {option.label}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
       <SwatchPreview />
     </div>
   );

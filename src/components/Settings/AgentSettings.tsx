@@ -1077,11 +1077,11 @@ export function AgentSettings({
                   <SettingsSelect
                     label="Assistant Model"
                     description="Model used when this agent is launched from the help panel or assistant shortcut"
-                    value={(activeEntry.assistantModelId as string) ?? ""}
-                    onChange={(e) => {
+                    value={(activeEntry.assistantModelId as string) || "__default__"}
+                    onValueChange={(v) => {
                       void (async () => {
                         await updateAgent(activeAgent.id, {
-                          assistantModelId: e.target.value || undefined,
+                          assistantModelId: v === "__default__" ? undefined : v,
                         });
                         onSettingsChange?.();
                       })();
@@ -1094,14 +1094,11 @@ export function AgentSettings({
                       })();
                     }}
                     resetAriaLabel={`Reset ${activeAgent.name} assistant model to default`}
-                  >
-                    <option value="">Default (fast model)</option>
-                    {agentCfg.models.map((m) => (
-                      <option key={m.id} value={m.id}>
-                        {m.name}
-                      </option>
-                    ))}
-                  </SettingsSelect>
+                    options={[
+                      { value: "__default__", label: "Default (fast model)" },
+                      ...agentCfg.models.map((m) => ({ value: m.id, label: m.name })),
+                    ]}
+                  />
                 </div>
               );
             })()}
