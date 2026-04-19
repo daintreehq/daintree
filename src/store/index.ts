@@ -7,7 +7,8 @@ export { useWorktreeSelectionStore } from "./worktreeStore";
 export { getCurrentViewStore, cleanupOrphanedTerminals } from "./createWorktreeStore";
 export type { WorktreeViewStoreApi } from "./createWorktreeStore";
 
-export { useLogsStore, filterLogs } from "./logsStore";
+export { useLogsStore, filterLogs, collapseConsecutiveDuplicates } from "./logsStore";
+export type { DisplayEntry } from "./logsStore";
 
 export { useErrorStore } from "./errorStore";
 export type { AppError, ErrorType, RetryAction } from "./errorStore";

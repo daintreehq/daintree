@@ -1,18 +1,23 @@
-import { memo, useCallback } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
+import { Copy, Check } from "lucide-react";
 import { cn } from "@/lib/utils";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-  TooltipProvider,
-} from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { Button } from "@/components/ui/button";
 import { safeStringify } from "@/lib/safeStringify";
 import type { LogEntry as LogEntryType, LogLevel } from "@/types";
+
+export interface LogEntryCopyMeta {
+  appVersion: string;
+  electronVersion: string;
+  platform: string;
+}
 
 interface LogEntryProps {
   entry: LogEntryType;
   isExpanded: boolean;
   onToggle: () => void;
+  count?: number;
+  copyMeta?: LogEntryCopyMeta;
 }
 
 const LEVEL_COLORS: Record<LogLevel, { bg: string; text: string; border: string }> = {
@@ -52,10 +57,38 @@ function formatContext(context: Record<string, unknown>): string {
   return safeStringify(context, 2);
 }
 
-function LogEntryComponent({ entry, isExpanded, onToggle }: LogEntryProps) {
+function buildCopyPayload(entry: LogEntryType, meta?: LogEntryCopyMeta): string {
+  const iso = new Date(entry.timestamp).toISOString();
+  const header = meta
+    ? `App: ${meta.appVersion} | Electron: ${meta.electronVersion} | OS: ${meta.platform}\n\n`
+    : "";
+  const headLine = entry.source
+    ? `[${iso}] [${entry.level.toUpperCase()}] [${entry.source}]`
+    : `[${iso}] [${entry.level.toUpperCase()}]`;
+  const body = [headLine, entry.message];
+  if (entry.context && Object.keys(entry.context).length > 0) {
+    body.push(safeStringify(entry.context, 2));
+  }
+  // Use tilde fence so any backtick blocks inside the log body don't break the outer fence.
+  return `${header}~~~log\n${body.join("\n")}\n~~~`;
+}
+
+function LogEntryComponent({ entry, isExpanded, onToggle, count = 1, copyMeta }: LogEntryProps) {
   const colors = LEVEL_COLORS[entry.level];
   const hasContext = entry.context && Object.keys(entry.context).length > 0;
   const contextPanelId = hasContext ? `context-${entry.id}` : undefined;
+
+  const [copied, setCopied] = useState(false);
+  const copyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (copyTimeoutRef.current) {
+        clearTimeout(copyTimeoutRef.current);
+        copyTimeoutRef.current = null;
+      }
+    };
+  }, []);
 
   const handleClick = useCallback(() => {
     if (hasContext) {
@@ -73,10 +106,28 @@ function LogEntryComponent({ entry, isExpanded, onToggle }: LogEntryProps) {
     [hasContext, onToggle]
   );
 
+  const handleCopy = useCallback(
+    async (e: React.MouseEvent) => {
+      e.stopPropagation();
+      try {
+        await navigator.clipboard.writeText(buildCopyPayload(entry, copyMeta));
+        setCopied(true);
+        if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
+        copyTimeoutRef.current = setTimeout(() => {
+          setCopied(false);
+          copyTimeoutRef.current = null;
+        }, 1500);
+      } catch {
+        // clipboard write can reject in unusual contexts; swallow silently
+      }
+    },
+    [entry, copyMeta]
+  );
+
   return (
     <div
       className={cn(
-        "border-b border-daintree-border/50 py-1.5 px-2",
+        "group border-b border-daintree-border/50 py-1.5 px-2 relative",
         hasContext && "cursor-pointer hover:bg-daintree-border/30",
         isExpanded && "bg-daintree-border/20"
       )}
@@ -93,16 +144,14 @@ function LogEntryComponent({ entry, isExpanded, onToggle }: LogEntryProps) {
       }
     >
       <div className="flex items-start gap-2 min-w-0">
-        <TooltipProvider>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <span className="text-daintree-text/60 text-xs font-mono shrink-0">
-                {formatTimestamp(entry.timestamp)}
-              </span>
-            </TooltipTrigger>
-            <TooltipContent side="bottom">{new Date(entry.timestamp).toISOString()}</TooltipContent>
-          </Tooltip>
-        </TooltipProvider>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span className="text-daintree-text/60 text-xs font-mono shrink-0">
+              {formatTimestamp(entry.timestamp)}
+            </span>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">{new Date(entry.timestamp).toISOString()}</TooltipContent>
+        </Tooltip>
 
         <span
           className={cn(
@@ -122,9 +171,36 @@ function LogEntryComponent({ entry, isExpanded, onToggle }: LogEntryProps) {
           {entry.message}
         </span>
 
+        {count > 1 && (
+          <span
+            className="text-daintree-text/60 text-xs font-mono shrink-0 tabular-nums bg-daintree-border/30 px-1.5 rounded"
+            aria-label={`Repeated ${count} times`}
+          >
+            ×{count}
+          </span>
+        )}
+
         {hasContext && (
           <span className="text-daintree-text/60 text-xs shrink-0">{isExpanded ? "[-]" : "[+]"}</span>
         )}
+
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              onClick={handleCopy}
+              aria-label={copied ? "Copied" : "Copy log entry"}
+              className={cn(
+                "h-5 w-5 shrink-0 opacity-0 group-hover:opacity-100 focus-visible:opacity-100",
+                copied && "opacity-100"
+              )}
+            >
+              {copied ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="left">{copied ? "Copied" : "Copy entry"}</TooltipContent>
+        </Tooltip>
       </div>
 
       {isExpanded && hasContext && (

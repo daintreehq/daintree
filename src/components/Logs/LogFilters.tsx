@@ -8,6 +8,7 @@ interface LogFiltersProps {
   onFiltersChange: (filters: Partial<LogFilterOptions>) => void;
   onClear: () => void;
   availableSources: string[];
+  levelCounts?: Partial<Record<LogLevel, number>>;
 }
 
 const LOG_LEVELS: { level: LogLevel; label: string; color: string }[] = [
@@ -26,6 +27,7 @@ export function LogFilters({
   onFiltersChange,
   onClear,
   availableSources,
+  levelCounts,
 }: LogFiltersProps) {
   const [searchValue, setSearchValue] = useState(filters.search || "");
   const [isSourcesOpen, setIsSourcesOpen] = useState(false);
@@ -117,6 +119,7 @@ export function LogFilters({
         <span className="text-daintree-text/60 text-xs mr-1">Level:</span>
         {LOG_LEVELS.map(({ level, label, color }) => {
           const isActive = filters.levels?.includes(level);
+          const count = levelCounts?.[level] ?? 0;
           return (
             <Button
               key={level}
@@ -124,8 +127,10 @@ export function LogFilters({
               size="xs"
               onClick={() => handleLevelToggle(level)}
               className={cn(isActive ? "bg-daintree-border font-medium" : "bg-daintree-bg/50", color)}
+              aria-label={`${label}${count > 0 ? ` (${count})` : ""}`}
             >
               {label}
+              {count > 0 && <span className="ml-1 tabular-nums opacity-70">{count}</span>}
             </Button>
           );
         })}
