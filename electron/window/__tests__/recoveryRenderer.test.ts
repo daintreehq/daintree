@@ -32,7 +32,6 @@ function renderWithParams(search: string): void {
     configurable: true,
   });
 
-  // eslint-disable-next-line @typescript-eslint/no-implied-eval, no-new-func
   new Function(RENDERER_SOURCE)();
 }
 
