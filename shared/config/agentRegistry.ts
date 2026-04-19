@@ -125,6 +125,13 @@ export interface AgentModelConfig {
   shortLabel: string;
 }
 
+/**
+ * Passive auth discovery probe. The result is surfaced as
+ * `AgentCliDetail.authConfirmed` (true / false / undefined) to drive onboarding
+ * UI, but never gates launch — an agent whose binary is on PATH is always
+ * `ready`. Registry entries use this to light up setup nudges in the tray and
+ * settings when a credential can't be found.
+ */
 export interface AgentAuthCheck {
   /** Platform-specific config file paths to check (relative to os.homedir()) */
   configPaths?: Partial<Record<"darwin" | "linux" | "win32", string[]>>;
@@ -132,8 +139,6 @@ export interface AgentAuthCheck {
   configPathsAll?: string[];
   /** Environment variable(s) that indicate auth when present */
   envVar?: string | string[];
-  /** Fallback state when binary found but auth check is inconclusive */
-  fallback?: "installed" | "ready";
 }
 
 export interface AgentPreset {
@@ -1077,14 +1082,14 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
       enabled: true,
     },
     authCheck: {
-      // Cursor may store tokens in OS Keychain on newer versions;
-      // file check is best-effort, default to "installed" if inconclusive.
+      // Cursor may store tokens in OS Keychain on newer versions; file check
+      // is best-effort. Misses leave `authConfirmed: false` so the Settings
+      // auth nudge surfaces, but do not block launch.
       configPaths: {
         darwin: ["Library/Application Support/Cursor/User/globalStorage/storage.json"],
         linux: [".config/Cursor/User/globalStorage/storage.json"],
         win32: ["AppData/Roaming/Cursor/User/globalStorage/storage.json"],
       },
-      fallback: "installed",
     },
     prerequisites: [
       {
@@ -1221,13 +1226,12 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
       // AWS SSO users authenticate via `kiro-cli login` (optionally with
       // --use-device-flow for headless/SSH), which writes a Kiro-specific
       // token cache to ~/.aws/sso/cache/kiro-auth-token.json. Probe that
-      // file so SSO-authenticated users reach "ready" instead of "installed".
+      // file so SSO-authenticated users get `authConfirmed: true`.
       // Non-SSO Kiro auth is managed via the OS keychain and internal state
       // directories (e.g. ~/Library/Application Support/kiro-cli/ on macOS,
       // ~/.local/share/kiro-cli/ on Linux), which we cannot reliably probe —
-      // those users fall back to "installed", mirroring Cursor.
+      // those users get `authConfirmed: false` but remain launchable.
       configPathsAll: [".aws/sso/cache/kiro-auth-token.json"],
-      fallback: "installed",
     },
     prerequisites: [
       {
@@ -1358,11 +1362,9 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
       // is unavailable (headless Linux, CI). We intentionally do NOT probe
       // ~/.config/gh/hosts.yml — that file is populated by any `gh auth login`
       // for general GitHub CLI use, not specifically Copilot, so presence
-      // does not imply a Copilot subscription or active auth. The
-      // "installed" fallback covers the macOS keychain case where no
-      // filesystem token exists.
+      // does not imply a Copilot subscription or active auth. Keychain-auth
+      // users get `authConfirmed: false` but remain launchable.
       configPathsAll: [".copilot/config.json"],
-      fallback: "installed",
     },
     prerequisites: [
       {

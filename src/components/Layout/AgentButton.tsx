@@ -30,6 +30,7 @@ import type { BuiltInAgentId } from "@shared/config/agentIds";
 import type { AgentAvailabilityState, AgentState } from "@shared/types";
 import { isAgentReady, isAgentInstalled } from "../../../shared/utils/agentAvailability";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
+import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
 import { useProjectPresetsStore } from "@/store/projectPresetsStore";
 import { usePanelStore } from "@/store/panelStore";
@@ -65,6 +66,7 @@ export function AgentButton({
   const { worktrees } = useWorktrees();
   const displayCombo = useKeybindingDisplay(`agent.${type}`);
   const agentSettings = useAgentSettingsStore((s) => s.settings);
+  const cliDetail = useCliAvailabilityStore((s) => s.details[type]);
   const ccrPresets = useCcrPresetsStore((s) => s.ccrPresetsByAgent[type]);
   const projectPresets = useProjectPresetsStore((s) => s.presetsByAgent[type]);
 
@@ -132,13 +134,22 @@ export function AgentButton({
   const shortcut = displayCombo ? ` (${displayCombo})` : "";
   const isLoading = availability === undefined;
   const isReady = isAgentReady(availability);
-  const isInstalledOnly = isAgentInstalled(availability);
-  const needsSetup = isInstalledOnly && !isReady;
+  // `installed` now only fires for WSL-capped binaries (launch not wired
+  // through wsl.exe yet); all other binary-on-PATH agents reach `ready`.
+  // `needsSetup` dims the button and routes clicks to Settings for these
+  // genuinely non-launchable cases.
+  const needsSetup = isAgentInstalled(availability) && !isReady;
+  // Surfaced in the tooltip only — launchable agents whose passive auth
+  // probe came back empty get a soft cue rather than a disabled look,
+  // because the CLI itself will prompt for sign-in on first run.
+  const signInUnconfirmed = isReady && cliDetail?.authConfirmed === false;
 
   const tooltip = isLoading
     ? `Checking ${config.name} CLI availability...`
     : isReady
-      ? `Start ${config.name}${tooltipDetails}${shortcut}`
+      ? signInUnconfirmed
+        ? `Start ${config.name} — sign-in not detected${shortcut}`
+        : `Start ${config.name}${tooltipDetails}${shortcut}`
       : needsSetup
         ? `${config.name} needs setup. Click to configure.`
         : `${config.name} CLI not found. Click to install.`;

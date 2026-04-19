@@ -213,50 +213,47 @@ export class CliAvailabilityService {
       };
     }
 
-    if (!config.authCheck) {
-      return {
-        state: "ready",
-        detail: {
-          state: "ready",
-          resolvedPath: probe.path,
-          via: probe.via,
-        },
-      };
-    }
+    // Binary found on PATH (or via native/npx) = launchable. Auth discovery
+    // runs in parallel only to populate `authConfirmed` for onboarding UI;
+    // it never gates the state. Agents without an `authCheck` config leave
+    // `authConfirmed` undefined so consumers can distinguish "no check
+    // applicable" from "check ran, nothing found".
+    const authConfirmed = config.authCheck
+      ? await this.checkAuth(config.name, config.authCheck)
+      : undefined;
 
-    const authState = await this.checkAuth(config.name, config.authCheck);
     return {
-      state: authState,
+      state: "ready",
       detail: {
-        state: authState,
+        state: "ready",
         resolvedPath: probe.path,
         via: probe.via,
+        authConfirmed,
       },
     };
   }
 
-  private async checkAuth(
-    agentName: string,
-    authCheck: AgentAuthCheck
-  ): Promise<AgentAvailabilityState> {
+  private async checkAuth(agentName: string, authCheck: AgentAuthCheck): Promise<boolean> {
     // Shared flag so the checkPromise knows the timeoutPromise already won
     // the race. Without this, a slow fs.access can later resolve/reject and
-    // emit a misleading "auth check fell through" log for an agent whose
-    // state was actually determined by the timeout branch.
+    // emit a misleading "auth discovery: no credential found" log for an
+    // agent whose result was actually determined by the timeout branch.
     let timedOut = false;
     // Track the timeout handle so we can clear it when checkPromise wins —
     // otherwise each fast-path success leaves an unresolved 3s timer pinned
     // to the event loop. Bounded leak per-refresh but worth avoiding.
     let timeoutHandle: NodeJS.Timeout | undefined;
 
-    const timeoutPromise = new Promise<AgentAvailabilityState>((resolve) => {
+    const timeoutPromise = new Promise<boolean>((resolve) => {
       timeoutHandle = setTimeout(() => {
         timedOut = true;
-        resolve(authCheck.fallback ?? "installed");
+        // Timeout = check was inconclusive; treat as "not confirmed" so the
+        // user sees the setup nudge rather than a silent green light.
+        resolve(false);
       }, CliAvailabilityService.AUTH_CHECK_TIMEOUT_MS);
     });
 
-    const checkPromise = (async (): Promise<AgentAvailabilityState> => {
+    const checkPromise = (async (): Promise<boolean> => {
       const checkedPaths: string[] = [];
 
       // Check environment variable first (positive signal only)
@@ -264,7 +261,7 @@ export class CliAvailabilityService {
         const envVars = Array.isArray(authCheck.envVar) ? authCheck.envVar : [authCheck.envVar];
         for (const envVar of envVars) {
           if (process.env[envVar]) {
-            return "ready";
+            return true;
           }
         }
       }
@@ -280,7 +277,7 @@ export class CliAvailabilityService {
           checkedPaths.push(fullPath);
           try {
             await access(fullPath, constants.R_OK);
-            return "ready";
+            return true;
           } catch {
             // File not found, continue
           }
@@ -294,22 +291,21 @@ export class CliAvailabilityService {
           checkedPaths.push(fullPath);
           try {
             await access(fullPath, constants.R_OK);
-            return "ready";
+            return true;
           } catch {
             // File not found, continue
           }
         }
       }
 
-      const fallbackState = authCheck.fallback ?? "installed";
       if (!timedOut) {
         console.log(
-          `[CliAvailabilityService] ${agentName}: binary found, auth check fell through (checked: ${
+          `[CliAvailabilityService] ${agentName}: binary found, auth discovery: no credential found (checked: ${
             checkedPaths.join(", ") || "none"
-          }) -> "${fallbackState}"`
+          })`
         );
       }
-      return fallbackState;
+      return false;
     })();
 
     try {

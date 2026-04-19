@@ -51,6 +51,14 @@ vi.mock("@/store/ccrPresetsStore", () => ({
   ) => selector({ ccrPresetsByAgent: mockCcrPresetsByAgent }),
 }));
 
+let mockCliDetails: Record<string, { authConfirmed?: boolean } | undefined> = {};
+
+vi.mock("@/store/cliAvailabilityStore", () => ({
+  useCliAvailabilityStore: (
+    selector: (s: { details: Record<string, { authConfirmed?: boolean } | undefined> }) => unknown
+  ) => selector({ details: mockCliDetails }),
+}));
+
 vi.mock("@/store/projectPresetsStore", () => ({
   useProjectPresetsStore: (
     selector: (s: { presetsByAgent: Record<string, unknown[]> }) => unknown
@@ -177,6 +185,7 @@ describe("AgentButton preset UX", () => {
     mockActiveWorktreeId = null;
     mockCcrPresetsByAgent = {};
     mockMergedPresetsFn = () => [];
+    mockCliDetails = {};
   });
 
   describe("split threshold", () => {

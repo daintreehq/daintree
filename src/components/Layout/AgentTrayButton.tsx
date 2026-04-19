@@ -405,11 +405,16 @@ export function AgentTrayButton({
 
       const state = agentAvailability?.[id];
       if (isAgentReady(state)) {
+        // Launchable. Passive auth discovery (`authConfirmed: false`) never
+        // moves an agent out of Launch — clicking starts the CLI, which
+        // prompts for sign-in on first run. The decoupling goal of
+        // #5483 requires this path to stay hot.
         launchable.push(row);
       } else if (isAgentInstalled(state)) {
-        // "installed" means the CLI is on PATH but not fully authenticated
-        // or configured yet. These belong in "Needs Setup" with a setup
-        // badge. Missing agents do NOT get promoted here.
+        // Reached only for the WSL `installed` cap (direct launch isn't
+        // wired through wsl.exe yet) and any future non-launchable
+        // installed state. These belong in "Needs Setup" — routing to
+        // Settings gives the user actionable install docs.
         needsSetup.push(row);
       }
       // Always build a fallback row so we can offer discovery when

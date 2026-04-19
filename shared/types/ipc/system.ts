@@ -30,8 +30,12 @@ export interface SystemWakePayload {
  * Availability for an individual agent CLI.
  *
  * - `missing`: binary not found via any probe (PATH, native installer path, npx fallback).
- * - `installed`: binary found but no auth credential detected (or auth inconclusive).
- * - `ready`: binary found AND auth credential detected — ready to use.
+ * - `installed`: binary found but cannot be launched directly (e.g. WSL-detected on
+ *   Windows, where direct spawn isn't wired up yet). Agents whose binary is on PATH
+ *   are always `ready`, regardless of whether a credential file was detected.
+ * - `ready`: binary found and launchable. Auth discovery runs in parallel and is
+ *   surfaced via {@link AgentCliDetail.authConfirmed} for onboarding nudges; it does
+ *   not gate launch.
  * - `blocked`: binary exists but execution was denied (security software like Santa,
  *   CrowdStrike, SentinelOne, or Windows Defender, or missing execute permission).
  *   Distinct from `missing` because the fix is a permissions/allowlist change, not
@@ -76,6 +80,19 @@ export interface AgentCliDetail {
   blockReason?: AgentCliBlockReason;
   /** WSL distribution used when `via === "wsl"`. */
   wslDistro?: string;
+  /**
+   * Passive auth discovery result. Populated alongside the binary probe to
+   * drive onboarding nudges ("Needs Setup" tray section, Settings auth
+   * panel) without gating launch.
+   *
+   * - `true`: a credential file or env var was detected for this agent.
+   * - `false`: the agent declares an `authCheck` in the registry, the check
+   *   ran, and nothing was found (or it failed / timed out). Show the nudge.
+   * - `undefined`: no `authCheck` is configured, or the agent is in a state
+   *   where discovery doesn't apply (WSL-capped, blocked, missing). Do not
+   *   show a nudge.
+   */
+  authConfirmed?: boolean;
 }
 
 /** Map of agent ID → detailed detection result. */
