@@ -26,6 +26,11 @@ export function useProjectPresetsSubscription(): void {
 
     const projectId = currentProjectId;
 
+    // Pre-clear so the previous project's presets don't leak through if the
+    // first load for the new project fails. Without this, a failed IPC would
+    // leave stale presets in the store until the next 30s poll succeeds.
+    reset();
+
     const load = async () => {
       try {
         const presets = await projectClient.getInRepoPresets(projectId);

@@ -64,7 +64,6 @@ type AgentRow = {
   dominantState: AgentState | null;
   isNew: boolean;
   presets?: AgentPreset[];
-  customPresetIds: Set<string>;
   projectPresetIds: Set<string>;
 };
 
@@ -97,7 +96,6 @@ function buildAgentRow(
     dominantState,
     isNew,
     presets: hasPresets ? presets : undefined,
-    customPresetIds: new Set((customPresets ?? []).map((f) => f.id)),
     projectPresetIds: new Set((projectPresets ?? []).map((f) => f.id)),
   };
 }
@@ -148,13 +146,16 @@ function SplitLaunchItem({ row, onLaunch }: SplitLaunchItemProps) {
     }
   };
 
-  const ccrPresets = (row.presets ?? []).filter((f) => f.id.startsWith("ccr-"));
-  const projectPresets = (row.presets ?? []).filter(
-    (f) =>
-      !f.id.startsWith("ccr-") && !row.customPresetIds.has(f.id) && row.projectPresetIds.has(f.id)
+  // Project membership beats the ccr- prefix so a project preset with a
+  // ccr-* id still lands under "Project Shared". Everything not-ccr and
+  // not-project falls through to "Custom" — preserves historical display
+  // for presets whose provenance can't be determined from id alone.
+  const projectPresets = (row.presets ?? []).filter((f) => row.projectPresetIds.has(f.id));
+  const ccrPresets = (row.presets ?? []).filter(
+    (f) => !row.projectPresetIds.has(f.id) && f.id.startsWith("ccr-")
   );
   const customPresets = (row.presets ?? []).filter(
-    (f) => !f.id.startsWith("ccr-") && !projectPresets.includes(f)
+    (f) => !row.projectPresetIds.has(f.id) && !f.id.startsWith("ccr-")
   );
   const groupCount =
     (ccrPresets.length > 0 ? 1 : 0) +

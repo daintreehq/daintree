@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import fs from "fs/promises";
 import path from "path";
 import os from "os";
@@ -466,6 +466,24 @@ describe("readInRepoPresets", () => {
 
     const result = await identityFiles.readInRepoPresets(tmpDir);
     expect(result.claude).toHaveLength(1);
+  });
+
+  it("deduplicates presets with the same id within an agent directory and warns", async () => {
+    const agentDir = path.join(tmpDir, PRESETS_DIR, "claude");
+    await fs.mkdir(agentDir, { recursive: true });
+    // Two files, same id. Filesystem readdir order is non-deterministic;
+    // the behavior we pin is: at most one entry, with a warning.
+    await fs.writeFile(path.join(agentDir, "a.json"), JSON.stringify({ id: "dup", name: "First" }));
+    await fs.writeFile(
+      path.join(agentDir, "b.json"),
+      JSON.stringify({ id: "dup", name: "Second" })
+    );
+
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const result = await identityFiles.readInRepoPresets(tmpDir);
+    expect(result.claude).toHaveLength(1);
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("Duplicate preset id"));
+    warnSpy.mockRestore();
   });
 
   it("rejects unsafe agent subdirectory names", async () => {

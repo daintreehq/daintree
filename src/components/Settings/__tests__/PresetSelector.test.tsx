@@ -160,6 +160,29 @@ describe("PresetSelector", () => {
     expect(getByTestId("preset-option-project-team-opus")).toBeTruthy();
   });
 
+  it("project preset with a ccr- prefixed id still renders as Project, not CCR", () => {
+    // Regression guard: without a membership-first source classification,
+    // a project preset authored with id `ccr-team` would get stolen by the
+    // CCR badge/group path and appear under "CCR Routes".
+    const project = mkPreset("ccr-team", "Team Route");
+    const { getByTestId, queryByTestId } = render(
+      <PresetSelector
+        selectedPresetId="ccr-team"
+        allPresets={[project]}
+        ccrPresets={[]}
+        projectPresets={[project]}
+        customPresets={[]}
+        onChange={onChange}
+        agentColor="#888"
+      />
+    );
+    expect(queryByTestId("preset-group-project-shared")).toBeTruthy();
+    expect(queryByTestId("preset-group-ccr-routes")).toBeNull();
+    const triggerText = getByTestId("preset-selector-trigger").textContent ?? "";
+    expect(triggerText).toContain("Project");
+    expect(triggerText).not.toContain("CCR");
+  });
+
   it("project group is absent when projectPresets is empty", () => {
     const { queryByTestId } = render(
       <PresetSelector

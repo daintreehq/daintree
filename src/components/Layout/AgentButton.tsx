@@ -105,14 +105,19 @@ export function AgentButton({
   // preset is implicitly the default and doesn't warrant a picker.
   const hasPresets = presets.length >= 2;
   const savedPresetId = agentSettings?.agents?.[type]?.presetId;
-  const customPresetIds = new Set((entry.customPresets ?? []).map((f) => f.id));
+  // Group by source. Project presets are identified by membership so that a
+  // project preset whose id happens to start with "ccr-" still lands in
+  // "Project Shared" rather than being stolen by the CCR group. Everything
+  // that isn't CCR-prefixed or project-member falls through to the "Custom"
+  // bucket — this preserves the historical rendering for user-authored
+  // presets regardless of whether they're also in `entry.customPresets`.
   const projectPresetIds = new Set((projectPresets ?? []).map((f) => f.id));
-  const ccrPresetGroup = presets.filter((f) => f.id.startsWith("ccr-"));
-  const projectPresetGroup = presets.filter(
-    (f) => !f.id.startsWith("ccr-") && !customPresetIds.has(f.id) && projectPresetIds.has(f.id)
+  const projectPresetGroup = presets.filter((f) => projectPresetIds.has(f.id));
+  const ccrPresetGroup = presets.filter(
+    (f) => !projectPresetIds.has(f.id) && f.id.startsWith("ccr-")
   );
   const customPresetGroup = presets.filter(
-    (f) => !f.id.startsWith("ccr-") && !projectPresetGroup.includes(f)
+    (f) => !projectPresetIds.has(f.id) && !f.id.startsWith("ccr-")
   );
   const presetGroupCount =
     (ccrPresetGroup.length > 0 ? 1 : 0) +

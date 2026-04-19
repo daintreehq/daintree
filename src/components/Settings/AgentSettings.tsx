@@ -381,15 +381,21 @@ export function AgentSettings({
               // canonical signal for "selected is custom" — prefix-based
               // checks would mis-classify a project preset that happened to
               // start with "user-".
+              // Source precedence for display classification (custom > project > CCR):
+              // membership checks must beat the ccr- prefix heuristic so that a
+              // project preset whose id happens to start with "ccr-" is still
+              // surfaced under its true source in the detail view.
               const selectedIsCustom =
                 !!selectedPreset && (customPresets ?? []).some((f) => f.id === selectedPreset.id);
-              const selectedIsCcr =
-                !!selectedPreset && !selectedIsCustom && selectedPreset.id.startsWith("ccr-");
               const selectedIsProject =
                 !!selectedPreset &&
                 !selectedIsCustom &&
-                !selectedIsCcr &&
                 (projectPresets ?? []).some((f) => f.id === selectedPreset.id);
+              const selectedIsCcr =
+                !!selectedPreset &&
+                !selectedIsCustom &&
+                !selectedIsProject &&
+                selectedPreset.id.startsWith("ccr-");
               const isDefault = !selectedPreset;
 
               // ── handlers ──────────────────────────────────────────────────

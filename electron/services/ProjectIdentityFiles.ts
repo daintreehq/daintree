@@ -320,6 +320,7 @@ export class ProjectIdentityFiles {
       }
 
       const presets: AgentPreset[] = [];
+      const seenIds = new Set<string>();
       for (const entry of fileEntries) {
         if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
         try {
@@ -339,6 +340,17 @@ export class ProjectIdentityFiles {
             );
             continue;
           }
+          if (seenIds.has(parsed.id)) {
+            // Filesystem readdir order is non-deterministic across machines,
+            // so a duplicate id would resolve differently on different dev
+            // machines. Keep the first occurrence and warn loudly so the
+            // contributor renames one.
+            console.warn(
+              `[ProjectIdentityFiles] Duplicate preset id "${parsed.id}" in ${agentId}/${entry.name} — keeping first occurrence, rename this file`
+            );
+            continue;
+          }
+          seenIds.add(parsed.id);
           presets.push(parsed as AgentPreset);
         } catch {
           console.warn(`[ProjectIdentityFiles] Skipping malformed preset file: ${entry.name}`);
