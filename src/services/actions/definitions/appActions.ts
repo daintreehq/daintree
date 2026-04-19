@@ -69,6 +69,7 @@ export function registerAppActions(actions: ActionRegistry, callbacks: ActionCal
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    nonRepeatable: true,
     run: async () => {
       callbacks.onOpenSettings();
     },
@@ -83,6 +84,7 @@ export function registerAppActions(actions: ActionRegistry, callbacks: ActionCal
     danger: "safe",
     scope: "renderer",
     argsSchema: SettingsNavTargetSchema,
+    nonRepeatable: true,
     run: async (args: unknown) => {
       callbacks.onOpenSettingsTab(args as SettingsNavTarget);
     },
@@ -134,6 +136,7 @@ export function registerAppActions(actions: ActionRegistry, callbacks: ActionCal
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    nonRepeatable: true,
     run: async () => {
       window.dispatchEvent(new CustomEvent("daintree:open-theme-palette"));
     },

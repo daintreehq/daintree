@@ -15,6 +15,7 @@ export function registerTerminalNavigationActions(
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    nonRepeatable: true,
     run: async () => {
       usePanelStore.getState().focusNext();
     },
@@ -28,6 +29,7 @@ export function registerTerminalNavigationActions(
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    nonRepeatable: true,
     run: async () => {
       usePanelStore.getState().focusPrevious();
     },
@@ -41,6 +43,7 @@ export function registerTerminalNavigationActions(
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    nonRepeatable: true,
     run: async () => {
       const nav = callbacks.getGridNavigation();
       if (nav.getCurrentLocation() === "grid") {
@@ -57,6 +60,7 @@ export function registerTerminalNavigationActions(
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    nonRepeatable: true,
     run: async () => {
       const nav = callbacks.getGridNavigation();
       if (nav.getCurrentLocation() === "grid") {
@@ -73,6 +77,7 @@ export function registerTerminalNavigationActions(
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    nonRepeatable: true,
     run: async () => {
       const nav = callbacks.getGridNavigation();
       const location = nav.getCurrentLocation();
@@ -92,6 +97,7 @@ export function registerTerminalNavigationActions(
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    nonRepeatable: true,
     run: async () => {
       const nav = callbacks.getGridNavigation();
       const location = nav.getCurrentLocation();
@@ -113,6 +119,7 @@ export function registerTerminalNavigationActions(
     danger: "safe",
     scope: "renderer",
     argsSchema: z.object({ index: z.number().int().min(1).max(9) }),
+    nonRepeatable: true,
     run: async (args: unknown) => {
       const { index } = args as { index: number };
       const nav = callbacks.getGridNavigation();
@@ -131,6 +138,7 @@ export function registerTerminalNavigationActions(
       kind: "command",
       danger: "safe",
       scope: "renderer",
+      nonRepeatable: true,
       run: async () => {
         const nav = callbacks.getGridNavigation();
         usePanelStore.getState().focusByIndex(index, nav.findByIndex);
@@ -146,6 +154,7 @@ export function registerTerminalNavigationActions(
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    nonRepeatable: true,
     run: async () => {
       const state = usePanelStore.getState();
       const activeWorktreeId = callbacks.getActiveWorktreeId();

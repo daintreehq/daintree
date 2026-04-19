@@ -113,6 +113,7 @@ export function registerNotesActions(actions: ActionRegistry, _callbacks: Action
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    nonRepeatable: true,
     run: async () => {
       window.dispatchEvent(new CustomEvent("daintree:open-notes-palette"));
     },

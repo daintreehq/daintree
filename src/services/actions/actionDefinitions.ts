@@ -1,4 +1,5 @@
 import type { ActionCallbacks, ActionRegistry } from "./actionTypes";
+import { registerActionActions } from "./definitions/actionActions";
 import { registerAgentActions } from "./definitions/agentActions";
 import { registerFileActions } from "./definitions/fileActions";
 import { registerAppActions } from "./definitions/appActions";
@@ -63,6 +64,7 @@ export function createActionDefinitions(callbacks: ActionCallbacks): ActionRegis
   registerWorkflowActions(actions);
   registerFileActions(actions, callbacks);
   registerVoiceActions(actions);
+  registerActionActions(actions);
 
   return actions;
 }
