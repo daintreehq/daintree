@@ -6,6 +6,24 @@ import { setAgentPresets } from "../../shared/config/agentRegistry.js";
 import { broadcastToRenderer } from "../ipc/utils.js";
 import { CHANNELS } from "../ipc/channels.js";
 
+function abortableSleep(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    if (signal.aborted) {
+      reject(new Error("aborted"));
+      return;
+    }
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(new Error("aborted"));
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
 interface CcrModelEntry {
   id?: string;
   name?: string;
@@ -48,6 +66,7 @@ export class CcrConfigService {
   private cachedPresets: AgentPreset[] | null = null;
   private pendingBroadcast = true;
   private watchAbortController: AbortController | null = null;
+  private pollPromise: Promise<void> | null = null;
 
   static getInstance(): CcrConfigService {
     if (!CcrConfigService.instance) {
@@ -104,18 +123,30 @@ export class CcrConfigService {
 
     const poll = async () => {
       while (!signal.aborted) {
-        await new Promise((resolve) => setTimeout(resolve, 30_000));
+        try {
+          // Abortable sleep — stopWatching() triggers this to reject immediately
+          // instead of blocking teardown up to 30s on the next iteration.
+          await abortableSleep(30_000, signal);
+        } catch {
+          break;
+        }
         if (signal.aborted) break;
         await this.loadAndApply();
       }
     };
 
-    void poll().catch(() => {});
+    this.pollPromise = poll().catch(() => {});
   }
 
-  stopWatching(): void {
-    this.watchAbortController?.abort();
+  async stopWatching(): Promise<void> {
+    // Capture locals before nulling so a racing startWatching() can install a fresh
+    // loop without having its fields clobbered by this teardown.
+    const controller = this.watchAbortController;
+    const promise = this.pollPromise;
     this.watchAbortController = null;
+    this.pollPromise = null;
+    controller?.abort();
+    await promise;
   }
 
   private entryToPreset(entry: CcrModelEntry): AgentPreset {

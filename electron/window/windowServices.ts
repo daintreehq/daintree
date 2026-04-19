@@ -105,6 +105,7 @@ let stopDiskSpaceMonitor: (() => void) | null = null;
 let resourceProfileService: ResourceProfileService | null = null;
 let worktreePortBroker: import("../services/WorktreePortBroker.js").WorktreePortBroker | null =
   null;
+let ccrConfigService: import("../services/CcrConfigService.js").CcrConfigService | null = null;
 
 // Guard: IPC handlers are globally scoped (ipcMain.handle throws on re-registration)
 let ipcHandlersRegistered = false;
@@ -345,9 +346,9 @@ export async function setupWindowServices(
     // CCR config — discover Claude Code Router models as agent presets
     try {
       const { CcrConfigService } = await import("../services/CcrConfigService.js");
-      const ccrService = CcrConfigService.getInstance();
-      await ccrService.loadAndApply();
-      ccrService.startWatching();
+      ccrConfigService = CcrConfigService.getInstance();
+      await ccrConfigService.loadAndApply();
+      ccrConfigService.startWatching();
       console.log("[MAIN] CcrConfigService initialized");
     } catch (err) {
       console.warn("[MAIN] CcrConfigService init failed (non-fatal):", err);
@@ -1152,5 +1153,10 @@ export async function setupWindowServices(
     activationFunnelService.dispose();
     preAgentSnapshotService.dispose();
     autoUpdaterService.dispose();
+
+    if (ccrConfigService) {
+      await ccrConfigService.stopWatching();
+      ccrConfigService = null;
+    }
   });
 }
