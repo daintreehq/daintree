@@ -151,6 +151,7 @@ import type { AppAgentConfig } from "../appAgent.js";
 import type { ActionContext } from "../actions.js";
 import type { AgentRegistry, AgentMetadata } from "./agentCapabilities.js";
 import type { AppThemeConfig } from "../appTheme.js";
+import type { SanitizedTelemetryEvent, TelemetryPreviewState } from "./telemetryPreview.js";
 
 export interface NotificationSettings {
   enabled: boolean;
@@ -1195,6 +1196,14 @@ export interface ElectronAPI {
     setEnabled(enabled: boolean): Promise<void>;
     markPromptShown(): Promise<void>;
     track(event: string, properties: Record<string, unknown>): Promise<void>;
+    preview: {
+      getState(): Promise<TelemetryPreviewState>;
+      toggle(active: boolean): Promise<TelemetryPreviewState>;
+      subscribe(): void;
+      unsubscribe(): void;
+      onEventBatch(callback: (events: SanitizedTelemetryEvent[]) => void): () => void;
+      onStateChanged(callback: (state: TelemetryPreviewState) => void): () => void;
+    };
   };
   gpu: {
     getStatus(): Promise<{ hardwareAccelerationDisabled: boolean }>;

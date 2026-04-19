@@ -483,6 +483,12 @@ export const CHANNELS = {
   TELEMETRY_SET_ENABLED: "telemetry:set-enabled",
   TELEMETRY_MARK_PROMPT_SHOWN: "telemetry:mark-prompt-shown",
   TELEMETRY_TRACK: "telemetry:track",
+  TELEMETRY_PREVIEW_GET_STATE: "telemetry:preview-get-state",
+  TELEMETRY_PREVIEW_TOGGLE: "telemetry:preview-toggle",
+  TELEMETRY_PREVIEW_SUBSCRIBE: "telemetry:preview-subscribe",
+  TELEMETRY_PREVIEW_UNSUBSCRIBE: "telemetry:preview-unsubscribe",
+  TELEMETRY_PREVIEW_EVENT_BATCH: "telemetry:preview-event-batch",
+  TELEMETRY_PREVIEW_STATE_CHANGED: "telemetry:preview-state-changed",
 
   // Privacy & Data channels
   PRIVACY_GET_SETTINGS: "privacy:get-settings",

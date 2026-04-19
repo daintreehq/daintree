@@ -130,6 +130,7 @@ import type {
   DevPreviewSessionState,
   DevPreviewStateChangedPayload,
 } from "./devPreview.js";
+import type { SanitizedTelemetryEvent, TelemetryPreviewState } from "./telemetryPreview.js";
 import type { ProjectPulse, PulseRangeDays } from "../pulse.js";
 import type {
   GitCommitListOptions,
@@ -1575,6 +1576,14 @@ export interface IpcInvokeMap {
     args: [event: string, properties: Record<string, unknown>];
     result: void;
   };
+  "telemetry:preview-get-state": {
+    args: [];
+    result: TelemetryPreviewState;
+  };
+  "telemetry:preview-toggle": {
+    args: [active: boolean];
+    result: TelemetryPreviewState;
+  };
 
   // GPU
   "gpu:get-status": {
@@ -2412,6 +2421,10 @@ export interface IpcEventMap {
     level: "off" | "errors" | "full";
     hasSeenPrompt: boolean;
   };
+
+  // Telemetry preview events
+  "telemetry:preview-event-batch": SanitizedTelemetryEvent[];
+  "telemetry:preview-state-changed": TelemetryPreviewState;
 
   // Onboarding checklist push (main → renderer)
   "onboarding:checklist-push": ChecklistState;

@@ -1,8 +1,11 @@
 import os from "os";
+import { randomUUID } from "node:crypto";
 import { app } from "electron";
 import { store } from "../store.js";
 import type { ActionBreadcrumb } from "../../shared/types/ipc/crashRecovery.js";
+import type { SanitizedTelemetryEvent } from "../../shared/types/ipc/telemetryPreview.js";
 import { scrubSecrets } from "../utils/secretScrubber.js";
+import { emitTelemetryPreview, isTelemetryPreviewActive } from "./TelemetryPreviewBroadcaster.js";
 
 export interface SentryBreadcrumb {
   message?: string;
@@ -190,8 +193,11 @@ export async function initializeTelemetry(): Promise<void> {
         // The local `SentryEvent` interface is a narrower projection of the
         // SDK's `Event` type — cast through `unknown` at the hook boundary so
         // our scrubbing logic can use the shape we control.
-        beforeSend: (event) =>
-          sanitizeEvent(event as unknown as SentryEvent) as unknown as typeof event,
+        beforeSend: (event) => {
+          const sanitized = sanitizeEvent(event as unknown as SentryEvent);
+          if (sanitized) capturePreviewFromSanitizedEvent(sanitized);
+          return sanitized as unknown as typeof event;
+        },
         initialScope: {
           tags: {
             platform: process.platform,
@@ -257,16 +263,68 @@ export async function setTelemetryEnabled(enabled: boolean): Promise<void> {
   await setTelemetryLevel(enabled ? "errors" : "off");
 }
 
+function buildAnalyticsSentryEvent(
+  event: string,
+  properties: Record<string, unknown>,
+  timestamp: number
+): SentryEvent {
+  return {
+    message: event,
+    level: "info" as unknown as undefined,
+    extra: { ...properties, timestamp },
+    tags: { kind: "analytics" },
+  } as SentryEvent;
+}
+
+/**
+ * Clone a sanitised Sentry event for the preview stream. Runs only when a
+ * preview subscriber is active — `structuredClone` isn't free and we don't
+ * want to pay for it when nobody is watching. Failure is swallowed: the
+ * preview mirror must never block a real telemetry send.
+ */
+function capturePreviewFromSanitizedEvent(event: SentryEvent): void {
+  if (!isTelemetryPreviewActive()) return;
+  try {
+    const clone = structuredClone(event) as Record<string, unknown>;
+    const isAnalytics =
+      clone.tags && typeof clone.tags === "object"
+        ? (clone.tags as Record<string, unknown>).kind === "analytics"
+        : false;
+    const label = deriveTelemetryPreviewLabel(clone);
+    const record: SanitizedTelemetryEvent = {
+      id: randomUUID(),
+      kind: isAnalytics ? "analytics" : "sentry",
+      timestamp: Date.now(),
+      label,
+      payload: clone,
+    };
+    emitTelemetryPreview(record);
+  } catch {
+    // never let preview capture affect the real telemetry send
+  }
+}
+
+function deriveTelemetryPreviewLabel(event: Record<string, unknown>): string {
+  if (typeof event.message === "string" && event.message.length > 0) {
+    return event.message;
+  }
+  const exception = event.exception as
+    | { values?: Array<{ type?: string; value?: string }> }
+    | undefined;
+  const first = exception?.values?.[0];
+  if (first) {
+    if (first.type && first.value) return `${first.type}: ${first.value}`;
+    if (first.value) return first.value;
+    if (first.type) return first.type;
+  }
+  return "(event)";
+}
+
 function flushPreConsentBuffer(): void {
   if (!captureEventFn) return;
   const events = preConsentBuffer.splice(0);
   for (const { event, properties, timestamp } of events) {
-    captureEventFn({
-      message: event,
-      level: "info" as unknown as undefined,
-      extra: { ...properties, timestamp },
-      tags: { kind: "analytics" },
-    } as SentryEvent);
+    captureEventFn(buildAnalyticsSentryEvent(event, properties, timestamp));
   }
 }
 
@@ -276,13 +334,19 @@ export function trackEvent(event: string, properties: Record<string, unknown> = 
 
   // Only send analytics events at "full" level; "errors" only permits crash reports via Sentry
   if (level === "full" && captureEventFn) {
-    captureEventFn({
-      message: event,
-      level: "info" as unknown as undefined,
-      extra: { ...properties, timestamp: Date.now() },
-      tags: { kind: "analytics" },
-    } as SentryEvent);
+    // `beforeSend` will fire the preview tap as part of the capture path.
+    captureEventFn(buildAnalyticsSentryEvent(event, properties, Date.now()));
     return;
+  }
+
+  // Preview should mirror what *would* be sent even when consent is off or
+  // the user hasn't answered the prompt yet — that's the whole point of the
+  // feature. Build the would-be event, run it through the same sanitiser,
+  // and emit without touching Sentry.
+  if (isTelemetryPreviewActive()) {
+    const previewOnly = buildAnalyticsSentryEvent(event, properties, Date.now());
+    const sanitized = sanitizeEvent(previewOnly);
+    if (sanitized) capturePreviewFromSanitizedEvent(sanitized);
   }
 
   if (!hasSeenPrompt) {

@@ -1,9 +1,11 @@
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import { z } from "zod";
-import { errorsClient, eventInspectorClient, logsClient } from "@/clients";
+import { errorsClient, eventInspectorClient, logsClient, telemetryPreviewClient } from "@/clients";
 import { useErrorStore } from "@/store/errorStore";
 import { useEventStore } from "@/store/eventStore";
 import { useLogsStore } from "@/store/logsStore";
+import { useDiagnosticsStore } from "@/store/diagnosticsStore";
+import { useTelemetryPreviewStore } from "@/store/telemetryPreviewStore";
 
 export function registerLogActions(actions: ActionRegistry, _callbacks: ActionCallbacks): void {
   actions.set("logs.openFile", () => ({
@@ -310,6 +312,42 @@ export function registerLogActions(actions: ActionRegistry, _callbacks: ActionCa
     run: async () => {
       useEventStore.getState().clearEvents();
       await eventInspectorClient.clear();
+    },
+  }));
+
+  actions.set("telemetry.togglePreview", () => ({
+    id: "telemetry.togglePreview",
+    title: "Preview Outbound Telemetry",
+    description:
+      "Toggle a session-only preview that mirrors every sanitised telemetry payload before it is sent.",
+    category: "diagnostics",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    argsSchema: z.object({ active: z.boolean().optional() }).optional(),
+    run: async (args: unknown) => {
+      const { active } = (args as { active?: boolean } | undefined) ?? {};
+      const current = useTelemetryPreviewStore.getState().active;
+      const next = typeof active === "boolean" ? active : !current;
+      const result = await telemetryPreviewClient.toggle(next);
+      useTelemetryPreviewStore.getState().setActive(result.active);
+      if (result.active) {
+        useDiagnosticsStore.getState().openDock("telemetry");
+      }
+      return result;
+    },
+  }));
+
+  actions.set("telemetry.clearPreview", () => ({
+    id: "telemetry.clearPreview",
+    title: "Clear Telemetry Preview",
+    description: "Clear captured telemetry preview events from the diagnostics dock.",
+    category: "diagnostics",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    run: async () => {
+      useTelemetryPreviewStore.getState().clearEvents();
     },
   }));
 

@@ -470,3 +470,12 @@ export type {
   AppThemeConfig,
   ColorVisionMode,
 } from "./appTheme.js";
+
+// Telemetry preview types — session-scoped payload mirror
+export type {
+  SanitizedTelemetryEvent,
+  SanitizedTelemetryEventKind,
+  SanitizedSentryEvent,
+  SanitizedAnalyticsEvent,
+  TelemetryPreviewState,
+} from "./ipc/telemetryPreview.js";

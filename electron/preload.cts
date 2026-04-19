@@ -1005,6 +1005,12 @@ const CHANNELS = {
   TELEMETRY_SET_ENABLED: "telemetry:set-enabled",
   TELEMETRY_MARK_PROMPT_SHOWN: "telemetry:mark-prompt-shown",
   TELEMETRY_TRACK: "telemetry:track",
+  TELEMETRY_PREVIEW_GET_STATE: "telemetry:preview-get-state",
+  TELEMETRY_PREVIEW_TOGGLE: "telemetry:preview-toggle",
+  TELEMETRY_PREVIEW_SUBSCRIBE: "telemetry:preview-subscribe",
+  TELEMETRY_PREVIEW_UNSUBSCRIBE: "telemetry:preview-unsubscribe",
+  TELEMETRY_PREVIEW_EVENT_BATCH: "telemetry:preview-event-batch",
+  TELEMETRY_PREVIEW_STATE_CHANGED: "telemetry:preview-state-changed",
 
   // GPU channels
   GPU_GET_STATUS: "gpu:get-status",
@@ -2811,6 +2817,22 @@ const api: ElectronAPI = {
     markPromptShown: () => _unwrappingInvoke(CHANNELS.TELEMETRY_MARK_PROMPT_SHOWN),
     track: (event: string, properties: Record<string, unknown>) =>
       _unwrappingInvoke(CHANNELS.TELEMETRY_TRACK, event, properties),
+    preview: {
+      getState: () => _unwrappingInvoke(CHANNELS.TELEMETRY_PREVIEW_GET_STATE),
+      toggle: (active: boolean) => _unwrappingInvoke(CHANNELS.TELEMETRY_PREVIEW_TOGGLE, active),
+      subscribe: () => ipcRenderer.send(CHANNELS.TELEMETRY_PREVIEW_SUBSCRIBE),
+      unsubscribe: () => ipcRenderer.send(CHANNELS.TELEMETRY_PREVIEW_UNSUBSCRIBE),
+      onEventBatch: (
+        callback: (
+          events: import("../shared/types/ipc/telemetryPreview.js").SanitizedTelemetryEvent[]
+        ) => void
+      ) => _typedOn(CHANNELS.TELEMETRY_PREVIEW_EVENT_BATCH, callback),
+      onStateChanged: (
+        callback: (
+          state: import("../shared/types/ipc/telemetryPreview.js").TelemetryPreviewState
+        ) => void
+      ) => _typedOn(CHANNELS.TELEMETRY_PREVIEW_STATE_CHANGED, callback),
+    },
   },
 
   gpu: {

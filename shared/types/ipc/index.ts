@@ -23,3 +23,4 @@ export * from "./api.js";
 export * from "./crashRecovery.js";
 export * from "./webviewConsole.js";
 export * from "./demo.js";
+export * from "./telemetryPreview.js";

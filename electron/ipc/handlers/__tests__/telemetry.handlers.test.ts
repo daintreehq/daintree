@@ -3,6 +3,8 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 const ipcMainMock = vi.hoisted(() => ({
   handle: vi.fn(),
   removeHandler: vi.fn(),
+  on: vi.fn(),
+  removeListener: vi.fn(),
 }));
 
 vi.mock("electron", () => ({ ipcMain: ipcMainMock }));
@@ -17,6 +19,23 @@ const telemetryServiceMock = vi.hoisted(() => ({
 }));
 
 vi.mock("../../../services/TelemetryService.js", () => telemetryServiceMock);
+
+const broadcasterMock = vi.hoisted(() => {
+  // Mirror real module behavior: the active flag is module-level, so
+  // setTelemetryPreviewActive must be observable via isTelemetryPreviewActive
+  // for the toggle handler's broadcast-state-changed path to assert correctly.
+  const state = { active: false };
+  return {
+    _state: state,
+    isTelemetryPreviewActive: vi.fn(() => state.active),
+    setTelemetryPreviewActive: vi.fn((next: boolean) => {
+      state.active = next;
+    }),
+    setTelemetryPreviewEnqueue: vi.fn(),
+  };
+});
+
+vi.mock("../../../services/TelemetryPreviewBroadcaster.js", () => broadcasterMock);
 
 const utilsMock = vi.hoisted(() => ({
   typedBroadcast: vi.fn(),
@@ -50,11 +69,15 @@ import { registerTelemetryHandlers } from "../telemetry.js";
 describe("registerTelemetryHandlers", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    broadcasterMock._state.active = false;
   });
 
-  it("registers all four IPC handlers", () => {
+  it("registers all invoke + subscribe IPC handlers", () => {
     const cleanup = registerTelemetryHandlers();
-    expect(ipcMainMock.handle).toHaveBeenCalledTimes(4);
+    // 4 pre-existing handlers + 2 new preview invoke handlers (get-state, toggle)
+    expect(ipcMainMock.handle).toHaveBeenCalledTimes(6);
+    // 2 new preview subscribe/unsubscribe listeners via ipcMain.on
+    expect(ipcMainMock.on).toHaveBeenCalledTimes(2);
     cleanup();
   });
 
@@ -65,7 +88,17 @@ describe("registerTelemetryHandlers", () => {
     expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("telemetry:set-enabled");
     expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("telemetry:mark-prompt-shown");
     expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("telemetry:track");
-    expect(ipcMainMock.removeHandler).toHaveBeenCalledTimes(4);
+    expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("telemetry:preview-get-state");
+    expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("telemetry:preview-toggle");
+    expect(ipcMainMock.removeHandler).toHaveBeenCalledTimes(6);
+    expect(ipcMainMock.removeListener).toHaveBeenCalledWith(
+      "telemetry:preview-subscribe",
+      expect.any(Function)
+    );
+    expect(ipcMainMock.removeListener).toHaveBeenCalledWith(
+      "telemetry:preview-unsubscribe",
+      expect.any(Function)
+    );
   });
 
   it("TELEMETRY_GET handler returns enabled and hasSeenPrompt", async () => {
@@ -206,5 +239,44 @@ describe("registerTelemetryHandlers", () => {
 
     await handler(null, "onboarding_step_viewed", [1, 2, 3]);
     expect(telemetryServiceMock.trackEvent).not.toHaveBeenCalled();
+  });
+
+  it("TELEMETRY_PREVIEW_GET_STATE returns the current active flag", async () => {
+    broadcasterMock._state.active = true;
+    registerTelemetryHandlers();
+
+    const [, handler] =
+      ipcMainMock.handle.mock.calls.find(([ch]) => ch === "telemetry:preview-get-state") ?? [];
+
+    const result = await handler();
+    expect(result).toEqual({ active: true });
+  });
+
+  it("TELEMETRY_PREVIEW_TOGGLE flips state and broadcasts the change on boolean input", async () => {
+    broadcasterMock._state.active = false;
+    registerTelemetryHandlers();
+
+    const [, handler] =
+      ipcMainMock.handle.mock.calls.find(([ch]) => ch === "telemetry:preview-toggle") ?? [];
+
+    const result = await handler(null, true);
+    expect(broadcasterMock.setTelemetryPreviewActive).toHaveBeenCalledWith(true);
+    expect(result).toEqual({ active: true });
+    expect(utilsMock.typedBroadcast).toHaveBeenCalledWith("telemetry:preview-state-changed", {
+      active: true,
+    });
+  });
+
+  it("TELEMETRY_PREVIEW_TOGGLE ignores non-boolean values and does not broadcast", async () => {
+    broadcasterMock._state.active = false;
+    registerTelemetryHandlers();
+
+    const [, handler] =
+      ipcMainMock.handle.mock.calls.find(([ch]) => ch === "telemetry:preview-toggle") ?? [];
+
+    const result = await handler(null, "true");
+    expect(broadcasterMock.setTelemetryPreviewActive).not.toHaveBeenCalled();
+    expect(result).toEqual({ active: false });
+    expect(utilsMock.typedBroadcast).not.toHaveBeenCalled();
   });
 });
