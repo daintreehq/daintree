@@ -830,6 +830,18 @@ describe("WorktreeHeader cleanup button", () => {
     expect(wrapper.contains(button)).toBe(false);
   });
 
+  it("keeps the cleanup button visible on inactive, non-collapsed cards", () => {
+    renderHeader({ onCleanupWorktree: vi.fn(), isActive: false, isCollapsed: false });
+    const button = screen.getByTestId("worktree-cleanup-button");
+    const wrapper = screen.getByTestId("worktree-actions-wrapper");
+    // The hover-gated wrapper should be hidden when inactive…
+    expect(wrapper.className).toContain("opacity-0");
+    expect(wrapper.className).toContain("pointer-events-none");
+    // …but the cleanup button is a sibling and must not inherit those classes.
+    expect(button.className).not.toContain("opacity-0");
+    expect(button.className).not.toContain("pointer-events-none");
+  });
+
   it("calls onCleanupWorktree and stops propagation when clicked", () => {
     const onCleanupWorktree = vi.fn();
     const onParentClick = vi.fn();
