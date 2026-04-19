@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import {
   buildCacheKey,
   getCache,
@@ -108,6 +108,45 @@ describe("githubResourceCache", () => {
       _resetForTests();
       expect(getCache("key1")).toBeUndefined();
       expect(getGeneration("key1")).toBe(0);
+    });
+  });
+
+  describe("TTL expiry", () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("returns cached entry before TTL elapses", () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
+      setCache("key1", { items: [], endCursor: null, hasNextPage: false, timestamp: 1 });
+
+      vi.advanceTimersByTime(4 * 60 * 1000);
+      expect(getCache("key1")).toBeDefined();
+    });
+
+    it("evicts entries after 5 minute TTL", () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
+      setCache("key1", { items: [], endCursor: null, hasNextPage: false, timestamp: 1 });
+
+      vi.advanceTimersByTime(5 * 60 * 1000 + 1);
+      expect(getCache("key1")).toBeUndefined();
+    });
+  });
+
+  describe("LRU eviction", () => {
+    it("evicts oldest entry when capacity is exceeded", () => {
+      for (let i = 0; i < 20; i++) {
+        setCache(`key${i}`, { items: [], endCursor: null, hasNextPage: false, timestamp: i });
+      }
+      expect(getCache("key0")).toBeDefined();
+
+      setCache("key20", { items: [], endCursor: null, hasNextPage: false, timestamp: 20 });
+
+      expect(getCache("key0")).toBeUndefined();
+      expect(getCache("key1")).toBeDefined();
+      expect(getCache("key20")).toBeDefined();
     });
   });
 });

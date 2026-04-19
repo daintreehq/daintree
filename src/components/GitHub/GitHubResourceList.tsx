@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, useCallback, useRef, type KeyboardEvent } from "react";
+import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import { useDebounce } from "@/hooks/useDebounce";
 import { Search, ExternalLink, RefreshCw, WifiOff, Plus, Settings, X, Filter } from "lucide-react";
 import {
@@ -26,7 +27,11 @@ import {
 } from "@/store/githubFilterStore";
 import type { GitHubIssue, GitHubPR, GitHubSortOrder } from "@shared/types/github";
 import { parseNumberQuery, MULTI_FETCH_CAP } from "@/lib/parseNumberQuery";
-import { GitHubResourceRowsSkeleton, MAX_SKELETON_ITEMS } from "./GitHubDropdownSkeletons";
+import {
+  GitHubResourceRowsSkeleton,
+  MAX_SKELETON_ITEMS,
+  RESOURCE_ITEM_HEIGHT_PX,
+} from "./GitHubDropdownSkeletons";
 
 type StateFilter = IssueStateFilter | PRStateFilter;
 
@@ -81,7 +86,7 @@ export function GitHubResourceList({
   const [activeIndex, setActiveIndex] = useState(-1);
   const [sortPopoverOpen, setSortPopoverOpen] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
-  const listRef = useRef<HTMLDivElement>(null);
+  const virtuosoRef = useRef<VirtuosoHandle>(null);
   const mountedRef = useRef(false);
 
   const selection = useIssueSelection();
@@ -445,15 +450,15 @@ export function GitHubResourceList({
   }, [data]);
 
   useEffect(() => {
-    if (activeIndex >= 0 && listRef.current) {
-      const activeEl = activeItemId
-        ? document.getElementById(activeItemId)
-        : isLoadMoreActive
-          ? document.getElementById(`github-${type}-load-more`)
-          : null;
-      activeEl?.scrollIntoView({ block: "nearest" });
+    if (activeIndex < 0) return;
+    if (isLoadMoreActive) {
+      document.getElementById(`github-${type}-load-more`)?.scrollIntoView({ block: "nearest" });
+      return;
     }
-  }, [activeIndex, activeItemId, isLoadMoreActive, type]);
+    if (activeIndex < data.length) {
+      virtuosoRef.current?.scrollIntoView({ index: activeIndex, behavior: "auto" });
+    }
+  }, [activeIndex, data.length, isLoadMoreActive, type]);
 
   const handleInputKeyDown = useCallback(
     (e: KeyboardEvent<HTMLInputElement>) => {
@@ -534,14 +539,76 @@ export function GitHubResourceList({
 
   const isTokenError = isTokenRelatedError(error);
 
-  const handleOpenGitHubSettings = () => {
+  const handleOpenGitHubSettings = useCallback(() => {
     void actionService.dispatch(
       "app.settings.openTab",
       { tab: "github", sectionId: "github-token" },
       { source: "user" }
     );
     onClose?.();
-  };
+  }, [onClose]);
+
+  const LoadMoreFooter = useMemo(() => {
+    if (!hasMore) return () => null;
+    return function ResourceListFooter() {
+      return (
+        <div className="p-3 space-y-2">
+          {loadMoreError && (
+            <div className="p-2 rounded-[var(--radius-md)] bg-overlay-soft border border-[var(--border-divider)]">
+              <p className="text-xs text-muted-foreground">{sanitizeIpcError(loadMoreError)}</p>
+              {isTokenRelatedError(loadMoreError) ? (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={handleOpenGitHubSettings}
+                  className="mt-1 text-muted-foreground hover:text-daintree-text h-6 text-xs"
+                >
+                  <Settings className="h-3 w-3" />
+                  Open GitHub Settings
+                </Button>
+              ) : (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={handleLoadMore}
+                  className="mt-1 text-muted-foreground hover:text-daintree-text h-6 text-xs"
+                >
+                  Retry
+                </Button>
+              )}
+            </div>
+          )}
+          <Button
+            id={`github-${type}-load-more`}
+            variant="ghost"
+            onClick={handleLoadMore}
+            disabled={loadingMore}
+            className={cn(
+              "w-full text-muted-foreground hover:text-daintree-text",
+              isLoadMoreActive && "ring-1 ring-daintree-accent text-daintree-text"
+            )}
+          >
+            {loadingMore ? (
+              <>
+                <RefreshCw className="animate-spin" />
+                Loading...
+              </>
+            ) : (
+              "Load More"
+            )}
+          </Button>
+        </div>
+      );
+    };
+  }, [
+    hasMore,
+    loadMoreError,
+    loadingMore,
+    isLoadMoreActive,
+    handleLoadMore,
+    handleOpenGitHubSettings,
+    type,
+  ]);
 
   const renderEmpty = () => {
     if (exactNumberNotFound !== null) {
@@ -760,15 +827,17 @@ export function GitHubResourceList({
         )}
       </div>
 
-      <div className="overflow-y-auto flex-1 min-h-0">
+      <div className="flex-1 min-h-0 flex flex-col">
         {loading && !data.length ? (
-          <GitHubResourceRowsSkeleton
-            count={initialCount && initialCount > 0 ? initialCount : MAX_SKELETON_ITEMS}
-          />
+          <div className="overflow-y-auto flex-1 min-h-0">
+            <GitHubResourceRowsSkeleton
+              count={initialCount && initialCount > 0 ? initialCount : MAX_SKELETON_ITEMS}
+            />
+          </div>
         ) : data.length > 0 ? (
           <>
             {error && (
-              <div className="px-3 py-2 border-b border-[var(--border-divider)] flex items-center gap-2 text-muted-foreground bg-overlay-soft">
+              <div className="px-3 py-2 border-b border-[var(--border-divider)] flex items-center gap-2 text-muted-foreground bg-overlay-soft shrink-0">
                 <WifiOff className="h-3.5 w-3.5 shrink-0" />
                 <span className="text-xs truncate">{sanitizeIpcError(error)}</span>
                 {isTokenError ? (
@@ -794,85 +863,39 @@ export function GitHubResourceList({
                 )}
               </div>
             )}
-            <div
-              ref={listRef}
-              id={listId}
-              role="listbox"
-              aria-multiselectable={true}
-              className="divide-y divide-[var(--border-divider)]"
-            >
-              {data.map((item, index) => (
-                <GitHubListItem
-                  key={item.number}
-                  item={item}
-                  type={type}
-                  onCreateWorktree={handleCreateWorktree}
-                  onSwitchToWorktree={handleSwitchToWorktree}
-                  optionId={`github-${type}-option-${item.number}`}
-                  isActive={activeIndex === index}
-                  isSelected={selection.selectedIds.has(item.number)}
-                  isSelectionActive={selection.isSelectionActive}
-                  onToggleSelect={(e: React.MouseEvent) => {
-                    if (e.shiftKey) {
-                      selection.toggleRange(index, (i) => data[i]!.number);
-                    } else {
-                      selection.toggle(item.number, index);
-                    }
-                  }}
-                />
-              ))}
-            </div>
-
-            {hasMore && (
-              <div className="p-3 space-y-2">
-                {loadMoreError && (
-                  <div className="p-2 rounded-[var(--radius-md)] bg-overlay-soft border border-[var(--border-divider)]">
-                    <p className="text-xs text-muted-foreground">
-                      {sanitizeIpcError(loadMoreError)}
-                    </p>
-                    {isTokenRelatedError(loadMoreError) ? (
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={handleOpenGitHubSettings}
-                        className="mt-1 text-muted-foreground hover:text-daintree-text h-6 text-xs"
-                      >
-                        <Settings className="h-3 w-3" />
-                        Open GitHub Settings
-                      </Button>
-                    ) : (
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={handleLoadMore}
-                        className="mt-1 text-muted-foreground hover:text-daintree-text h-6 text-xs"
-                      >
-                        Retry
-                      </Button>
-                    )}
-                  </div>
+            <div id={listId} role="listbox" aria-multiselectable={true} className="flex-1 min-h-0">
+              <Virtuoso
+                ref={virtuosoRef}
+                data={data}
+                style={{ height: "100%" }}
+                fixedItemHeight={RESOURCE_ITEM_HEIGHT_PX}
+                computeItemKey={(_, item) => item.number}
+                increaseViewportBy={{ top: 0, bottom: 200 }}
+                endReached={() => {
+                  if (!loadingMore && !loading && hasMore) handleLoadMore();
+                }}
+                components={{ Footer: LoadMoreFooter }}
+                itemContent={(index, item) => (
+                  <GitHubListItem
+                    item={item}
+                    type={type}
+                    onCreateWorktree={handleCreateWorktree}
+                    onSwitchToWorktree={handleSwitchToWorktree}
+                    optionId={`github-${type}-option-${item.number}`}
+                    isActive={activeIndex === index}
+                    isSelected={selection.selectedIds.has(item.number)}
+                    isSelectionActive={selection.isSelectionActive}
+                    onToggleSelect={(e: React.MouseEvent) => {
+                      if (e.shiftKey) {
+                        selection.toggleRange(index, (i) => data[i]!.number);
+                      } else {
+                        selection.toggle(item.number, index);
+                      }
+                    }}
+                  />
                 )}
-                <Button
-                  id={`github-${type}-load-more`}
-                  variant="ghost"
-                  onClick={handleLoadMore}
-                  disabled={loadingMore}
-                  className={cn(
-                    "w-full text-muted-foreground hover:text-daintree-text",
-                    isLoadMoreActive && "ring-1 ring-daintree-accent text-daintree-text"
-                  )}
-                >
-                  {loadingMore ? (
-                    <>
-                      <RefreshCw className="animate-spin" />
-                      Loading...
-                    </>
-                  ) : (
-                    "Load More"
-                  )}
-                </Button>
-              </div>
-            )}
+              />
+            </div>
           </>
         ) : error ? (
           <div className="p-8 text-center text-muted-foreground">

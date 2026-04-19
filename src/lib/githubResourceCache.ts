@@ -1,4 +1,5 @@
 import type { GitHubIssue, GitHubPR } from "@shared/types/github";
+import { TtlCache } from "@/utils/ttlCache";
 
 export interface GitHubResourceCacheEntry {
   items: (GitHubIssue | GitHubPR)[];
@@ -7,7 +8,10 @@ export interface GitHubResourceCacheEntry {
   timestamp: number;
 }
 
-const cache = new Map<string, GitHubResourceCacheEntry>();
+const CACHE_MAX_SIZE = 20;
+const CACHE_TTL_MS = 5 * 60 * 1000;
+
+const cache = new TtlCache<string, GitHubResourceCacheEntry>(CACHE_MAX_SIZE, CACHE_TTL_MS);
 const generationMap = new Map<string, number>();
 
 export function buildCacheKey(

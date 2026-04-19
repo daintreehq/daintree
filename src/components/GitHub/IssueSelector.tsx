@@ -7,6 +7,7 @@ import type { GitHubIssue } from "@shared/types/github";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
+import { GitHubResourceRowsSkeleton } from "./GitHubDropdownSkeletons";
 
 interface IssueSelectorProps {
   projectPath: string;
@@ -137,7 +138,7 @@ export function IssueSelector({
         </div>
         <div id="issue-list" role="listbox" className="max-h-[300px] overflow-y-auto p-1">
           {loading ? (
-            <div className="py-6 text-center text-sm text-muted-foreground">Loading issues...</div>
+            <GitHubResourceRowsSkeleton count={3} immediate />
           ) : issues.length === 0 ? (
             <div className="py-6 text-center text-sm text-muted-foreground">
               {debouncedQuery ? "No issues found" : "No open issues"}
