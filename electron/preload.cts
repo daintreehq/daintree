@@ -1136,6 +1136,10 @@ const CHANNELS = {
   DEMO_EXEC_DISMISS_ANNOTATION: "demo:exec-dismiss-annotation",
   DEMO_WAIT_FOR_IDLE: "demo:wait-for-idle",
   DEMO_EXEC_WAIT_FOR_IDLE: "demo:exec-wait-for-idle",
+  DEMO_EXEC_START_CAPTURE: "demo:exec-start-capture",
+  DEMO_EXEC_STOP_CAPTURE: "demo:exec-stop-capture",
+  DEMO_CAPTURE_CHUNK: "demo:capture-chunk",
+  DEMO_CAPTURE_STOP: "demo:capture-stop",
 
   // Plugin channels
   PLUGIN_LIST: "plugin:list",
@@ -3091,12 +3095,14 @@ const api: ElectronAPI = {
           pause: () => _unwrappingInvoke(CHANNELS.DEMO_PAUSE),
           resume: () => _unwrappingInvoke(CHANNELS.DEMO_RESUME),
           sleep: (durationMs: number) => _unwrappingInvoke(CHANNELS.DEMO_SLEEP, { durationMs }),
-          startCapture: (payload: {
-            fps?: number;
-            maxFrames?: number;
-            outputPath: string;
-            preset: import("../shared/types/ipc/demo.js").DemoEncodePreset;
-          }) => _unwrappingInvoke(CHANNELS.DEMO_START_CAPTURE, payload),
+          startCapture: (payload: { fps?: number; outputPath: string }) =>
+            _unwrappingInvoke(CHANNELS.DEMO_START_CAPTURE, payload),
+          sendCaptureChunk: (captureId: string, data: Uint8Array) => {
+            ipcRenderer.send(CHANNELS.DEMO_CAPTURE_CHUNK, { captureId, data });
+          },
+          sendCaptureStop: (captureId: string, frameCount: number, error?: string) => {
+            ipcRenderer.send(CHANNELS.DEMO_CAPTURE_STOP, { captureId, frameCount, error });
+          },
           stopCapture: () => _unwrappingInvoke(CHANNELS.DEMO_STOP_CAPTURE),
           getCaptureStatus: () => _unwrappingInvoke(CHANNELS.DEMO_GET_CAPTURE_STATUS),
           scroll: (selector: string) => _unwrappingInvoke(CHANNELS.DEMO_SCROLL, { selector }),
