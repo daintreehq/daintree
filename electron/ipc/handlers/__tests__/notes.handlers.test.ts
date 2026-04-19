@@ -21,14 +21,12 @@ const NotesServiceMock = vi.hoisted(() =>
   ) {
     const instance = {
       create: vi.fn().mockResolvedValue({ path: "/note.md", metadata: { id: "n1" } }),
-      read: vi
-        .fn()
-        .mockResolvedValue({
-          content: "",
-          metadata: { id: "n1" },
-          path: "/note.md",
-          lastModified: 0,
-        }),
+      read: vi.fn().mockResolvedValue({
+        content: "",
+        metadata: { id: "n1" },
+        path: "/note.md",
+        lastModified: 0,
+      }),
       write: vi.fn().mockResolvedValue({ lastModified: 1 }),
       list: vi.fn().mockResolvedValue([]),
       delete: vi.fn().mockResolvedValue(undefined),
@@ -181,5 +179,49 @@ describe("notes handlers", () => {
 
     const projectIds = notesServiceInstances.map((e) => e.projectId);
     expect(projectIds).toEqual(["project-A", "project-B"]);
+  });
+
+  it("threads write arguments through to the project's NotesService", async () => {
+    mockProjectFor(1, "project-A");
+
+    const writeHandler = getInvokeHandler(CHANNELS.NOTES_WRITE);
+    const metadata = {
+      id: "note-1",
+      title: "Hello",
+      scope: "project" as const,
+      createdAt: 123,
+    };
+    await writeHandler(makeEvent(1), "notes/hello.md", "body", metadata, 99);
+
+    const service = notesServiceInstances[0].instance;
+    expect(service.write).toHaveBeenCalledWith("notes/hello.md", "body", metadata, 99);
+  });
+
+  it("recovers from a NoteConflictError by creating a conflict copy and force-writing", async () => {
+    mockProjectFor(1, "project-A");
+
+    const writeHandler = getInvokeHandler(CHANNELS.NOTES_WRITE);
+    const metadata = {
+      id: "note-1",
+      title: "Hello",
+      scope: "project" as const,
+      createdAt: 123,
+    };
+
+    // First invocation creates the cached service and primes a conflict on the
+    // next write. The handler re-resolves the service on its second write call,
+    // so we must mutate the cached instance rather than building a fresh one.
+    await writeHandler(makeEvent(1), "notes/hello.md", "body", metadata);
+    const service = notesServiceInstances[0].instance;
+    service.write.mockReset();
+    service.write
+      .mockRejectedValueOnce(new NoteConflictErrorStub("conflict"))
+      .mockResolvedValueOnce({ lastModified: 42 });
+
+    const result = await writeHandler(makeEvent(1), "notes/hello.md", "body", metadata);
+
+    expect(service.createConflictCopy).toHaveBeenCalledWith("notes/hello.md");
+    expect(service.write).toHaveBeenCalledTimes(2);
+    expect(result).toMatchObject({ lastModified: 42, conflictPath: "/note.conflict.md" });
   });
 });
