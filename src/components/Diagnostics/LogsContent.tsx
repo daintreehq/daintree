@@ -124,6 +124,9 @@ export function LogsContent({ className, onSourcesChange }: LogsContentProps) {
 
   const filteredLogs = useMemo(() => filterLogs(logs, filters), [logs, filters]);
 
+  const previousSessionEntry = filteredLogs.find((log) => log.id === "previous-session-separator");
+  const mainLogs = filteredLogs.filter((log) => log.id !== "previous-session-separator");
+
   return (
     <div className={cn("flex flex-col h-full", className)}>
       <LogFilters
@@ -133,15 +136,31 @@ export function LogsContent({ className, onSourcesChange }: LogsContentProps) {
         availableSources={sources}
       />
 
-      <div className="flex-1 relative">
-        {filteredLogs.length === 0 ? (
+      {previousSessionEntry && !filters?.search && (
+        <div className="shrink-0 max-h-48 overflow-y-auto overflow-x-hidden border-b border-daintree-border bg-surface-panel/50 p-3">
+          <div className="flex items-center gap-2 text-text-secondary text-xs font-medium mb-2">
+            <div className="w-2 h-2 rounded-full bg-text-secondary/40" />
+            <span>Previous session</span>
+          </div>
+          <pre className="text-xs text-text-muted whitespace-pre-wrap break-all font-mono">
+            {String(previousSessionEntry.context?.tail || "")}
+          </pre>
+        </div>
+      )}
+
+      <div className="flex-1 relative min-h-0">
+        {mainLogs.length === 0 ? (
           <div className="flex items-center justify-center h-full text-daintree-text/60 text-sm">
-            {logs.length === 0 ? "No logs yet" : "No logs match filters"}
+            {logs.length === 0 && !previousSessionEntry
+              ? "No logs yet"
+              : logs.length === 0
+                ? "No new logs this session"
+                : "No logs match filters"}
           </div>
         ) : (
           <Virtuoso
             ref={virtuosoRef}
-            data={filteredLogs}
+            data={mainLogs}
             followOutput={autoScroll ? "smooth" : false}
             atBottomStateChange={handleAtBottomChange}
             itemContent={(_index, entry) => (
@@ -156,7 +175,7 @@ export function LogsContent({ className, onSourcesChange }: LogsContentProps) {
           />
         )}
 
-        {!atBottom && filteredLogs.length > 0 && (
+        {!atBottom && mainLogs.length > 0 && (
           <Button
             variant="info"
             size="sm"

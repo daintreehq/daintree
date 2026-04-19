@@ -9,6 +9,7 @@ import {
   logWarn,
   logError,
   getLogFilePath,
+  getPreviousSessionTail,
   type LogLevel,
 } from "../../utils/logger.js";
 import type { FilterOptions as LogFilterOptions } from "../../services/LogBuffer.js";
@@ -18,10 +19,22 @@ export function registerLogsHandlers(): () => void {
   const handlers: Array<() => void> = [];
 
   const handleLogsGetAll = async (filters?: LogFilterOptions) => {
-    if (filters) {
-      return logBuffer.getFiltered(filters);
+    const previousSession = getPreviousSessionTail();
+    let logs = filters ? logBuffer.getFiltered(filters) : logBuffer.getAll();
+
+    if (previousSession && !filters) {
+      const separatorEntry: (typeof logs)[0] = {
+        id: "previous-session-separator",
+        timestamp: Date.now(),
+        level: "info",
+        message: "Previous session",
+        context: { previousSession: true, tail: previousSession },
+        source: undefined,
+      };
+      logs = [separatorEntry, ...logs];
     }
-    return logBuffer.getAll();
+
+    return logs;
   };
   handlers.push(typedHandle(CHANNELS.LOGS_GET_ALL, handleLogsGetAll));
 

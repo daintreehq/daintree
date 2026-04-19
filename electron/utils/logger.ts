@@ -3,14 +3,18 @@ import {
   appendFileSync,
   mkdirSync,
   existsSync,
-  writeFileSync,
   readdirSync,
   statSync,
   unlinkSync,
+  writeFileSync,
+  openSync,
+  readSync,
+  closeSync,
 } from "fs";
 import { join } from "path";
 import { logBuffer, type LogEntry } from "../services/LogBuffer.js";
 import { CHANNELS } from "../ipc/channels.js";
+import { resilientRenameSync } from "./fs.js";
 
 export type LogLevel = "debug" | "info" | "warn" | "error";
 
@@ -20,46 +24,160 @@ interface LogContext {
 
 let storagePath: string | null = null;
 
-function clearSessionLogs(basePath: string): void {
-  const logsDir = join(basePath, "logs");
-  const debugDir = join(basePath, "debug");
+export const ROTATION_MAX_SIZE = 5 * 1024 * 1024;
+export const ROTATION_MAX_FILES = 5;
+const PREVIOUS_SESSION_TAIL_LINES = 100;
+let previousSessionTail: string | null = null;
+let isRotating = false;
 
-  // Clear main logs directory
-  if (existsSync(logsDir)) {
+function preservePreviousSessionTail(basePath: string): void {
+  const logFile = join(basePath, "logs", "daintree.log");
+  try {
+    if (!existsSync(logFile)) {
+      return;
+    }
+
+    const stats = statSync(logFile);
+    if (stats.size === 0) {
+      return;
+    }
+
+    const lines: string[] = [];
+    const handle = openSync(logFile, "r");
+    const CHUNK_SIZE = 65536;
+
     try {
-      const files = readdirSync(logsDir);
-      for (const file of files) {
-        if (file.endsWith(".log")) {
-          const filePath = join(logsDir, file);
-          writeFileSync(filePath, "", "utf8");
+      let cursor = stats.size;
+      let buffer = Buffer.alloc(0);
+
+      while (lines.length < PREVIOUS_SESSION_TAIL_LINES - 1 && cursor > 0) {
+        const bytesToRead = Math.min(cursor, CHUNK_SIZE);
+        cursor -= bytesToRead;
+
+        const chunk = Buffer.alloc(bytesToRead);
+        readSync(handle, chunk, 0, bytesToRead, cursor);
+
+        buffer = Buffer.concat([chunk, buffer]);
+
+        const text = buffer.toString("utf8");
+        const splitLines = text.split(/\r?\n/);
+        const lastLine = splitLines.pop() ?? "";
+
+        buffer = Buffer.from(lastLine, "utf8");
+
+        for (let i = splitLines.length - 1; i >= 0; i--) {
+          const line = splitLines[i].trim();
+          if (line) {
+            lines.push(line);
+          }
+          if (lines.length >= PREVIOUS_SESSION_TAIL_LINES - 1) {
+            break;
+          }
         }
       }
-    } catch {
-      // Ignore errors during cleanup
+
+      lines.reverse();
+
+      if (buffer.length > 0) {
+        const lastLine = buffer.toString("utf8").trim();
+        if (lastLine) {
+          lines.push(lastLine);
+        }
+      }
+
+      previousSessionTail = lines.join("\n");
+    } finally {
+      closeSync(handle);
     }
+  } catch {
+    previousSessionTail = null;
   }
+}
 
-  // Clear debug directory (frame-sequences.log, etc.)
-  if (existsSync(debugDir)) {
-    try {
-      const files = readdirSync(debugDir);
-      for (const file of files) {
-        if (file.endsWith(".log")) {
-          const filePath = join(debugDir, file);
-          writeFileSync(filePath, "", "utf8");
+function rotateLogsIfNeeded(): boolean {
+  if (isRotating) return true;
+
+  const logFile = getLogFilePath();
+  try {
+    if (!existsSync(logFile)) return true;
+
+    const stats = statSync(logFile);
+    if (stats.size < ROTATION_MAX_SIZE) return true;
+
+    isRotating = true;
+
+    const logDir = getLogDirectory();
+    let rotationSucceeded = true;
+
+    for (let i = ROTATION_MAX_FILES - 1; i >= 1; i--) {
+      const oldFile = join(logDir, `daintree.log.${i}`);
+      const newFile = join(logDir, `daintree.log.${i + 1}`);
+
+      if (existsSync(oldFile)) {
+        if (i === ROTATION_MAX_FILES - 1) {
+          try {
+            unlinkSync(oldFile);
+          } catch {
+            rotationSucceeded = false;
+          }
+        } else {
+          try {
+            resilientRenameSync(oldFile, newFile);
+          } catch {
+            rotationSucceeded = false;
+          }
         }
       }
-    } catch {
-      // Ignore errors during cleanup
     }
+
+    try {
+      resilientRenameSync(logFile, join(logDir, "daintree.log.1"));
+    } catch {
+      rotationSucceeded = false;
+    }
+
+    return rotationSucceeded;
+  } catch {
+    return false;
+  } finally {
+    isRotating = false;
+  }
+}
+
+function clearDebugLogs(basePath: string): void {
+  const debugDir = join(basePath, "debug");
+  if (!existsSync(debugDir)) return;
+
+  try {
+    const files = readdirSync(debugDir);
+    for (const file of files) {
+      if (!file.endsWith(".log")) continue;
+      try {
+        writeFileSync(join(debugDir, file), "", "utf8");
+      } catch {
+        // Skip locked or inaccessible files (Windows antivirus, etc.)
+      }
+    }
+  } catch {
+    // Directory read failed — non-fatal
   }
 }
 
 export function initializeLogger(path: string): void {
   storagePath = path;
 
-  // Clear all log files at startup for single-session logging
-  clearSessionLogs(path);
+  preservePreviousSessionTail(path);
+  clearDebugLogs(path);
+}
+
+export function getPreviousSessionTail(): string | null {
+  return previousSessionTail;
+}
+
+export function resetLoggerStateForTesting(): void {
+  previousSessionTail = null;
+  isRotating = false;
+  storagePath = null;
 }
 
 export function pruneOldLogs(basePath: string, retentionDays: number | 0): void {
@@ -300,6 +418,9 @@ function writeToLogFile(level: string, message: string, context?: LogContext): v
       mkdirSync(logDir, { recursive: true });
     }
 
+    if (!rotateLogsIfNeeded()) {
+      return;
+    }
     appendFileSync(logFile, logLine, "utf8");
   } catch (_error) {
     // ignore
