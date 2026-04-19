@@ -1,6 +1,6 @@
 {
-  "count": 1133,
-  "moduleCount": 1133,
+  "count": 1416,
+  "moduleCount": 1416,
   "allowlist": [
     "electron/ipc/errorHandlers.ts",
     "electron/ipc/handlers/agentCapabilities.ts",
@@ -9,6 +9,7 @@
     "electron/ipc/handlers/app/state.ts",
     "electron/ipc/handlers/appTheme.ts",
     "electron/ipc/handlers/demo.ts",
+    "electron/ipc/handlers/diagnostics.ts",
     "electron/ipc/handlers/git-write.ts",
     "electron/ipc/handlers/globalEnv.ts",
     "electron/ipc/handlers/keybinding.ts",
@@ -150,6 +151,16 @@
     {
       "file": "electron/ipc/handlers/demo.ts",
       "line": 285,
+      "pattern": "sync-fs"
+    },
+    {
+      "file": "electron/ipc/handlers/diagnostics.ts",
+      "line": 44,
+      "pattern": "sync-fs"
+    },
+    {
+      "file": "electron/ipc/handlers/diagnostics.ts",
+      "line": 51,
       "pattern": "sync-fs"
     },
     {
