@@ -22,6 +22,7 @@ export interface ActionPaletteItem {
   categoryLower: string;
   descriptionLower: string;
   titleAcronym: string;
+  keywordsLower: readonly string[];
 }
 
 export interface UseActionPaletteReturn {
@@ -49,6 +50,11 @@ function toActionPaletteItem(entry: ActionManifestEntry): ActionPaletteItem {
   const category = typeof entry.category === "string" ? entry.category : "General";
   const disabledReason =
     typeof entry.disabledReason === "string" ? entry.disabledReason : undefined;
+  const keywordsLower: readonly string[] = Array.isArray(entry.keywords)
+    ? entry.keywords
+        .filter((k): k is string => typeof k === "string" && k.length > 0)
+        .map((k) => k.toLowerCase())
+    : [];
 
   return {
     id: entry.id,
@@ -63,6 +69,7 @@ function toActionPaletteItem(entry: ActionManifestEntry): ActionPaletteItem {
     categoryLower: category.toLowerCase(),
     descriptionLower: description.toLowerCase(),
     titleAcronym: extractAcronym(title),
+    keywordsLower,
   };
 }
 
@@ -94,7 +101,12 @@ export function useActionPalette(): UseActionPaletteReturn {
         });
       }
 
-      return rankActionMatches(query, items, actionMruList);
+      const context = actionService.getContext();
+      return rankActionMatches(query, items, actionMruList, {
+        focusedTerminalKind: context.focusedTerminalKind,
+        focusedWorktreeId: context.focusedWorktreeId,
+        isSettingsOpen: context.isSettingsOpen,
+      });
     },
     [getSortedActionMruList]
   );

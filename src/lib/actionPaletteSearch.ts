@@ -1,7 +1,9 @@
 const TITLE_WEIGHT = 3;
 const CATEGORY_WEIGHT = 1.5;
 const DESCRIPTION_WEIGHT = 0.5;
+const KEYWORD_WEIGHT = 1.0;
 const MRU_BONUS_CAP = 50;
+const CONTEXT_BOOST = 80;
 const GENERIC_CATEGORY = "general";
 
 export interface SearchableAction {
@@ -14,6 +16,13 @@ export interface SearchableAction {
   categoryLower: string;
   descriptionLower: string;
   titleAcronym: string;
+  keywordsLower: readonly string[];
+}
+
+export interface RankContext {
+  focusedTerminalKind?: string;
+  focusedWorktreeId?: string;
+  isSettingsOpen?: boolean;
 }
 
 function isBoundary(str: string, index: number): boolean {
@@ -102,6 +111,16 @@ function scoreTitle(
   return score;
 }
 
+function scoreKeywords(lowerQuery: string, keywordsLower: readonly string[]): number {
+  let max = 0;
+  for (const kw of keywordsLower) {
+    if (kw.length === 0) continue;
+    const s = scoreSubsequence(lowerQuery, kw, kw);
+    if (s > max) max = s;
+  }
+  return max;
+}
+
 export function scoreAction(query: string, item: SearchableAction): number {
   if (!query) return 0;
   const lowerQuery = query.toLowerCase();
@@ -118,17 +137,72 @@ export function scoreAction(query: string, item: SearchableAction): number {
       ? scoreSubsequence(lowerQuery, item.description, item.descriptionLower)
       : 0;
 
-  if (titleScore === 0 && categoryRaw === 0 && descriptionRaw === 0) return 0;
+  const keywordRaw =
+    item.keywordsLower.length > 0 ? scoreKeywords(lowerQuery, item.keywordsLower) : 0;
+
+  if (titleScore === 0 && categoryRaw === 0 && descriptionRaw === 0 && keywordRaw === 0) return 0;
 
   return (
-    titleScore * TITLE_WEIGHT + categoryRaw * CATEGORY_WEIGHT + descriptionRaw * DESCRIPTION_WEIGHT
+    titleScore * TITLE_WEIGHT +
+    categoryRaw * CATEGORY_WEIGHT +
+    descriptionRaw * DESCRIPTION_WEIGHT +
+    keywordRaw * KEYWORD_WEIGHT
   );
+}
+
+export function getBoostedCategories(context: RankContext | undefined): Set<string> {
+  const boosted = new Set<string>();
+  if (!context) return boosted;
+
+  const kind = context.focusedTerminalKind;
+  if (kind) {
+    switch (kind) {
+      case "terminal":
+        boosted.add("terminal");
+        boosted.add("panel");
+        break;
+      case "agent":
+        boosted.add("agent");
+        boosted.add("terminal");
+        boosted.add("panel");
+        break;
+      case "browser":
+        boosted.add("browser");
+        boosted.add("panel");
+        break;
+      case "notes":
+        boosted.add("notes");
+        boosted.add("panel");
+        break;
+      case "dev-preview":
+        boosted.add("devserver");
+        boosted.add("panel");
+        break;
+    }
+  }
+
+  if (
+    typeof context.focusedWorktreeId === "string" &&
+    context.focusedWorktreeId.trim().length > 0
+  ) {
+    boosted.add("worktree");
+    boosted.add("git");
+    boosted.add("github");
+  }
+
+  if (context.isSettingsOpen) {
+    boosted.add("settings");
+    boosted.add("preferences");
+  }
+
+  return boosted;
 }
 
 export function rankActionMatches<T extends SearchableAction>(
   query: string,
   items: T[],
-  mruList: readonly string[]
+  mruList: readonly string[],
+  context?: RankContext
 ): T[] {
   const trimmed = query.trim();
   if (!trimmed) return [];
@@ -136,6 +210,7 @@ export function rankActionMatches<T extends SearchableAction>(
   const mruIndex = new Map<string, number>();
   mruList.forEach((id, idx) => mruIndex.set(id, idx));
   const mruSize = mruList.length;
+  const boostedCategories = getBoostedCategories(context);
 
   const scored: Array<{ item: T; score: number }> = [];
   for (const item of items) {
@@ -144,7 +219,8 @@ export function rankActionMatches<T extends SearchableAction>(
     const rank = mruIndex.get(item.id);
     const mruBonus =
       rank !== undefined && mruSize > 0 ? ((mruSize - rank) / mruSize) * MRU_BONUS_CAP : 0;
-    scored.push({ item, score: base + mruBonus });
+    const contextBonus = boostedCategories.has(item.categoryLower) ? CONTEXT_BOOST : 0;
+    scored.push({ item, score: base + mruBonus + contextBonus });
   }
 
   scored.sort((a, b) => {

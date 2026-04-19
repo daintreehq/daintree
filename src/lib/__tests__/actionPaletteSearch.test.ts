@@ -12,9 +12,11 @@ function makeAction(overrides: {
   category?: string;
   description?: string;
   enabled?: boolean;
+  keywords?: string[];
 }): SearchableAction {
   const category = overrides.category ?? "General";
   const description = overrides.description ?? "";
+  const keywords = overrides.keywords ?? [];
   return {
     id: overrides.id,
     title: overrides.title,
@@ -25,6 +27,7 @@ function makeAction(overrides: {
     categoryLower: category.toLowerCase(),
     descriptionLower: description.toLowerCase(),
     titleAcronym: extractAcronym(overrides.title),
+    keywordsLower: keywords.map((k) => k.toLowerCase()),
   };
 }
 
