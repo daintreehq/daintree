@@ -1026,7 +1026,8 @@ describe("telemetry preview tap", () => {
       const init = sentryInitMock.mock.calls[0]?.[0] as {
         beforeSend?: (event: unknown) => unknown;
       };
-      init.beforeSend?.(captureEventMock.mock.calls[0]![0]);
+      const captured = (captureEventMock.mock.calls[0] as unknown[] | undefined)?.[0];
+      init.beforeSend?.(captured);
       expect(enqueue).toHaveBeenCalledTimes(1);
     } finally {
       broadcaster.setTelemetryPreviewActive(false);
