@@ -16,6 +16,19 @@ vi.mock("electron", () => ({
   ipcMain: { handle: vi.fn(), on: vi.fn(), removeAllListeners: vi.fn() },
 }));
 
+// Mock ProjectStore for migration 003. Must be hoisted before barrel import.
+const { mockProjectStore } = vi.hoisted(() => ({
+  mockProjectStore: {
+    getCurrentProjectId: vi.fn<() => string | null>(() => null),
+    getProjectById: vi.fn<() => Record<string, unknown> | null>(() => null),
+    getRecipes: vi.fn<() => Promise<unknown[]>>(async () => []),
+    saveRecipes: vi.fn<() => Promise<void>>(async () => {}),
+  },
+}));
+vi.mock("../ProjectStore.js", () => ({
+  projectStore: mockProjectStore,
+}));
+
 import type { Migration } from "../StoreMigrations.js";
 import { LATEST_SCHEMA_VERSION, MigrationRunner } from "../StoreMigrations.js";
 import { migrations } from "../migrations/index.js";
@@ -32,16 +45,25 @@ type MockStore = {
   data: MockStoreData;
   get: (key: string, defaultValue?: unknown) => unknown;
   set: (key: string, value: unknown) => void;
+  delete: (key: string) => void;
 };
 
 function createMockStore(storePath: string, initialData: MockStoreData = {}): MockStore {
-  const data = { ...initialData };
+  const data: MockStoreData = { ...initialData };
   return {
     path: storePath,
     data,
     get: (key, defaultValue) => (key in data ? data[key] : defaultValue),
     set: (key, value) => {
+      if (value === undefined) {
+        throw new Error(
+          `electron-store v11 does not allow store.set("${key}", undefined) — use delete() instead`
+        );
+      }
       data[key] = value;
+    },
+    delete: (key) => {
+      delete data[key];
     },
   };
 }
@@ -434,5 +456,192 @@ describe("MigrationRunner", () => {
 
     expect(migration).not.toHaveBeenCalled();
     expect(store.data._schemaVersion).toBe(2);
+  });
+
+  describe("heavy fixture — full migration chain", () => {
+    beforeEach(() => {
+      mockProjectStore.getCurrentProjectId.mockReturnValue("perf-project-0");
+      mockProjectStore.getProjectById.mockReturnValue({
+        id: "perf-project-0",
+        name: "Perf Project",
+        path: "/tmp/perf",
+      });
+      mockProjectStore.getRecipes.mockResolvedValue([]);
+      mockProjectStore.saveRecipes.mockResolvedValue(undefined);
+    });
+
+    afterEach(() => {
+      mockProjectStore.getCurrentProjectId.mockReset();
+      mockProjectStore.getProjectById.mockReset();
+      mockProjectStore.getRecipes.mockReset();
+      mockProjectStore.saveRecipes.mockReset();
+    });
+
+    it("applies all migrations to a heavy v0 fixture within budget", async () => {
+      const terminalCount = 10_000;
+      const recipeCount = 500;
+      const agentCount = 200;
+
+      const terminals = Array.from({ length: terminalCount }, (_, i) => ({
+        id: `term-${i}`,
+        title: `Terminal ${i}`,
+        cwd: `/repo/wt-${i % 100}`,
+        worktreeId: `wt-${i % 100}`,
+      }));
+
+      const recipes = Array.from({ length: recipeCount }, (_, i) => ({
+        id: `recipe-${i}`,
+        name: `Recipe ${i}`,
+        worktreeId: i % 2 === 0 ? `wt-${i % 100}` : undefined,
+        terminals: Array.from({ length: 3 }, (_, j) => ({
+          type: "terminal" as const,
+          title: `Tab ${j}`,
+          command: `echo ${i}-${j}`,
+        })),
+        createdAt: Date.now() - i * 1000,
+        showInEmptyState: i < 10,
+        lastUsedAt: i % 5 === 0 ? Date.now() - i * 5000 : undefined,
+      }));
+
+      const agents: Record<string, Record<string, unknown>> = {};
+      for (let i = 0; i < agentCount; i++) {
+        if (i % 2 === 0) {
+          agents[`agent-${i}`] = { selected: i % 3 !== 0, enabled: true, customFlag: `v-${i}` };
+        } else {
+          agents[`agent-${i}`] = { pinned: true };
+        }
+      }
+
+      const fixture = {
+        _schemaVersion: 0,
+        windowState: { width: 1200, height: 800, isMaximized: false },
+        terminalConfig: { scrollbackLines: 2500, performanceMode: false },
+        hibernation: { enabled: false, inactiveThresholdHours: 24 },
+        idleTerminalNotify: { enabled: true, thresholdMinutes: 60 },
+        idleTerminalDismissals: {},
+        appState: {
+          activeWorktreeId: "wt-0",
+          sidebarWidth: 350,
+          focusMode: false,
+          terminals,
+          recipes,
+          hasSeenWelcome: true,
+          panelGridConfig: { strategy: "automatic", value: 3 },
+          fleetDeckOpen: false,
+          fleetDeckEdge: "right",
+          fleetDeckWidth: 480,
+        },
+        userConfig: {},
+        worktreeConfig: { pathPattern: "{parent-dir}/{base-folder}-worktrees/{branch-slug}" },
+        agentSettings: { agents },
+        notificationSettings: {
+          enabled: true,
+          completedEnabled: false,
+          waitingEnabled: false,
+          soundEnabled: true,
+          soundFile: "ping.wav",
+          waitingEscalationEnabled: true,
+          waitingEscalationDelayMs: 180_000,
+        },
+        userAgentRegistry: {},
+        agentUpdateSettings: { autoCheck: true, checkFrequencyHours: 24, lastAutoCheck: null },
+        keybindingOverrides: { overrides: {} },
+        projectEnv: {},
+        globalEnvironmentVariables: Object.fromEntries(
+          Array.from({ length: 100 }, (_, i) => [`PERF_VAR_${i}`, `value-${i}`])
+        ),
+        appAgentConfig: {},
+        windowStates: {},
+        worktreeIssueMap: Object.fromEntries(
+          Array.from({ length: 100 }, (_, i) => [
+            `wt-${i}`,
+            { issueNumber: 1000 + i, url: `https://github.com/org/repo/issues/${1000 + i}` },
+          ])
+        ),
+        appTheme: { colorSchemeId: "canopy" },
+        privacy: { telemetryLevel: "off", hasSeenPrompt: false, logRetentionDays: 30 },
+        voiceInput: {
+          enabled: true,
+          apiKey: "",
+          language: "en",
+          customDictionary: [],
+          transcriptionModel: "nova-3",
+          correctionEnabled: false,
+          correctionModel: "gpt-5-nano",
+          correctionCustomInstructions: "",
+          paragraphingStrategy: "spoken-command",
+        },
+        mcpServer: { enabled: false, port: 45454, apiKey: "" },
+        pendingErrors: [],
+        gpu: { hardwareAccelerationDisabled: false },
+        crashRecovery: { autoRestoreOnCrash: false },
+        onboarding: {
+          schemaVersion: 0,
+          completed: true,
+          currentStep: null,
+          agentSetupIds: [],
+          firstRunToastSeen: false,
+          newsletterPromptSeen: false,
+          waitingNudgeSeen: false,
+          seenAgentIds: [],
+          welcomeCardDismissed: false,
+          setupBannerDismissed: false,
+          migratedFromLocalStorage: false,
+        },
+        activationFunnel: {},
+        orchestrationMilestones: {},
+        shortcutHintCounts: {},
+        updateChannel: "stable",
+        logLevelOverrides: {},
+      };
+
+      const store = createMockStore(storePath, fixture);
+      const runner = new MigrationRunner(store as never);
+
+      const start = performance.now();
+      await runner.runMigrations(migrations);
+      const elapsedMs = performance.now() - start;
+
+      // Verify migrations actually ran
+      expect(store.data._schemaVersion).toBe(LATEST_SCHEMA_VERSION);
+
+      // Migration 002: terminals should have location field
+      const migratedTerminals = (store.data.appState as Record<string, unknown>).terminals as Array<
+        Record<string, unknown>
+      >;
+      expect(migratedTerminals[0]?.location).toBe("grid");
+      expect(migratedTerminals).toHaveLength(terminalCount);
+
+      // Migration 003: recipes should be cleared
+      expect((store.data.appState as Record<string, unknown>).recipes).toEqual([]);
+      expect(mockProjectStore.saveRecipes).toHaveBeenCalled();
+
+      // Migration 006: canopy → daintree
+      expect((store.data.appTheme as Record<string, unknown>).colorSchemeId).toBe("daintree");
+
+      // Migration 007: scrollback reduced
+      expect((store.data.terminalConfig as Record<string, unknown>).scrollbackLines).toBe(1000);
+
+      // Migration 008: soundFile split
+      const notif = store.data.notificationSettings as Record<string, unknown>;
+      expect(notif.completedSoundFile).toBe("ping.wav");
+      expect(notif.waitingSoundFile).toBe("waiting.wav");
+      expect(notif.soundFile).toBeUndefined();
+
+      // Migration 012: agents should have pinned field, no selected/enabled
+      const migratedAgents = (store.data.agentSettings as Record<string, unknown>).agents as Record<
+        string,
+        Record<string, unknown>
+      >;
+      for (const [, entry] of Object.entries(migratedAgents)) {
+        expect(entry.selected).toBeUndefined();
+        expect(entry.enabled).toBeUndefined();
+        expect(typeof entry.pinned).toBe("boolean");
+      }
+
+      // Single-run sanity check; statistical p95 is measured by PERF-080
+      // Use generous tolerance to avoid CI flake under load
+      expect(elapsedMs).toBeLessThan(2000);
+    });
   });
 });

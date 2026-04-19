@@ -71,6 +71,12 @@
       "p95Ms": 6500,
       "maxRegressionPct": 20,
       "maxMetricValues": { "memoryGrowthPct": 10 }
+    },
+
+    "PERF-080": {
+      "p95Ms": 500,
+      "maxRegressionPct": 15,
+      "maxMetricValues": { "bytes": 10000000 }
     }
   }
 }
