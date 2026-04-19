@@ -206,6 +206,13 @@ export function FleetComposer(): ReactElement | null {
           setHistoryIndex(-1);
           historySnapshotRef.current = "";
         }
+      } catch (e) {
+        useNotificationStore.getState().addNotification({
+          type: "error",
+          priority: "high",
+          message: "Broadcast failed unexpectedly",
+        });
+        throw e;
       } finally {
         submittingRef.current = false;
         setIsSubmitting(false);
