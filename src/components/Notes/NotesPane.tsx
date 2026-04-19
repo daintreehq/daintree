@@ -14,6 +14,7 @@ import { daintreeTheme } from "./editorTheme";
 import { notesTypographyExtension } from "./codeBlockExtension";
 import { MarkdownPreview } from "./MarkdownPreview";
 import { MarkdownToolbar } from "./MarkdownToolbar";
+import { NotesFindBar } from "./NotesFindBar";
 import { useNoteVoiceInput } from "./useNoteVoiceInput";
 import {
   buildAttachmentExtension,
@@ -22,6 +23,7 @@ import {
   type AttachItem,
 } from "./attachmentExtension";
 import { useNotificationStore } from "@/store/notificationStore";
+import { useFindInNote } from "@/hooks/useFindInNote";
 
 export interface NotesPaneProps extends BasePanelProps {
   notePath: string;
@@ -91,11 +93,19 @@ export function NotesPane({
 
   useNoteVoiceInput(id, editorViewRef);
 
+  const find = useFindInNote(editorViewRef, !!isFocused && viewMode !== "preview");
+  const closeFind = find.close;
+
   useEffect(() => {
     if (viewMode === "preview") {
       editorViewRef.current = null;
+      closeFind();
     }
-  }, [viewMode]);
+  }, [viewMode, closeFind]);
+
+  useEffect(() => {
+    closeFind();
+  }, [notePath, closeFind]);
 
   useEffect(() => {
     let cancelled = false;
@@ -419,8 +429,9 @@ export function NotesPane({
         onAttach: (items) => attachHandlerRef.current(items),
         onRejected: (items, reason) => attachRejectedRef.current(items, reason),
       }),
+      find.searchExtension,
     ],
-    []
+    [find.searchExtension]
   );
 
   return (
@@ -486,17 +497,21 @@ export function NotesPane({
                     onChange={handleContentChange}
                     onCreateEditor={(view) => {
                       editorViewRef.current = view;
+                      find.handleEditorCreated(view);
                       setEditorMountKey((k) => k + 1);
                     }}
+                    onUpdate={find.handleEditorUpdate}
                     basicSetup={{
                       lineNumbers: false,
                       foldGutter: false,
                       highlightActiveLine: false,
                       highlightActiveLineGutter: false,
+                      searchKeymap: false,
                     }}
                     className="h-full"
                     placeholder="Start writing your notes..."
                   />
+                  {find.isOpen && <NotesFindBar find={find} />}
                   <div className="absolute bottom-3 right-3 z-10">
                     <VoiceInputButton
                       panelId={id}
@@ -532,16 +547,20 @@ export function NotesPane({
                   onChange={handleContentChange}
                   onCreateEditor={(view) => {
                     editorViewRef.current = view;
+                    find.handleEditorCreated(view);
                   }}
+                  onUpdate={find.handleEditorUpdate}
                   basicSetup={{
                     lineNumbers: false,
                     foldGutter: false,
                     highlightActiveLine: false,
                     highlightActiveLineGutter: false,
+                    searchKeymap: false,
                   }}
                   className="h-full"
                   placeholder="Start writing your notes..."
                 />
+                {find.isOpen && <NotesFindBar find={find} />}
                 <div className="absolute bottom-3 right-3 z-10">
                   <VoiceInputButton
                     panelId={id}
