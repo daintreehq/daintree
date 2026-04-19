@@ -36,6 +36,7 @@ import { ProjectPulseCard } from "@/components/Pulse";
 import { Kbd } from "@/components/ui/Kbd";
 import { svgToDataUrl, sanitizeSvg } from "@/lib/svg";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import { TerminalRefreshTier } from "@shared/types/panel";
 import {
   computeGridColumns,
   MIN_TERMINAL_HEIGHT_PX,
@@ -432,7 +433,7 @@ export function ContentGrid({
   const { armedIds, armOrder } = useFleetArmingStore(
     useShallow((state) => ({ armedIds: state.armedIds, armOrder: state.armOrder }))
   );
-  const isFleetScopeRender = fleetScopeMode === "scoped" && isFleetScopeActive && armedIds.size > 0;
+  const isFleetScopeEnabled = fleetScopeMode === "scoped" && isFleetScopeActive;
 
   // Grid terminals filtered by location and active worktree
   const gridTerminals = useMemo(() => {
@@ -713,7 +714,7 @@ export function ContentGrid({
   // that have since been pruned, trashed, or moved to the dock. We resolve
   // against panelsById once here so GridPanel cells receive stable refs.
   const fleetPanels = useMemo(() => {
-    if (!isFleetScopeRender) return [];
+    if (!isFleetScopeEnabled) return [];
     const result: TerminalInstance[] = [];
     for (const id of armOrder) {
       if (!armedIds.has(id)) continue;
@@ -723,7 +724,13 @@ export function ContentGrid({
       result.push(t);
     }
     return result;
-  }, [isFleetScopeRender, armOrder, armedIds, panelsById]);
+  }, [isFleetScopeEnabled, armOrder, armedIds, panelsById]);
+
+  // Only render the fleet grid if at least one armed panel is actually
+  // grid-renderable. Otherwise fall through to the normal active-worktree
+  // grid so the user isn't trapped in an empty fleet view when every
+  // armed terminal has been moved to the dock or trashed.
+  const isFleetScopeRender = isFleetScopeEnabled && fleetPanels.length > 0;
 
   const fleetNeedsWorktreePrefix = useMemo(() => {
     if (fleetPanels.length <= 1) return false;
@@ -741,10 +748,16 @@ export function ContentGrid({
   // `gridTerminals` and can't be redirected at the current armed set, which
   // spans worktrees. Stagger fits via rAF to let xterm reattach per cell
   // without starving the renderer — lesson #5092 flagged simultaneous cross-
-  // worktree mounts as a risk for IntersectionObserver misfires.
+  // worktree mounts as a risk for IntersectionObserver misfires. We also
+  // promote every mounted fleet cell to VISIBLE so cross-worktree terminals
+  // keep streaming output — worktreeStore's per-worktree policy would
+  // otherwise demote them to BACKGROUND (showing stale frames).
   useEffect(() => {
     if (!isFleetScopeRender) return;
     const ids = fleetPanels.map((t) => t.id);
+    for (const id of ids) {
+      terminalInstanceService.applyRendererPolicy(id, TerminalRefreshTier.VISIBLE);
+    }
     const cancelRef = { cancelled: false };
     const timeoutId = window.setTimeout(() => {
       if (isDraggingRef.current) return;

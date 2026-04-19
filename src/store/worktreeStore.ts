@@ -8,6 +8,15 @@ import { PERF_MARKS } from "@shared/perf/marks";
 import { markRendererPerformance } from "@/utils/performance";
 import { setWorktreeSelectionStoreGetter } from "./projectStore";
 
+// Getter injected by fleetArmingStore at module init to break the import
+// cycle (fleetArmingStore imports worktreeStore). Returns the current armed
+// terminal id set so `applyWorktreeTerminalPolicy` can keep armed
+// cross-worktree terminals at VISIBLE while fleet scope is active.
+let _getArmedIds: (() => Set<string>) | null = null;
+export function setFleetArmedIdsGetter(getter: () => Set<string>): void {
+  _getArmedIds = getter;
+}
+
 interface CreateDialogState {
   isOpen: boolean;
   initialIssue: GitHubIssue | null;
@@ -519,16 +528,24 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
     // Idempotent: first pre-scope activeWorktreeId wins so the restoration
     // target isn't corrupted by a double-enter.
     if (get().isFleetScopeActive) return;
+    const activeWorktreeId = get().activeWorktreeId;
+    const generation = get()._policyGeneration + 1;
     set({
       isFleetScopeActive: true,
-      _previousActiveWorktreeId: get().activeWorktreeId,
+      _previousActiveWorktreeId: activeWorktreeId,
+      _policyGeneration: generation,
     });
     // Clear any active maximize so the fleet-scope render path isn't shadowed
     // by the single-panel/group maximize branch in ContentGrid. Also clear the
     // preMaximizeLayout snapshot so exiting scope later doesn't restore a
     // stale layout captured against a different worktree.
+    //
+    // Guard inside the resolved callback: the dynamic import resolves on a
+    // later microtask, so if the caller entered and exited scope back-to-back
+    // we must not wipe a maximize the user set after the exit.
     void loadTerminalStoreModule()
       .then(({ usePanelStore }) => {
+        if (!get().isFleetScopeActive) return;
         usePanelStore.setState({
           maximizedId: null,
           maximizeTarget: null,
@@ -536,6 +553,10 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
         });
       })
       .catch(() => {});
+    // Promote armed cross-worktree terminals to VISIBLE so their xterm
+    // instances actually stream live output inside the fleet grid. The
+    // policy function consults `isFleetScopeActive` + the armed set.
+    applyWorktreeTerminalPolicy(get, set, activeWorktreeId, generation);
   },
 
   exitFleetScope: () => {
@@ -613,6 +634,15 @@ function applyWorktreeTerminalPolicy(
       const { panelsById, panelIds } = usePanelStore.getState();
       const activeDockTerminalId = usePanelStore.getState().activeDockTerminalId;
 
+      // Fleet scope pins armed grid/agent terminals to VISIBLE regardless of
+      // worktree affiliation — the whole point of the scope view is to see
+      // live output across worktrees. Without this, cross-worktree armed
+      // terminals would get demoted to BACKGROUND and show stale/frozen
+      // content even though they are mounted in the fleet grid. We fetch the
+      // armed set through an injected getter to avoid a cyclic import.
+      const fleetActive = get().isFleetScopeActive;
+      const armedIds = fleetActive && _getArmedIds ? _getArmedIds() : null;
+
       for (const id of panelIds) {
         const terminal = panelsById[id];
         if (!terminal) continue;
@@ -627,8 +657,10 @@ function applyWorktreeTerminalPolicy(
           continue;
         }
 
+        const isArmedInFleetScope = armedIds?.has(terminal.id) && !isDockOrTrash;
+
         const targetTier =
-          isInActiveWorktree && !isDockOrTrash
+          isArmedInFleetScope || (isInActiveWorktree && !isDockOrTrash)
             ? TerminalRefreshTier.VISIBLE
             : TerminalRefreshTier.BACKGROUND;
 

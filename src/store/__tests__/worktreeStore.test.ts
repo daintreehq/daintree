@@ -9,6 +9,7 @@ const {
   logErrorWithContextMock,
   focusStateGetterMock,
   subscribeMock,
+  panelSetStateMock,
 } = vi.hoisted(() => ({
   appSetStateMock: vi.fn().mockResolvedValue(undefined),
   applyRendererPolicyMock: vi.fn(),
@@ -17,6 +18,7 @@ const {
   logErrorWithContextMock: vi.fn(),
   focusStateGetterMock: vi.fn(() => ({ isFocusMode: false })),
   subscribeMock: vi.fn(() => vi.fn()),
+  panelSetStateMock: vi.fn(),
 }));
 
 type MockTerminal = {
@@ -36,7 +38,7 @@ const terminalStoreState = {
   recordMru: recordMruMock,
   setFocused: setFocusedMock,
 };
-const panelSetStateMock = vi.fn((patch: Record<string, unknown>) => {
+panelSetStateMock.mockImplementation((patch: Record<string, unknown>) => {
   Object.assign(terminalStoreState, patch);
 });
 function setMockTerminals(terminals: MockTerminal[]) {
@@ -77,7 +79,10 @@ vi.mock("@/store/panelStore", () => ({
   },
 }));
 
-import { useWorktreeSelectionStore } from "../worktreeStore";
+import { useWorktreeSelectionStore, setFleetArmedIdsGetter } from "../worktreeStore";
+
+let armedIdsForFleet = new Set<string>();
+setFleetArmedIdsGetter(() => armedIdsForFleet);
 
 describe("worktreeStore", () => {
   beforeEach(() => {
@@ -91,6 +96,12 @@ describe("worktreeStore", () => {
     terminalStoreState.maximizedId = null;
     terminalStoreState.maximizeTarget = null;
     terminalStoreState.preMaximizeLayout = null;
+    // clearAllMocks() wipes the panelSetStateMock implementation too, so
+    // reinstall it on every test — otherwise panelSetStateMock becomes a
+    // noop and the maximize-clear assertions silently miss behavior drift.
+    panelSetStateMock.mockImplementation((patch: Record<string, unknown>) => {
+      Object.assign(terminalStoreState, patch);
+    });
     focusStateGetterMock.mockReturnValue({ isFocusMode: false });
   });
 
@@ -445,6 +456,57 @@ describe("worktreeStore", () => {
 
       expect(panelSetStateMock).toHaveBeenCalledWith({ preMaximizeLayout: null });
       expect(terminalStoreState.preMaximizeLayout).toBeNull();
+    });
+
+    it("enterFleetScope's deferred maximize-clear bails if scope was exited first", async () => {
+      useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-race" });
+      useWorktreeSelectionStore.getState().enterFleetScope();
+      // Exit scope synchronously before the deferred .then() resolves.
+      useWorktreeSelectionStore.getState().exitFleetScope();
+
+      // Simulate the user manually re-maximizing a panel after the exit.
+      terminalStoreState.maximizedId = "term-user-maxed";
+      terminalStoreState.maximizeTarget = { type: "panel", id: "term-user-maxed" };
+      panelSetStateMock.mockClear();
+
+      // Flush the microtask queue so the deferred import/then runs.
+      await Promise.resolve();
+      await Promise.resolve();
+
+      // The enterFleetScope .then() MUST NOT wipe the user's new maximize.
+      expect(panelSetStateMock).not.toHaveBeenCalledWith(
+        expect.objectContaining({ maximizedId: null })
+      );
+      expect(terminalStoreState.maximizedId).toBe("term-user-maxed");
+    });
+
+    it("enterFleetScope pins armed cross-worktree terminals to VISIBLE", async () => {
+      setMockTerminals([
+        { id: "term-active", worktreeId: "wt-pre-scope", location: "grid" },
+        { id: "term-armed-remote", worktreeId: "wt-other", location: "grid" },
+        { id: "term-idle-remote", worktreeId: "wt-other", location: "grid" },
+      ]);
+      useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-pre-scope" });
+      armedIdsForFleet = new Set(["term-armed-remote"]);
+      applyRendererPolicyMock.mockClear();
+
+      useWorktreeSelectionStore.getState().enterFleetScope();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(applyRendererPolicyMock).toHaveBeenCalledWith(
+        "term-active",
+        TerminalRefreshTier.VISIBLE
+      );
+      expect(applyRendererPolicyMock).toHaveBeenCalledWith(
+        "term-armed-remote",
+        TerminalRefreshTier.VISIBLE
+      );
+      expect(applyRendererPolicyMock).toHaveBeenCalledWith(
+        "term-idle-remote",
+        TerminalRefreshTier.BACKGROUND
+      );
+      armedIdsForFleet = new Set();
     });
   });
 });
