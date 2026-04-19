@@ -2,7 +2,6 @@ import { shell } from "electron";
 import { CHANNELS } from "../channels.js";
 import { logBuffer } from "../../services/LogBuffer.js";
 import {
-  setVerboseLogging,
   isVerboseLogging,
   logInfo,
   logDebug,
@@ -10,6 +9,7 @@ import {
   logError,
   getLogFilePath,
   getPreviousSessionTail,
+  getLogLevelOverrides,
   setLogLevelOverrides,
   getRegisteredLoggerNames,
   isValidLogOverrideLevel,
@@ -19,6 +19,14 @@ import type { FilterOptions as LogFilterOptions } from "../../services/LogBuffer
 import { typedHandle } from "../utils.js";
 import { store } from "../../store.js";
 import type { HandlerDependencies } from "../types.js";
+
+/**
+ * When verbose is toggled on, the user's prior `"*"` wildcard (if any) is
+ * stashed here so toggling verbose off restores it instead of silently
+ * dropping an explicit user override. Module-scoped because verbose state
+ * toggling is a global user action that outlives handler registration.
+ */
+let savedWildcardBeforeVerbose: string | null = null;
 
 function sanitizeOverrides(raw: unknown): Record<string, string> {
   if (!raw || typeof raw !== "object") return {};
@@ -114,16 +122,26 @@ export function registerLogsHandlers(
     }
     // Verbose toggle maps to the `"*"` wildcard override so it flows through
     // the same persistence + utility-process propagation as explicit per-module
-    // overrides. This also makes the legacy toggle survive restarts.
-    const current = { ...(store.get("logLevelOverrides") ?? {}) };
+    // overrides. Enabling unconditionally sets `"*": "debug"`; disabling
+    // restores whatever wildcard existed before the user turned verbose on
+    // (tracked in `savedWildcardBeforeVerbose`) so a pre-existing explicit
+    // `"*": "warn"` isn't wiped by a verbose on/off cycle.
+    const current = sanitizeOverrides(store.get("logLevelOverrides") ?? {});
     if (enabled) {
+      if (current["*"] !== "debug") {
+        savedWildcardBeforeVerbose = current["*"] ?? null;
+      }
       current["*"] = "debug";
     } else {
-      delete current["*"];
+      if (savedWildcardBeforeVerbose && savedWildcardBeforeVerbose !== "debug") {
+        current["*"] = savedWildcardBeforeVerbose;
+      } else {
+        delete current["*"];
+      }
+      savedWildcardBeforeVerbose = null;
     }
     store.set("logLevelOverrides", current);
     setLogLevelOverrides(current);
-    setVerboseLogging(enabled);
     fanOut(current, deps);
     logInfo(`Verbose logging ${enabled ? "enabled" : "disabled"} by user`);
     return { success: true };
@@ -160,7 +178,9 @@ export function registerLogsHandlers(
   handlers.push(typedHandle(CHANNELS.LOGS_WRITE, handleLogsWrite));
 
   const handleGetLevelOverrides = async (): Promise<Record<string, string>> => {
-    return { ...(store.get("logLevelOverrides") ?? {}) };
+    // Return the in-memory sanitized map (not the raw store value) so the UI
+    // never shows overrides that the logger silently dropped as invalid.
+    return getLogLevelOverrides();
   };
   handlers.push(typedHandle(CHANNELS.LOGS_GET_LEVEL_OVERRIDES, handleGetLevelOverrides));
 

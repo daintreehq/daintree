@@ -52,6 +52,8 @@ const { mockHosts, MockWorkspaceHostProcess } = vi.hoisted(() => {
       this._isDisposed = true;
     });
 
+    setLogLevelOverrides = vi.fn();
+
     simulateReady(): void {
       this._isReady = true;
       if (this.readyResolve) {

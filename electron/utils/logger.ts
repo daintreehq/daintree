@@ -373,8 +373,15 @@ export function isValidLogOverrideLevel(value: unknown): value is LogOverrideLev
  * (unlike the old stack-inference fallback).
  */
 export function createLogger(name: string): Logger {
-  if (!name || typeof name !== "string") {
+  if (typeof name !== "string") {
+    throw new Error("createLogger requires a string name");
+  }
+  const trimmed = name.trim();
+  if (!trimmed) {
     throw new Error("createLogger requires a non-empty name");
+  }
+  if (trimmed !== name) {
+    throw new Error(`createLogger name must not contain leading/trailing whitespace: "${name}"`);
   }
   loggerRegistry.add(name);
   return {

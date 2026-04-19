@@ -15,6 +15,7 @@ import { CHANNELS } from "../ipc/channels.js";
 import { broadcastToRenderer } from "../ipc/utils.js";
 import { gitHubRateLimitService } from "./github/index.js";
 import { store } from "../store.js";
+import { isValidLogOverrideLevel } from "../utils/logger.js";
 
 import { WorkspaceHostProcess } from "./WorkspaceHostProcess.js";
 import type {
@@ -37,6 +38,21 @@ export type CopyTreeProgressCallback = (progress: CopyTreeProgress) => void;
 
 const CLEANUP_GRACE_MS = 180_000; // 3 minutes
 const MAX_WARM_ENTRIES = 3;
+
+function readPersistedLogOverrides(): Record<string, string> {
+  try {
+    const raw = store.get("logLevelOverrides") ?? {};
+    const clean: Record<string, string> = {};
+    for (const [key, value] of Object.entries(raw)) {
+      if (typeof key === "string" && key && isValidLogOverrideLevel(value)) {
+        clean[key] = value as string;
+      }
+    }
+    return clean;
+  } catch {
+    return {};
+  }
+}
 
 const DEFAULT_CONFIG: Required<WorkspaceClientConfig> = {
   maxRestartAttempts: 3,
@@ -92,8 +108,12 @@ export class WorkspaceClient extends EventEmitter {
    * Cached log-level overrides, fanned out to every workspace host and
    * primed on new hosts spawned after the cache was set. Each host's own
    * `setLogLevelOverrides` handles push-on-ready replay internally.
+   *
+   * Seeded from the persisted store so hosts created before the IPC handler
+   * registers (e.g. via `prewarmProject` during early boot) still inherit
+   * the user's saved overrides.
    */
-  private logLevelOverridesCache: Record<string, string> = {};
+  private logLevelOverridesCache: Record<string, string> = readPersistedLogOverrides();
 
   constructor(config: WorkspaceClientConfig = {}) {
     super();

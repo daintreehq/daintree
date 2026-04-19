@@ -55,6 +55,8 @@ const { mockHosts, MockWorkspaceHostProcess } = vi.hoisted(() => {
     });
     attachRendererPort = vi.fn(() => true);
 
+    setLogLevelOverrides = vi.fn();
+
     simulateReady(): void {
       this._isReady = true;
       if (this.readyResolve) {

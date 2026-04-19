@@ -215,11 +215,22 @@ vi.mock("../pty/agentSessionHistory.js", () => ({
   persistAgentSession: shared.persistAgentSession,
 }));
 
+const logDebug = vi.fn();
+const logInfo = vi.fn();
+const logWarn = vi.fn();
+const logError = vi.fn();
+
 vi.mock("../../utils/logger.js", () => ({
-  logDebug: vi.fn(),
-  logInfo: vi.fn(),
-  logWarn: vi.fn(),
-  logError: vi.fn(),
+  createLogger: vi.fn(() => ({
+    debug: logDebug,
+    info: logInfo,
+    warn: logWarn,
+    error: logError,
+  })),
+  logDebug,
+  logInfo,
+  logWarn,
+  logError,
 }));
 
 const { PtyManager } = await import("../PtyManager.js");

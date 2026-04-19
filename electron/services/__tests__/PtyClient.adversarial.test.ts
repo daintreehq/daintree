@@ -35,9 +35,24 @@ vi.mock("../TrashedPidTracker.js", () => ({
   getTrashedPidTracker: () => shared.tracker,
 }));
 
+const logWarn = vi.fn();
+const logInfo = vi.fn();
+
+const mockCreateLogger = vi.fn((_name: string) => {
+  return {
+    debug: vi.fn(),
+    info: logInfo,
+    warn: logWarn,
+    error: vi.fn(),
+    name: _name,
+  };
+});
+
 vi.mock("../../utils/logger.js", () => ({
-  logInfo: vi.fn(),
-  logWarn: vi.fn(),
+  createLogger: mockCreateLogger,
+  logInfo,
+  logWarn,
+  isValidLogOverrideLevel: vi.fn(() => true),
 }));
 
 interface MockUtilityProcess extends EventEmitter {

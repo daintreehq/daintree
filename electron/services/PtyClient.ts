@@ -32,11 +32,14 @@ import os from "os";
 import { spawnSync } from "child_process";
 import { fileURLToPath } from "url";
 import { performance } from "node:perf_hooks";
-import { createLogger } from "../utils/logger.js";
+import { createLogger, isValidLogOverrideLevel } from "../utils/logger.js";
+import { store } from "../store.js";
 
 const logger = createLogger("main:PtyClient");
-const logInfo = (msg: string, ctx?: Record<string, unknown>) => logger.info(msg, ctx);
-const logWarn = (msg: string, ctx?: Record<string, unknown>) => logger.warn(msg, ctx);
+const logInfo = (msg: string, ctx?: Record<string, unknown>) =>
+  ctx ? logger.info(msg, ctx) : logger.info(msg);
+const logWarn = (msg: string, ctx?: Record<string, unknown>) =>
+  ctx ? logger.warn(msg, ctx) : logger.warn(msg);
 import { getTrashedPidTracker } from "./TrashedPidTracker.js";
 import { RequestResponseBroker, BrokerError } from "./rpc/index.js";
 import { bridgePtyEvent } from "./pty/PtyEventsBridge.js";
@@ -167,6 +170,27 @@ function classifyCrash(code: number | null, signal: string | null): CrashType {
   return "CLEAN_EXIT";
 }
 
+/**
+ * Read and sanitize the persisted log-level override map. Invalid values are
+ * dropped — the stored payload is `Record<string, string>` but user edits to
+ * the config file could leave it in an unknown state, so we defensively
+ * filter before seeding the cache.
+ */
+function readPersistedOverrides(): Record<string, string> {
+  try {
+    const raw = store.get("logLevelOverrides") ?? {};
+    const clean: Record<string, string> = {};
+    for (const [key, value] of Object.entries(raw)) {
+      if (typeof key === "string" && key && isValidLogOverrideLevel(value)) {
+        clean[key] = value as string;
+      }
+    }
+    return clean;
+  } catch {
+    return {};
+  }
+}
+
 const RTT_BUFFER_SIZE = 20;
 const RTT_LOG_EVERY_N_SAMPLES = 10;
 const RTT_LOG_INTERVAL_MS = 5 * 60 * 1000;
@@ -257,8 +281,10 @@ export class PtyClient extends EventEmitter {
 
   /** Cached log-level overrides. Replayed on every host spawn/restart via the
    * `ready` event, which is the first moment the child's message listener is
-   * attached (push-on-spawn would race and silently drop the first message). */
-  private logLevelOverridesCache: Record<string, string> = {};
+   * attached (push-on-spawn would race and silently drop the first message).
+   * Seeded from the persisted store so boot-time host spawns inherit the
+   * user's saved configuration without waiting for renderer IPC. */
+  private logLevelOverridesCache: Record<string, string> = readPersistedOverrides();
 
   /**
    * Authoritative crash reason captured from `app.on("child-process-gone")`.
