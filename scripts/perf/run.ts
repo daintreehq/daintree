@@ -1,6 +1,6 @@
 import { performance } from "node:perf_hooks";
 import path from "node:path";
-import { execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { loadBudgetConfig, getScenarioBudget } from "./lib/budgets";
 import { compareSamples } from "./lib/comparison";
 import { appendJsonLine, readJson, writeJson, writeText, ensureDir } from "./lib/io";
@@ -363,7 +363,9 @@ run().catch((error) => {
 
 function getMergeBase(compareBase: string): string | null {
   try {
-    return execSync(`git merge-base HEAD ${compareBase}`, { encoding: "utf-8" }).trim();
+    return execFileSync("git", ["merge-base", "HEAD", compareBase], {
+      encoding: "utf-8",
+    }).trim();
   } catch {
     return null;
   }
