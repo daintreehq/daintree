@@ -1,8 +1,11 @@
-import { app, dialog } from "electron";
+import { app, dialog, shell } from "electron";
 import os from "node:os";
 import v8 from "node:v8";
 import { monitorEventLoopDelay, type IntervalHistogram } from "node:perf_hooks";
-import { promises as fs } from "node:fs";
+import { promises as fs, createWriteStream } from "node:fs";
+import { existsSync } from "node:fs";
+import path from "node:path";
+import archiver from "archiver";
 import { CHANNELS } from "../channels.js";
 import type { HandlerDependencies } from "../types.js";
 import type {
@@ -11,11 +14,68 @@ import type {
   ProcessMetricEntry,
   HeapStats,
   DiagnosticsInfo,
+  DiagnosticsReviewPayload,
+  DiagnosticsBundleSavePayload,
 } from "../../../shared/types/ipc/system.js";
-import { collectDiagnostics } from "../../services/DiagnosticsCollector.js";
+import { collectDiagnosticsWithKeys } from "../../services/DiagnosticsCollector.js";
+import { getLogFilePath, getLogDirectory } from "../../utils/logger.js";
+import { safeStringify } from "../../utils/safeStringify.js";
+import {
+  filterSections,
+  applyReplacements,
+  type ReplacementRule,
+} from "../../../shared/utils/diagnosticsTransform.js";
 import { typedHandle } from "../utils.js";
 
 let eventLoopHistogram: IntervalHistogram | null = null;
+
+async function writeBundleZip(
+  zipPath: string,
+  jsonContent: string,
+  includeLogs: boolean,
+  replacements: ReplacementRule[]
+): Promise<void> {
+  const logDir = getLogDirectory();
+  const logFile = getLogFilePath();
+
+  const logEntries: Array<{ name: string; content: string }> = [];
+
+  if (includeLogs) {
+    if (existsSync(logFile)) {
+      const raw = await fs.readFile(logFile, "utf-8");
+      logEntries.push({ name: "daintree.log", content: applyReplacements(raw, replacements) });
+    }
+
+    for (let i = 1; i <= 5; i++) {
+      const rotated = path.join(logDir, `daintree.log.${i}`);
+      if (existsSync(rotated)) {
+        const raw = await fs.readFile(rotated, "utf-8");
+        logEntries.push({
+          name: `daintree.log.${i}`,
+          content: applyReplacements(raw, replacements),
+        });
+      }
+    }
+  }
+
+  return new Promise((resolve, reject) => {
+    const output = createWriteStream(zipPath);
+    const archive = archiver("zip", { zlib: { level: 6 } });
+
+    output.on("close", resolve);
+    output.on("error", reject);
+    archive.on("error", reject);
+
+    archive.pipe(output);
+    archive.append(jsonContent, { name: "diagnostics.json" });
+
+    for (const entry of logEntries) {
+      archive.append(entry.content, { name: entry.name });
+    }
+
+    void archive.finalize();
+  });
+}
 
 function ensureEventLoopHistogram(): IntervalHistogram {
   if (!eventLoopHistogram) {
@@ -105,7 +165,7 @@ export function registerDiagnosticsHandlers(deps: HandlerDependencies): () => vo
   handlers.push(typedHandle(CHANNELS.SYSTEM_GET_HARDWARE_INFO, handleGetHardwareInfo));
 
   const handleDownloadDiagnostics = async (): Promise<boolean> => {
-    const payload = await collectDiagnostics(deps);
+    const { payload } = await collectDiagnosticsWithKeys(deps);
     const json = JSON.stringify(payload, null, 2);
 
     const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
@@ -125,6 +185,48 @@ export function registerDiagnosticsHandlers(deps: HandlerDependencies): () => vo
     return true;
   };
   handlers.push(typedHandle(CHANNELS.SYSTEM_DOWNLOAD_DIAGNOSTICS, handleDownloadDiagnostics));
+
+  const handleCollectDiagnosticsForReview = async (): Promise<DiagnosticsReviewPayload> => {
+    const { payload, sectionKeys } = await collectDiagnosticsWithKeys(deps);
+    const previewJson = safeStringify(payload, 2);
+    return { payload, sectionKeys, previewJson };
+  };
+  handlers.push(
+    typedHandle(CHANNELS.SYSTEM_COLLECT_DIAGNOSTICS_FOR_REVIEW, handleCollectDiagnosticsForReview)
+  );
+
+  const handleSaveDiagnosticsBundle = async (
+    savePayload: DiagnosticsBundleSavePayload
+  ): Promise<boolean> => {
+    const filtered = filterSections(savePayload.payload, savePayload.enabledSections);
+    let json = safeStringify(filtered, 2);
+    json = applyReplacements(json, savePayload.replacements as ReplacementRule[]);
+
+    const includeLogs = savePayload.enabledSections.logs !== false;
+
+    const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const win = deps.windowRegistry?.getPrimary()?.browserWindow ?? deps.mainWindow;
+    const dialogOpts = {
+      title: "Save Diagnostics Bundle",
+      defaultPath: `daintree-diagnostics-${timestamp}.zip`,
+      filters: [{ name: "ZIP", extensions: ["zip"] }],
+    };
+    const { filePath, canceled } = win
+      ? await dialog.showSaveDialog(win, dialogOpts)
+      : await dialog.showSaveDialog(dialogOpts);
+
+    if (canceled || !filePath) return false;
+
+    await writeBundleZip(
+      filePath,
+      json,
+      includeLogs,
+      savePayload.replacements as ReplacementRule[]
+    );
+    shell.showItemInFolder(filePath);
+    return true;
+  };
+  handlers.push(typedHandle(CHANNELS.SYSTEM_SAVE_DIAGNOSTICS_BUNDLE, handleSaveDiagnosticsBundle));
 
   return () => handlers.forEach((cleanup) => cleanup());
 }

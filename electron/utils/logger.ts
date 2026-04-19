@@ -242,7 +242,7 @@ export function pruneOldLogs(basePath: string, retentionDays: number | 0): void 
   }
 }
 
-function getLogDirectory(): string {
+export function getLogDirectory(): string {
   // Priority 1: Environment variable (Utility Processes)
   if (process.env.DAINTREE_USER_DATA) {
     return join(process.env.DAINTREE_USER_DATA, "logs");

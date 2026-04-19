@@ -402,6 +402,13 @@ async function collectEvents(deps: HandlerDependencies) {
 }
 
 export async function collectDiagnostics(deps: HandlerDependencies): Promise<unknown> {
+  const { payload } = await collectDiagnosticsWithKeys(deps);
+  return payload;
+}
+
+export async function collectDiagnosticsWithKeys(
+  deps: HandlerDependencies
+): Promise<{ payload: Record<string, unknown>; sectionKeys: string[] }> {
   const sections = [
     { key: "metadata", fn: collectMetadata },
     { key: "runtime", fn: collectRuntime },
@@ -439,5 +446,8 @@ export async function collectDiagnostics(deps: HandlerDependencies): Promise<unk
     }
   }
 
-  return redactDeep(payload);
+  return {
+    payload: redactDeep(payload) as Record<string, unknown>,
+    sectionKeys: sections.map((s) => s.key),
+  };
 }

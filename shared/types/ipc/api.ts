@@ -346,6 +346,10 @@ export interface ElectronAPI {
     getHealthCheckSpecs(agentIds?: string[]): Promise<PrerequisiteSpec[]>;
     checkTool(spec: PrerequisiteSpec): Promise<PrerequisiteCheckResult>;
     downloadDiagnostics(): Promise<boolean>;
+    collectDiagnosticsForReview(): Promise<import("./system.js").DiagnosticsReviewPayload>;
+    saveDiagnosticsBundle(
+      payload: import("./system.js").DiagnosticsBundleSavePayload
+    ): Promise<boolean>;
     getAppMetrics(): Promise<import("./system.js").AppMetricsSummary>;
     getHardwareInfo(): Promise<import("./system.js").HardwareInfo>;
     getProcessMetrics(): Promise<import("./system.js").ProcessMetricEntry[]>;

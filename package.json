@@ -72,6 +72,7 @@
   },
   "dependencies": {
     "@xterm/addon-webgl": "^0.19.0",
+    "archiver": "^7.0.1",
     "better-sqlite3": "^12.8.0",
     "copytree": "^0.14.2",
     "js-yaml": "^4.1.1",
@@ -116,6 +117,7 @@
     "@tailwindcss/vite": "^4.1.17",
     "@testing-library/dom": "^10.4.1",
     "@testing-library/react": "^16.3.2",
+    "@types/archiver": "^7.0.0",
     "@types/better-sqlite3": "^7.6.13",
     "@types/js-yaml": "^4.0.9",
     "@types/jsdom": "^28.0.0",

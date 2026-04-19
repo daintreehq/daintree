@@ -132,7 +132,7 @@
     "pipeline": 0
   },
   "src/components/Diagnostics/DiagnosticsActions.tsx": {
-    "success": 3,
+    "success": 4,
     "skip": 0,
     "error": 0,
     "pipeline": 0
@@ -157,6 +157,12 @@
   },
   "src/components/Diagnostics/ProblemsContent.tsx": {
     "success": 2,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0
+  },
+  "src/components/Diagnostics/TelemetryContent.tsx": {
+    "success": 4,
     "skip": 0,
     "error": 0,
     "pipeline": 0
@@ -354,7 +360,7 @@
     "pipeline": 0
   },
   "src/components/GitHub/GitHubResourceList.tsx": {
-    "success": 0,
+    "success": 1,
     "skip": 0,
     "error": 2,
     "pipeline": 0
@@ -557,6 +563,12 @@
     "error": 0,
     "pipeline": 0
   },
+  "src/components/LogLevelPalette/LogLevelPalette.tsx": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0
+  },
   "src/components/Logs/LogEntry.tsx": {
     "success": 1,
     "skip": 0,
@@ -608,7 +620,7 @@
   "src/components/Notes/NotesPane.tsx": {
     "success": 0,
     "skip": 0,
-    "error": 2,
+    "error": 1,
     "pipeline": 0
   },
   "src/components/Notes/NotesPaneSkeleton.tsx": {
@@ -929,6 +941,12 @@
     "error": 1,
     "pipeline": 0
   },
+  "src/components/Settings/DiagnosticsReviewDialog.tsx": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0
+  },
   "src/components/Settings/DockDensityPicker.tsx": {
     "success": 1,
     "skip": 0,
@@ -996,7 +1014,7 @@
     "pipeline": 0
   },
   "src/components/Settings/NotificationSettingsTab.tsx": {
-    "success": 1,
+    "success": 2,
     "skip": 0,
     "error": 0,
     "pipeline": 0
@@ -1079,6 +1097,12 @@
     "error": 0,
     "pipeline": 0
   },
+  "src/components/Settings/SettingsSwitch.tsx": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0
+  },
   "src/components/Settings/SettingsSwitchCard.tsx": {
     "success": 1,
     "skip": 0,
@@ -1118,7 +1142,7 @@
   "src/components/Settings/TroubleshootingTab.tsx": {
     "success": 1,
     "skip": 0,
-    "error": 5,
+    "error": 6,
     "pipeline": 0
   },
   "src/components/Settings/VoiceInputSettingsTab.tsx": {
@@ -2387,6 +2411,12 @@
     "error": 0,
     "pipeline": 0
   },
+  "src/hooks/useGitHubTokenHealth.ts": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0
+  },
   "src/hooks/useGitHubTooltip.ts": {
     "success": 0,
     "skip": 0,
@@ -2568,6 +2598,12 @@
     "pipeline": 0
   },
   "src/hooks/useProjectMruSwitcher.ts": {
+    "success": 1,
+    "skip": 0,
+    "error": 0,
+    "pipeline": 0
+  },
+  "src/hooks/useProjectPresetsSubscription.ts": {
     "success": 1,
     "skip": 0,
     "error": 0,

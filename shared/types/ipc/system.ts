@@ -209,6 +209,26 @@ export interface DiagnosticsInfo {
   eventLoopP99Ms: number;
 }
 
+/** Payload returned by the review collection IPC. */
+export interface DiagnosticsReviewPayload {
+  /** Raw diagnostic data (keyed by section). */
+  payload: Record<string, unknown>;
+  /** Ordered section keys for the review dialog. */
+  sectionKeys: string[];
+  /** Safe-stringified JSON preview (already redacted). */
+  previewJson: string;
+}
+
+/** User selections sent to the save-bundle IPC. */
+export interface DiagnosticsBundleSavePayload {
+  /** The reviewed and filtered payload (what the user saw in preview). */
+  payload: Record<string, unknown>;
+  /** Sections the user chose to include. */
+  enabledSections: Record<string, boolean>;
+  /** Find-and-replace redaction rules. */
+  replacements: Array<{ find: string; replace: string }>;
+}
+
 /** Payload for starting an agent install via setup wizard */
 export interface AgentInstallPayload {
   agentId: string;

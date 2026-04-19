@@ -168,7 +168,12 @@ import type {
   DemoWaitForIdlePayload,
 } from "./demo.js";
 import type { BulkProjectStats } from "./project.js";
-import type { PrerequisiteSpec, PrerequisiteCheckResult } from "./system.js";
+import type {
+  PrerequisiteSpec,
+  PrerequisiteCheckResult,
+  DiagnosticsReviewPayload,
+  DiagnosticsBundleSavePayload,
+} from "./system.js";
 import type { CloneRepoOptions, CloneRepoResult } from "./gitClone.js";
 import type { AppAgentConfig } from "../appAgent.js";
 import type { AgentSessionRecord } from "./agentSessionHistory.js";
@@ -531,6 +536,14 @@ export interface IpcInvokeMap {
   };
   "system:download-diagnostics": {
     args: [];
+    result: boolean;
+  };
+  "system:collect-diagnostics-for-review": {
+    args: [];
+    result: DiagnosticsReviewPayload;
+  };
+  "system:save-diagnostics-bundle": {
+    args: [DiagnosticsBundleSavePayload];
     result: boolean;
   };
   "system:get-app-metrics": {

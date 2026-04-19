@@ -119,6 +119,8 @@ export const CHANNELS = {
   SYSTEM_HEALTH_CHECK_SPECS: "system:health-check-specs",
   SYSTEM_CHECK_TOOL: "system:check-tool",
   SYSTEM_DOWNLOAD_DIAGNOSTICS: "system:download-diagnostics",
+  SYSTEM_COLLECT_DIAGNOSTICS_FOR_REVIEW: "system:collect-diagnostics-for-review",
+  SYSTEM_SAVE_DIAGNOSTICS_BUNDLE: "system:save-diagnostics-bundle",
   SYSTEM_GET_APP_METRICS: "system:get-app-metrics",
   SYSTEM_GET_HARDWARE_INFO: "system:get-hardware-info",
   DIAGNOSTICS_GET_PROCESS_METRICS: "diagnostics:get-process-metrics",

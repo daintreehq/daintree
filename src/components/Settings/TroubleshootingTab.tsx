@@ -16,9 +16,12 @@ import {
 import { cn } from "@/lib/utils";
 import { appClient, systemClient, logsClient } from "@/clients";
 import type { AppState, SystemHealthCheckResult } from "@shared/types";
+import type { DiagnosticsReviewPayload } from "@shared/types/ipc/system";
+import type { ReplacementRule } from "@shared/utils/diagnosticsTransform";
 import { actionService } from "@/services/ActionService";
 import { SettingsSection } from "./SettingsSection";
 import { SettingsSwitchCard } from "./SettingsSwitchCard";
+import { DiagnosticsReviewDialog } from "./DiagnosticsReviewDialog";
 
 function SystemHealthSection() {
   const [result, setResult] = useState<SystemHealthCheckResult | null>(null);
@@ -87,20 +90,47 @@ function SystemHealthSection() {
 }
 
 function DownloadDiagnosticsSection() {
-  const [isDownloading, setIsDownloading] = useState(false);
+  const [isCollecting, setIsCollecting] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [reviewOpen, setReviewOpen] = useState(false);
+  const [reviewPayload, setReviewPayload] = useState<DiagnosticsReviewPayload | null>(null);
   const [downloadError, setDownloadError] = useState<string | null>(null);
 
-  const handleDownload = useCallback(async () => {
-    setIsDownloading(true);
+  const handleOpenReview = useCallback(async () => {
+    setIsCollecting(true);
     setDownloadError(null);
     try {
-      await systemClient.downloadDiagnostics();
+      const payload = await systemClient.collectDiagnosticsForReview();
+      setReviewPayload(payload);
+      setReviewOpen(true);
     } catch (err) {
-      setDownloadError(err instanceof Error ? err.message : "Failed to download diagnostics");
+      setDownloadError(err instanceof Error ? err.message : "Failed to collect diagnostics");
     } finally {
-      setIsDownloading(false);
+      setIsCollecting(false);
     }
   }, []);
+
+  const handleSave = useCallback(
+    async (enabledSections: Record<string, boolean>, replacements: ReplacementRule[]) => {
+      setIsSaving(true);
+      try {
+        const payload = reviewPayload?.payload ?? {};
+        const saved = await systemClient.saveDiagnosticsBundle({
+          payload,
+          enabledSections,
+          replacements,
+        });
+        if (saved) {
+          setReviewOpen(false);
+        }
+      } catch (err) {
+        setDownloadError(err instanceof Error ? err.message : "Failed to save diagnostics bundle");
+      } finally {
+        setIsSaving(false);
+      }
+    },
+    [reviewPayload]
+  );
 
   return (
     <SettingsSection
@@ -111,14 +141,21 @@ function DownloadDiagnosticsSection() {
       <Button
         variant="outline"
         size="sm"
-        onClick={() => void handleDownload()}
-        disabled={isDownloading}
+        onClick={() => void handleOpenReview()}
+        disabled={isCollecting}
         className="text-daintree-text border-daintree-border hover:bg-daintree-border hover:text-daintree-text mb-3"
       >
-        <Download className={cn("w-4 h-4", isDownloading && "animate-spin")} />
-        {isDownloading ? "Collecting..." : "Download Diagnostics"}
+        <Download className={cn("w-4 h-4", isCollecting && "animate-spin")} />
+        {isCollecting ? "Collecting..." : "Download Diagnostics"}
       </Button>
       {downloadError && <p className="text-xs text-status-error mb-3">{downloadError}</p>}
+      <DiagnosticsReviewDialog
+        isOpen={reviewOpen}
+        onClose={() => setReviewOpen(false)}
+        reviewPayload={reviewPayload}
+        onSave={handleSave}
+        isSaving={isSaving}
+      />
     </SettingsSection>
   );
 }
