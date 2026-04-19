@@ -28,6 +28,7 @@ import { getCrashRecoveryService } from "../services/CrashRecoveryService.js";
 import { notifyError } from "../ipc/errorHandlers.js";
 import { PERF_MARKS } from "../../shared/perf/marks.js";
 import { injectSkeletonCss } from "./skeletonCss.js";
+import { attachRendererConsoleCapture } from "./rendererConsoleCapture.js";
 import { markPerformance } from "../utils/performance.js";
 import { registerProtocolsForSession, getDistPath } from "../setup/protocols.js";
 import { isSmokeTest } from "../setup/environment.js";
@@ -239,6 +240,7 @@ export function setupBrowserWindow(
 
   // The app view's webContents is the "renderer" for all purposes
   const appWebContents = appView.webContents;
+  attachRendererConsoleCapture(appWebContents);
 
   // Match the appView's background to the window chrome so the frame and
   // content area reveal a single colour when the window is shown before the

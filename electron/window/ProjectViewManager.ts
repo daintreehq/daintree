@@ -25,6 +25,7 @@ import { getPtyManager } from "../services/PtyManager.js";
 import { notifyError } from "../ipc/errorHandlers.js";
 import { logInfo } from "../utils/logger.js";
 import { injectSkeletonCss } from "./skeletonCss.js";
+import { attachRendererConsoleCapture } from "./rendererConsoleCapture.js";
 import { ACTIVE_AGENT_STATES } from "../../shared/types/agent.js";
 
 const GC_DELAY_MS = 100;
@@ -452,6 +453,8 @@ export class ProjectViewManager {
   private setupViewHandlers(view: WebContentsView): void {
     const wc = view.webContents;
     const win = this.win;
+
+    attachRendererConsoleCapture(wc);
 
     wc.setWindowOpenHandler(({ url }) => {
       if (url && canOpenExternalUrl(url)) {
