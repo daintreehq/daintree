@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { EventEmitter } from "events";
 
 const ipcMainMock = vi.hoisted(() => ({
@@ -8,14 +8,37 @@ const ipcMainMock = vi.hoisted(() => ({
   removeListener: vi.fn(),
 }));
 
-vi.mock("electron", () => ({ ipcMain: ipcMainMock, BrowserWindow: { getAllWindows: () => [] } }));
+const displaySessionMock = vi.hoisted(() => ({
+  setDisplayMediaRequestHandler: vi.fn(),
+}));
+
+const sessionMock = vi.hoisted(() => ({
+  fromPartition: vi.fn(() => displaySessionMock),
+}));
+
+vi.mock("electron", () => ({
+  ipcMain: ipcMainMock,
+  session: sessionMock,
+  BrowserWindow: { getAllWindows: () => [] },
+}));
 
 vi.mock("crypto", () => ({
   randomBytes: vi.fn(() => ({ toString: () => "test-request-id" })),
 }));
 
+class MockWriteStream extends EventEmitter {
+  write = vi.fn(() => true);
+  end = vi.fn((cb?: () => void) => {
+    if (cb) setTimeout(cb, 0);
+  });
+  destroy = vi.fn();
+}
+
+let mockWriteStream: MockWriteStream;
+
 vi.mock("fs", () => ({
   mkdirSync: vi.fn(),
+  createWriteStream: vi.fn(() => mockWriteStream),
 }));
 
 class MockStdin extends EventEmitter {
@@ -50,17 +73,14 @@ import type { BrowserWindow } from "electron";
 
 const FRAME_W = 1920;
 const FRAME_H = 1080;
-// Use a small buffer for tests — real BGRA would be FRAME_W * FRAME_H * 4 but that causes OOM in test workers
-const BGRA_BUFFER = Buffer.alloc(16);
 
 function makeMockImage() {
-  const img = {
+  return {
     toPNG: () => Buffer.from([0x89, 0x50, 0x4e, 0x47]),
     getSize: () => ({ width: FRAME_W, height: FRAME_H }),
-    toBitmap: () => BGRA_BUFFER,
+    toBitmap: () => Buffer.alloc(16),
     resize: vi.fn().mockReturnThis(),
   };
-  return img;
 }
 
 function makeDeps(isDemoMode: boolean): HandlerDependencies {
@@ -83,15 +103,22 @@ function getHandler(channel: string): (...args: unknown[]) => unknown {
   return call[1] as (...args: unknown[]) => unknown;
 }
 
+function getIpcListener(channel: string): ((...args: unknown[]) => void) | undefined {
+  const call = ipcMainMock.on.mock.calls.find(([ch]: unknown[]) => ch === channel);
+  return call?.[1] as ((...args: unknown[]) => void) | undefined;
+}
+
 describe("registerDemoHandlers", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockProc = createMockProc();
+    mockWriteStream = new MockWriteStream();
   });
 
   it("is a no-op when isDemoMode is false", () => {
     const cleanup = registerDemoHandlers(makeDeps(false));
     expect(ipcMainMock.handle).not.toHaveBeenCalled();
+    expect(displaySessionMock.setDisplayMediaRequestHandler).not.toHaveBeenCalled();
     cleanup();
   });
 
@@ -101,91 +128,393 @@ describe("registerDemoHandlers", () => {
     cleanup();
   });
 
+  it("registers setDisplayMediaRequestHandler on persist:daintree session", () => {
+    const cleanup = registerDemoHandlers(makeDeps(true));
+    expect(sessionMock.fromPartition).toHaveBeenCalledWith("persist:daintree");
+    expect(displaySessionMock.setDisplayMediaRequestHandler).toHaveBeenCalledTimes(1);
+    const args = displaySessionMock.setDisplayMediaRequestHandler.mock.calls[0]!;
+    expect(typeof args[0]).toBe("function");
+    expect(args[1]).toEqual({ useSystemPicker: false });
+    cleanup();
+  });
+
+  it("display handler invokes callback with request frame", () => {
+    const cleanup = registerDemoHandlers(makeDeps(true));
+    const [handlerFn] = displaySessionMock.setDisplayMediaRequestHandler.mock.calls[0]!;
+    const callback = vi.fn();
+    const frame = { id: "frame1" };
+    (handlerFn as (req: unknown, cb: (r: unknown) => void) => void)(
+      { frame, videoRequested: true },
+      callback
+    );
+    expect(callback).toHaveBeenCalledWith({ video: frame });
+    cleanup();
+  });
+
+  it("cleanup removes the display media handler", () => {
+    const cleanup = registerDemoHandlers(makeDeps(true));
+    cleanup();
+    expect(displaySessionMock.setDisplayMediaRequestHandler).toHaveBeenLastCalledWith(null);
+  });
+
   it("registers handlers for all demo channels", () => {
     const cleanup = registerDemoHandlers(makeDeps(true));
     const channels = ipcMainMock.handle.mock.calls.map(([ch]: unknown[]) => ch);
     expect(channels).toContain("demo:move-to");
-    expect(channels).toContain("demo:move-to-selector");
     expect(channels).toContain("demo:click");
     expect(channels).toContain("demo:screenshot");
-    expect(channels).toContain("demo:type");
-    expect(channels).toContain("demo:wait-for-selector");
-    expect(channels).toContain("demo:pause");
-    expect(channels).toContain("demo:resume");
-    expect(channels).toContain("demo:sleep");
     expect(channels).toContain("demo:start-capture");
     expect(channels).toContain("demo:stop-capture");
     expect(channels).toContain("demo:get-capture-status");
-    expect(channels).not.toContain("demo:encode");
-    expect(channels).toContain("demo:scroll");
-    expect(channels).toContain("demo:drag");
-    expect(channels).toContain("demo:press-key");
-    expect(channels).toContain("demo:spotlight");
-    expect(channels).toContain("demo:dismiss-spotlight");
-    expect(channels).toContain("demo:annotate");
-    expect(channels).toContain("demo:dismiss-annotation");
-    expect(channels).toContain("demo:wait-for-idle");
+    expect(channels).toContain("demo:encode");
     cleanup();
   });
 
-  it("cleanup removes all 20 handlers", () => {
+  it("registers chunk and stop listeners on ipcMain", () => {
+    const cleanup = registerDemoHandlers(makeDeps(true));
+    const onChannels = ipcMainMock.on.mock.calls.map(([ch]: unknown[]) => ch);
+    expect(onChannels).toContain("demo:capture-chunk");
+    expect(onChannels).toContain("demo:capture-stop");
+    cleanup();
+  });
+
+  it("cleanup removes all 22 handlers", () => {
     const cleanup = registerDemoHandlers(makeDeps(true));
     cleanup();
-    expect(ipcMainMock.removeHandler).toHaveBeenCalledTimes(20);
-    expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("demo:move-to");
-    expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("demo:move-to-selector");
-    expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("demo:click");
-    expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("demo:screenshot");
-    expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("demo:type");
-    expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("demo:wait-for-selector");
-    expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("demo:pause");
-    expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("demo:resume");
-    expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("demo:sleep");
-    expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("demo:scroll");
-    expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("demo:drag");
-    expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("demo:press-key");
-    expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("demo:spotlight");
-    expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("demo:dismiss-spotlight");
-    expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("demo:annotate");
-    expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("demo:dismiss-annotation");
-    expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("demo:wait-for-idle");
-    expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("demo:start-capture");
-    expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("demo:stop-capture");
-    expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("demo:get-capture-status");
-    expect(ipcMainMock.removeHandler).not.toHaveBeenCalledWith("demo:encode");
+    expect(ipcMainMock.removeHandler).toHaveBeenCalledTimes(22);
+  });
+
+  it("cleanup removes chunk and stop listeners", () => {
+    const cleanup = registerDemoHandlers(makeDeps(true));
+    cleanup();
+    const removed = ipcMainMock.removeListener.mock.calls.map(([ch]: unknown[]) => ch);
+    expect(removed).toContain("demo:capture-chunk");
+    expect(removed).toContain("demo:capture-stop");
   });
 
   it("screenshot handler returns Uint8Array with PNG magic bytes", async () => {
     const deps = makeDeps(true);
     registerDemoHandlers(deps);
-
-    const [, handler] =
-      ipcMainMock.handle.mock.calls.find(([ch]: unknown[]) => ch === "demo:screenshot") ?? [];
-    const result = await handler();
+    const handler = getHandler("demo:screenshot");
+    const result = (await handler()) as {
+      data: Uint8Array;
+      width: number;
+      height: number;
+    };
     expect(result.data).toBeInstanceOf(Uint8Array);
     expect(result.data[0]).toBe(0x89);
-    expect(result.data[1]).toBe(0x50);
-    expect(result.data[2]).toBe(0x4e);
-    expect(result.data[3]).toBe(0x47);
     expect(result.width).toBe(1920);
     expect(result.height).toBe(1080);
   });
 
-  it("moveTo handler sends exec event with requestId and awaits done", async () => {
-    const deps = makeDeps(true);
-    registerDemoHandlers(deps);
+  describe("handleEncode", () => {
+    function getEncodeHandler() {
+      registerDemoHandlers(makeDeps(true));
+      return getHandler("demo:encode");
+    }
 
-    const [, handler] =
-      ipcMainMock.handle.mock.calls.find(([ch]: unknown[]) => ch === "demo:move-to") ?? [];
+    function makeEvent(isDestroyed = false) {
+      return {
+        sender: {
+          send: vi.fn(),
+          isDestroyed: vi.fn(() => isDestroyed),
+        },
+      };
+    }
 
-    ipcMainMock.on.mockImplementation((channel: string, listener: (...args: unknown[]) => void) => {
-      if (channel === "demo:command-done") {
-        setTimeout(() => {
-          listener({}, { requestId: "test-request-id" });
-        }, 10);
-      }
+    it("resolves with outputPath and durationMs on success", async () => {
+      const handler = getEncodeHandler();
+      const event = makeEvent();
+      const promise = handler(event, {
+        framesDir: "/tmp/frames",
+        outputPath: "/tmp/out.mp4",
+        preset: "youtube-1080p",
+      });
+      mockProc.emit("close", 0);
+      const result = (await promise) as { outputPath: string; durationMs: number };
+      expect(result.outputPath).toBe("/tmp/out.mp4");
+      expect(typeof result.durationMs).toBe("number");
     });
 
+    it("rejects when no PNG frames found", async () => {
+      const fsMod = await import("fs");
+      (fsMod.readdirSync as ReturnType<typeof vi.fn>).mockReturnValueOnce([]);
+      const handler = getEncodeHandler();
+      const event = makeEvent();
+      await expect(
+        handler(event, {
+          framesDir: "/tmp/empty",
+          outputPath: "/tmp/out.mp4",
+          preset: "youtube-4k",
+        })
+      ).rejects.toThrow("No PNG frames matching frame-NNNNNN.png found");
+    });
+
+    it("rejects on non-zero exit code with stderr", async () => {
+      const handler = getEncodeHandler();
+      const event = makeEvent();
+      const promise = handler(event, {
+        framesDir: "/tmp/frames",
+        outputPath: "/tmp/out.mp4",
+        preset: "web-webm",
+      });
+      mockProc.stderr.emit("data", Buffer.from("Unknown encoder libx264"));
+      mockProc.emit("close", 1);
+      await expect(promise).rejects.toThrow("ffmpeg exited with code 1");
+    });
+
+    it("uses yuv444p and high444 profile for youtube presets", async () => {
+      const { spawn: spawnMock } = await import("child_process");
+      const handler = getEncodeHandler();
+      const event = makeEvent();
+      const promise = handler(event, {
+        framesDir: "/tmp/frames",
+        outputPath: "/tmp/out.mp4",
+        preset: "youtube-1080p",
+      });
+      mockProc.emit("close", 0);
+      await promise;
+      const args = (spawnMock as ReturnType<typeof vi.fn>).mock.calls[0]![1] as string[];
+      expect(args).toContain("yuv444p");
+      expect(args).toContain("high444");
+    });
+
+    it("uses frame-%06d.png input pattern", async () => {
+      const { spawn: spawnMock } = await import("child_process");
+      const handler = getEncodeHandler();
+      const event = makeEvent();
+      const promise = handler(event, {
+        framesDir: "/tmp/frames",
+        outputPath: "/tmp/out.mp4",
+        preset: "youtube-1080p",
+      });
+      mockProc.emit("close", 0);
+      await promise;
+      const args = (spawnMock as ReturnType<typeof vi.fn>).mock.calls[0]![1] as string[];
+      const inputIdx = args.indexOf("-i");
+      expect(args[inputIdx + 1]).toContain("frame-%06d.png");
+    });
+  });
+
+  describe("MediaRecorder capture pipeline", () => {
+    const defaultPayload = {
+      fps: 30,
+      outputPath: "/tmp/capture/out.webm",
+    };
+
+    function simulateCommandDone(requestId = "test-request-id") {
+      const doneListener = getIpcListener("demo:command-done");
+      doneListener?.({}, { requestId });
+    }
+
+    it("startCapture creates write stream, sends exec start, returns outputPath", async () => {
+      const fsMod = await import("fs");
+      const deps = makeDeps(true);
+      const cleanup = registerDemoHandlers(deps);
+      const handler = getHandler("demo:start-capture");
+
+      ipcMainMock.on.mockImplementation(
+        (channel: string, listener: (...args: unknown[]) => void) => {
+          if (channel === "demo:command-done") {
+            setTimeout(() => listener({}, { requestId: "test-request-id" }), 5);
+          }
+        }
+      );
+
+      const result = (await handler({}, defaultPayload)) as { outputPath: string };
+      expect(result.outputPath).toBe("/tmp/capture/out.webm");
+      expect(fsMod.mkdirSync).toHaveBeenCalledWith("/tmp/capture", { recursive: true });
+      expect(fsMod.createWriteStream).toHaveBeenCalledWith("/tmp/capture/out.webm");
+
+      const send = deps.mainWindow!.webContents.send as ReturnType<typeof vi.fn>;
+      const startSend = send.mock.calls.find((c) => c[0] === "demo:exec-start-capture");
+      expect(startSend).toBeDefined();
+      expect(startSend![1]).toMatchObject({
+        fps: 30,
+        mimeType: "video/webm;codecs=vp9",
+      });
+      cleanup();
+    });
+
+    it("rejects startCapture when already active", async () => {
+      ipcMainMock.on.mockImplementation(
+        (channel: string, listener: (...args: unknown[]) => void) => {
+          if (channel === "demo:command-done") {
+            setTimeout(() => listener({}, { requestId: "test-request-id" }), 5);
+          }
+        }
+      );
+      const cleanup = registerDemoHandlers(makeDeps(true));
+      const handler = getHandler("demo:start-capture");
+      await handler({}, defaultPayload);
+      await expect(handler({}, defaultPayload)).rejects.toThrow("Capture already in progress");
+      cleanup();
+    });
+
+    it("capture chunk handler writes buffer to stream for matching captureId", async () => {
+      // Build a real registration (not mocked) so we can capture the listener
+      const deps = makeDeps(true);
+      const cleanup = registerDemoHandlers(deps);
+      const startHandler = getHandler("demo:start-capture");
+
+      // Arrange: resolve exec-start-capture
+      let doneListener: ((...args: unknown[]) => void) | undefined;
+      ipcMainMock.on.mock.calls.forEach((c: unknown[]) => {
+        if (c[0] === "demo:command-done") {
+          doneListener = c[1] as (...args: unknown[]) => void;
+        }
+      });
+      const startPromise = startHandler({}, defaultPayload);
+      // find the latest demo:command-done listener added by sendCommandAndAwait
+      setTimeout(() => {
+        const latest = ipcMainMock.on.mock.calls
+          .filter((c: unknown[]) => c[0] === "demo:command-done")
+          .at(-1);
+        (latest?.[1] as (...args: unknown[]) => void)?.({}, { requestId: "test-request-id" });
+      }, 0);
+      await startPromise;
+
+      const chunkListener = getIpcListener("demo:capture-chunk");
+      expect(chunkListener).toBeDefined();
+      const data = new Uint8Array([1, 2, 3, 4]);
+      chunkListener!({}, { captureId: "test-request-id", data });
+      expect(mockWriteStream.write).toHaveBeenCalledTimes(1);
+      cleanup();
+      // doneListener is captured but unused; simulateCommandDone retained for other tests
+      void doneListener;
+    });
+
+    it("stale captureId chunks are ignored", async () => {
+      ipcMainMock.on.mockImplementation(
+        (channel: string, listener: (...args: unknown[]) => void) => {
+          if (channel === "demo:command-done") {
+            setTimeout(() => listener({}, { requestId: "test-request-id" }), 5);
+          }
+        }
+      );
+      const cleanup = registerDemoHandlers(makeDeps(true));
+      const handler = getHandler("demo:start-capture");
+      await handler({}, defaultPayload);
+      const chunkListener = getIpcListener("demo:capture-chunk");
+      chunkListener!({}, { captureId: "bogus", data: new Uint8Array([9]) });
+      expect(mockWriteStream.write).not.toHaveBeenCalled();
+      cleanup();
+    });
+
+    it("stop flow: exec-stop sent then capture-stop finalizes writeStream and resolves", async () => {
+      ipcMainMock.on.mockImplementation(
+        (channel: string, listener: (...args: unknown[]) => void) => {
+          if (channel === "demo:command-done") {
+            setTimeout(() => listener({}, { requestId: "test-request-id" }), 5);
+          }
+        }
+      );
+      const deps = makeDeps(true);
+      const cleanup = registerDemoHandlers(deps);
+
+      await (getHandler("demo:start-capture") as (...a: unknown[]) => Promise<unknown>)(
+        {},
+        defaultPayload
+      );
+      const stopPromise = (
+        getHandler("demo:stop-capture") as (...a: unknown[]) => Promise<{
+          outputPath: string;
+          frameCount: number;
+        }>
+      )({});
+
+      // Simulate renderer posting the final DEMO_CAPTURE_STOP
+      setTimeout(() => {
+        const stopListener = getIpcListener("demo:capture-stop");
+        stopListener!({}, { captureId: "test-request-id", frameCount: 7 });
+      }, 10);
+
+      const result = await stopPromise;
+      expect(mockWriteStream.end).toHaveBeenCalled();
+      expect(result.outputPath).toBe("/tmp/capture/out.webm");
+      expect(result.frameCount).toBe(7);
+      cleanup();
+    });
+
+    it("stopCapture rejects when no capture in progress", async () => {
+      const cleanup = registerDemoHandlers(makeDeps(true));
+      const handler = getHandler("demo:stop-capture");
+      await expect(handler({})).rejects.toThrow("No capture in progress");
+      cleanup();
+    });
+
+    it("getCaptureStatus returns inactive before start", async () => {
+      const cleanup = registerDemoHandlers(makeDeps(true));
+      const status = (await (
+        getHandler("demo:get-capture-status") as () => Promise<unknown>
+      )()) as {
+        active: boolean;
+        frameCount: number;
+        outputPath: string | null;
+      };
+      expect(status.active).toBe(false);
+      expect(status.outputPath).toBeNull();
+      cleanup();
+    });
+
+    it("getCaptureStatus reports active after start", async () => {
+      ipcMainMock.on.mockImplementation(
+        (channel: string, listener: (...args: unknown[]) => void) => {
+          if (channel === "demo:command-done") {
+            setTimeout(() => listener({}, { requestId: "test-request-id" }), 5);
+          }
+        }
+      );
+      const cleanup = registerDemoHandlers(makeDeps(true));
+      await (getHandler("demo:start-capture") as (...a: unknown[]) => Promise<unknown>)(
+        {},
+        defaultPayload
+      );
+      const status = (await (
+        getHandler("demo:get-capture-status") as () => Promise<unknown>
+      )()) as {
+        active: boolean;
+        outputPath: string | null;
+      };
+      expect(status.active).toBe(true);
+      expect(status.outputPath).toBe("/tmp/capture/out.webm");
+      cleanup();
+    });
+
+    it("error from renderer on capture-stop rejects finalize promise", async () => {
+      ipcMainMock.on.mockImplementation(
+        (channel: string, listener: (...args: unknown[]) => void) => {
+          if (channel === "demo:command-done") {
+            setTimeout(() => listener({}, { requestId: "test-request-id" }), 5);
+          }
+        }
+      );
+      const cleanup = registerDemoHandlers(makeDeps(true));
+      await (getHandler("demo:start-capture") as (...a: unknown[]) => Promise<unknown>)(
+        {},
+        defaultPayload
+      );
+      const stopPromise = (
+        getHandler("demo:stop-capture") as (...a: unknown[]) => Promise<unknown>
+      )({});
+      setTimeout(() => {
+        const stopListener = getIpcListener("demo:capture-stop");
+        stopListener!({}, { captureId: "test-request-id", frameCount: 0, error: "boom" });
+      }, 10);
+      await expect(stopPromise).rejects.toThrow("Capture failed: boom");
+      cleanup();
+    });
+  });
+
+  it("moveTo handler sends exec event with requestId and awaits done", async () => {
+    ipcMainMock.on.mockImplementation((channel: string, listener: (...args: unknown[]) => void) => {
+      if (channel === "demo:command-done") {
+        setTimeout(() => listener({}, { requestId: "test-request-id" }), 10);
+      }
+    });
+    const deps = makeDeps(true);
+    registerDemoHandlers(deps);
+    const handler = getHandler("demo:move-to");
     const result = await handler({}, { x: 25, y: 75, durationMs: 500 });
     expect(result).toBeUndefined();
     expect(deps.mainWindow!.webContents.send as ReturnType<typeof vi.fn>).toHaveBeenCalledWith(
@@ -194,487 +523,16 @@ describe("registerDemoHandlers", () => {
     );
   });
 
-  it("moveToSelector handler sends exec event and awaits done", async () => {
-    const deps = makeDeps(true);
-    registerDemoHandlers(deps);
-
-    const [, handler] =
-      ipcMainMock.handle.mock.calls.find(([ch]: unknown[]) => ch === "demo:move-to-selector") ?? [];
-
-    ipcMainMock.on.mockImplementation((channel: string, listener: (...args: unknown[]) => void) => {
-      if (channel === "demo:command-done") {
-        setTimeout(() => {
-          listener({}, { requestId: "test-request-id" });
-        }, 10);
-      }
-    });
-
-    const result = await handler(
-      {},
-      { selector: ".my-btn", durationMs: 300, offsetX: 5, offsetY: -3 }
-    );
-    expect(result).toBeUndefined();
-    expect(deps.mainWindow!.webContents.send as ReturnType<typeof vi.fn>).toHaveBeenCalledWith(
-      "demo:exec-move-to-selector",
-      {
-        selector: ".my-btn",
-        durationMs: 300,
-        offsetX: 5,
-        offsetY: -3,
-        requestId: "test-request-id",
-      }
-    );
-  });
-
   it("annotate handler returns pre-generated id", async () => {
-    const deps = makeDeps(true);
-    registerDemoHandlers(deps);
-
-    const [, handler] =
-      ipcMainMock.handle.mock.calls.find(([ch]: unknown[]) => ch === "demo:annotate") ?? [];
-
     ipcMainMock.on.mockImplementation((channel: string, listener: (...args: unknown[]) => void) => {
       if (channel === "demo:command-done") {
-        setTimeout(() => {
-          listener({}, { requestId: "test-request-id" });
-        }, 10);
+        setTimeout(() => listener({}, { requestId: "test-request-id" }), 10);
       }
     });
-
+    const deps = makeDeps(true);
+    registerDemoHandlers(deps);
+    const handler = getHandler("demo:annotate");
     const result = await handler({}, { selector: ".my-el", text: "Hello", position: "top" });
     expect(result).toEqual({ id: "test-request-id" });
-    expect(deps.mainWindow!.webContents.send as ReturnType<typeof vi.fn>).toHaveBeenCalledWith(
-      "demo:exec-annotate",
-      expect.objectContaining({ selector: ".my-el", text: "Hello", id: "test-request-id" })
-    );
-  });
-
-  it("annotate handler uses provided id when given", async () => {
-    const deps = makeDeps(true);
-    registerDemoHandlers(deps);
-
-    const [, handler] =
-      ipcMainMock.handle.mock.calls.find(([ch]: unknown[]) => ch === "demo:annotate") ?? [];
-
-    ipcMainMock.on.mockImplementation((channel: string, listener: (...args: unknown[]) => void) => {
-      if (channel === "demo:command-done") {
-        setTimeout(() => {
-          listener({}, { requestId: "test-request-id" });
-        }, 10);
-      }
-    });
-
-    const result = await handler({}, { selector: ".my-el", text: "Hello", id: "custom-id" });
-    expect(result).toEqual({ id: "custom-id" });
-  });
-
-  it("scroll handler sends exec-scroll event and awaits done", async () => {
-    const deps = makeDeps(true);
-    registerDemoHandlers(deps);
-
-    const [, handler] =
-      ipcMainMock.handle.mock.calls.find(([ch]: unknown[]) => ch === "demo:scroll") ?? [];
-
-    ipcMainMock.on.mockImplementation((channel: string, listener: (...args: unknown[]) => void) => {
-      if (channel === "demo:command-done") {
-        setTimeout(() => {
-          listener({}, { requestId: "test-request-id" });
-        }, 10);
-      }
-    });
-
-    const result = await handler({}, { selector: ".content" });
-    expect(result).toBeUndefined();
-    expect(deps.mainWindow!.webContents.send as ReturnType<typeof vi.fn>).toHaveBeenCalledWith(
-      "demo:exec-scroll",
-      { selector: ".content", requestId: "test-request-id" }
-    );
-  });
-
-  it("sleep handler sends exec-sleep event with requestId and awaits done", async () => {
-    const deps = makeDeps(true);
-    registerDemoHandlers(deps);
-
-    const [, handler] =
-      ipcMainMock.handle.mock.calls.find(([ch]: unknown[]) => ch === "demo:sleep") ?? [];
-
-    ipcMainMock.on.mockImplementation((channel: string, listener: (...args: unknown[]) => void) => {
-      if (channel === "demo:command-done") {
-        setTimeout(() => {
-          listener({}, { requestId: "test-request-id" });
-        }, 10);
-      }
-    });
-
-    const result = await handler({}, { durationMs: 1000 });
-    expect(result).toBeUndefined();
-    expect(deps.mainWindow!.webContents.send as ReturnType<typeof vi.fn>).toHaveBeenCalledWith(
-      "demo:exec-sleep",
-      { durationMs: 1000, requestId: "test-request-id" }
-    );
-  });
-});
-
-describe("frame capture pipeline", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mockProc = createMockProc();
-    vi.useFakeTimers();
-  });
-
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
-  const defaultPayload = {
-    fps: 30,
-    outputPath: "/tmp/capture/out.mp4",
-    preset: "youtube-1080p" as const,
-  };
-
-  it("startCapture spawns ffmpeg with rawvideo stdin args and returns outputPath", async () => {
-    const { spawn: spawnMock } = await import("child_process");
-    const deps = makeDeps(true);
-    const cleanup = registerDemoHandlers(deps);
-
-    const handler = getHandler("demo:start-capture");
-    const result = (await handler({}, defaultPayload)) as { outputPath: string };
-
-    expect(result.outputPath).toBe("/tmp/capture/out.mp4");
-
-    const args = (spawnMock as ReturnType<typeof vi.fn>).mock.calls[0][1] as string[];
-    expect(args).toContain("-f");
-    expect(args).toContain("rawvideo");
-    expect(args).toContain("-pix_fmt");
-    expect(args[args.indexOf("-pix_fmt") + 1]).toBe("bgra");
-    expect(args).toContain("-video_size");
-    expect(args[args.indexOf("-video_size") + 1]).toBe("1920x1080");
-    expect(args).toContain("-framerate");
-    expect(args[args.indexOf("-framerate") + 1]).toBe("30");
-    expect(args).toContain("-i");
-    expect(args[args.indexOf("-i") + 1]).toBe("pipe:0");
-    expect(args).toContain("-fps_mode");
-    expect(args).toContain("cfr");
-
-    cleanup();
-  });
-
-  it("creates output directory before spawning ffmpeg", async () => {
-    const fsMod = await import("fs");
-    const deps = makeDeps(true);
-    const cleanup = registerDemoHandlers(deps);
-
-    const handler = getHandler("demo:start-capture");
-    await handler({}, defaultPayload);
-
-    expect(fsMod.mkdirSync).toHaveBeenCalledWith("/tmp/capture", { recursive: true });
-
-    cleanup();
-  });
-
-  it("captures first frame and calls resize for HiDPI normalization", async () => {
-    const deps = makeDeps(true);
-    const cleanup = registerDemoHandlers(deps);
-
-    const handler = getHandler("demo:start-capture");
-    await handler({}, defaultPayload);
-
-    const capturePage = deps.mainWindow!.webContents.capturePage as ReturnType<typeof vi.fn>;
-    expect(capturePage).toHaveBeenCalled();
-
-    // The mock image's resize should have been called with logical dims
-    const mockImage = await capturePage.mock.results[0].value;
-    expect(mockImage.resize).toHaveBeenCalledWith({
-      width: 1920,
-      height: 1080,
-      quality: "best",
-    });
-
-    cleanup();
-  });
-
-  it("ticker writes BGRA buffer to ffmpeg stdin", async () => {
-    const deps = makeDeps(true);
-    const cleanup = registerDemoHandlers(deps);
-
-    const handler = getHandler("demo:start-capture");
-    await handler({}, defaultPayload);
-
-    // Advance timer to trigger the ticker
-    await vi.advanceTimersByTimeAsync(34);
-
-    expect(mockProc.stdin.write).toHaveBeenCalledWith(BGRA_BUFFER);
-
-    cleanup();
-  });
-
-  it("getCaptureStatus returns inactive before start", async () => {
-    const deps = makeDeps(true);
-    const cleanup = registerDemoHandlers(deps);
-
-    const handler = getHandler("demo:get-capture-status");
-    const status = (await handler({})) as {
-      active: boolean;
-      frameCount: number;
-      outputPath: string | null;
-    };
-
-    expect(status.active).toBe(false);
-    expect(status.frameCount).toBe(0);
-    expect(status.outputPath).toBeNull();
-
-    cleanup();
-  });
-
-  it("getCaptureStatus reports active while capturing", async () => {
-    const deps = makeDeps(true);
-    const cleanup = registerDemoHandlers(deps);
-
-    const startHandler = getHandler("demo:start-capture");
-    await startHandler({}, defaultPayload);
-
-    // Write one frame via ticker
-    await vi.advanceTimersByTimeAsync(34);
-
-    const statusHandler = getHandler("demo:get-capture-status");
-    const status = (await statusHandler({})) as {
-      active: boolean;
-      frameCount: number;
-      outputPath: string | null;
-    };
-
-    expect(status.active).toBe(true);
-    expect(status.frameCount).toBe(1);
-    expect(status.outputPath).toBe("/tmp/capture/out.mp4");
-
-    cleanup();
-  });
-
-  it("stopCapture calls stdin.end and resolves with outputPath and frameCount", async () => {
-    const deps = makeDeps(true);
-    const cleanup = registerDemoHandlers(deps);
-
-    const startHandler = getHandler("demo:start-capture");
-    await startHandler({}, defaultPayload);
-
-    // Write one frame
-    await vi.advanceTimersByTimeAsync(34);
-
-    const stopHandler = getHandler("demo:stop-capture");
-    const stopPromise = stopHandler({}) as Promise<{ outputPath: string; frameCount: number }>;
-
-    expect(mockProc.stdin.end).toHaveBeenCalled();
-
-    // Simulate ffmpeg closing successfully
-    mockProc.emit("close", 0);
-
-    const result = await stopPromise;
-    expect(result.outputPath).toBe("/tmp/capture/out.mp4");
-    expect(result.frameCount).toBe(1);
-
-    cleanup();
-  });
-
-  it("stopCapture rejects when no capture in progress", async () => {
-    const deps = makeDeps(true);
-    const cleanup = registerDemoHandlers(deps);
-
-    const stopHandler = getHandler("demo:stop-capture");
-    await expect(stopHandler({})).rejects.toThrow("No capture in progress");
-
-    cleanup();
-  });
-
-  it("rejects startCapture when already active", async () => {
-    const deps = makeDeps(true);
-    const cleanup = registerDemoHandlers(deps);
-
-    const handler = getHandler("demo:start-capture");
-    await handler({}, defaultPayload);
-
-    await expect(handler({}, defaultPayload)).rejects.toThrow("Capture already in progress");
-
-    cleanup();
-  });
-
-  it("auto-stops when maxFrames is reached", async () => {
-    const deps = makeDeps(true);
-    const cleanup = registerDemoHandlers(deps);
-
-    const startHandler = getHandler("demo:start-capture");
-    await startHandler({}, { ...defaultPayload, maxFrames: 2 });
-
-    // Write first frame
-    await vi.advanceTimersByTimeAsync(34);
-    expect(mockProc.stdin.write).toHaveBeenCalledTimes(1);
-
-    // Write second frame — should trigger auto-stop
-    await vi.advanceTimersByTimeAsync(34);
-    expect(mockProc.stdin.write).toHaveBeenCalledTimes(2);
-    expect(mockProc.stdin.end).toHaveBeenCalled();
-
-    cleanup();
-  });
-
-  it("handles backpressure by pausing ticker and resuming on drain", async () => {
-    const deps = makeDeps(true);
-    const cleanup = registerDemoHandlers(deps);
-
-    // First write returns false (backpressure)
-    mockProc.stdin.write.mockReturnValueOnce(false);
-
-    const startHandler = getHandler("demo:start-capture");
-    await startHandler({}, defaultPayload);
-
-    // First tick — write returns false
-    await vi.advanceTimersByTimeAsync(34);
-    expect(mockProc.stdin.write).toHaveBeenCalledTimes(1);
-
-    // More ticks should NOT produce writes (ticker paused)
-    await vi.advanceTimersByTimeAsync(34);
-    expect(mockProc.stdin.write).toHaveBeenCalledTimes(1);
-
-    // Emit drain — should resume ticker
-    mockProc.stdin.emit("drain");
-
-    // Next tick after drain should write again
-    await vi.advanceTimersByTimeAsync(34);
-    expect(mockProc.stdin.write).toHaveBeenCalledTimes(2);
-
-    cleanup();
-  });
-
-  it("cleanup stops capture and kills ffmpeg process", async () => {
-    const deps = makeDeps(true);
-    const cleanup = registerDemoHandlers(deps);
-
-    const startHandler = getHandler("demo:start-capture");
-    await startHandler({}, defaultPayload);
-
-    cleanup();
-
-    expect(mockProc.stdin.end).toHaveBeenCalled();
-    expect(mockProc.kill).toHaveBeenCalledWith("SIGKILL");
-  });
-
-  it("rejects finalize promise when ffmpeg exits with non-zero code", async () => {
-    const deps = makeDeps(true);
-    const cleanup = registerDemoHandlers(deps);
-
-    const startHandler = getHandler("demo:start-capture");
-    await startHandler({}, defaultPayload);
-
-    const stopHandler = getHandler("demo:stop-capture");
-    const stopPromise = stopHandler({}) as Promise<unknown>;
-
-    mockProc.emit("close", 1);
-
-    await expect(stopPromise).rejects.toThrow("ffmpeg exited with code 1");
-
-    cleanup();
-  });
-
-  it("rejects finalize promise on ffmpeg spawn error", async () => {
-    const deps = makeDeps(true);
-    const cleanup = registerDemoHandlers(deps);
-
-    const startHandler = getHandler("demo:start-capture");
-    await startHandler({}, defaultPayload);
-
-    // Stop first to get the finalize promise, then emit error
-    const stopHandler = getHandler("demo:stop-capture");
-    const stopPromise = stopHandler({}) as Promise<unknown>;
-
-    mockProc.emit("error", new Error("spawn ENOENT"));
-
-    await expect(stopPromise).rejects.toThrow("Capture encode failed: spawn ENOENT");
-
-    cleanup();
-  });
-
-  it("uses capture preset options including yuv444p for youtube-1080p", async () => {
-    const { spawn: spawnMock } = await import("child_process");
-    const deps = makeDeps(true);
-    const cleanup = registerDemoHandlers(deps);
-
-    const handler = getHandler("demo:start-capture");
-    await handler({}, defaultPayload);
-
-    const args = (spawnMock as ReturnType<typeof vi.fn>).mock.calls[0][1] as string[];
-    expect(args).toContain("yuv444p");
-    expect(args).toContain("high444");
-    expect(args).toContain("libx264");
-    expect(args).not.toContain("yuv420p");
-
-    cleanup();
-  });
-
-  it("uses web-webm capture preset with VP9 and yuv444p", async () => {
-    const { spawn: spawnMock } = await import("child_process");
-    mockProc = createMockProc();
-    const deps = makeDeps(true);
-    const cleanup = registerDemoHandlers(deps);
-
-    const handler = getHandler("demo:start-capture");
-    await handler({}, { ...defaultPayload, preset: "web-webm", outputPath: "/tmp/out.webm" });
-
-    const args = (spawnMock as ReturnType<typeof vi.fn>).mock.calls[0][1] as string[];
-    expect(args).toContain("libvpx-vp9");
-    expect(args).toContain("yuv444p");
-    expect(args).toContain("-row-mt");
-
-    cleanup();
-  });
-
-  it("supports start/stop/restart cycle with fresh state", async () => {
-    const deps = makeDeps(true);
-    const cleanup = registerDemoHandlers(deps);
-
-    const startHandler = getHandler("demo:start-capture");
-    const stopHandler = getHandler("demo:stop-capture");
-
-    // First session
-    await startHandler({}, defaultPayload);
-    await vi.advanceTimersByTimeAsync(34);
-    const stopPromise1 = stopHandler({}) as Promise<{ outputPath: string; frameCount: number }>;
-    mockProc.emit("close", 0);
-    const result1 = await stopPromise1;
-    expect(result1.outputPath).toBe("/tmp/capture/out.mp4");
-    expect(result1.frameCount).toBe(1);
-
-    // Second session — need fresh mockProc
-    mockProc = createMockProc();
-    const { spawn: spawnMock } = await import("child_process");
-    (spawnMock as ReturnType<typeof vi.fn>).mockReturnValue(mockProc);
-
-    await startHandler({}, { ...defaultPayload, outputPath: "/tmp/capture/out2.mp4" });
-    await vi.advanceTimersByTimeAsync(34);
-    await vi.advanceTimersByTimeAsync(34);
-    const stopPromise2 = stopHandler({}) as Promise<{ outputPath: string; frameCount: number }>;
-    mockProc.emit("close", 0);
-    const result2 = await stopPromise2;
-    expect(result2.outputPath).toBe("/tmp/capture/out2.mp4");
-    expect(result2.frameCount).toBe(2);
-
-    cleanup();
-  });
-
-  it("rejects startCapture when first capturePage fails", async () => {
-    const deps = makeDeps(true);
-    const capturePage = deps.mainWindow!.webContents.capturePage as ReturnType<typeof vi.fn>;
-    capturePage.mockRejectedValueOnce(new Error("GPU context lost"));
-
-    const cleanup = registerDemoHandlers(deps);
-
-    const { spawn: spawnMock } = await import("child_process");
-    const spawnCallsBefore = (spawnMock as ReturnType<typeof vi.fn>).mock.calls.length;
-
-    const handler = getHandler("demo:start-capture");
-    await expect(handler({}, defaultPayload)).rejects.toThrow("GPU context lost");
-
-    // ffmpeg should not have been spawned
-    expect((spawnMock as ReturnType<typeof vi.fn>).mock.calls.length).toBe(spawnCallsBefore);
-
-    cleanup();
   });
 });

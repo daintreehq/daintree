@@ -34,9 +34,30 @@ export interface DemoScreenshotResult {
 
 export interface DemoStartCapturePayload {
   fps?: number;
-  maxFrames?: number;
   outputPath: string;
-  preset: DemoEncodePreset;
+}
+
+export interface DemoCaptureChunkPayload {
+  captureId: string;
+  data: Uint8Array;
+}
+
+export interface DemoCaptureStopPayload {
+  captureId: string;
+  frameCount: number;
+  error?: string;
+}
+
+export interface DemoExecStartCapturePayload {
+  captureId: string;
+  requestId: string;
+  fps: number;
+  mimeType: string;
+}
+
+export interface DemoExecStopCapturePayload {
+  captureId: string;
+  requestId: string;
 }
 
 export interface DemoStartCaptureResult {

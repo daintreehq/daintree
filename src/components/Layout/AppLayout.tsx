@@ -9,7 +9,7 @@ import { HelpPanel } from "../HelpPanel";
 import { ProjectSwitchOverlay } from "@/components/Project";
 import { FleetArmingRibbon, FleetDeck } from "@/components/Fleet";
 import { ChordIndicator } from "./ChordIndicator";
-import { DemoCursor, DemoOverlay } from "../Demo";
+import { DemoCaptureBridge, DemoCursor, DemoOverlay } from "../Demo";
 
 import { AllClearOverlay } from "../AllClearOverlay";
 import { useDiagnosticsStore, useDockStore, useFleetDeckStore, type PanelState } from "@/store";
@@ -383,6 +383,7 @@ export function AppLayout({
         <>
           <DemoOverlay />
           <DemoCursor />
+          <DemoCaptureBridge />
         </>
       )}
     </div>
