@@ -5,8 +5,11 @@ interface ActiveRecording {
   recorder: MediaRecorder;
   stream: MediaStream;
   frameCount: number;
+  pendingChunks: number;
   stopped: boolean;
+  stopSignalSent: boolean;
   stopRequestId: string | null;
+  stopError: string | null;
 }
 
 function getDemoApi() {
@@ -19,23 +22,40 @@ export function DemoCaptureBridge() {
   useEffect(() => {
     const api = getDemoApi();
 
+    // Send DEMO_CAPTURE_STOP only once all pending chunks have drained AND the
+    // recorder has stopped. ondataavailable is async (awaits arrayBuffer), so
+    // naive dispatch inside onstop races ahead of the final chunk's IPC send.
+    const maybeSendStop = (active: ActiveRecording) => {
+      if (!active.stopped || active.stopSignalSent || active.pendingChunks > 0) return;
+      active.stopSignalSent = true;
+      api.sendCaptureStop(active.captureId, active.frameCount, active.stopError ?? undefined);
+      if (active.stopRequestId) {
+        api.sendCommandDone(active.stopRequestId, active.stopError ?? undefined);
+        active.stopRequestId = null;
+      }
+      if (activeRef.current === active) {
+        activeRef.current = null;
+      }
+    };
+
     const stopAndCleanup = (active: ActiveRecording, error?: string) => {
       if (active.stopped) return;
       active.stopped = true;
+      if (error && !active.stopError) active.stopError = error;
       try {
         if (active.recorder.state !== "inactive") {
           active.recorder.stop();
+        } else {
+          // Recorder already inactive — onstop won't fire, so drive the barrier.
+          try {
+            active.stream.getTracks().forEach((t) => t.stop());
+          } catch {
+            // ignore
+          }
+          maybeSendStop(active);
         }
       } catch {
-        // already stopped
-      }
-      try {
-        active.stream.getTracks().forEach((t) => t.stop());
-      } catch {
-        // ignore
-      }
-      if (error) {
-        api.sendCaptureStop(active.captureId, active.frameCount, error);
+        maybeSendStop(active);
       }
     };
 
@@ -83,19 +103,28 @@ export function DemoCaptureBridge() {
           recorder,
           stream,
           frameCount: 0,
+          pendingChunks: 0,
           stopped: false,
+          stopSignalSent: false,
           stopRequestId: null,
+          stopError: null,
         };
         activeRef.current = active;
 
         recorder.ondataavailable = async (e: BlobEvent) => {
-          if (e.data && e.data.size > 0) {
-            try {
-              const ab = await e.data.arrayBuffer();
-              api.sendCaptureChunk(active.captureId, new Uint8Array(ab));
-            } catch {
-              // renderer unloading
+          if (!e.data || e.data.size === 0) return;
+          active.pendingChunks += 1;
+          active.frameCount += 1;
+          try {
+            const ab = await e.data.arrayBuffer();
+            api.sendCaptureChunk(active.captureId, new Uint8Array(ab));
+          } catch (err) {
+            if (!active.stopError) {
+              active.stopError = err instanceof Error ? err.message : String(err);
             }
+          } finally {
+            active.pendingChunks -= 1;
+            maybeSendStop(active);
           }
         };
 
@@ -103,10 +132,6 @@ export function DemoCaptureBridge() {
           const errEvent = event as unknown as { error?: Error };
           const message = errEvent.error?.message ?? "MediaRecorder error";
           stopAndCleanup(active, message);
-          if (active.stopRequestId) {
-            api.sendCommandDone(active.stopRequestId, message);
-            active.stopRequestId = null;
-          }
         };
 
         recorder.onstop = () => {
@@ -115,14 +140,8 @@ export function DemoCaptureBridge() {
           } catch {
             // ignore
           }
-          api.sendCaptureStop(active.captureId, active.frameCount);
-          if (active.stopRequestId) {
-            api.sendCommandDone(active.stopRequestId);
-            active.stopRequestId = null;
-          }
-          if (activeRef.current === active) {
-            activeRef.current = null;
-          }
+          active.stopped = true;
+          maybeSendStop(active);
         };
 
         try {
@@ -143,25 +162,28 @@ export function DemoCaptureBridge() {
         const requestId = payload.requestId as string;
         const active = activeRef.current;
 
-        if (!active || active.captureId !== captureId || active.stopped) {
+        if (!active || active.captureId !== captureId) {
+          api.sendCommandDone(requestId);
+          return;
+        }
+        if (active.stopSignalSent) {
           api.sendCommandDone(requestId);
           return;
         }
 
-        active.stopped = true;
         active.stopRequestId = requestId;
         try {
           if (active.recorder.state !== "inactive") {
             active.recorder.stop();
           } else {
-            api.sendCaptureStop(active.captureId, active.frameCount);
-            api.sendCommandDone(requestId);
-            active.stopRequestId = null;
+            active.stopped = true;
+            maybeSendStop(active);
           }
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
-          api.sendCommandDone(requestId, message);
-          active.stopRequestId = null;
+          active.stopError = message;
+          active.stopped = true;
+          maybeSendStop(active);
         }
       }
     );
