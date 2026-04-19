@@ -115,6 +115,11 @@ export function NotesPane({
     const view = editorViewRef.current;
     if (!view || items.length === 0) return;
 
+    // Capture the insertion point synchronously, before any async work — the
+    // cursor may move during upload and we want the snippet where the paste
+    // happened.
+    const { from, to } = view.state.selection.main;
+
     const notify = useNotificationStore.getState().addNotification;
 
     const snippets = await Promise.all(
@@ -146,10 +151,12 @@ export function NotesPane({
     const currentView = editorViewRef.current;
     if (!currentView) return;
 
-    const { from, to } = currentView.state.selection.main;
+    const docLen = currentView.state.doc.length;
+    const safeFrom = Math.min(from, docLen);
+    const safeTo = Math.min(to, docLen);
     currentView.dispatch({
-      changes: { from, to, insert: text },
-      selection: { anchor: from + text.length },
+      changes: { from: safeFrom, to: safeTo, insert: text },
+      selection: { anchor: safeFrom + text.length },
       scrollIntoView: true,
     });
     currentView.focus();

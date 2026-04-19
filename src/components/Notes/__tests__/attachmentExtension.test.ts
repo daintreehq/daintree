@@ -175,6 +175,19 @@ describe("buildMarkdownSnippet", () => {
     expect(snippet.includes("\n")).toBe(false);
     expect(snippet.includes("]")).toBe(snippet.endsWith(")"));
   });
+
+  it("escapes opening brackets in link labels", () => {
+    const snippet = buildMarkdownSnippet(
+      { mimeType: "application/pdf", originalName: "spec[final].pdf" },
+      "attachments/x.pdf"
+    );
+    // Must be a valid CommonMark link: no unescaped [ or ] inside the label.
+    const labelMatch = snippet.match(/^\[(.*)\]\(/);
+    expect(labelMatch).not.toBeNull();
+    const label = labelMatch![1]!;
+    expect(label.includes("[")).toBe(false);
+    expect(label.includes("]")).toBe(false);
+  });
 });
 
 describe("isImageMime", () => {

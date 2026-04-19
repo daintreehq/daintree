@@ -78,10 +78,8 @@ export function buildAttachmentExtension({
         if (files.length === 0) return false;
         const { accepted, rejected } = partitionBySize(files);
         if (rejected.length > 0) {
-          onRejected?.(
-            rejected,
-            rejected.every((item) => item.file.size === 0) ? "empty" : "oversize"
-          );
+          const allEmpty = rejected.every((item) => item.file.size === 0);
+          onRejected?.(rejected, allEmpty ? "empty" : "oversize");
         }
         if (accepted.length > 0) {
           onAttach(accepted);
@@ -93,10 +91,8 @@ export function buildAttachmentExtension({
         if (items.length === 0) return false;
         const { accepted, rejected } = partitionBySize(items);
         if (rejected.length > 0) {
-          onRejected?.(
-            rejected,
-            rejected.every((item) => item.file.size === 0) ? "empty" : "oversize"
-          );
+          const allEmpty = rejected.every((item) => item.file.size === 0);
+          onRejected?.(rejected, allEmpty ? "empty" : "oversize");
         }
         if (accepted.length > 0) {
           onAttach(accepted);
@@ -112,7 +108,7 @@ export function isImageMime(mimeType: string): boolean {
 }
 
 function sanitizeAltText(value: string): string {
-  return value.replace(/[\r\n\]]/g, " ").trim();
+  return value.replace(/[\r\n[\]]/g, " ").trim();
 }
 
 export function buildMarkdownSnippet(

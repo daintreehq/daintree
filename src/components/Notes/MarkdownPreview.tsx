@@ -15,8 +15,17 @@ const ATTACHMENT_PREFIX = "attachments/";
 
 function buildUrlTransform(notesDir: string | null | undefined): (url: string) => string {
   return (url: string) => {
-    if (url && notesDir && url.startsWith(ATTACHMENT_PREFIX) && !url.includes("..")) {
-      const decoded = decodeURIComponent(url);
+    if (url && notesDir && url.startsWith(ATTACHMENT_PREFIX)) {
+      let decoded: string;
+      try {
+        decoded = decodeURIComponent(url);
+      } catch {
+        return defaultUrlTransform(url);
+      }
+      // Reject any traversal segment — raw or percent-encoded — after decode.
+      if (decoded.includes("..") || decoded.includes("\0")) {
+        return defaultUrlTransform(url);
+      }
       const sep = notesDir.endsWith("/") || notesDir.endsWith("\\") ? "" : "/";
       const absolutePath = `${notesDir}${sep}${decoded}`;
       return `daintree-file://daintree/?path=${encodeURIComponent(absolutePath)}&root=${encodeURIComponent(notesDir)}`;

@@ -121,5 +121,27 @@ describe("MarkdownPreview", () => {
       // Should NOT contain daintree-file:// since we reject .. paths
       expect(img!.getAttribute("src")).not.toContain("daintree-file://");
     });
+
+    it("does not rewrite percent-encoded parent traversal to daintree-file://", () => {
+      const { container } = render(
+        <MarkdownPreview
+          content="![evil](attachments/%2e%2e/secret.md)"
+          notesDir="/Users/me/notes/p1"
+        />
+      );
+      const img = container.querySelector("img");
+      expect(img!.getAttribute("src")).not.toContain("daintree-file://");
+    });
+
+    it("does not throw on malformed percent-encoding in attachment URLs", () => {
+      expect(() =>
+        render(
+          <MarkdownPreview
+            content="![bad](attachments/%E0%A4%A.png)"
+            notesDir="/Users/me/notes/p1"
+          />
+        )
+      ).not.toThrow();
+    });
   });
 });
