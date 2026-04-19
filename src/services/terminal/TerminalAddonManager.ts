@@ -8,6 +8,8 @@ import { FileLinksAddon, HoverCallback } from "./FileLinksAddon";
 
 const IMAGE_ADDON_OPTIONS = { pixelLimit: 2_000_000, storageLimit: 8 };
 
+export const SEARCH_HIGHLIGHT_LIMIT = 1000;
+
 export interface TerminalAddons {
   fitAddon: FitAddon;
   serializeAddon: SerializeAddon;
@@ -40,7 +42,7 @@ export function setupTerminalAddons(
   const imageAddon = new ImageAddon(IMAGE_ADDON_OPTIONS);
   terminal.loadAddon(imageAddon);
 
-  const searchAddon = new SearchAddon();
+  const searchAddon = new SearchAddon({ highlightLimit: SEARCH_HIGHLIGHT_LIMIT });
   terminal.loadAddon(searchAddon);
 
   const fileLinksAddon = new FileLinksAddon(terminal, getCwd, onFileLinkHover);

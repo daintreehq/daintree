@@ -1,13 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-const { mockImageAddon } = vi.hoisted(() => ({
+const { mockImageAddon, mockSearchAddon } = vi.hoisted(() => ({
   mockImageAddon: vi.fn(),
+  mockSearchAddon: vi.fn(),
 }));
 
 vi.mock("@xterm/addon-image", () => ({ ImageAddon: mockImageAddon }));
 vi.mock("@xterm/addon-fit", () => ({ FitAddon: vi.fn() }));
 vi.mock("@xterm/addon-serialize", () => ({ SerializeAddon: vi.fn() }));
-vi.mock("@xterm/addon-search", () => ({ SearchAddon: vi.fn() }));
+vi.mock("@xterm/addon-search", () => ({ SearchAddon: mockSearchAddon }));
 vi.mock("@xterm/addon-web-links", () => ({ WebLinksAddon: vi.fn() }));
 vi.mock("../FileLinksAddon", () => ({
   FileLinksAddon: vi.fn(),
@@ -18,6 +19,7 @@ import {
   createImageAddon,
   createWebLinksAddon,
   createFileLinksAddon,
+  SEARCH_HIGHLIGHT_LIMIT,
 } from "../TerminalAddonManager";
 import type { Terminal } from "@xterm/xterm";
 import { WebLinksAddon } from "@xterm/addon-web-links";
@@ -43,6 +45,15 @@ describe("TerminalAddonManager", () => {
       expect(mockImageAddon).toHaveBeenCalledWith({
         pixelLimit: 2_000_000,
         storageLimit: 8,
+      });
+    });
+
+    it("creates SearchAddon with highlightLimit for bounded match counts", () => {
+      const terminal = createMockTerminal();
+      setupTerminalAddons(terminal, () => "/tmp");
+
+      expect(mockSearchAddon).toHaveBeenCalledWith({
+        highlightLimit: SEARCH_HIGHLIGHT_LIMIT,
       });
     });
   });

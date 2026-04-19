@@ -3,7 +3,17 @@ import { X, ChevronUp, ChevronDown } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import { SEARCH_HIGHLIGHT_LIMIT } from "@/services/terminal/TerminalAddonManager";
 import { validateRegexTerm, buildSearchOptions, type SearchStatus } from "./terminalSearchUtils";
+
+interface MatchResults {
+  resultIndex: number;
+  resultCount: number;
+}
+
+function formatCount(count: number): string {
+  return count >= SEARCH_HIGHLIGHT_LIMIT ? `${SEARCH_HIGHLIGHT_LIMIT}+` : String(count);
+}
 
 interface TerminalSearchBarProps {
   terminalId: string;
@@ -16,6 +26,7 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
   const [caseSensitive, setCaseSensitive] = useState(false);
   const [regexEnabled, setRegexEnabled] = useState(false);
   const [searchStatus, setSearchStatus] = useState<SearchStatus>("idle");
+  const [matchResults, setMatchResults] = useState<MatchResults | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -23,6 +34,18 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
     inputRef.current?.focus();
     inputRef.current?.select();
   }, []);
+
+  useEffect(() => {
+    const managed = terminalInstanceService.get(terminalId);
+    const addon = managed?.searchAddon;
+    if (!addon?.onDidChangeResults) return;
+    const disposable = addon.onDidChangeResults(({ resultIndex, resultCount }) => {
+      setMatchResults({ resultIndex, resultCount });
+    });
+    return () => {
+      disposable.dispose();
+    };
+  }, [terminalId]);
 
   const performSearch = useCallback(
     (
@@ -35,6 +58,7 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
 
       if (!term) {
         setSearchStatus("idle");
+        setMatchResults(null);
         return;
       }
 
@@ -42,6 +66,7 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
         const validation = validateRegexTerm(term, effectiveCaseSensitive);
         if (!validation.isValid) {
           setSearchStatus("invalidRegex");
+          setMatchResults(null);
           const managed = terminalInstanceService.get(terminalId);
           managed?.searchAddon.clearDecorations();
           return;
@@ -61,10 +86,12 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
 
         if (!found) {
           managed.searchAddon.clearDecorations();
+          setMatchResults(null);
         }
         setSearchStatus(found ? "found" : "none");
       } catch {
         setSearchStatus(effectiveRegexEnabled ? "invalidRegex" : "none");
+        setMatchResults(null);
         managed.searchAddon.clearDecorations();
       }
     },
@@ -75,6 +102,7 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
     const managed = terminalInstanceService.get(terminalId);
     managed?.searchAddon.clearDecorations();
     setSearchStatus("idle");
+    setMatchResults(null);
   }, [terminalId]);
 
   const handleInputChange = useCallback(
@@ -148,14 +176,18 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
     };
   }, []);
 
-  const statusText =
-    searchTerm && searchStatus !== "idle"
-      ? searchStatus === "found"
-        ? "Found"
-        : searchStatus === "none"
-          ? "No matches"
-          : "Invalid regex"
-      : "";
+  const statusText = (() => {
+    if (!searchTerm || searchStatus === "idle") return "";
+    if (searchStatus === "invalidRegex") return "Invalid regex";
+    if (searchStatus === "none") return "No matches";
+    if (matchResults && matchResults.resultCount > 0) {
+      const countLabel = formatCount(matchResults.resultCount);
+      return matchResults.resultIndex >= 0
+        ? `${matchResults.resultIndex + 1} of ${countLabel}`
+        : `${countLabel} matches`;
+    }
+    return "Found";
+  })();
 
   return (
     <div
