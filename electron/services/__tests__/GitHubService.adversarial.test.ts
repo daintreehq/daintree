@@ -491,6 +491,101 @@ describe("GitHubService adversarial", () => {
     expect(shared.graphqlClient).toHaveBeenCalledTimes(1);
   });
 
+  it("BATCHCHECK_SECOND_PROBE_SENDS_IF_NONE_MATCH", async () => {
+    // Cycle 1 populates the ETag cache.
+    vi.mocked(global.fetch).mockResolvedValueOnce(createETagResponse(200, 'W/"xyz-789"'));
+    shared.graphqlClient.mockResolvedValueOnce({
+      wt_0_branch: { pullRequests: { nodes: [] } },
+    });
+    await github.batchCheckLinkedPRs("/repo", [
+      { worktreeId: "wt-1", branchName: "feature/x", knownPRNumber: 42 },
+    ]);
+
+    // Cycle 2 must send the If-None-Match header and target the correct URL.
+    let capturedUrl: string | undefined;
+    let capturedHeaders: Record<string, string> | undefined;
+    vi.mocked(global.fetch).mockImplementationOnce(async (url, init) => {
+      capturedUrl = typeof url === "string" ? url : String(url);
+      capturedHeaders = (init?.headers ?? {}) as Record<string, string>;
+      return createETagResponse(304);
+    });
+
+    await github.batchCheckLinkedPRs("/repo", [
+      { worktreeId: "wt-1", branchName: "feature/x", knownPRNumber: 42 },
+    ]);
+
+    expect(capturedUrl).toBe("https://api.github.com/repos/owner/repo/pulls/42");
+    expect(capturedHeaders?.["If-None-Match"]).toBe('W/"xyz-789"');
+  });
+
+  it("BATCHCHECK_MIXED_DISCOVERY_AND_REVALIDATION_BYPASSES_FAST_PATH", async () => {
+    // One candidate with knownPRNumber, one without → fast path must be
+    // skipped and GraphQL must run for both.
+    shared.graphqlClient.mockResolvedValueOnce({
+      wt_0_branch: { pullRequests: { nodes: [] } },
+      wt_1_branch: { pullRequests: { nodes: [] } },
+    });
+
+    const result = await github.batchCheckLinkedPRs("/repo", [
+      { worktreeId: "wt-1", branchName: "feature/known", knownPRNumber: 42 },
+      { worktreeId: "wt-2", branchName: "feature/discovery" },
+    ]);
+
+    expect(global.fetch).not.toHaveBeenCalled();
+    expect(shared.graphqlClient).toHaveBeenCalledTimes(1);
+    expect(result.results.size).toBe(2);
+  });
+
+  it("BATCHCHECK_DUPLICATE_PR_NUMBERS_PROBED_ONCE", async () => {
+    // Two candidates pointing at the same PR number must dedupe to a single
+    // REST probe — avoids wasteful duplicate requests when multiple worktrees
+    // share a PR.
+    vi.mocked(global.fetch).mockResolvedValue(createETagResponse(304));
+
+    await github.batchCheckLinkedPRs("/repo", [
+      { worktreeId: "wt-1", branchName: "feature/a", knownPRNumber: 42 },
+      { worktreeId: "wt-2", branchName: "feature/b", knownPRNumber: 42 },
+    ]);
+
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("BATCHCHECK_200_WITHOUT_ETAG_CLEARS_STALE_VALIDATOR", async () => {
+    // Cycle 1: populate ETag.
+    vi.mocked(global.fetch).mockResolvedValueOnce(createETagResponse(200, 'W/"initial"'));
+    shared.graphqlClient.mockResolvedValueOnce({
+      wt_0_branch: { pullRequests: { nodes: [] } },
+    });
+    await github.batchCheckLinkedPRs("/repo", [
+      { worktreeId: "wt-1", branchName: "feature/x", knownPRNumber: 42 },
+    ]);
+
+    // Cycle 2: 200 without ETag → cached validator must be dropped.
+    vi.mocked(global.fetch).mockResolvedValueOnce(createETagResponse(200));
+    shared.graphqlClient.mockResolvedValueOnce({
+      wt_0_branch: { pullRequests: { nodes: [] } },
+    });
+    await github.batchCheckLinkedPRs("/repo", [
+      { worktreeId: "wt-1", branchName: "feature/x", knownPRNumber: 42 },
+    ]);
+
+    // Cycle 3: probe must NOT send If-None-Match because the stale validator
+    // was dropped in cycle 2.
+    let capturedHeaders: Record<string, string> | undefined;
+    vi.mocked(global.fetch).mockImplementationOnce(async (_url, init) => {
+      capturedHeaders = (init?.headers ?? {}) as Record<string, string>;
+      return createETagResponse(200, 'W/"fresh"');
+    });
+    shared.graphqlClient.mockResolvedValueOnce({
+      wt_0_branch: { pullRequests: { nodes: [] } },
+    });
+    await github.batchCheckLinkedPRs("/repo", [
+      { worktreeId: "wt-1", branchName: "feature/x", knownPRNumber: 42 },
+    ]);
+
+    expect(capturedHeaders?.["If-None-Match"]).toBeUndefined();
+  });
+
   it("BATCHCHECK_ETAG_CLEARED_ON_TOKEN_ROTATION", async () => {
     // Cycle 1: populate ETag cache.
     vi.mocked(global.fetch).mockResolvedValueOnce(createETagResponse(200, 'W/"v1"'));
