@@ -64,6 +64,13 @@ describe("ARIA page landmarks — issue #5416", () => {
     it("keeps tabIndex=-1 so the macro-focus cycler can target it", () => {
       expect(source).toMatch(/<aside[\s\S]*?tabIndex=\{-1\}/);
     });
+
+    it("hides the aside from the accessibility tree when no panels are docked", () => {
+      // The dock <aside> stays mounted (offscreen container pattern), but
+      // screen-reader landmark rotors will list it as an empty navigable
+      // landmark unless aria-hidden is toggled with hasDocked.
+      expect(source).toMatch(/aria-hidden=\{hasDocked \? undefined : true\}/);
+    });
   });
 
   describe("PortalDock <aside>", () => {

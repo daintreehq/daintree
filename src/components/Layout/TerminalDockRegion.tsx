@@ -31,6 +31,7 @@ export function TerminalDockRegion() {
       ref={dockRegionRef}
       tabIndex={-1}
       aria-label="Dock"
+      aria-hidden={hasDocked ? undefined : true}
       data-macro-focus={isMacroFocused ? "true" : undefined}
       className="outline-none data-[macro-focus=true]:ring-2 data-[macro-focus=true]:ring-daintree-accent/60 data-[macro-focus=true]:ring-inset"
     >
