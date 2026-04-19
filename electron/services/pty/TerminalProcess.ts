@@ -28,6 +28,7 @@ import { events } from "../events.js";
 import { AgentSpawnedSchema } from "../../schemas/agent.js";
 import type { PtyPool } from "../PtyPool.js";
 import { installHeadlessResponder } from "./headlessResponder.js";
+import { classifyExitOutput, shouldTriggerFallback } from "./FallbackErrorClassifier.js";
 
 // Extracted modules
 import {
@@ -302,6 +303,8 @@ export class TerminalProcess {
       agentLaunchFlags: options.agentLaunchFlags,
       agentModelId: options.agentModelId,
       worktreeId: options.worktreeId,
+      agentPresetId: options.agentPresetId,
+      originalAgentPresetId: options.originalAgentPresetId ?? options.agentPresetId,
       spawnArgs,
     };
 
@@ -1298,6 +1301,34 @@ export class TerminalProcess {
 
       if (this.isAgentTerminal && terminal.agentId && !terminal.wasKilled) {
         this.deps.agentStateService.emitAgentCompleted(terminal, exitCode ?? 0);
+      }
+
+      // Fallback detection: inspect the forensic buffer BEFORE teardown clears
+      // anything and emit a fallback-triggered event so the renderer can walk
+      // the preset's fallbacks[] chain. Passive observation only — we do not
+      // modify the terminal, spawn anything, or touch user config here.
+      if (
+        this.isAgentTerminal &&
+        terminal.agentId &&
+        terminal.agentPresetId &&
+        !terminal.wasKilled
+      ) {
+        const cls = classifyExitOutput({
+          recentOutput: this.forensicsBuffer.getRecentOutput(),
+          exitCode: exitCode ?? 0,
+          wasKilled: terminal.wasKilled,
+        });
+        if (shouldTriggerFallback(cls)) {
+          events.emit("agent:fallback-triggered", {
+            terminalId: this.id,
+            agentId: terminal.agentId,
+            fromPresetId: terminal.agentPresetId,
+            originalPresetId: terminal.originalAgentPresetId ?? terminal.agentPresetId,
+            reason: cls as "connection" | "auth",
+            exitCode: exitCode ?? 0,
+            timestamp: Date.now(),
+          });
+        }
       }
 
       if (this.shouldPreserveOnExit(exitCode ?? 0)) {

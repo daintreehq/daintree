@@ -142,6 +142,17 @@ export interface PanelRegistrySlice {
   setInputLocked: (id: string, locked: boolean) => void;
   toggleInputLocked: (id: string) => void;
   convertTerminalType: (id: string, newType: TerminalType, newAgentId?: string) => Promise<void>;
+  /**
+   * Kill the current PTY and respawn it in the same panel slot using a
+   * different preset. Fires as part of the fallback chain when a preset's
+   * provider is unavailable. No session resume (fresh spawn), since the
+   * upstream session we were talking to is the very thing that failed.
+   */
+  activateFallbackPreset: (
+    id: string,
+    nextPresetId: string,
+    originalPresetId: string
+  ) => Promise<{ success: boolean; error?: string }>;
   setBrowserUrl: (id: string, url: string) => void;
   setBrowserHistory: (id: string, history: BrowserHistory) => void;
   setBrowserZoom: (id: string, zoom: number) => void;

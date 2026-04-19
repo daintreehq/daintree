@@ -195,6 +195,7 @@ export type {
   // Agent detection
   AgentDetectedPayload,
   AgentExitedPayload,
+  AgentFallbackTriggeredPayload,
   // Artifact types
   ArtifactDetectedPayload,
   SaveArtifactOptions,

@@ -190,6 +190,9 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
         agentLaunchFlags: validatedOptions.agentLaunchFlags,
         agentModelId: validatedOptions.agentModelId,
         worktreeId: validatedOptions.worktreeId,
+        agentPresetId: validatedOptions.agentPresetId,
+        originalAgentPresetId:
+          validatedOptions.originalAgentPresetId ?? validatedOptions.agentPresetId,
       });
 
       // For non-agent terminals (or Windows agent terminals), write command to stdin

@@ -20,6 +20,9 @@ export function serializePtyPanel(t: PtySerializeInput): Partial<PanelSnapshot> 
     ...(t.agentModelId && { agentModelId: t.agentModelId }),
     ...(t.agentPresetId && { agentPresetId: t.agentPresetId }),
     ...(t.agentPresetColor && { agentPresetColor: t.agentPresetColor }),
+    ...(t.originalPresetId && { originalPresetId: t.originalPresetId }),
+    ...(t.isUsingFallback && { isUsingFallback: true }),
+    ...(typeof t.fallbackChainIndex === "number" && { fallbackChainIndex: t.fallbackChainIndex }),
     ...(t.agentState && { agentState: t.agentState }),
     ...(t.lastStateChange !== undefined && { lastStateChange: t.lastStateChange }),
   };

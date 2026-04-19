@@ -501,6 +501,8 @@ function PanelHeaderComponent({
                         agentState={tab.agentState}
                         isActive={tab.isActive}
                         presetColor={tab.presetColor}
+                        isUsingFallback={tab.isUsingFallback}
+                        fallbackTooltip={tab.fallbackTooltip}
                         onClick={() => onTabClick?.(tab.id)}
                         onClose={() => onTabClose?.(tab.id)}
                         onRename={
@@ -597,6 +599,8 @@ function PanelHeaderComponent({
                     agentState={tab.agentState}
                     isActive={tab.isActive}
                     presetColor={tab.presetColor}
+                    isUsingFallback={tab.isUsingFallback}
+                    fallbackTooltip={tab.fallbackTooltip}
                     onClick={() => onTabClick?.(tab.id)}
                     onClose={() => onTabClose?.(tab.id)}
                     onRename={onTabRename ? (newTitle) => onTabRename(tab.id, newTitle) : undefined}

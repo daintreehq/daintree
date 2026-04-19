@@ -36,6 +36,10 @@ export interface PtyHostSpawnOptions {
   agentModelId?: string;
   /** Worktree the terminal was spawned in; used when persisting agent session history */
   worktreeId?: string;
+  /** Preset ID the agent was launched with (needed for fallback chain lookup on exit). */
+  agentPresetId?: string;
+  /** Original user-selected preset ID; unchanged across fallback hops for revert UX. */
+  originalAgentPresetId?: string;
 }
 
 /**
@@ -276,6 +280,10 @@ export interface PtyHostTerminalInfo {
   agentModelId?: string;
   /** Worktree the terminal was spawned in; used when persisting agent session history */
   worktreeId?: string;
+  /** Preset ID the agent was launched with. */
+  agentPresetId?: string;
+  /** Original user-selected preset ID; unchanged across fallback hops. */
+  originalAgentPresetId?: string;
 }
 
 /** Payload for agent:spawned event */

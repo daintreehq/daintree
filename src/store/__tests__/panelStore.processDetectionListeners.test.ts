@@ -130,6 +130,7 @@ vi.mock("@/clients", () => ({
     onAgentStateChanged: onAgentStateChangedMock,
     onAgentDetected: onAgentDetectedMock,
     onAgentExited: onAgentExitedMock,
+    onFallbackTriggered: vi.fn(() => vi.fn()),
     onActivity: onActivityMock,
     onTrashed: onTrashedMock,
     onRestored: onRestoredMock,

@@ -90,11 +90,22 @@ vi.mock("@/utils/terminalValidation", () => ({
 vi.mock("@/config/agents", () => ({
   isRegisteredAgent: (type: string) => type === "claude" || type === "gemini",
   getAgentConfig: vi.fn().mockReturnValue({ command: "claude" }),
+  getAgentIds: () => ["claude", "gemini", "codex"],
+  getMergedPreset: vi.fn().mockReturnValue(undefined),
+  sanitizeAgentEnv: (env: Record<string, string> | undefined) => env,
 }));
 
 vi.mock("@shared/types", () => ({
   generateAgentCommand: vi.fn().mockReturnValue("claude --resume"),
+  buildAgentLaunchFlags: vi.fn().mockReturnValue([]),
   buildResumeCommand: vi.fn().mockReturnValue(null),
+  buildLaunchCommandFromFlags: vi.fn().mockReturnValue("claude"),
+}));
+
+vi.mock("@/store/ccrPresetsStore", () => ({
+  useCcrPresetsStore: {
+    getState: () => ({ ccrPresetsByAgent: {} }),
+  },
 }));
 
 const { usePanelStore } = await import("../../../panelStore");

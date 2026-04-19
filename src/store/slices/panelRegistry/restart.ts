@@ -3,6 +3,7 @@ import type { PanelRegistryStoreApi, PanelRegistrySlice } from "./types";
 import { terminalClient, agentSettingsClient, projectClient, systemClient } from "@/clients";
 import {
   generateAgentCommand,
+  buildAgentLaunchFlags,
   buildResumeCommand,
   buildLaunchCommandFromFlags,
 } from "@shared/types";
@@ -10,7 +11,13 @@ import type { AgentState } from "@/types";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { TerminalRefreshTier } from "@/types";
 import { validateTerminalConfig } from "@/utils/terminalValidation";
-import { isRegisteredAgent, getAgentConfig } from "@/config/agents";
+import {
+  isRegisteredAgent,
+  getAgentConfig,
+  getMergedPreset,
+  sanitizeAgentEnv,
+} from "@/config/agents";
+import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 import { markTerminalRestarting, unmarkTerminalRestarting } from "@/store/restartExitSuppression";
 import { useLayoutConfigStore } from "@/store/layoutConfigStore";
@@ -93,6 +100,7 @@ export const createRestartActions = (
   | "setInputLocked"
   | "toggleInputLocked"
   | "convertTerminalType"
+  | "activateFallbackPreset"
 > => ({
   restartTerminal: async (id) => {
     const terminal = get().panelsById[id];
@@ -816,6 +824,204 @@ export const createRestartActions = (
       );
 
       logError("[TerminalStore] Failed to convert terminal", error, { id });
+    }
+  },
+
+  activateFallbackPreset: async (id, nextPresetId, originalPresetId) => {
+    const terminal = get().panelsById[id];
+    if (!terminal) {
+      return { success: false, error: "terminal not found" };
+    }
+    if (terminal.isRestarting) {
+      return { success: false, error: "already restarting" };
+    }
+
+    const effectiveAgentId =
+      terminal.agentId ??
+      (terminal.type && isRegisteredAgent(terminal.type) ? terminal.type : undefined);
+    if (!effectiveAgentId) {
+      return { success: false, error: "panel is not an agent" };
+    }
+
+    markTerminalRestarting(id);
+    set((state) =>
+      updateTerminal(state, id, (t) => ({
+        ...t,
+        restartError: undefined,
+        spawnError: undefined,
+        isRestarting: true,
+      }))
+    );
+
+    try {
+      const [agentSettings, tmpDir] = await Promise.all([
+        agentSettingsClient.get(),
+        systemClient.getTmpDir().catch(() => ""),
+      ]);
+      const entry = agentSettings?.agents?.[effectiveAgentId] ?? {};
+      const ccrPresets = useCcrPresetsStore.getState().ccrPresetsByAgent[effectiveAgentId];
+      const nextPreset = getMergedPreset(
+        effectiveAgentId,
+        nextPresetId,
+        entry.customPresets,
+        ccrPresets
+      );
+      if (!nextPreset) {
+        throw new Error(`fallback preset "${nextPresetId}" not found`);
+      }
+
+      const sanitizedGlobal = sanitizeAgentEnv(entry.globalEnv as Record<string, unknown>);
+      const sanitizedPreset = nextPreset.env;
+      const presetEnv: Record<string, string> | undefined =
+        sanitizedGlobal || sanitizedPreset ? { ...sanitizedGlobal, ...sanitizedPreset } : undefined;
+
+      const effectiveEntry = {
+        ...entry,
+        ...(nextPreset.dangerousEnabled !== undefined && {
+          dangerousEnabled: nextPreset.dangerousEnabled,
+        }),
+        ...(nextPreset.customFlags !== undefined && { customFlags: nextPreset.customFlags }),
+        ...(nextPreset.inlineMode !== undefined && { inlineMode: nextPreset.inlineMode }),
+      };
+
+      let clipboardDirectory: string | undefined;
+      if (effectiveAgentId === "gemini" && effectiveEntry.shareClipboardDirectory !== false) {
+        clipboardDirectory = tmpDir ? `${tmpDir}/daintree-clipboard` : undefined;
+      }
+
+      const agentConfig = getAgentConfig(effectiveAgentId);
+      const baseCommand = agentConfig?.command || effectiveAgentId;
+      const commandToRun = generateAgentCommand(baseCommand, effectiveEntry, effectiveAgentId, {
+        clipboardDirectory,
+        modelId: terminal.agentModelId,
+        presetArgs: nextPreset.args?.join(" "),
+      });
+      const nextLaunchFlags = buildAgentLaunchFlags(effectiveEntry, effectiveAgentId, {
+        modelId: terminal.agentModelId,
+      });
+
+      // Capture live terminal dimensions before teardown
+      const managedInstance = terminalInstanceService.get(id);
+      let spawnCols = terminal.cols || 80;
+      let spawnRows = terminal.rows || 24;
+      if (managedInstance?.terminal) {
+        spawnCols = managedInstance.terminal.cols || spawnCols;
+        spawnRows = managedInstance.terminal.rows || spawnRows;
+      }
+
+      terminalInstanceService.destroy(id);
+      terminalInstanceService.suppressNextExit(id, 10000);
+      try {
+        await terminalClient.kill(id);
+      } catch (error) {
+        logWarn("[TerminalStore] kill failed during fallback activation; continuing", {
+          id,
+          error,
+        });
+      }
+
+      const nextChainIndex = (terminal.fallbackChainIndex ?? 0) + 1;
+
+      set((state) => {
+        const t = state.panelsById[id];
+        if (!t) return state;
+        const updated = {
+          ...t,
+          restartKey: (t.restartKey ?? 0) + 1,
+          agentState: "working" as AgentState,
+          lastStateChange: Date.now(),
+          stateChangeTrigger: undefined,
+          stateChangeConfidence: undefined,
+          command: commandToRun,
+          agentPresetId: nextPreset.id,
+          agentPresetColor: nextPreset.color,
+          originalPresetId: originalPresetId,
+          isUsingFallback: true,
+          fallbackChainIndex: nextChainIndex,
+          agentLaunchFlags: nextLaunchFlags,
+          agentSessionId: undefined,
+          isRestarting: true,
+          restartError: undefined,
+          exitCode: undefined,
+          startedAt: Date.now(),
+        };
+        const newById = { ...state.panelsById, [id]: updated };
+        saveNormalized(newById, state.panelIds);
+        return { panelsById: newById };
+      });
+
+      await terminalInstanceService.waitForInstance(id, { timeoutMs: 5000 });
+
+      const projectStore = await resolveProjectStore();
+      const capturedProjectId = projectStore.getState().currentProject?.id;
+
+      let restartEnv: Record<string, string> | undefined = presetEnv;
+      try {
+        if (capturedProjectId) {
+          const projectSettings = await projectClient.getSettings(capturedProjectId);
+          if (
+            projectSettings?.environmentVariables &&
+            Object.keys(projectSettings.environmentVariables).length > 0
+          ) {
+            restartEnv = { ...projectSettings.environmentVariables, ...(presetEnv ?? {}) };
+          }
+        }
+      } catch (error) {
+        logWarn("[TerminalStore] Failed to fetch project env for fallback", { error });
+      }
+
+      await terminalClient.spawn({
+        id,
+        projectId: capturedProjectId,
+        cwd: terminal.cwd,
+        cols: spawnCols,
+        rows: spawnRows,
+        kind: terminal.kind ?? "agent",
+        type: terminal.type,
+        agentId: terminal.agentId,
+        title: terminal.title,
+        command: commandToRun,
+        restore: false,
+        env: restartEnv,
+        agentLaunchFlags: nextLaunchFlags,
+        agentModelId: terminal.agentModelId,
+        agentPresetId: nextPreset.id,
+        originalAgentPresetId: originalPresetId,
+      });
+
+      if (terminal.location === "dock") {
+        optimizeForDock(id);
+      } else {
+        terminalInstanceService.fit(id);
+      }
+
+      unmarkTerminalRestarting(id);
+      set((state) => updateTerminal(state, id, (t) => ({ ...t, isRestarting: false })));
+      return { success: true };
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      unmarkTerminalRestarting(id);
+      set((state) =>
+        updateTerminal(state, id, (t) => ({
+          ...t,
+          isRestarting: false,
+          restartError: {
+            message: errorMessage,
+            timestamp: Date.now(),
+            recoverable: false,
+            context: {
+              failedCwd: terminal.cwd,
+              phase: "fallback-activation",
+              nextPresetId,
+            },
+          },
+        }))
+      );
+      logError("[TerminalStore] Failed to activate fallback preset", error, {
+        id,
+        nextPresetId,
+      });
+      return { success: false, error: errorMessage };
     }
   },
 });

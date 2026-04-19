@@ -102,6 +102,8 @@ export interface AgentSettingsEntry {
     customFlags?: string;
     inlineMode?: boolean;
     color?: string;
+    /** Ordered preset IDs to fall over to when provider is unreachable. */
+    fallbacks?: string[];
   }>;
   /**
    * Environment variables applied to every launch of this agent, regardless of preset.

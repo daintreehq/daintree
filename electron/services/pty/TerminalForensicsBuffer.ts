@@ -16,6 +16,14 @@ export class TerminalForensicsBuffer {
     }
   }
 
+  /**
+   * Read the current forensic buffer snapshot without disturbing it. Used by
+   * the fallback classifier to inspect exit-time output before teardown runs.
+   */
+  getRecentOutput(): string {
+    return this.recentOutputBuffer;
+  }
+
   logForensics(
     terminalId: string,
     exitCode: number,

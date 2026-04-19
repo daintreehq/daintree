@@ -74,6 +74,7 @@ export const CHANNELS = {
   AGENT_ALL_CLEAR: "agent:all-clear",
   AGENT_DETECTED: "agent:detected",
   AGENT_EXITED: "agent:exited",
+  AGENT_FALLBACK_TRIGGERED: "agent:fallback-triggered",
 
   TERMINAL_ACTIVITY: "terminal:activity",
 

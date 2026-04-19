@@ -77,6 +77,11 @@ export function registerTerminalEventHandlers(deps: HandlerDependencies): () => 
   });
   handlers.push(unsubAgentExited);
 
+  const unsubFallbackTriggered = events.on("agent:fallback-triggered", (payload: unknown) => {
+    broadcastToRenderer(CHANNELS.AGENT_FALLBACK_TRIGGERED, payload);
+  });
+  handlers.push(unsubFallbackTriggered);
+
   // Artifact events
   const unsubArtifactDetected = events.on("artifact:detected", (payload: unknown) => {
     broadcastToRenderer(CHANNELS.ARTIFACT_DETECTED, payload);

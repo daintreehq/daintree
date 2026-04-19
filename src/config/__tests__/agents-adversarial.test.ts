@@ -397,3 +397,92 @@ describe("Adversarial: sanitizeAgentEnv exported function", () => {
     expect(result).toEqual({ SAFE: "yes" });
   });
 });
+
+describe("Preset fallback chain sanitization", () => {
+  const customPresets = [
+    { id: "primary", name: "Primary", fallbacks: ["backup-a", "backup-b"] },
+    { id: "backup-a", name: "Backup A" },
+    { id: "backup-b", name: "Backup B" },
+    { id: "backup-c", name: "Backup C" },
+  ];
+
+  it("preserves valid fallback chains", () => {
+    const result = getMergedPresets("claude", customPresets);
+    const primary = result.find((p) => p.id === "primary");
+    expect(primary?.fallbacks).toEqual(["backup-a", "backup-b"]);
+  });
+
+  it("strips self-references from fallbacks", () => {
+    const bad = [
+      { id: "me", name: "Me", fallbacks: ["me", "other"] },
+      { id: "other", name: "O" },
+    ];
+    const result = getMergedPresets("claude", bad);
+    const me = result.find((p) => p.id === "me");
+    expect(me?.fallbacks).toEqual(["other"]);
+  });
+
+  it("deduplicates repeated IDs in fallbacks", () => {
+    const dup = [
+      { id: "p", name: "P", fallbacks: ["a", "a", "b", "a"] },
+      { id: "a", name: "A" },
+      { id: "b", name: "B" },
+    ];
+    const result = getMergedPresets("claude", dup);
+    const p = result.find((x) => x.id === "p");
+    expect(p?.fallbacks).toEqual(["a", "b"]);
+  });
+
+  it("caps fallbacks array at FALLBACK_CHAIN_MAX (3)", () => {
+    const long = [
+      { id: "p", name: "P", fallbacks: ["a", "b", "c", "d", "e"] },
+      { id: "a", name: "A" },
+      { id: "b", name: "B" },
+      { id: "c", name: "C" },
+      { id: "d", name: "D" },
+      { id: "e", name: "E" },
+    ];
+    const result = getMergedPresets("claude", long);
+    const p = result.find((x) => x.id === "p");
+    expect(p?.fallbacks?.length).toBe(3);
+    expect(p?.fallbacks).toEqual(["a", "b", "c"]);
+  });
+
+  it("filters out references to unknown preset IDs", () => {
+    const withUnknown = [
+      { id: "p", name: "P", fallbacks: ["real", "does-not-exist"] },
+      { id: "real", name: "Real" },
+    ];
+    const result = getMergedPresets("claude", withUnknown);
+    const p = result.find((x) => x.id === "p");
+    expect(p?.fallbacks).toEqual(["real"]);
+  });
+
+  it("drops invalid ID characters in fallbacks", () => {
+    const bad = [
+      { id: "p", name: "P", fallbacks: ["valid", "with space", "semi;colon", ""] },
+      { id: "valid", name: "Valid" },
+    ];
+    const result = getMergedPresets("claude", bad);
+    const p = result.find((x) => x.id === "p");
+    expect(p?.fallbacks).toEqual(["valid"]);
+  });
+
+  it("returns undefined when all fallbacks are invalid or unknown", () => {
+    const bad = [{ id: "p", name: "P", fallbacks: ["p", "", ";bad"] }];
+    const result = getMergedPresets("claude", bad);
+    const p = result.find((x) => x.id === "p");
+    expect(p?.fallbacks).toBeUndefined();
+  });
+
+  it("tolerates non-array fallbacks field", () => {
+    const bad = [
+      {
+        id: "p",
+        name: "P",
+        fallbacks: "not-an-array" as unknown as string[],
+      },
+    ];
+    expect(() => getMergedPresets("claude", bad)).not.toThrow();
+  });
+});

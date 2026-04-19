@@ -158,6 +158,7 @@ export const GridTabGroup = React.memo(function GridTabGroup({
   const tabs: TabInfo[] = useMemo(() => {
     return panels.map((p) => {
       let presetColor = p.agentPresetColor;
+      let fallbackTooltip: string | undefined;
       if (p.agentId && p.agentPresetId) {
         const presets = getMergedPresets(
           p.agentId,
@@ -166,6 +167,12 @@ export const GridTabGroup = React.memo(function GridTabGroup({
         );
         const live = presets.find((f) => f.id === p.agentPresetId);
         if (live) presetColor = live.color ?? presetColor;
+        if (p.isUsingFallback && p.originalPresetId) {
+          const original = presets.find((f) => f.id === p.originalPresetId);
+          const originalName = original?.name ?? p.originalPresetId;
+          const activeName = live?.name ?? p.agentPresetId;
+          fallbackTooltip = `Using fallback "${activeName}" — "${originalName}" unavailable`;
+        }
       }
       return {
         id: p.id,
@@ -177,6 +184,8 @@ export const GridTabGroup = React.memo(function GridTabGroup({
         agentState: p.agentState,
         isActive: p.id === activeTabId,
         presetColor,
+        isUsingFallback: p.isUsingFallback,
+        fallbackTooltip,
       };
     });
   }, [panels, activeTabId, agentSettings, ccrPresetsByAgent]);

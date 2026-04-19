@@ -546,6 +546,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
                   agentState={panel.agentState}
                   isActive={panel.id === activeTabId}
                   presetColor={panelPresetColors.get(panel.id)}
+                  isUsingFallback={panel.isUsingFallback}
                   onClick={() => handleTabClick(panel.id)}
                   onClose={() => handleTabClose(panel.id)}
                   onRename={(newTitle) => handleTabRename(panel.id, newTitle)}

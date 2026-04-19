@@ -415,6 +415,8 @@ export const createCorePanelActions = (
           agentLaunchFlags: options.agentLaunchFlags,
           agentModelId: options.agentModelId,
           worktreeId: options.worktreeId,
+          agentPresetId: options.agentPresetId,
+          originalAgentPresetId: options.originalPresetId ?? options.agentPresetId,
         });
       }
 
@@ -455,6 +457,9 @@ export const createCorePanelActions = (
         agentModelId: options.agentModelId,
         agentPresetId: options.agentPresetId,
         agentPresetColor: options.agentPresetColor,
+        originalPresetId: options.originalPresetId ?? options.agentPresetId,
+        isUsingFallback: options.isUsingFallback,
+        fallbackChainIndex: options.fallbackChainIndex,
         extensionState: options.extensionState,
         spawnedBy: options.spawnedBy,
         startedAt: Date.now(),

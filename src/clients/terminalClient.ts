@@ -3,6 +3,7 @@ import type {
   AgentStateChangePayload,
   AgentDetectedPayload,
   AgentExitedPayload,
+  AgentFallbackTriggeredPayload,
   TerminalActivityPayload,
   BackendTerminalInfo,
   TerminalReconnectResult,
@@ -270,6 +271,10 @@ export const terminalClient = {
 
   onAgentExited: (callback: (data: AgentExitedPayload) => void): (() => void) => {
     return window.electron.terminal.onAgentExited(callback);
+  },
+
+  onFallbackTriggered: (callback: (data: AgentFallbackTriggeredPayload) => void): (() => void) => {
+    return window.electron.terminal.onFallbackTriggered(callback);
   },
 
   onActivity: (callback: (data: TerminalActivityPayload) => void): (() => void) => {

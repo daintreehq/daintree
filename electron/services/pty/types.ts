@@ -59,6 +59,10 @@ export interface TerminalPublicState {
   worktreeId?: string;
   /** Last non-useless title observed from xterm OSC updates (renderer-synced) */
   lastObservedTitle?: string;
+  /** Currently active preset ID (updated on each fallback hop). */
+  agentPresetId?: string;
+  /** User-originally-selected preset ID; immutable across fallback hops. */
+  originalAgentPresetId?: string;
 }
 
 /**

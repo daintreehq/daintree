@@ -48,6 +48,12 @@ export interface AddPanelOptionsBase {
   agentPresetId?: string;
   /** Preset brand color (hex) captured at launch time for per-panel icon tinting */
   agentPresetColor?: string;
+  /** Original user-selected preset ID; immutable across fallback hops. */
+  originalPresetId?: string;
+  /** Whether this panel is currently running on a fallback preset. */
+  isUsingFallback?: boolean;
+  /** Chain index consumed so far from the primary preset's fallback list. */
+  fallbackChainIndex?: number;
 }
 
 /** Options for creating a terminal panel */

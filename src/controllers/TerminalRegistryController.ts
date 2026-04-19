@@ -20,6 +20,7 @@ import type {
   AgentStateChangePayload,
   AgentDetectedPayload,
   AgentExitedPayload,
+  AgentFallbackTriggeredPayload,
   TerminalActivityPayload,
   TerminalStatusPayload,
   SpawnResult,
@@ -294,6 +295,10 @@ class TerminalRegistryController {
 
   onAgentExited(handler: (data: AgentExitedPayload) => void) {
     return terminalClient.onAgentExited(handler);
+  }
+
+  onFallbackTriggered(handler: (data: AgentFallbackTriggeredPayload) => void) {
+    return terminalClient.onFallbackTriggered(handler);
   }
 
   onActivity(handler: (data: TerminalActivityPayload) => void) {

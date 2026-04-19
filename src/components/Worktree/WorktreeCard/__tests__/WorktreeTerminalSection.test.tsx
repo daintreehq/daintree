@@ -49,6 +49,7 @@ vi.mock("@/config/agents", () => ({
     return undefined;
   },
   isRegisteredAgent: (id: string) => id === "claude" || id === "gemini",
+  getAgentIds: () => ["claude", "gemini"],
 }));
 
 function makeTerminal(overrides: Partial<TerminalInstance> = {}): TerminalInstance {

@@ -43,6 +43,7 @@ import type {
   AgentStateChangePayload,
   AgentDetectedPayload,
   AgentExitedPayload,
+  AgentFallbackTriggeredPayload,
   ArtifactDetectedPayload,
   AgentHelpRequest,
   AgentHelpResult,
@@ -2207,6 +2208,7 @@ export interface IpcEventMap {
   "agent:all-clear": { timestamp: number };
   "agent:detected": AgentDetectedPayload;
   "agent:exited": AgentExitedPayload;
+  "agent:fallback-triggered": AgentFallbackTriggeredPayload;
 
   // Terminal activity events
   "terminal:activity": TerminalActivityPayload;

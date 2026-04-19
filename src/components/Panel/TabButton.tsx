@@ -1,6 +1,6 @@
 import React, { useCallback, useState, useRef, useEffect, forwardRef } from "react";
 import type { DraggableAttributes, DraggableSyntheticListeners } from "@dnd-kit/core";
-import { X } from "lucide-react";
+import { X, AlertTriangle } from "lucide-react";
 import type { PanelKind, TerminalType, AgentState } from "@/types";
 import type { WaitingReason } from "@shared/types/agent";
 import { cn } from "@/lib/utils";
@@ -23,6 +23,8 @@ export interface TabInfo {
   agentState?: AgentState;
   isActive: boolean;
   presetColor?: string;
+  isUsingFallback?: boolean;
+  fallbackTooltip?: string;
 }
 
 export interface TabButtonProps {
@@ -40,6 +42,8 @@ export interface TabButtonProps {
   sortableListeners?: DraggableSyntheticListeners;
   sortableAttributes?: DraggableAttributes;
   onRename?: (newTitle: string) => void;
+  isUsingFallback?: boolean;
+  fallbackTooltip?: string;
 }
 
 const TabButtonComponent = forwardRef<HTMLDivElement, TabButtonProps>(function TabButtonComponent(
@@ -58,6 +62,8 @@ const TabButtonComponent = forwardRef<HTMLDivElement, TabButtonProps>(function T
     sortableListeners,
     sortableAttributes,
     onRename,
+    isUsingFallback,
+    fallbackTooltip,
   },
   ref
 ) {
@@ -283,6 +289,23 @@ const TabButtonComponent = forwardRef<HTMLDivElement, TabButtonProps>(function T
                 )}
                 aria-hidden="true"
               />
+            )}
+
+            {isUsingFallback && (
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <AlertTriangle
+                      className="w-3 h-3 shrink-0 text-status-warning"
+                      aria-label="Running on fallback preset"
+                    />
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">
+                    {fallbackTooltip ??
+                      "Running on fallback preset — original provider unavailable"}
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
             )}
 
             {/* Close button - visible on hover */}

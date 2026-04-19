@@ -84,6 +84,24 @@ export interface AgentExitedPayload {
   timestamp: number;
 }
 
+/**
+ * Emitted when an agent PTY exits with an error classified as fallback-eligible
+ * (connection failure or hard auth). The renderer consumes this to walk the
+ * preset's `fallbacks` chain and respawn the panel with the next preset.
+ */
+export interface AgentFallbackTriggeredPayload {
+  terminalId: string;
+  agentId: string;
+  /** Preset that was active when the PTY exited. */
+  fromPresetId: string;
+  /** Original user-selected preset ID; unchanged across fallback hops. */
+  originalPresetId?: string;
+  /** Why the classifier decided this was a fallback-eligible exit. */
+  reason: "connection" | "auth";
+  exitCode: number;
+  timestamp: number;
+}
+
 /** Artifact detected payload */
 export interface ArtifactDetectedPayload {
   /** Agent ID that generated the artifacts */

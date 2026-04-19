@@ -181,6 +181,12 @@ export const EVENT_META: Record<keyof DaintreeEventMap, EventMetadata> = {
     requiresTimestamp: true,
     description: "Agent process spawned in terminal",
   },
+  "agent:fallback-triggered": {
+    category: "agent",
+    requiresContext: false,
+    requiresTimestamp: true,
+    description: "Agent preset exited with a fallback-eligible error",
+  },
   "agent:state-changed": {
     category: "agent",
     requiresContext: true,
@@ -573,6 +579,21 @@ export type DaintreeEventMap = {
   }>;
 
   /**
+   * Emitted when an agent PTY exits with output matching a fallback-eligible
+   * error class (connection failure or hard auth). The renderer consumes this
+   * to walk the preset's `fallbacks` chain and respawn.
+   */
+  "agent:fallback-triggered": {
+    terminalId: string;
+    agentId: string;
+    fromPresetId: string;
+    originalPresetId?: string;
+    reason: "connection" | "auth";
+    exitCode: number;
+    timestamp: number;
+  };
+
+  /**
    * Emitted when artifacts (code blocks or patches) are extracted from agent output.
    */
   "artifact:detected": WithContext<{
@@ -802,6 +823,7 @@ export const ALL_EVENT_TYPES: Array<keyof DaintreeEventMap> = [
   "agent:output",
   "agent:completed",
   "agent:killed",
+  "agent:fallback-triggered",
   "artifact:detected",
   "action:dispatched",
   "terminal:trashed",

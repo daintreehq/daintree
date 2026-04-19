@@ -46,6 +46,7 @@ import type {
   AgentStateChangePayload,
   AgentDetectedPayload,
   AgentExitedPayload,
+  AgentFallbackTriggeredPayload,
   ArtifactDetectedPayload,
   SaveArtifactOptions,
   ApplyPatchOptions,
@@ -561,6 +562,7 @@ const CHANNELS = {
   AGENT_ALL_CLEAR: "agent:all-clear",
   AGENT_DETECTED: "agent:detected",
   AGENT_EXITED: "agent:exited",
+  AGENT_FALLBACK_TRIGGERED: "agent:fallback-triggered",
 
   // Terminal activity channels
   TERMINAL_ACTIVITY: "terminal:activity",
@@ -1270,6 +1272,9 @@ const api: ElectronAPI = {
 
     onAgentExited: (callback: (data: AgentExitedPayload) => void) =>
       _typedOn(CHANNELS.AGENT_EXITED, callback),
+
+    onFallbackTriggered: (callback: (data: AgentFallbackTriggeredPayload) => void) =>
+      _typedOn(CHANNELS.AGENT_FALLBACK_TRIGGERED, callback),
 
     onAllAgentsClear: (callback: (data: { timestamp: number }) => void) =>
       _typedOn(CHANNELS.AGENT_ALL_CLEAR, callback),

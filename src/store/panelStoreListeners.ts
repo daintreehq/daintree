@@ -15,6 +15,10 @@ import { SCROLLBACK_BACKGROUND } from "@shared/config/scrollback";
 import { clearAllRestartGuards, isTerminalRestarting } from "./restartExitSuppression";
 import { usePanelStore, type PanelGridState } from "./panelStore";
 import { DisposableStore, toDisposable } from "@/utils/disposable";
+import { getMergedPresets } from "@/config/agents";
+import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
+import { useAgentSettingsStore } from "@/store/agentSettingsStore";
+import { useNotificationStore } from "@/store/notificationStore";
 
 function normalizeCrashType(value: unknown): CrashType | null {
   const validTypes: CrashType[] = [
@@ -31,6 +35,14 @@ let store: DisposableStore | null = null;
 // Managed dynamically inside backendCrashed / backendReady callbacks — set and
 // cleared mid-flight, so it cannot be registered with `store` at setup time.
 let recoveryTimer: NodeJS.Timeout | null = null;
+
+/**
+ * Per-terminal reentrancy guard for fallback activations. A single slow exit
+ * can produce duplicate `agent:fallback-triggered` events if respawn races
+ * with cleanup — we ignore re-entries for the same terminalId until the
+ * activation resolves.
+ */
+const fallbackInFlight = new Set<string>();
 
 const activityBuffer = new Map<string, TerminalActivityPayload>();
 let activityRafId: number | null = null;
@@ -68,6 +80,101 @@ export function cleanupTerminalStoreListeners() {
   if (recoveryTimer) {
     clearTimeout(recoveryTimer);
     recoveryTimer = null;
+  }
+  fallbackInFlight.clear();
+}
+
+async function handleFallbackTriggered(data: {
+  terminalId: string;
+  agentId: string;
+  fromPresetId: string;
+  originalPresetId?: string;
+  reason: "connection" | "auth";
+}): Promise<void> {
+  const { terminalId, agentId, fromPresetId, reason } = data;
+  if (fallbackInFlight.has(terminalId)) return;
+
+  const panel = usePanelStore.getState().panelsById[terminalId];
+  if (!panel) return;
+  if (panel.isRestarting) return;
+
+  const originalPresetId = panel.originalPresetId ?? data.originalPresetId ?? fromPresetId;
+
+  // Resolve the original preset's fallbacks[] chain from the agent settings store
+  // (renderer-local mirror of user settings; no IPC needed here).
+  const agentSettings = useAgentSettingsStore.getState().settings;
+  const entry = agentSettings?.agents?.[agentId] ?? {};
+  const ccrPresets = useCcrPresetsStore.getState().ccrPresetsByAgent[agentId];
+  const mergedPresets = getMergedPresets(agentId, entry.customPresets, ccrPresets);
+  const originalPreset = mergedPresets.find((p) => p.id === originalPresetId);
+
+  const chain = originalPreset?.fallbacks ?? [];
+  const currentIndex = panel.fallbackChainIndex ?? 0;
+  const nextPresetId = chain[currentIndex];
+
+  // Always lookup a fresh preset name, using the panel title as last resort.
+  const fromPreset = mergedPresets.find((p) => p.id === fromPresetId);
+  const fromName = fromPreset?.name ?? fromPresetId;
+
+  if (!nextPresetId) {
+    // Chain exhausted: surface a single error notification. No respawn.
+    const isExhausted = chain.length > 0;
+    useNotificationStore.getState().addNotification({
+      type: "error",
+      priority: "high",
+      title: isExhausted ? "Fallback chain exhausted" : `${fromName} unavailable`,
+      message: isExhausted
+        ? `All fallback presets tried. Terminal will stay exited.`
+        : `${fromName} provider is unreachable. Configure fallbacks in Settings to auto-recover.`,
+    });
+    return;
+  }
+
+  const nextPreset = mergedPresets.find((p) => p.id === nextPresetId);
+  if (!nextPreset) {
+    useNotificationStore.getState().addNotification({
+      type: "error",
+      priority: "high",
+      title: "Fallback preset missing",
+      message: `Preset "${nextPresetId}" is no longer configured. Skipping.`,
+    });
+    return;
+  }
+
+  fallbackInFlight.add(terminalId);
+  try {
+    logInfo("[TerminalStore] Activating fallback preset", {
+      terminalId,
+      agentId,
+      fromPresetId,
+      toPresetId: nextPresetId,
+      reason,
+    });
+
+    const result = await usePanelStore
+      .getState()
+      .activateFallbackPreset(terminalId, nextPresetId, originalPresetId);
+
+    if (result.success) {
+      useNotificationStore.getState().addNotification({
+        type: "info",
+        priority: "low",
+        title: "Switched to fallback preset",
+        message:
+          reason === "auth"
+            ? `${fromName} authentication failed — now running "${nextPreset.name}".`
+            : `${fromName} unreachable — now running "${nextPreset.name}".`,
+      });
+    } else {
+      useNotificationStore.getState().addNotification({
+        type: "error",
+        priority: "high",
+        title: "Fallback activation failed",
+        message: `Could not switch to "${nextPreset.name}": ${result.error ?? "unknown error"}`,
+      });
+    }
+  } finally {
+    fallbackInFlight.delete(terminalId);
   }
 }
 
@@ -184,6 +291,19 @@ export function setupTerminalStoreListeners() {
               [terminalId]: { ...terminal, detectedProcessId: undefined },
             },
           };
+        });
+      })
+    )
+  );
+
+  disposables.add(
+    toDisposable(
+      terminalRegistryController.onFallbackTriggered((data) => {
+        void handleFallbackTriggered(data).catch((err) => {
+          logError("[TerminalStore] Unhandled error in fallback listener", err, {
+            terminalId: data.terminalId,
+          });
+          fallbackInFlight.delete(data.terminalId);
         });
       })
     )

@@ -3,6 +3,7 @@ import {
   AGENT_REGISTRY as BASE_AGENT_REGISTRY,
   type AgentConfig as BaseAgentConfig,
   type AgentPreset,
+  FALLBACK_CHAIN_MAX,
   getEffectiveAgentConfig,
   getEffectiveAgentIds,
   isEffectivelyRegisteredAgent,
@@ -121,6 +122,24 @@ export function getMergedPresets(
       return safe.length > 0 ? safe : undefined;
     };
 
+    const sanitizeFallbacks = (fallbacks?: string[], selfId?: string): string[] | undefined => {
+      if (!Array.isArray(fallbacks)) return undefined;
+      const seen = new Set<string>();
+      const safe: string[] = [];
+      for (const entry of fallbacks) {
+        if (typeof entry !== "string") continue;
+        const trimmed = entry.trim();
+        if (!trimmed || trimmed.length > 100) continue;
+        if (!/^[a-zA-Z0-9_.-]+$/.test(trimmed)) continue;
+        if (trimmed === selfId) continue;
+        if (seen.has(trimmed)) continue;
+        seen.add(trimmed);
+        safe.push(trimmed);
+        if (safe.length >= FALLBACK_CHAIN_MAX) break;
+      }
+      return safe.length > 0 ? safe : undefined;
+    };
+
     return {
       ...preset,
       name: trimmedName,
@@ -142,6 +161,7 @@ export function getMergedPresets(
         /^#[0-9a-fA-F]{3,4}$|^#[0-9a-fA-F]{6}$|^#[0-9a-fA-F]{8}$/.test(preset.color)
           ? preset.color
           : undefined,
+      fallbacks: sanitizeFallbacks(preset.fallbacks, preset.id),
     };
   };
 
@@ -157,6 +177,16 @@ export function getMergedPresets(
     if (!seenIds.has(preset.id)) {
       seenIds.add(preset.id);
       result.push(preset);
+    }
+  }
+
+  // Second pass: filter fallbacks[] against known preset IDs so unknown
+  // references don't propagate to the launcher.
+  const knownIds = new Set(result.map((p) => p.id));
+  for (const preset of result) {
+    if (preset.fallbacks?.length) {
+      const filtered = preset.fallbacks.filter((id) => knownIds.has(id));
+      preset.fallbacks = filtered.length > 0 ? filtered : undefined;
     }
   }
 

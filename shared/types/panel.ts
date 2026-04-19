@@ -262,6 +262,15 @@ export interface PtyPanelData extends BasePanelData {
   startedAt?: number;
   /** Exit code from the last process exit */
   exitCode?: number;
+  /**
+   * Original user-selected preset ID. Set on first spawn, never overwritten
+   * when a fallback activates. Used to display "was {original} → {active}".
+   */
+  originalPresetId?: string;
+  /** Whether this panel is currently running on a fallback preset. */
+  isUsingFallback?: boolean;
+  /** How many fallback hops have been consumed from the primary's chain (0-based index into fallbacks[]). */
+  fallbackChainIndex?: number;
 }
 
 export interface BrowserPanelData extends BasePanelData {
@@ -431,6 +440,12 @@ export interface TerminalInstance {
   startedAt?: number;
   /** Exit code from the last process exit */
   exitCode?: number;
+  /** Original user-selected preset ID; immutable across fallback hops. */
+  originalPresetId?: string;
+  /** Whether this panel is currently running on a fallback preset. */
+  isUsingFallback?: boolean;
+  /** How many fallback hops have been consumed from the primary's chain. */
+  fallbackChainIndex?: number;
   /** Opaque state bag for extension panels — survives the save/restore round-trip */
   extensionState?: Record<string, unknown>;
   // Note: Tab membership is now stored in TabGroup objects, not on panels

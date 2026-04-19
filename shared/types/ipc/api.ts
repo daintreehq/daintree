@@ -39,6 +39,7 @@ import type {
   AgentStateChangePayload,
   AgentDetectedPayload,
   AgentExitedPayload,
+  AgentFallbackTriggeredPayload,
   ArtifactDetectedPayload,
   AgentHelpRequest,
   AgentHelpResult,
@@ -247,6 +248,7 @@ export interface ElectronAPI {
     onAgentStateChanged(callback: (data: AgentStateChangePayload) => void): () => void;
     onAgentDetected(callback: (data: AgentDetectedPayload) => void): () => void;
     onAgentExited(callback: (data: AgentExitedPayload) => void): () => void;
+    onFallbackTriggered(callback: (data: AgentFallbackTriggeredPayload) => void): () => void;
     onAllAgentsClear(callback: (data: { timestamp: number }) => void): () => void;
     onActivity(callback: (data: TerminalActivityPayload) => void): () => void;
     onTrashed(callback: (data: { id: string; expiresAt: number }) => void): () => void;

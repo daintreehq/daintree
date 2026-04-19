@@ -38,6 +38,10 @@ export interface TerminalSpawnOptions {
   agentModelId?: string;
   /** Worktree the terminal is spawned in; persisted in agent session history */
   worktreeId?: string;
+  /** Preset ID the agent is being launched with (needed for fallback chain lookup on exit). */
+  agentPresetId?: string;
+  /** Original user-selected preset ID; unchanged across fallback hops. */
+  originalAgentPresetId?: string;
 }
 
 /** Terminal state for app state persistence */

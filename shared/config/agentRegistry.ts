@@ -150,7 +150,18 @@ export interface AgentPreset {
   inlineMode?: boolean;
   /** Optional brand color (CSS hex) used to tint the agent icon for this preset */
   color?: string;
+  /**
+   * Ordered list of preset IDs to try when this preset's provider becomes
+   * unavailable (connection errors, hard auth failures). Each entry must be
+   * an ID of another preset for the SAME agent. Self-references, duplicates,
+   * and unknown IDs are stripped by `getMergedPresets` validation. Capped at
+   * `FALLBACK_CHAIN_MAX` entries.
+   */
+  fallbacks?: string[];
 }
+
+/** Max fallback presets that can be chained after the primary. */
+export const FALLBACK_CHAIN_MAX = 3;
 
 export interface AgentConfig {
   id: string;

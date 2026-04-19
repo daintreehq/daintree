@@ -106,6 +106,12 @@ export interface PanelSnapshot {
   agentPresetId?: string;
   /** Preset hex color captured at launch time; fallback when preset is later deleted */
   agentPresetColor?: string;
+  /** Original user-selected preset ID; immutable across fallback hops. */
+  originalPresetId?: string;
+  /** Whether this panel is currently running on a fallback preset. */
+  isUsingFallback?: boolean;
+  /** How many fallback hops have been consumed from the primary's chain. */
+  fallbackChainIndex?: number;
   /** Last known agent state for crash recovery display */
   agentState?: AgentState;
   /** Timestamp of last agent state change */

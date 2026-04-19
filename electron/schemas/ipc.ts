@@ -249,6 +249,8 @@ export const TerminalSpawnOptionsSchema = z.object({
   agentLaunchFlags: z.array(z.string()).optional(),
   agentModelId: z.string().optional(),
   worktreeId: z.string().optional(),
+  agentPresetId: z.string().optional(),
+  originalAgentPresetId: z.string().optional(),
 });
 
 export const TerminalResizePayloadSchema = z.object({
