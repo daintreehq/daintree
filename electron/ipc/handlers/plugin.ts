@@ -17,11 +17,8 @@ import type {
 import type { ToolbarButtonConfig } from "../../../shared/config/toolbarButtonRegistry.js";
 import { typedHandle } from "../utils.js";
 
-let hasValidatedActionIds = false;
-
 export function registerPluginHandlers(): () => void {
   const handlers: Array<() => void> = [];
-  hasValidatedActionIds = false;
 
   const handleList = async (): Promise<LoadedPluginInfo[]> => {
     return pluginService.listPlugins();
@@ -38,9 +35,7 @@ export function registerPluginHandlers(): () => void {
   };
 
   const handleValidateActionIds = async (actionIds: string[]): Promise<void> => {
-    if (hasValidatedActionIds) return;
     if (!Array.isArray(actionIds)) return;
-    hasValidatedActionIds = true;
 
     const knownIds = new Set(actionIds.filter((id): id is string => typeof id === "string"));
 

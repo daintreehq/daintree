@@ -385,7 +385,7 @@ describe("PLUGIN_VALIDATE_ACTION_IDS handler", () => {
     warn.mockRestore();
   });
 
-  it("only validates once per handler lifecycle so multi-window callers don't double-log", async () => {
+  it("validates on every invocation", async () => {
     mockGetPluginToolbarButtonIds.mockReturnValue(["plugin.a"]);
     mockGetToolbarButtonConfig.mockReturnValue({
       id: "plugin.a",
@@ -400,7 +400,7 @@ describe("PLUGIN_VALIDATE_ACTION_IDS handler", () => {
     await handler({}, []);
     await handler({}, []);
     await handler({}, []);
-    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledTimes(3);
     warn.mockRestore();
   });
 });
