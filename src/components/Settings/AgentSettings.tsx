@@ -618,11 +618,6 @@ export function AgentSettings({
                   <p className="text-[11px] text-daintree-text/40 pb-0.5">
                     Available env overrides:
                   </p>
-                  <datalist id="env-key-suggestions">
-                    {agentEnvSuggestions.map(({ key }) => (
-                      <option key={key} value={key} />
-                    ))}
-                  </datalist>
                   {agentEnvSuggestions.map(({ key, hint }) => (
                     <div key={key} className="flex items-baseline gap-2 font-mono">
                       <span className="text-[11px] text-daintree-text/60 shrink-0">{key}</span>
@@ -726,13 +721,6 @@ export function AgentSettings({
                       </span>
                     )}
                   </div>
-
-                  {/* Hidden datalist retained for custom flags input autocomplete */}
-                  <datalist id="env-key-suggestions">
-                    {agentEnvSuggestions.map(({ key }) => (
-                      <option key={key} value={key} />
-                    ))}
-                  </datalist>
 
                   {/* Editor body — keyed on the scope so React unmounts/remounts
                       the rename input and form state naturally on scope change.
