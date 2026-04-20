@@ -241,22 +241,27 @@ export function AgentInstallSection({
         : `${agentName} CLI not found`;
 
   return (
-    <div id="agents-installation" className="space-y-3 pt-4 border-t border-daintree-border">
-      <div className="flex items-center justify-between">
-        <div>
-          <h5 className="text-sm font-medium text-daintree-text">{headerLabel}</h5>
-          <p className="text-xs text-daintree-text/50 select-text">{headerDescription}</p>
+    <div
+      id="agents-installation"
+      className="rounded-[var(--radius-lg)] border border-daintree-border bg-surface p-4 space-y-4"
+    >
+      <div className="pb-3 border-b border-daintree-border">
+        <div className="flex items-center justify-between">
+          <div>
+            <h5 className="text-sm font-medium text-daintree-text">{headerLabel}</h5>
+            <p className="text-xs text-daintree-text/50 select-text">{headerDescription}</p>
+          </div>
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={onRefresh}
+            disabled={isRefreshingCli}
+            className="text-daintree-text/50 hover:text-daintree-text"
+          >
+            <RefreshCw size={14} className={cn("mr-1.5", isRefreshingCli && "animate-spin")} />
+            Re-check
+          </Button>
         </div>
-        <Button
-          size="sm"
-          variant="ghost"
-          onClick={onRefresh}
-          disabled={isRefreshingCli}
-          className="text-daintree-text/50 hover:text-daintree-text"
-        >
-          <RefreshCw size={14} className={cn("mr-1.5", isRefreshingCli && "animate-spin")} />
-          Re-check
-        </Button>
       </div>
 
       {cliError && (

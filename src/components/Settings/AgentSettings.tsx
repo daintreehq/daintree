@@ -389,8 +389,11 @@ export function AgentSettings({
             </div>
 
             {/* Agent-level Defaults — always visible */}
-            <div id="agents-defaults" className="space-y-3 pt-2 border-t border-daintree-border">
-              <div>
+            <div
+              id="agents-defaults"
+              className="rounded-[var(--radius-lg)] border border-daintree-border bg-surface p-4 space-y-4"
+            >
+              <div className="pb-3 border-b border-daintree-border">
                 <label className="text-sm font-medium text-daintree-text">Defaults</label>
                 <p className="text-xs text-daintree-text/40 select-text">
                   Base settings for every launch. Custom presets can override these.
@@ -792,24 +795,29 @@ export function AgentSettings({
               );
 
               return (
-                <div id="agents-presets" className="space-y-3 pt-2 border-t border-daintree-border">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <label className="text-sm font-medium text-daintree-text">Presets</label>
-                      <p className="text-xs text-daintree-text/40 select-text">
-                        Variants with different env overrides and model routes
-                      </p>
+                <div
+                  id="agents-presets"
+                  className="rounded-[var(--radius-lg)] border border-daintree-border bg-surface p-4 space-y-4"
+                >
+                  <div className="pb-3 border-b border-daintree-border">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <label className="text-sm font-medium text-daintree-text">Presets</label>
+                        <p className="text-xs text-daintree-text/40 select-text">
+                          Variants with different env overrides and model routes
+                        </p>
+                      </div>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        data-testid="preset-add-button"
+                        className="text-daintree-accent hover:text-daintree-accent/80"
+                        onClick={openAddDialog}
+                      >
+                        <Plus size={14} />
+                        Add
+                      </Button>
                     </div>
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      data-testid="preset-add-button"
-                      className="text-daintree-accent hover:text-daintree-accent/80"
-                      onClick={openAddDialog}
-                    >
-                      <Plus size={14} />
-                      Add
-                    </Button>
                   </div>
 
                   {allPresets.length > 0 && (

@@ -158,42 +158,44 @@ export function AgentHelpOutput({ agentId, agentName, usageUrl }: AgentHelpOutpu
   };
 
   return (
-    <div className="space-y-3 pt-4 border-t border-daintree-border">
-      <div className="flex items-center justify-between">
-        <div>
-          <h5 className="text-sm font-medium text-daintree-text">Help Output</h5>
-          <p className="text-xs text-daintree-text/50 select-text">
-            Available CLI flags for {agentName}
-          </p>
-        </div>
+    <div className="rounded-[var(--radius-lg)] border border-daintree-border bg-surface p-4 space-y-4">
+      <div className="pb-3 border-b border-daintree-border">
+        <div className="flex items-center justify-between">
+          <div>
+            <h5 className="text-sm font-medium text-daintree-text">Help Output</h5>
+            <p className="text-xs text-daintree-text/50 select-text">
+              Available CLI flags for {agentName}
+            </p>
+          </div>
 
-        {isAgentInstalled(isCliAvailable ?? undefined) && (
-          <div className="flex items-center gap-2">
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={() => void loadHelp(!!helpResult)}
-              disabled={isLoading}
-              className="text-daintree-text/50 hover:text-daintree-text"
-            >
-              <RefreshCw size={14} />
-              {helpResult ? "Refresh" : "Load"}
-            </Button>
-
-            {helpResult && (
+          {isAgentInstalled(isCliAvailable ?? undefined) && (
+            <div className="flex items-center gap-2">
               <Button
                 size="sm"
                 variant="ghost"
-                onClick={() => void handleCopy()}
+                onClick={() => void loadHelp(!!helpResult)}
                 disabled={isLoading}
                 className="text-daintree-text/50 hover:text-daintree-text"
               >
-                <Copy size={14} />
-                {isCopied ? "Copied!" : "Copy"}
+                <RefreshCw size={14} />
+                {helpResult ? "Refresh" : "Load"}
               </Button>
-            )}
-          </div>
-        )}
+
+              {helpResult && (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => void handleCopy()}
+                  disabled={isLoading}
+                  className="text-daintree-text/50 hover:text-daintree-text"
+                >
+                  <Copy size={14} />
+                  {isCopied ? "Copied!" : "Copy"}
+                </Button>
+              )}
+            </div>
+          )}
+        </div>
       </div>
 
       {isLoading && (
