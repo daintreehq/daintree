@@ -17,6 +17,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { cn } from "@/lib/utils";
 import { worktreeClient, githubClient, agentSettingsClient, systemClient } from "@/clients";
 import { detectPrefixFromIssue, buildBranchName } from "@/components/Worktree/branchPrefixUtils";
+import { resolveIssuePrequeries } from "./bulkCreatePrequery";
 import { generateBranchSlug } from "@/utils/textParsing";
 import { notify } from "@/lib/notify";
 import { usePreferencesStore } from "@/store/preferencesStore";
@@ -579,43 +580,46 @@ export function BulkCreateWorktreeDialog({
         }
       }
 
-      const assignedBranches = new Set<string>();
-      for (const planned of toCreate) {
+      // Batch pre-queries: parallel branch/path resolution with bounded concurrency.
+      // Two-phase approach: (1) resolve branch candidates with bounded concurrency,
+      // (2) apply deterministic uniqueness suffixes in input order, (3) resolve paths
+      // with bounded concurrency using final unique branch names.
+      const existingWorktrees = getCurrentViewStore().getState().worktrees;
+      const existingBranchSet = new Set(
+        Array.from(existingWorktrees.values())
+          .map((wt) => wt.branch)
+          .filter((b): b is string => b !== undefined)
+      );
+
+      const prequeryInput = toCreate.filter((planned) => {
+        if (planned.mode !== "issue") return false;
+        if (existingBranchSet.has(planned.branchName)) return false;
+        return true;
+      });
+
+      if (prequeryInput.length > 0) {
+        const { results, failedNumbers } = await resolveIssuePrequeries({
+          rootPath,
+          items: prequeryInput,
+          existingBranches: null,
+          getAvailableBranch: worktreeClient.getAvailableBranch,
+          getDefaultPath: worktreeClient.getDefaultPath,
+          isStaleRun: () => runIdRef.current !== currentRunId,
+        });
+
         if (runIdRef.current !== currentRunId) return;
-        if (planned.mode !== "issue") continue;
 
-        // Skip pre-query if the worktree already exists locally — the per-item
-        // path below will detect it via the worktree store and short-circuit.
-        const existingWorktrees = getCurrentViewStore().getState().worktrees;
-        let alreadyExists = false;
-        for (const wt of existingWorktrees.values()) {
-          if (wt.branch && wt.branch === planned.branchName) {
-            alreadyExists = true;
-            break;
-          }
+        for (const [number, { branch, path }] of results) {
+          precomputed.set(number, { branch, path });
         }
-        if (alreadyExists) continue;
 
-        try {
-          let branch = await worktreeClient.getAvailableBranch(rootPath, planned.branchName);
-          if (runIdRef.current !== currentRunId) return;
-          if (assignedBranches.has(branch)) {
-            let n = 2;
-            while (assignedBranches.has(`${branch}-${n}`)) n++;
-            branch = `${branch}-${n}`;
-          }
-          assignedBranches.add(branch);
-          const path = await worktreeClient.getDefaultPath(rootPath, branch);
-          if (runIdRef.current !== currentRunId) return;
-          precomputed.set(planned.item.number, { branch, path });
-        } catch (err) {
-          if (runIdRef.current !== currentRunId) return;
-          prequeryFailed.add(planned.item.number);
-          failedItems.add(planned.item.number);
+        for (const number of failedNumbers) {
+          prequeryFailed.add(number);
+          failedItems.add(number);
           dispatchProgress({
             type: "ITEM_FAILED",
-            issueNumber: planned.item.number,
-            error: normalizeError(err),
+            issueNumber: number,
+            error: "Prequery failed",
             attempts: 1,
             failedStep: "worktree",
           });
