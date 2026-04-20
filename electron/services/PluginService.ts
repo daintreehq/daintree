@@ -119,6 +119,13 @@ export class PluginService {
 
     const manifest = parseResult.data;
 
+    if (this.plugins.has(manifest.name)) {
+      console.error(
+        `[PluginService] Duplicate plugin name "${manifest.name}" in ${dirName} — rejecting`
+      );
+      return null;
+    }
+
     const requiredRange = manifest.engines?.daintree;
     if (requiredRange) {
       if (!semver.satisfies(this.appVersion, requiredRange, { includePrerelease: true })) {
@@ -198,12 +205,6 @@ export class PluginService {
     // plugin as loaded. Without this, `hasPlugin(pluginId)` returns false
     // inside the plugin's own init, and registerHandler/registerPluginAction
     // throw "Unknown plugin" even for a correctly loaded plugin.
-    if (this.plugins.has(manifest.name)) {
-      console.warn(
-        `[PluginService] Duplicate plugin name "${manifest.name}" in ${dirName}, tearing down previous instance`
-      );
-      this.unloadPlugin(manifest.name);
-    }
     this.plugins.set(manifest.name, plugin);
 
     if (plugin.resolvedMain) {

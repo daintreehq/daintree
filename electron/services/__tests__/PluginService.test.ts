@@ -446,16 +446,32 @@ describe("PluginService", () => {
     expect(service.listPlugins()).toEqual([]);
   });
 
-  it("warns on duplicate plugin names and keeps the last one", async () => {
-    await writePlugin("dir-a", { name: "acme.same-name", version: "1.0.0", description: "first" });
-    await writePlugin("dir-b", { name: "acme.same-name", version: "2.0.0", description: "second" });
+  it("rejects duplicate plugin names with error", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await writePlugin("dir-a", {
+        name: "acme.same-name",
+        version: "1.0.0",
+        description: "first",
+      });
+      await writePlugin("dir-b", {
+        name: "acme.same-name",
+        version: "2.0.0",
+        description: "second",
+      });
 
-    const service = new PluginService(tmpDir);
-    await service.initialize();
+      const service = new PluginService(tmpDir);
+      await service.initialize();
 
-    const plugins = service.listPlugins();
-    expect(plugins).toHaveLength(1);
-    expect(plugins[0].manifest.name).toBe("acme.same-name");
+      const plugins = service.listPlugins();
+      expect(plugins).toHaveLength(1);
+      expect(plugins[0].manifest.description).toBe("first");
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining('Duplicate plugin name "acme.same-name" in dir-b')
+      );
+    } finally {
+      errorSpy.mockRestore();
+    }
   });
 
   it("allows retry after non-ENOENT initialize failure", async () => {
