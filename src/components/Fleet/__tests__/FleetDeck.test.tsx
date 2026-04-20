@@ -222,6 +222,38 @@ describe("FleetDeck", () => {
     expect(getByRole("status")).toBeTruthy();
   });
 
+  it("shift-click range follows grouped render order when worktrees are interleaved", () => {
+    // Panels in panelIds order: wt1:a, wt2:b, wt1:c.
+    // Visual render order (after grouping by worktree) is: a, c (wt-1), then b (wt-2).
+    // Shift-click from "a" to visible "c" must arm {a, c} only — NOT b,
+    // which is visually below "c" but appears before it in panelIds order.
+    seedPanels([
+      makeAgent("a", { worktreeId: "wt-1" }),
+      makeAgent("b", { worktreeId: "wt-2" }),
+      makeAgent("c", { worktreeId: "wt-1" }),
+    ]);
+    const { getAllByTestId } = renderWithWorktrees(<FleetDeck />);
+    const rows = getAllByTestId("fleet-deck-row");
+    const orderIds = rows.map((el) => el.getAttribute("data-panel-id"));
+    expect(orderIds).toEqual(["a", "c", "b"]);
+
+    fireEvent.click(rows[0]!); // Arm "a" (anchor)
+    fireEvent.click(rows[1]!, { shiftKey: true }); // Extend to visually-next row "c"
+    const armed = useFleetArmingStore.getState().armedIds;
+    expect(armed.has("a")).toBe(true);
+    expect(armed.has("c")).toBe(true);
+    expect(armed.has("b")).toBe(false);
+  });
+
+  it("group header falls back to worktree id when snapshot is missing", () => {
+    seedPanels([makeAgent("a", { worktreeId: "wt-orphan" })]);
+    const { getByTestId } = renderWithWorktrees(
+      <FleetDeck />,
+      new Map([["wt-1", makeWorktreeSnapshot("wt-1", "main")]])
+    );
+    expect(getByTestId("fleet-deck-group-header").textContent).toBe("wt-orphan");
+  });
+
   it("armed row exposes data-armed attribute and aria-pressed", () => {
     seedPanels([makeAgent("a")]);
     useFleetArmingStore.setState({

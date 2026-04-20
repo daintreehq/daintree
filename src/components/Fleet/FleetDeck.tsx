@@ -75,6 +75,11 @@ export function FleetDeck(): ReactElement | null {
     return out;
   }, [filteredIds, panelsById, worktrees]);
 
+  // Grouped render order: shift-click range must reuse this list, not
+  // `filteredIds`, so the anchor/target indices match what the user sees.
+  // Otherwise panels from interleaved worktrees can arm non-visible rows.
+  const renderOrderIds = useMemo(() => groups.flatMap((g) => g.ids), [groups]);
+
   const handleArmFiltered = useCallback(() => {
     if (filteredIds.length === 0) return;
     armIds(filteredIds);
@@ -207,7 +212,7 @@ export function FleetDeck(): ReactElement | null {
                   <FleetDeckRow
                     key={id}
                     panelId={id}
-                    filteredIds={filteredIds}
+                    filteredIds={renderOrderIds}
                     worktreeName={group.worktreeName}
                   />
                 ))}
