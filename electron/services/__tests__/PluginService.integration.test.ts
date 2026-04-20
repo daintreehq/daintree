@@ -39,6 +39,7 @@ vi.mock("../../ipc/utils.js", () => ({
 }));
 
 import { PluginService } from "../PluginService.js";
+import type { PluginIpcContext } from "../../../shared/types/plugin.js";
 import {
   clearPanelKindRegistry,
   getPanelKindConfig,
@@ -48,6 +49,16 @@ import {
   getToolbarButtonConfig,
 } from "../../../shared/config/toolbarButtonRegistry.js";
 import { clearPluginMenuRegistry, getPluginMenuItems } from "../pluginMenuRegistry.js";
+
+function makeCtx(pluginId: string, overrides: Partial<PluginIpcContext> = {}): PluginIpcContext {
+  return {
+    projectId: null,
+    worktreeId: null,
+    webContentsId: 0,
+    pluginId,
+    ...overrides,
+  };
+}
 
 type PluginManifestShape = {
   name: string;
@@ -112,8 +123,8 @@ afterEach(async () => {
 
 describe("PluginService integration — panel contributions", () => {
   it("registers a panel contribution in the real panelKindRegistry", async () => {
-    await writePlugin("panel-plugin", {
-      name: "panel-plugin",
+    await writePlugin("acme.panel-plugin", {
+      name: "acme.panel-plugin",
       version: "1.0.0",
       contributes: {
         panels: [
@@ -130,10 +141,10 @@ describe("PluginService integration — panel contributions", () => {
     const service = new PluginService(tmpDir, "0.0.0");
     await service.initialize();
 
-    const config = getPanelKindConfig("panel-plugin.viewer");
+    const config = getPanelKindConfig("acme.panel-plugin.viewer");
     expect(config).toBeDefined();
     expect(config).toMatchObject({
-      id: "panel-plugin.viewer",
+      id: "acme.panel-plugin.viewer",
       name: "Viewer",
       iconId: "eye",
       color: "#ff0000",
@@ -141,13 +152,13 @@ describe("PluginService integration — panel contributions", () => {
       canRestart: false,
       canConvert: false,
       showInPalette: true,
-      extensionId: "panel-plugin",
+      extensionId: "acme.panel-plugin",
     });
   });
 
   it("registers multiple panels from one plugin with full config per panel", async () => {
-    await writePlugin("multi-panel", {
-      name: "multi-panel",
+    await writePlugin("acme.multi-panel", {
+      name: "acme.multi-panel",
       version: "1.0.0",
       contributes: {
         panels: [
@@ -160,25 +171,25 @@ describe("PluginService integration — panel contributions", () => {
     const service = new PluginService(tmpDir, "0.0.0");
     await service.initialize();
 
-    expect(getPanelKindConfig("multi-panel.viewer")).toMatchObject({
-      id: "multi-panel.viewer",
+    expect(getPanelKindConfig("acme.multi-panel.viewer")).toMatchObject({
+      id: "acme.multi-panel.viewer",
       name: "Viewer",
       iconId: "eye",
       color: "#111",
-      extensionId: "multi-panel",
+      extensionId: "acme.multi-panel",
     });
-    expect(getPanelKindConfig("multi-panel.editor")).toMatchObject({
-      id: "multi-panel.editor",
+    expect(getPanelKindConfig("acme.multi-panel.editor")).toMatchObject({
+      id: "acme.multi-panel.editor",
       name: "Editor",
       iconId: "pen",
       color: "#222",
-      extensionId: "multi-panel",
+      extensionId: "acme.multi-panel",
     });
   });
 
   it("propagates non-default panel flags through to the registry", async () => {
-    await writePlugin("flag-plugin", {
-      name: "flag-plugin",
+    await writePlugin("acme.flag-plugin", {
+      name: "acme.flag-plugin",
       version: "1.0.0",
       contributes: {
         panels: [
@@ -199,7 +210,7 @@ describe("PluginService integration — panel contributions", () => {
     const service = new PluginService(tmpDir, "0.0.0");
     await service.initialize();
 
-    expect(getPanelKindConfig("flag-plugin.custom")).toMatchObject({
+    expect(getPanelKindConfig("acme.flag-plugin.custom")).toMatchObject({
       hasPty: true,
       canRestart: true,
       canConvert: true,
@@ -208,8 +219,8 @@ describe("PluginService integration — panel contributions", () => {
   });
 
   it("preserves built-in panel kind configs intact after loading an extension", async () => {
-    await writePlugin("built-in-coexist", {
-      name: "built-in-coexist",
+    await writePlugin("acme.built-in-coexist", {
+      name: "acme.built-in-coexist",
       version: "1.0.0",
       contributes: {
         panels: [{ id: "p", name: "P", iconId: "i", color: "#000" }],
@@ -245,7 +256,7 @@ describe("PluginService integration — panel contributions", () => {
 
   it("uses manifest.name not directory name when registering contributions", async () => {
     await writePlugin("alias-dir", {
-      name: "real-plugin",
+      name: "acme.real-plugin",
       version: "1.0.0",
       contributes: {
         panels: [{ id: "viewer", name: "Viewer", iconId: "eye", color: "#abc" }],
@@ -259,22 +270,24 @@ describe("PluginService integration — panel contributions", () => {
     const service = new PluginService(tmpDir, "0.0.0");
     await service.initialize();
 
-    expect(getPanelKindConfig("real-plugin.viewer")?.extensionId).toBe("real-plugin");
+    expect(getPanelKindConfig("acme.real-plugin.viewer")?.extensionId).toBe("acme.real-plugin");
     expect(getPanelKindConfig("alias-dir.viewer")).toBeUndefined();
 
-    expect(getToolbarButtonConfig("plugin.real-plugin.btn")?.pluginId).toBe("real-plugin");
+    expect(getToolbarButtonConfig("plugin.acme.real-plugin.btn")?.pluginId).toBe(
+      "acme.real-plugin"
+    );
     expect(getToolbarButtonConfig("plugin.alias-dir.btn")).toBeUndefined();
 
     const items = getPluginMenuItems();
     expect(items).toHaveLength(1);
-    expect(items[0].pluginId).toBe("real-plugin");
+    expect(items[0].pluginId).toBe("acme.real-plugin");
   });
 });
 
 describe("PluginService integration — toolbar button contributions", () => {
   it("registers a toolbar button in the real toolbarButtonRegistry", async () => {
-    await writePlugin("toolbar-plugin", {
-      name: "toolbar-plugin",
+    await writePlugin("acme.toolbar-plugin", {
+      name: "acme.toolbar-plugin",
       version: "1.0.0",
       contributes: {
         toolbarButtons: [
@@ -292,21 +305,21 @@ describe("PluginService integration — toolbar button contributions", () => {
     const service = new PluginService(tmpDir, "0.0.0");
     await service.initialize();
 
-    const config = getToolbarButtonConfig("plugin.toolbar-plugin.my-btn");
+    const config = getToolbarButtonConfig("plugin.acme.toolbar-plugin.my-btn");
     expect(config).toBeDefined();
     expect(config).toMatchObject({
-      id: "plugin.toolbar-plugin.my-btn",
+      id: "plugin.acme.toolbar-plugin.my-btn",
       label: "My Button",
       iconId: "puzzle",
       actionId: "toolbar-plugin.doThing",
       priority: 4,
-      pluginId: "toolbar-plugin",
+      pluginId: "acme.toolbar-plugin",
     });
   });
 
   it("defaults priority to 3 when omitted", async () => {
-    await writePlugin("default-prio", {
-      name: "default-prio",
+    await writePlugin("acme.default-prio", {
+      name: "acme.default-prio",
       version: "1.0.0",
       contributes: {
         toolbarButtons: [
@@ -323,14 +336,14 @@ describe("PluginService integration — toolbar button contributions", () => {
     const service = new PluginService(tmpDir, "0.0.0");
     await service.initialize();
 
-    expect(getToolbarButtonConfig("plugin.default-prio.btn")?.priority).toBe(3);
+    expect(getToolbarButtonConfig("plugin.acme.default-prio.btn")?.priority).toBe(3);
   });
 });
 
 describe("PluginService integration — menu item contributions", () => {
   it("registers a menu item in the real pluginMenuRegistry", async () => {
-    await writePlugin("menu-plugin", {
-      name: "menu-plugin",
+    await writePlugin("acme.menu-plugin", {
+      name: "acme.menu-plugin",
       version: "1.0.0",
       contributes: {
         menuItems: [
@@ -349,7 +362,7 @@ describe("PluginService integration — menu item contributions", () => {
     const items = getPluginMenuItems();
     expect(items).toHaveLength(1);
     expect(items[0]).toEqual({
-      pluginId: "menu-plugin",
+      pluginId: "acme.menu-plugin",
       item: {
         label: "Do Something",
         actionId: "menu-plugin.doSomething",
@@ -362,8 +375,8 @@ describe("PluginService integration — menu item contributions", () => {
 describe("PluginService integration — main entry execution", () => {
   it("executes a plugin's main entry via dynamic import", async () => {
     const markerKey = makeMarkerKey();
-    const pluginDir = await writePlugin("main-plugin", {
-      name: "main-plugin",
+    const pluginDir = await writePlugin("acme.main-plugin", {
+      name: "acme.main-plugin",
       version: "1.0.0",
     });
     const mainFile = await writeMainFixture(pluginDir, markerKey);
@@ -371,7 +384,7 @@ describe("PluginService integration — main entry execution", () => {
     await fs.writeFile(
       path.join(pluginDir, "plugin.json"),
       JSON.stringify({
-        name: "main-plugin",
+        name: "acme.main-plugin",
         version: "1.0.0",
         main: mainFile,
       })
@@ -386,8 +399,8 @@ describe("PluginService integration — main entry execution", () => {
   });
 
   it("registers contributions even when main entry import throws", async () => {
-    const pluginDir = await writePlugin("bad-main", {
-      name: "bad-main",
+    const pluginDir = await writePlugin("acme.bad-main", {
+      name: "acme.bad-main",
       version: "1.0.0",
     });
     const mainFile = `main-${randomUUID()}.mjs`;
@@ -398,7 +411,7 @@ describe("PluginService integration — main entry execution", () => {
     await fs.writeFile(
       path.join(pluginDir, "plugin.json"),
       JSON.stringify({
-        name: "bad-main",
+        name: "acme.bad-main",
         version: "1.0.0",
         main: mainFile,
         contributes: {
@@ -414,13 +427,13 @@ describe("PluginService integration — main entry execution", () => {
       const service = new PluginService(tmpDir, "0.0.0");
       await service.initialize();
 
-      expect(service.hasPlugin("bad-main")).toBe(true);
+      expect(service.hasPlugin("acme.bad-main")).toBe(true);
       expect(errorSpy).toHaveBeenCalledWith(
-        expect.stringContaining("Failed to load main entry for bad-main"),
+        expect.stringContaining("Failed to load main entry for acme.bad-main"),
         expect.anything()
       );
-      expect(getPanelKindConfig("bad-main.p")).toBeDefined();
-      expect(getToolbarButtonConfig("plugin.bad-main.b")).toBeDefined();
+      expect(getPanelKindConfig("acme.bad-main.p")).toBeDefined();
+      expect(getToolbarButtonConfig("plugin.acme.bad-main.b")).toBeDefined();
       expect(getPluginMenuItems()).toHaveLength(1);
     } finally {
       errorSpy.mockRestore();
@@ -435,8 +448,8 @@ describe("PluginService integration — main entry execution", () => {
       `globalThis[${JSON.stringify(markerKey)}] = true;\n`
     );
 
-    await writePlugin("escape-main", {
-      name: "escape-main",
+    await writePlugin("acme.escape-main", {
+      name: "acme.escape-main",
       version: "1.0.0",
       main: `../${outsideFile}`,
     });
@@ -446,7 +459,7 @@ describe("PluginService integration — main entry execution", () => {
       const service = new PluginService(tmpDir, "0.0.0");
       await service.initialize();
 
-      expect(service.hasPlugin("escape-main")).toBe(true);
+      expect(service.hasPlugin("acme.escape-main")).toBe(true);
       expect(readMarker(markerKey)).toBeUndefined();
     } finally {
       warnSpy.mockRestore();
@@ -456,43 +469,242 @@ describe("PluginService integration — main entry execution", () => {
 
 describe("PluginService integration — handler dispatch", () => {
   it("registers and dispatches a handler end-to-end on a real loaded plugin", async () => {
-    await writePlugin("handler-plugin", {
-      name: "handler-plugin",
+    await writePlugin("acme.handler-plugin", {
+      name: "acme.handler-plugin",
       version: "1.0.0",
     });
 
     const service = new PluginService(tmpDir, "0.0.0");
     await service.initialize();
-    expect(service.hasPlugin("handler-plugin")).toBe(true);
+    expect(service.hasPlugin("acme.handler-plugin")).toBe(true);
 
-    service.registerHandler("handler-plugin", "ping", async (...args: unknown[]) => ({
-      pong: args,
-    }));
+    service.registerHandler(
+      "acme.handler-plugin",
+      "ping",
+      async (ctx: PluginIpcContext, ...args: unknown[]) => ({
+        pong: args,
+        seenPluginId: ctx.pluginId,
+      })
+    );
 
-    const result = await service.dispatchHandler("handler-plugin", "ping", ["hello", 42]);
-    expect(result).toEqual({ pong: ["hello", 42] });
+    const ctx = makeCtx("acme.handler-plugin", { webContentsId: 17 });
+    const result = await service.dispatchHandler("acme.handler-plugin", "ping", ctx, ["hello", 42]);
+    expect(result).toEqual({ pong: ["hello", 42], seenPluginId: "acme.handler-plugin" });
   });
 
   it("dispatchHandler rejects when plugin registered no handler for the channel", async () => {
-    await writePlugin("silent-plugin", {
-      name: "silent-plugin",
+    await writePlugin("acme.silent-plugin", {
+      name: "acme.silent-plugin",
       version: "1.0.0",
     });
 
     const service = new PluginService(tmpDir, "0.0.0");
     await service.initialize();
 
-    await expect(service.dispatchHandler("silent-plugin", "nope", [])).rejects.toThrow(
-      "No plugin handler registered for silent-plugin:nope"
+    await expect(
+      service.dispatchHandler("acme.silent-plugin", "nope", makeCtx("acme.silent-plugin"), [])
+    ).rejects.toThrow("No plugin handler registered for acme.silent-plugin:nope");
+  });
+});
+
+describe("PluginService integration — activate() lifecycle", () => {
+  async function writeActivateFixture(pluginDir: string, markerKey: string): Promise<string> {
+    const fileName = `activate-${randomUUID()}.mjs`;
+    const filePath = path.join(pluginDir, fileName);
+    await fs.writeFile(
+      filePath,
+      `export function activate(host) {
+  globalThis[${JSON.stringify(markerKey)}] = { pluginId: host.pluginId, called: true };
+  host.registerHandler("probe", (ctx, ...args) => ({ ctx, args }));
+  return () => {
+    globalThis[${JSON.stringify(markerKey)}].cleaned = true;
+  };
+}
+`
     );
+    return fileName;
+  }
+
+  it("calls exported activate(host) and registers handlers via host.registerHandler", async () => {
+    const markerKey = makeMarkerKey();
+    const pluginDir = await writePlugin("acme.activating-plugin", {
+      name: "acme.activating-plugin",
+      version: "1.0.0",
+    });
+    const mainFile = await writeActivateFixture(pluginDir, markerKey);
+    await fs.writeFile(
+      path.join(pluginDir, "plugin.json"),
+      JSON.stringify({
+        name: "acme.activating-plugin",
+        version: "1.0.0",
+        main: mainFile,
+      })
+    );
+
+    const service = new PluginService(tmpDir, "0.0.0");
+    await service.initialize();
+
+    const marker = readMarker(markerKey) as { pluginId: string; called: boolean } | undefined;
+    expect(marker).toBeDefined();
+    expect(marker?.pluginId).toBe("acme.activating-plugin");
+    expect(marker?.called).toBe(true);
+
+    const result = (await service.dispatchHandler(
+      "acme.activating-plugin",
+      "probe",
+      makeCtx("acme.activating-plugin", { webContentsId: 99 }),
+      ["hello"]
+    )) as { ctx: PluginIpcContext; args: unknown[] };
+    expect(result.ctx.pluginId).toBe("acme.activating-plugin");
+    expect(result.ctx.webContentsId).toBe(99);
+    expect(result.args).toEqual(["hello"]);
+  });
+
+  it("invokes activate's returned cleanup before handlers are removed on unload", async () => {
+    const markerKey = makeMarkerKey();
+    const pluginDir = await writePlugin("acme.cleanup-plugin", {
+      name: "acme.cleanup-plugin",
+      version: "1.0.0",
+    });
+    const mainFile = await writeActivateFixture(pluginDir, markerKey);
+    await fs.writeFile(
+      path.join(pluginDir, "plugin.json"),
+      JSON.stringify({
+        name: "acme.cleanup-plugin",
+        version: "1.0.0",
+        main: mainFile,
+      })
+    );
+
+    const service = new PluginService(tmpDir, "0.0.0");
+    await service.initialize();
+
+    const marker = readMarker(markerKey) as
+      | { pluginId: string; called: boolean; cleaned?: boolean }
+      | undefined;
+    expect(marker?.cleaned).toBeUndefined();
+
+    service.unloadPlugin("acme.cleanup-plugin");
+
+    const afterMarker = readMarker(markerKey) as
+      | { pluginId: string; called: boolean; cleaned?: boolean }
+      | undefined;
+    expect(afterMarker?.cleaned).toBe(true);
+    expect(service.hasPlugin("acme.cleanup-plugin")).toBe(false);
+  });
+
+  it("loads plugins that do not export activate without throwing", async () => {
+    const markerKey = makeMarkerKey();
+    const pluginDir = await writePlugin("acme.no-activate", {
+      name: "acme.no-activate",
+      version: "1.0.0",
+    });
+    const mainFile = `side-effect-${randomUUID()}.mjs`;
+    await fs.writeFile(
+      path.join(pluginDir, mainFile),
+      `globalThis[${JSON.stringify(markerKey)}] = true;\n`
+    );
+    await fs.writeFile(
+      path.join(pluginDir, "plugin.json"),
+      JSON.stringify({
+        name: "acme.no-activate",
+        version: "1.0.0",
+        main: mainFile,
+      })
+    );
+
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const service = new PluginService(tmpDir, "0.0.0");
+      await service.initialize();
+
+      expect(service.hasPlugin("acme.no-activate")).toBe(true);
+      expect(readMarker(markerKey)).toBe(true);
+      expect(errorSpy).not.toHaveBeenCalled();
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
+  it("logs an error and still registers the plugin when activate throws", async () => {
+    const pluginDir = await writePlugin("acme.throwing-activate", {
+      name: "acme.throwing-activate",
+      version: "1.0.0",
+    });
+    const mainFile = `activate-throw-${randomUUID()}.mjs`;
+    await fs.writeFile(
+      path.join(pluginDir, mainFile),
+      `export function activate() { throw new Error("boom"); }\n`
+    );
+    await fs.writeFile(
+      path.join(pluginDir, "plugin.json"),
+      JSON.stringify({
+        name: "acme.throwing-activate",
+        version: "1.0.0",
+        main: mainFile,
+      })
+    );
+
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const service = new PluginService(tmpDir, "0.0.0");
+      await service.initialize();
+
+      expect(service.hasPlugin("acme.throwing-activate")).toBe(true);
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining("Failed to load main entry for acme.throwing-activate"),
+        expect.anything()
+      );
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
+  it("host.registerHandler enforces the plugin's own namespace", async () => {
+    const markerKey = makeMarkerKey();
+    const pluginDir = await writePlugin("acme.namespace-plugin", {
+      name: "acme.namespace-plugin",
+      version: "1.0.0",
+    });
+    const mainFile = `namespace-${randomUUID()}.mjs`;
+    await fs.writeFile(
+      path.join(pluginDir, mainFile),
+      `export function activate(host) {
+  globalThis[${JSON.stringify(markerKey)}] = { pluginId: host.pluginId };
+  host.registerHandler("ping", () => "pong");
+}
+`
+    );
+    await fs.writeFile(
+      path.join(pluginDir, "plugin.json"),
+      JSON.stringify({
+        name: "acme.namespace-plugin",
+        version: "1.0.0",
+        main: mainFile,
+      })
+    );
+
+    const service = new PluginService(tmpDir, "0.0.0");
+    await service.initialize();
+
+    const marker = readMarker(markerKey) as { pluginId: string } | undefined;
+    expect(marker?.pluginId).toBe("acme.namespace-plugin");
+
+    const result = await service.dispatchHandler(
+      "acme.namespace-plugin",
+      "ping",
+      makeCtx("acme.namespace-plugin"),
+      []
+    );
+    expect(result).toBe("pong");
   });
 });
 
 describe("PluginService integration — full contribution fan-out", () => {
   it("loads a plugin with panel, toolbar, menu, and main entry in one initialize call", async () => {
     const markerKey = makeMarkerKey();
-    const pluginDir = await writePlugin("all-in-one", {
-      name: "all-in-one",
+    const pluginDir = await writePlugin("acme.all-in-one", {
+      name: "acme.all-in-one",
       version: "1.0.0",
     });
     const mainFile = await writeMainFixture(pluginDir, markerKey);
@@ -500,7 +712,7 @@ describe("PluginService integration — full contribution fan-out", () => {
     await fs.writeFile(
       path.join(pluginDir, "plugin.json"),
       JSON.stringify({
-        name: "all-in-one",
+        name: "acme.all-in-one",
         version: "1.0.0",
         main: mainFile,
         contributes: {
@@ -516,11 +728,11 @@ describe("PluginService integration — full contribution fan-out", () => {
     const service = new PluginService(tmpDir, "0.0.0");
     await service.initialize();
 
-    expect(getPanelKindConfig("all-in-one.v")?.extensionId).toBe("all-in-one");
-    expect(getToolbarButtonConfig("plugin.all-in-one.b")?.priority).toBe(2);
+    expect(getPanelKindConfig("acme.all-in-one.v")?.extensionId).toBe("acme.all-in-one");
+    expect(getToolbarButtonConfig("plugin.acme.all-in-one.b")?.priority).toBe(2);
     expect(getPluginMenuItems()).toEqual([
       {
-        pluginId: "all-in-one",
+        pluginId: "acme.all-in-one",
         item: { label: "M", actionId: "all-in-one.act", location: "view" },
       },
     ]);

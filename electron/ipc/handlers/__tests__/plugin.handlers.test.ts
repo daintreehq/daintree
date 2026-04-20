@@ -89,13 +89,45 @@ describe("registerPluginHandlers", () => {
       (c: unknown[]) => c[0] === "plugin:invoke"
     )![1] as (...args: unknown[]) => unknown;
 
-    const trustedEvent = { senderFrame: { url: "app://daintree/" } };
+    const trustedEvent = {
+      senderFrame: { url: "app://daintree/" },
+      sender: { id: 33 },
+    };
     const result = await invokeHandler(trustedEvent, "acme.my-plugin", "get-data", "arg1", "arg2");
-    expect(mockDispatchHandler).toHaveBeenCalledWith("acme.my-plugin", "get-data", [
-      "arg1",
-      "arg2",
-    ]);
+    expect(mockDispatchHandler).toHaveBeenCalledWith(
+      "acme.my-plugin",
+      "get-data",
+      {
+        projectId: null,
+        worktreeId: null,
+        webContentsId: 33,
+        pluginId: "acme.my-plugin",
+      },
+      ["arg1", "arg2"]
+    );
     expect(result).toEqual({ data: "hello" });
+  });
+
+  it("PLUGIN_INVOKE handler builds ctx with webContentsId from event.sender.id", async () => {
+    mockDispatchHandler.mockResolvedValue(undefined);
+
+    registerPluginHandlers();
+    const invokeHandler = mockIpcMainHandle.mock.calls.find(
+      (c: unknown[]) => c[0] === "plugin:invoke"
+    )![1] as (...args: unknown[]) => unknown;
+
+    const trustedEvent = {
+      senderFrame: { url: "app://daintree/" },
+      sender: { id: 7 },
+    };
+    await invokeHandler(trustedEvent, "acme.my-plugin", "get-data");
+    const ctxArg = mockDispatchHandler.mock.calls[0][2];
+    expect(ctxArg).toEqual({
+      projectId: null,
+      worktreeId: null,
+      webContentsId: 7,
+      pluginId: "acme.my-plugin",
+    });
   });
 
   it("PLUGIN_INVOKE handler propagates errors from dispatchHandler", async () => {
@@ -106,7 +138,10 @@ describe("registerPluginHandlers", () => {
       (c: unknown[]) => c[0] === "plugin:invoke"
     )![1] as (...args: unknown[]) => unknown;
 
-    const trustedEvent = { senderFrame: { url: "app://daintree/" } };
+    const trustedEvent = {
+      senderFrame: { url: "app://daintree/" },
+      sender: { id: 1 },
+    };
     await expect(invokeHandler(trustedEvent, "x", "y")).rejects.toThrow(
       "No plugin handler registered for x:y"
     );
@@ -118,7 +153,10 @@ describe("registerPluginHandlers", () => {
       (c: unknown[]) => c[0] === "plugin:invoke"
     )![1] as (...args: unknown[]) => unknown;
 
-    const untrustedEvent = { senderFrame: { url: "https://evil.com/attack.html" } };
+    const untrustedEvent = {
+      senderFrame: { url: "https://evil.com/attack.html" },
+      sender: { id: 1 },
+    };
     await expect(
       invokeHandler(untrustedEvent, "acme.my-plugin", "get-data", "arg1")
     ).rejects.toThrow("plugin:invoke rejected: untrusted sender");
@@ -131,7 +169,7 @@ describe("registerPluginHandlers", () => {
       (c: unknown[]) => c[0] === "plugin:invoke"
     )![1] as (...args: unknown[]) => unknown;
 
-    const nullFrameEvent = { senderFrame: null };
+    const nullFrameEvent = { senderFrame: null, sender: { id: 1 } };
     await expect(invokeHandler(nullFrameEvent, "acme.my-plugin", "get-data")).rejects.toThrow(
       "plugin:invoke rejected: untrusted sender"
     );

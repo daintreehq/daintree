@@ -52,4 +52,24 @@ export interface LoadedPluginInfo {
   loadedAt: number;
 }
 
-export type PluginIpcHandler = (...args: unknown[]) => unknown | Promise<unknown>;
+export interface PluginIpcContext {
+  projectId: string | null;
+  worktreeId: string | null;
+  webContentsId: number;
+  pluginId: string;
+}
+
+export type PluginIpcHandler = (
+  ctx: PluginIpcContext,
+  ...args: unknown[]
+) => unknown | Promise<unknown>;
+
+export interface PluginHostApi {
+  readonly pluginId: string;
+  registerHandler(channel: string, handler: PluginIpcHandler): void;
+  broadcastToRenderer(channel: string, payload: unknown): void;
+}
+
+export type PluginActivate = (
+  host: PluginHostApi
+) => void | (() => void) | Promise<void | (() => void)>;

@@ -7,7 +7,11 @@ import {
 } from "../../../shared/config/toolbarButtonRegistry.js";
 import { getPluginMenuItems } from "../../services/pluginMenuRegistry.js";
 import { isTrustedRendererUrl } from "../../../shared/utils/trustedRenderer.js";
-import type { LoadedPluginInfo, PluginIpcHandler } from "../../../shared/types/plugin.js";
+import type {
+  LoadedPluginInfo,
+  PluginIpcHandler,
+  PluginIpcContext,
+} from "../../../shared/types/plugin.js";
 import type { ToolbarButtonConfig } from "../../../shared/config/toolbarButtonRegistry.js";
 import { typedHandle } from "../utils.js";
 
@@ -70,7 +74,13 @@ export function registerPluginHandlers(): () => void {
       if (!senderUrl || !isTrustedRendererUrl(senderUrl)) {
         throw new Error(`plugin:invoke rejected: untrusted sender (url=${senderUrl ?? "unknown"})`);
       }
-      return await pluginService.dispatchHandler(pluginId, channel, args);
+      const ctx: PluginIpcContext = {
+        projectId: null,
+        worktreeId: null,
+        webContentsId: event.sender.id,
+        pluginId,
+      };
+      return await pluginService.dispatchHandler(pluginId, channel, ctx, args);
     }
   );
   handlers.push(() => ipcMain.removeHandler(CHANNELS.PLUGIN_INVOKE));

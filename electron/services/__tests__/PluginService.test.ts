@@ -29,6 +29,17 @@ vi.mock("../pluginMenuRegistry.js", () => ({
 
 import { PluginService } from "../PluginService.js";
 import { PluginManifestSchema } from "../../schemas/plugin.js";
+import type { PluginIpcContext } from "../../../shared/types/plugin.js";
+
+function makeCtx(pluginId: string, overrides: Partial<PluginIpcContext> = {}): PluginIpcContext {
+  return {
+    projectId: null,
+    worktreeId: null,
+    webContentsId: 0,
+    pluginId,
+    ...overrides,
+  };
+}
 import {
   registerPanelKind,
   unregisterPluginPanelKinds,
@@ -470,15 +481,33 @@ describe("Plugin IPC handler registration", () => {
     const handler = vi.fn().mockResolvedValue({ value: 42 });
     service.registerHandler("acme.test-plugin", "get-data", handler);
 
-    const result = await service.dispatchHandler("acme.test-plugin", "get-data", ["arg1", "arg2"]);
-    expect(handler).toHaveBeenCalledWith("arg1", "arg2");
+    const ctx = makeCtx("acme.test-plugin", { webContentsId: 7 });
+    const result = await service.dispatchHandler("acme.test-plugin", "get-data", ctx, [
+      "arg1",
+      "arg2",
+    ]);
+    expect(handler).toHaveBeenCalledWith(ctx, "arg1", "arg2");
     expect(result).toEqual({ value: 42 });
   });
 
+  it("dispatchHandler passes the context as the first argument to the handler", async () => {
+    const handler = vi.fn().mockResolvedValue("ok");
+    service.registerHandler("acme.test-plugin", "get-ctx", handler);
+
+    const ctx = makeCtx("acme.test-plugin", {
+      projectId: "p1",
+      worktreeId: "w1",
+      webContentsId: 42,
+    });
+    await service.dispatchHandler("acme.test-plugin", "get-ctx", ctx, ["x"]);
+    expect(handler.mock.calls[0][0]).toEqual(ctx);
+    expect(handler.mock.calls[0][1]).toBe("x");
+  });
+
   it("dispatchHandler throws when no handler is found", async () => {
-    await expect(service.dispatchHandler("acme.test-plugin", "unknown", [])).rejects.toThrow(
-      "No plugin handler registered for acme.test-plugin:unknown"
-    );
+    await expect(
+      service.dispatchHandler("acme.test-plugin", "unknown", makeCtx("acme.test-plugin"), [])
+    ).rejects.toThrow("No plugin handler registered for acme.test-plugin:unknown");
   });
 
   it("registering same (pluginId, channel) twice overwrites the handler", async () => {
@@ -487,7 +516,12 @@ describe("Plugin IPC handler registration", () => {
     service.registerHandler("acme.test-plugin", "get-data", handler1);
     service.registerHandler("acme.test-plugin", "get-data", handler2);
 
-    const result = await service.dispatchHandler("acme.test-plugin", "get-data", []);
+    const result = await service.dispatchHandler(
+      "acme.test-plugin",
+      "get-data",
+      makeCtx("acme.test-plugin"),
+      []
+    );
     expect(result).toBe("second");
     expect(handler1).not.toHaveBeenCalled();
   });
@@ -503,9 +537,15 @@ describe("Plugin IPC handler registration", () => {
 
     service2.removeHandlers("acme.test-plugin");
 
-    await expect(service2.dispatchHandler("acme.test-plugin", "ch-a", [])).rejects.toThrow();
-    await expect(service2.dispatchHandler("acme.test-plugin", "ch-b", [])).rejects.toThrow();
-    expect(await service2.dispatchHandler("acme.other-plugin", "ch-c", [])).toBe("c");
+    await expect(
+      service2.dispatchHandler("acme.test-plugin", "ch-a", makeCtx("acme.test-plugin"), [])
+    ).rejects.toThrow();
+    await expect(
+      service2.dispatchHandler("acme.test-plugin", "ch-b", makeCtx("acme.test-plugin"), [])
+    ).rejects.toThrow();
+    expect(
+      await service2.dispatchHandler("acme.other-plugin", "ch-c", makeCtx("acme.other-plugin"), [])
+    ).toBe("c");
   });
 
   it("hasPlugin returns true for loaded plugins and false otherwise", () => {
@@ -520,7 +560,12 @@ describe("Plugin IPC handler registration", () => {
 
   it("dispatchHandler handles synchronous handlers", async () => {
     service.registerHandler("acme.test-plugin", "sync", () => "sync-result");
-    const result = await service.dispatchHandler("acme.test-plugin", "sync", []);
+    const result = await service.dispatchHandler(
+      "acme.test-plugin",
+      "sync",
+      makeCtx("acme.test-plugin"),
+      []
+    );
     expect(result).toBe("sync-result");
   });
 });
@@ -810,13 +855,15 @@ describe("Plugin unload lifecycle", () => {
     await service.initialize();
 
     service.registerHandler("acme.handler-host", "ping", () => "pong");
-    expect(await service.dispatchHandler("acme.handler-host", "ping", [])).toBe("pong");
+    expect(
+      await service.dispatchHandler("acme.handler-host", "ping", makeCtx("acme.handler-host"), [])
+    ).toBe("pong");
 
     service.unloadPlugin("acme.handler-host");
 
-    await expect(service.dispatchHandler("acme.handler-host", "ping", [])).rejects.toThrow(
-      "No plugin handler registered for acme.handler-host:ping"
-    );
+    await expect(
+      service.dispatchHandler("acme.handler-host", "ping", makeCtx("acme.handler-host"), [])
+    ).rejects.toThrow("No plugin handler registered for acme.handler-host:ping");
   });
 
   it("unloadPlugin is a no-op when the plugin is not loaded", async () => {
@@ -872,6 +919,84 @@ describe("Plugin unload lifecycle", () => {
     expect(registerPanelKind).toHaveBeenCalledWith(
       expect.objectContaining({ id: "acme.lifecycle.viewer", extensionId: "acme.lifecycle" })
     );
+  });
+});
+
+type CreateHostShape = (pluginId: string) => {
+  host: {
+    pluginId: string;
+    registerHandler: (channel: string, handler: (...args: unknown[]) => unknown) => void;
+    broadcastToRenderer: (channel: string, payload: unknown) => void;
+  };
+  revoke: () => void;
+};
+
+describe("createHost (plugin activation API)", () => {
+  it("host.registerHandler delegates with the plugin's own namespace", async () => {
+    await writePlugin("host-test", { name: "acme.host-test", version: "1.0.0" });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host } = (service as unknown as { createHost: CreateHostShape }).createHost(
+      "acme.host-test"
+    );
+
+    expect(host.pluginId).toBe("acme.host-test");
+
+    const handler = vi.fn().mockReturnValue("ok");
+    host.registerHandler("probe", handler);
+
+    const ctx = makeCtx("acme.host-test");
+    const result = await service.dispatchHandler("acme.host-test", "probe", ctx, ["a"]);
+    expect(handler).toHaveBeenCalledWith(ctx, "a");
+    expect(result).toBe("ok");
+  });
+
+  it("host.broadcastToRenderer namespaces channels as plugin:{pluginId}:{channel}", async () => {
+    await writePlugin("bcast-test", { name: "acme.bcast-test", version: "1.0.0" });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host } = (service as unknown as { createHost: CreateHostShape }).createHost(
+      "acme.bcast-test"
+    );
+
+    broadcastToRendererMock.mockClear();
+    host.broadcastToRenderer("status", { ok: true });
+    expect(broadcastToRendererMock).toHaveBeenCalledWith("plugin:acme.bcast-test:status", {
+      ok: true,
+    });
+  });
+
+  it("host.broadcastToRenderer rejects channels containing colons", async () => {
+    await writePlugin("bcast-reject", { name: "acme.bcast-reject", version: "1.0.0" });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host } = (service as unknown as { createHost: CreateHostShape }).createHost(
+      "acme.bcast-reject"
+    );
+
+    expect(() => host.broadcastToRenderer("bad:channel", null)).toThrow(
+      "Plugin broadcast channel must be a string without colons"
+    );
+  });
+
+  it("revoked host rejects registerHandler and broadcastToRenderer calls", async () => {
+    await writePlugin("revoke-test", { name: "acme.revoke-test", version: "1.0.0" });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host, revoke } = (service as unknown as { createHost: CreateHostShape }).createHost(
+      "acme.revoke-test"
+    );
+
+    revoke();
+
+    expect(() => host.registerHandler("x", () => undefined)).toThrow(
+      /host revoked: registerHandler/
+    );
+    expect(() => host.broadcastToRenderer("x", null)).toThrow(/host revoked: broadcastToRenderer/);
   });
 });
 
