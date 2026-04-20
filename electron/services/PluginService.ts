@@ -138,12 +138,6 @@ export class PluginService {
       );
     }
 
-    if (manifest.renderer) {
-      console.warn(
-        `[PluginService] Plugin "${manifest.name}" uses deprecated 'renderer' field. This field is no longer supported and will be ignored. Daintree plugins use main process entry points only; renderer-side plugins are not supported.`
-      );
-    }
-
     if (manifest.permissions.length > 0) {
       console.log(
         `[PluginService] Plugin "${manifest.name}" declares permissions: ${manifest.permissions.join(", ")}`
