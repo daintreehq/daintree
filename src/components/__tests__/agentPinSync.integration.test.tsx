@@ -237,6 +237,7 @@ vi.mock("@dnd-kit/utilities", () => ({ CSS: { Transform: { toString: () => "" } 
 vi.mock("@/components/icons", () => ({
   CopyTreeIcon: () => null,
   McpServerIcon: () => null,
+  DaintreeAgentIcon: () => null,
 }));
 
 vi.mock("@/components/Settings/SettingsSection", () => ({
