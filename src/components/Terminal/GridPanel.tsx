@@ -2,7 +2,7 @@ import React, { useCallback, useMemo } from "react";
 import { usePanelStore, type TerminalInstance } from "@/store";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { getPanelKindDefinition, type PanelComponentProps } from "@/registry";
-import { ContentPanel, triggerPanelTransition } from "@/components/Panel";
+import { ContentPanel, MissingPluginPanel, triggerPanelTransition } from "@/components/Panel";
 import type { TabInfo } from "@/components/Panel/TabButton";
 import { usePanelLifecycle } from "@/hooks/usePanelLifecycle";
 import { usePanelHandlers } from "@/hooks/usePanelHandlers";
@@ -258,15 +258,7 @@ export const GridPanel = React.memo(function GridPanel({
         onAddTab={onAddTab}
         onTabReorder={onTabReorder}
       >
-        <div className="flex flex-1 items-center justify-center bg-surface-panel text-text-muted">
-          <div className="text-center">
-            <p className="text-sm font-medium">Unknown Panel Type</p>
-            <p className="text-xs mt-1 text-daintree-text/50">Kind: {kind}</p>
-            <p className="text-xs mt-2 text-daintree-text/40">
-              No component registered for this panel kind
-            </p>
-          </div>
-        </div>
+        <MissingPluginPanel kind={kind} onRemove={() => handleClose(true)} />
       </ContentPanel>
     );
   }
