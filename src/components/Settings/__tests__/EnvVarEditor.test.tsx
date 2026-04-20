@@ -17,6 +17,9 @@ import { EnvVarEditor } from "../EnvVarEditor";
 
 vi.mock("lucide-react", () => ({
   X: () => <span data-testid="x-icon" />,
+  Eye: () => <span data-testid="eye-icon" />,
+  EyeOff: () => <span data-testid="eye-off-icon" />,
+  Plus: () => <span data-testid="plus-icon" />,
 }));
 
 describe("EnvVarEditor", () => {
@@ -35,9 +38,9 @@ describe("EnvVarEditor", () => {
     expect(getAllByTestId("env-editor-key")).toHaveLength(2);
   });
 
-  it("shows 'No env overrides' placeholder when empty", () => {
+  it("shows an empty-state affordance inviting the first variable", () => {
     const { getByText } = renderEditor({});
-    expect(getByText(/No env overrides/)).toBeTruthy();
+    expect(getByText(/Add your first variable/i)).toBeTruthy();
   });
 
   it("renaming a key to a unique non-empty name commits the updated env", () => {
@@ -196,6 +199,92 @@ describe("EnvVarEditor", () => {
 
       const warnings = queryAllByTestId("env-editor-warning-secret");
       expect(warnings).toHaveLength(1);
+    });
+  });
+
+  describe("reveal toggle", () => {
+    it("shows eye toggle when the key is sensitive (isSensitiveEnvKey)", () => {
+      const { getByTestId } = renderEditor({ ANTHROPIC_API_KEY: "sk-real-secret-value" });
+      expect(getByTestId("env-editor-reveal")).toBeTruthy();
+    });
+
+    it("does NOT show eye toggle for ordinary key + ordinary value", () => {
+      const { queryByTestId } = renderEditor({ MY_VAR: "hello" });
+      expect(queryByTestId("env-editor-reveal")).toBeNull();
+    });
+
+    it("masks value by default and reveals on toggle", () => {
+      const { getByTestId, getAllByTestId } = renderEditor({ ANTHROPIC_API_KEY: "abc-12345" });
+      const valueInput = getAllByTestId("env-editor-value")[0] as HTMLInputElement;
+      expect(valueInput.type).toBe("password");
+
+      fireEvent.click(getByTestId("env-editor-reveal"));
+      expect(valueInput.type).toBe("text");
+
+      fireEvent.click(getByTestId("env-editor-reveal"));
+      expect(valueInput.type).toBe("password");
+    });
+
+    it("reveal state is independent per row", () => {
+      const { getAllByTestId } = renderEditor({
+        ANTHROPIC_API_KEY: "v1",
+        OPENAI_API_KEY: "v2",
+      });
+      const reveals = getAllByTestId("env-editor-reveal");
+      const values = getAllByTestId("env-editor-value") as HTMLInputElement[];
+
+      expect(values[0]!.type).toBe("password");
+      expect(values[1]!.type).toBe("password");
+
+      fireEvent.click(reveals[0]!);
+      expect(values[0]!.type).toBe("text");
+      expect(values[1]!.type).toBe("password");
+    });
+
+    it("reveal state is cleared when contextKey changes", () => {
+      const { getByTestId, getAllByTestId, rerender } = render(
+        <EnvVarEditor env={{ ANTHROPIC_API_KEY: "v1" }} onChange={onChange} contextKey="preset-a" />
+      );
+      fireEvent.click(getByTestId("env-editor-reveal"));
+      expect((getAllByTestId("env-editor-value")[0] as HTMLInputElement).type).toBe("text");
+
+      rerender(
+        <EnvVarEditor env={{ ANTHROPIC_API_KEY: "v2" }} onChange={onChange} contextKey="preset-b" />
+      );
+      expect((getAllByTestId("env-editor-value")[0] as HTMLInputElement).type).toBe("password");
+    });
+  });
+
+  describe("keyboard ergonomics", () => {
+    it("Enter on a value input appends a new row", () => {
+      const { getAllByTestId } = renderEditor({ FOO: "bar" });
+      const valueInput = getAllByTestId("env-editor-value")[0] as HTMLInputElement;
+
+      fireEvent.keyDown(valueInput, { key: "Enter" });
+
+      expect(getAllByTestId("env-editor-key")).toHaveLength(2);
+    });
+
+    it("Escape on a value input blurs it", () => {
+      const { getAllByTestId } = renderEditor({ FOO: "bar" });
+      const valueInput = getAllByTestId("env-editor-value")[0] as HTMLInputElement;
+      valueInput.focus();
+      expect(document.activeElement).toBe(valueInput);
+
+      fireEvent.keyDown(valueInput, { key: "Escape" });
+
+      expect(document.activeElement).not.toBe(valueInput);
+    });
+
+    it("Escape on a key input blurs it", () => {
+      const { getAllByTestId } = renderEditor({ FOO: "bar" });
+      const keyInput = getAllByTestId("env-editor-key")[0] as HTMLInputElement;
+      keyInput.focus();
+      expect(document.activeElement).toBe(keyInput);
+
+      fireEvent.keyDown(keyInput, { key: "Escape" });
+
+      expect(document.activeElement).not.toBe(keyInput);
     });
   });
 

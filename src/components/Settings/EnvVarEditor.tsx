@@ -1,21 +1,31 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { X } from "lucide-react";
+import { Eye, EyeOff, Plus, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { looksLikeSecret } from "@/utils/secretDetection";
+import { isSensitiveEnvKey } from "../../../shared/utils/envVars";
 
 /**
  * Inline env var CRUD editor with validation.
  *
- * Draft rows are the source of truth during editing — we can't represent an
- * in-progress duplicate key as a JS object, so we keep an array of
- * `{rowId, key, value}` and serialize back to a `Record<string, string>`
+ * Renders a bordered table surface with flush cells, hairline row dividers,
+ * and a flush "Add variable" row — matching the chrome of Vercel/Railway/GitHub
+ * Actions env editors. Draft rows are the source of truth during editing — we
+ * can't represent an in-progress duplicate key as a JS object, so we keep an
+ * array of `{rowId, key, value}` and serialize back to a `Record<string,string>`
  * only when all keys are unique and non-empty.
  *
  * Validation surfaces:
- *  - Empty key after trim → red border on the key input + "Key required"
- *    message below. Blur on an empty key does NOT persist.
- *  - Duplicate key → amber border on both matching key inputs + "Duplicate key"
- *    message. The second occurrence is not persisted until the user resolves it.
+ *  - Empty key after trim → red left-stripe on the row + "Key required" inline
+ *    message. Blur on an empty key does NOT persist.
+ *  - Duplicate key → amber left-stripe on both matching rows + "Duplicate key"
+ *    inline message. The second occurrence is not persisted until resolved.
+ *  - Literal secret value → amber left-stripe + inline advisory message.
+ *    Values still commit (warning is advisory only).
+ *
+ * Reveal toggle: when the key name matches `isSensitiveEnvKey` or the value
+ * matches `looksLikeSecret`, an eye toggle appears in the value cell and the
+ * input renders as `type="password"` until the user reveals it. Revealed rows
+ * are session-scoped and cleared on `contextKey` change.
  */
 
 export interface EnvVarSuggestion {
@@ -111,8 +121,13 @@ export function EnvVarEditor({
   // Track which keys have been "touched" (blurred or modified after creation) —
   // we suppress the empty-key error for newly added rows until first blur.
   const [touchedKeys, setTouchedKeys] = useState<Record<string, boolean>>({});
+  // Per-row reveal state for secret values. Session-scoped, cleared on context switch.
+  const [revealedRows, setRevealedRows] = useState<Set<string>>(() => new Set());
+  // When non-null, the focus-recovery effect focuses the key input for that rowId.
+  const [pendingFocusKey, setPendingFocusKey] = useState<string | null>(null);
   const lastEnvRef = useRef<Record<string, string>>(env);
   const lastContextKeyRef = useRef<string | undefined>(contextKey);
+  const keyInputRefs = useRef<Map<string, HTMLInputElement>>(new Map());
 
   // When the parent's env changes externally (different preset selected,
   // programmatic reset), reseed the draft rows. We use a shallow compare on
@@ -134,6 +149,7 @@ export function EnvVarEditor({
       lastContextKeyRef.current = contextKey;
       if (contextChanged) {
         setTouchedKeys({});
+        setRevealedRows(new Set());
       }
       // Only reseed if the incoming env is actually different from what our
       // draft would produce. Otherwise typing triggers a parent update that
@@ -149,6 +165,18 @@ export function EnvVarEditor({
       }
     }
   }, [env, contextKey, rows]);
+
+  // Focus recovery after adding a row. Narrowly keyed to avoid cross-firing
+  // with the reseed effect above.
+  useEffect(() => {
+    if (pendingFocusKey === null) return;
+    const input = keyInputRefs.current.get(pendingFocusKey);
+    if (input) {
+      input.focus();
+      input.select();
+    }
+    setPendingFocusKey(null);
+  }, [pendingFocusKey]);
 
   const commitIfValid = useCallback(
     (nextRows: DraftRow[]) => {
@@ -175,14 +203,16 @@ export function EnvVarEditor({
   );
 
   const handleAdd = useCallback(() => {
+    const newRowId = nextRowId();
     setRows((prev) => {
       // Pick a KEY name that isn't already present.
       let candidate = "NEW_VAR";
       let i = 1;
       const present = new Set(prev.map((r) => r.key.trim()));
       while (present.has(candidate)) candidate = `NEW_VAR_${i++}`;
-      return [...prev, { rowId: nextRowId(), key: candidate, value: "" }];
+      return [...prev, { rowId: newRowId, key: candidate, value: "" }];
     });
+    setPendingFocusKey(newRowId);
   }, []);
 
   const handleRemove = useCallback(
@@ -190,6 +220,12 @@ export function EnvVarEditor({
       setRows((prev) => {
         const next = prev.filter((r) => r.rowId !== rowId);
         commitIfValid(next);
+        return next;
+      });
+      setRevealedRows((prev) => {
+        if (!prev.has(rowId)) return prev;
+        const next = new Set(prev);
+        next.delete(rowId);
         return next;
       });
     },
@@ -206,9 +242,7 @@ export function EnvVarEditor({
 
   const handleKeyBlur = useCallback(
     (rowId: string) => {
-      // Mark this row as touched so we surface any empty-key error.
       setTouchedKeys((prev) => ({ ...prev, [rowId]: true }));
-      // Attempt a commit. If invalid (empty or duplicate), we hold the draft.
       setRows((prev) => {
         commitIfValid(prev);
         return prev;
@@ -224,23 +258,28 @@ export function EnvVarEditor({
     });
   }, [commitIfValid]);
 
+  const toggleReveal = useCallback((rowId: string) => {
+    setRevealedRows((prev) => {
+      const next = new Set(prev);
+      if (next.has(rowId)) next.delete(rowId);
+      else next.add(rowId);
+      return next;
+    });
+  }, []);
+
+  const registerKeyInput = useCallback((rowId: string, el: HTMLInputElement | null) => {
+    if (el) keyInputRefs.current.set(rowId, el);
+    else keyInputRefs.current.delete(rowId);
+  }, []);
+
   const duplicateKeys = findDuplicateKeys(rows);
+  const isEmpty = rows.length === 0;
 
   return (
-    <div className="space-y-1.5" data-testid={dataTestId}>
-      <div className="flex items-center justify-end">
-        <button
-          type="button"
-          className="text-[11px] text-daintree-accent hover:text-daintree-accent/80 transition-colors"
-          onClick={handleAdd}
-          data-testid="env-editor-add"
-        >
-          + Add
-        </button>
-      </div>
-      {rows.length === 0 && (
-        <p className="text-[11px] text-daintree-text/40 select-text italic">No env overrides.</p>
-      )}
+    <div
+      className="rounded-[var(--radius-md)] border border-daintree-border overflow-hidden bg-daintree-bg/30"
+      data-testid={dataTestId}
+    >
       {datalistId && suggestions && suggestions.length > 0 && (
         <datalist id={datalistId}>
           {suggestions.map(({ key }) => (
@@ -248,77 +287,176 @@ export function EnvVarEditor({
           ))}
         </datalist>
       )}
-      {rows.map((row) => {
-        const trimmedKey = row.key.trim();
-        const touched = !!touchedKeys[row.rowId];
-        const isEmptyKey = touched && trimmedKey === "";
-        const isDuplicate = trimmedKey !== "" && duplicateKeys.has(trimmedKey);
-        const hasSecretWarning = looksLikeSecret(row.value);
-        return (
-          <div key={row.rowId} className="space-y-0.5">
-            <div className="flex items-center gap-1 font-mono text-[11px]">
-              <input
+      {/* Header */}
+      <div className="grid grid-cols-[2fr_3fr_auto] text-[10px] uppercase tracking-wide text-daintree-text/50 bg-daintree-bg/40 border-b border-daintree-border">
+        <div className="px-2.5 py-1.5">Key</div>
+        <div className="px-2.5 py-1.5 border-l border-daintree-border/60">Value</div>
+        <div className="px-2.5 py-1.5 w-9" aria-hidden="true" />
+      </div>
+      {/* Body */}
+      {isEmpty ? (
+        <button
+          type="button"
+          onClick={handleAdd}
+          className="w-full flex items-center justify-center gap-1.5 py-4 text-[12px] text-daintree-text/50 hover:text-daintree-accent hover:bg-daintree-bg/50 transition-colors border border-dashed border-daintree-border/60 m-2 rounded-[var(--radius-sm)]"
+          data-testid="env-editor-add"
+        >
+          <Plus size={12} aria-hidden="true" />
+          <span>Add your first variable</span>
+        </button>
+      ) : (
+        <div className="divide-y divide-daintree-border">
+          {rows.map((row) => {
+            const trimmedKey = row.key.trim();
+            const touched = !!touchedKeys[row.rowId];
+            const isEmptyKey = touched && trimmedKey === "";
+            const isDuplicate = trimmedKey !== "" && duplicateKeys.has(trimmedKey);
+            const hasSecretWarning = looksLikeSecret(row.value);
+            const isSecret = isSensitiveEnvKey(row.key) || hasSecretWarning;
+            const isRevealed = revealedRows.has(row.rowId);
+            const valueInputType = isSecret && !isRevealed ? "password" : "text";
+            const stripeClass = isEmptyKey
+              ? "before:bg-status-error"
+              : isDuplicate || hasSecretWarning
+                ? "before:bg-amber-500/70"
+                : "before:bg-transparent";
+            return (
+              <div
+                key={row.rowId}
                 className={cn(
-                  "w-2/5 bg-daintree-bg border rounded px-1.5 py-0.5 text-daintree-text/70 focus:outline-none transition-colors",
-                  isEmptyKey
-                    ? "border-status-error focus:border-status-error"
-                    : isDuplicate
-                      ? "border-amber-500/60 focus:border-amber-500"
-                      : "border-border-strong focus:border-daintree-accent"
+                  "relative grid grid-cols-[2fr_3fr_auto] items-stretch group",
+                  "before:content-[''] before:absolute before:left-0 before:top-0 before:bottom-0 before:w-[2px]",
+                  stripeClass
                 )}
-                value={row.key}
-                placeholder="KEY"
-                list={datalistId}
-                onChange={(e) => handleKeyChange(row.rowId, e.target.value)}
-                onBlur={() => handleKeyBlur(row.rowId)}
-                data-testid="env-editor-key"
-              />
-              <span className="text-daintree-text/30">=</span>
-              <input
-                className={cn(
-                  "flex-1 bg-daintree-bg border rounded px-1.5 py-0.5 text-daintree-accent/80 focus:outline-none transition-colors",
-                  hasSecretWarning
-                    ? "border-amber-500/60 focus:border-amber-500"
-                    : "border-border-strong focus:border-daintree-accent"
-                )}
-                value={row.value}
-                placeholder={valuePlaceholder}
-                onChange={(e) => handleValueChange(row.rowId, e.target.value)}
-                onBlur={handleValueBlur}
-                data-testid="env-editor-value"
-              />
-              <button
-                type="button"
-                className="text-daintree-text/30 hover:text-status-error transition-colors shrink-0"
-                aria-label={`Remove ${trimmedKey || "empty"} env var`}
-                onClick={() => handleRemove(row.rowId)}
-                data-testid="env-editor-remove"
               >
-                <X size={11} />
-              </button>
-            </div>
-            {(isEmptyKey || isDuplicate) && (
-              <p
-                className={cn(
-                  "text-[10px] pl-0.5",
-                  isEmptyKey ? "text-status-error" : "text-amber-500"
-                )}
-                data-testid={isEmptyKey ? "env-editor-error-empty" : "env-editor-error-duplicate"}
-              >
-                {isEmptyKey ? "Key required" : "Duplicate key"}
-              </p>
-            )}
-            {hasSecretWarning && (
-              <p
-                className="text-[10px] pl-0.5 text-amber-500"
-                data-testid="env-editor-warning-secret"
-              >
-                {"Looks like a secret. Prefer a ${ENV_VAR} reference to your shell environment."}
-              </p>
-            )}
-          </div>
-        );
-      })}
+                {/* Key cell */}
+                <div className="relative">
+                  <input
+                    ref={(el) => registerKeyInput(row.rowId, el)}
+                    type="text"
+                    className={cn(
+                      "w-full h-full bg-transparent border-0 outline-none px-2.5 py-2 font-mono text-[12px]",
+                      "focus:ring-2 focus:ring-inset focus:ring-daintree-accent/40",
+                      isEmptyKey
+                        ? "text-status-error"
+                        : isDuplicate
+                          ? "text-amber-500"
+                          : "text-daintree-text/80"
+                    )}
+                    value={row.key}
+                    placeholder="KEY"
+                    list={datalistId}
+                    spellCheck={false}
+                    autoCapitalize="off"
+                    autoCorrect="off"
+                    aria-label={`Env var key for row ${row.rowId}`}
+                    aria-invalid={isEmptyKey || isDuplicate ? "true" : undefined}
+                    onChange={(e) => handleKeyChange(row.rowId, e.target.value)}
+                    onBlur={() => handleKeyBlur(row.rowId)}
+                    onFocus={(e) => e.target.select()}
+                    onKeyDown={(e) => {
+                      if (e.key === "Escape") {
+                        e.currentTarget.blur();
+                      }
+                    }}
+                    data-testid="env-editor-key"
+                  />
+                  {(isEmptyKey || isDuplicate) && (
+                    <p
+                      className={cn(
+                        "absolute left-2.5 bottom-0.5 text-[9px] leading-none pointer-events-none",
+                        isEmptyKey ? "text-status-error" : "text-amber-500"
+                      )}
+                      data-testid={
+                        isEmptyKey ? "env-editor-error-empty" : "env-editor-error-duplicate"
+                      }
+                    >
+                      {isEmptyKey ? "Key required" : "Duplicate key"}
+                    </p>
+                  )}
+                </div>
+                {/* Value cell */}
+                <div className="relative border-l border-daintree-border/60">
+                  <input
+                    type={valueInputType}
+                    className={cn(
+                      "w-full h-full bg-transparent border-0 outline-none py-2 font-mono text-[12px] text-daintree-accent/90",
+                      "focus:ring-2 focus:ring-inset focus:ring-daintree-accent/40",
+                      isSecret ? "pl-2.5 pr-8" : "px-2.5",
+                      hasSecretWarning && "text-amber-500"
+                    )}
+                    value={row.value}
+                    placeholder={valuePlaceholder}
+                    spellCheck={false}
+                    autoComplete={isSecret ? "new-password" : "off"}
+                    aria-label={`Env var value for row ${row.rowId}`}
+                    onChange={(e) => handleValueChange(row.rowId, e.target.value)}
+                    onBlur={handleValueBlur}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        handleAdd();
+                      } else if (e.key === "Escape") {
+                        e.currentTarget.blur();
+                      }
+                    }}
+                    data-testid="env-editor-value"
+                  />
+                  {isSecret && (
+                    <button
+                      type="button"
+                      onClick={() => toggleReveal(row.rowId)}
+                      aria-pressed={isRevealed}
+                      aria-label={isRevealed ? "Hide value" : "Show value"}
+                      className="absolute right-1.5 top-1/2 -translate-y-1/2 p-1 rounded text-daintree-text/40 hover:text-daintree-text/70 hover:bg-daintree-bg/60 transition-colors"
+                      data-testid="env-editor-reveal"
+                    >
+                      {isRevealed ? (
+                        <EyeOff size={12} aria-hidden="true" />
+                      ) : (
+                        <Eye size={12} aria-hidden="true" />
+                      )}
+                    </button>
+                  )}
+                  {hasSecretWarning && (
+                    <p
+                      className="absolute left-2.5 bottom-0.5 text-[9px] leading-none text-amber-500 pointer-events-none"
+                      data-testid="env-editor-warning-secret"
+                      title="Looks like a secret. Prefer a ${ENV_VAR} reference to your shell environment."
+                    >
+                      {"Looks like a secret — prefer ${ENV_VAR}"}
+                    </p>
+                  )}
+                </div>
+                {/* Actions cell */}
+                <div className="flex items-center justify-center w-9 border-l border-daintree-border/60">
+                  <button
+                    type="button"
+                    className="p-1 rounded text-daintree-text/30 hover:text-status-error hover:bg-daintree-bg/60 transition-colors"
+                    aria-label={`Remove ${trimmedKey || "empty"} env var`}
+                    onClick={() => handleRemove(row.rowId)}
+                    data-testid="env-editor-remove"
+                  >
+                    <X size={12} aria-hidden="true" />
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+      {/* Add row (only when non-empty — empty state has its own affordance) */}
+      {!isEmpty && (
+        <button
+          type="button"
+          onClick={handleAdd}
+          className="w-full flex items-center justify-center gap-1.5 py-2 text-[11px] text-daintree-text/50 hover:text-daintree-accent hover:bg-daintree-bg/50 transition-colors border-t border-daintree-border"
+          data-testid="env-editor-add"
+        >
+          <Plus size={12} aria-hidden="true" />
+          <span>Add variable</span>
+        </button>
+      )}
     </div>
   );
 }
