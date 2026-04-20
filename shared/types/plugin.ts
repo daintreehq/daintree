@@ -45,6 +45,36 @@ export interface MenuItemContribution {
   accelerator?: string;
 }
 
+/**
+ * Reserved contribution point — validated by the manifest schema but ignored
+ * at load time with a "not yet implemented" warning. See
+ * `docs/architecture/plugin-views-and-mcp-servers.md` for the design RFC.
+ */
+export type ViewLocation = "panel" | "sidebar";
+
+export interface ViewContribution {
+  id: string;
+  name: string;
+  componentPath: string;
+  location: ViewLocation;
+  iconId?: string;
+  description?: string;
+}
+
+/**
+ * Reserved contribution point — validated by the manifest schema but ignored
+ * at load time with a "not yet implemented" warning. Shape intentionally
+ * mirrors the Claude Desktop / Cursor MCP server config format (stdio only;
+ * remote servers via `url` are out of scope and deliberately excluded).
+ */
+export interface McpServerContribution {
+  id: string;
+  name: string;
+  command: string;
+  args?: string[];
+  env?: Record<string, string>;
+}
+
 export interface PluginManifest {
   name: string;
   version: string;
@@ -59,6 +89,8 @@ export interface PluginManifest {
     panels: PanelContribution[];
     toolbarButtons: ToolbarButtonContribution[];
     menuItems: MenuItemContribution[];
+    views: ViewContribution[];
+    mcpServers: McpServerContribution[];
   };
 }
 

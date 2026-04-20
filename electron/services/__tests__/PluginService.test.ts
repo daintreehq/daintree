@@ -1886,3 +1886,193 @@ describe("Plugin worktree host API", () => {
     expect("_secret" in active).toBe(false);
   });
 });
+
+describe("reserved contribution point warnings", () => {
+  let warnSpy: ReturnType<typeof vi.spyOn>;
+  let errorSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    warnSpy.mockRestore();
+    errorSpy.mockRestore();
+  });
+
+  it("accepts a contributes.views entry and logs a 'not yet implemented' warning", async () => {
+    await writePlugin("views", {
+      name: "acme.views",
+      version: "1.0.0",
+      engines: { daintree: "^0.7.0" },
+      contributes: {
+        views: [
+          {
+            id: "main",
+            name: "Main",
+            componentPath: "./dist/view.js",
+            location: "panel",
+          },
+        ],
+      },
+    });
+
+    const service = new PluginService(tmpDir, "0.7.5");
+    await service.initialize();
+
+    expect(service.listPlugins()).toHaveLength(1);
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('Plugin "acme.views": contributes.views is not yet implemented')
+    );
+  });
+
+  it("accepts a contributes.mcpServers entry and logs a 'not yet implemented' warning", async () => {
+    await writePlugin("mcp", {
+      name: "acme.mcp",
+      version: "1.0.0",
+      engines: { daintree: "^0.7.0" },
+      contributes: {
+        mcpServers: [
+          {
+            id: "linear",
+            name: "Linear MCP",
+            command: "node",
+            args: ["./server.js"],
+            env: { LINEAR_API_KEY: "secret" },
+          },
+        ],
+      },
+    });
+
+    const service = new PluginService(tmpDir, "0.7.5");
+    await service.initialize();
+
+    expect(service.listPlugins()).toHaveLength(1);
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('Plugin "acme.mcp": contributes.mcpServers is not yet implemented')
+    );
+  });
+
+  it("does not warn about reserved points when the manifest omits them", async () => {
+    await writePlugin("plain", {
+      name: "acme.plain",
+      version: "1.0.0",
+      engines: { daintree: "^0.7.0" },
+    });
+
+    const service = new PluginService(tmpDir, "0.7.5");
+    await service.initialize();
+
+    expect(service.listPlugins()).toHaveLength(1);
+    const warnMessages = warnSpy.mock.calls.map((call) => String(call[0]));
+    expect(warnMessages).not.toContain(
+      expect.stringContaining("contributes.views is not yet implemented")
+    );
+    expect(warnMessages.some((m) => m.includes("contributes.views"))).toBe(false);
+    expect(warnMessages.some((m) => m.includes("contributes.mcpServers"))).toBe(false);
+  });
+
+  it("still processes other contributions when reserved points are present", async () => {
+    await writePlugin("mixed", {
+      name: "acme.mixed",
+      version: "1.0.0",
+      engines: { daintree: "^0.7.0" },
+      contributes: {
+        panels: [{ id: "viewer", name: "Viewer", iconId: "eye", color: "#000" }],
+        views: [{ id: "main", name: "Main", componentPath: "./v.js", location: "sidebar" }],
+        mcpServers: [{ id: "svc", name: "Svc", command: "node" }],
+      },
+    });
+
+    const service = new PluginService(tmpDir, "0.7.5");
+    await service.initialize();
+
+    expect(service.listPlugins()).toHaveLength(1);
+    expect(registerPanelKind).toHaveBeenCalledTimes(1);
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("contributes.views is not yet implemented")
+    );
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("contributes.mcpServers is not yet implemented")
+    );
+  });
+
+  it("warns once per category regardless of entry count", async () => {
+    await writePlugin("many", {
+      name: "acme.many",
+      version: "1.0.0",
+      engines: { daintree: "^0.7.0" },
+      contributes: {
+        views: [
+          { id: "a", name: "A", componentPath: "./a.js", location: "panel" },
+          { id: "b", name: "B", componentPath: "./b.js", location: "sidebar" },
+          { id: "c", name: "C", componentPath: "./c.js", location: "panel" },
+        ],
+      },
+    });
+
+    const service = new PluginService(tmpDir, "0.7.5");
+    await service.initialize();
+
+    const viewWarnings = warnSpy.mock.calls.filter((call) =>
+      String(call[0]).includes("contributes.views is not yet implemented")
+    );
+    expect(viewWarnings).toHaveLength(1);
+  });
+
+  it("rejects a views entry with an invalid location at schema level", () => {
+    const result = PluginManifestSchema.safeParse({
+      name: "acme.bad-location",
+      version: "1.0.0",
+      contributes: {
+        views: [{ id: "main", name: "Main", componentPath: "./v.js", location: "floating" }],
+      },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects a views entry missing componentPath", () => {
+    const result = PluginManifestSchema.safeParse({
+      name: "acme.no-path",
+      version: "1.0.0",
+      contributes: {
+        views: [{ id: "main", name: "Main", location: "panel" }],
+      },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects an mcpServers entry missing command", () => {
+    const result = PluginManifestSchema.safeParse({
+      name: "acme.no-cmd",
+      version: "1.0.0",
+      contributes: {
+        mcpServers: [{ id: "svc", name: "Svc" }],
+      },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects an mcpServers entry with non-string env values", () => {
+    const result = PluginManifestSchema.safeParse({
+      name: "acme.bad-env",
+      version: "1.0.0",
+      contributes: {
+        mcpServers: [{ id: "svc", name: "Svc", command: "node", env: { PORT: 8080 } }],
+      },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("accepts an mcpServers entry without optional args/env fields", () => {
+    const result = PluginManifestSchema.safeParse({
+      name: "acme.minimal-mcp",
+      version: "1.0.0",
+      contributes: {
+        mcpServers: [{ id: "svc", name: "Svc", command: "node" }],
+      },
+    });
+    expect(result.success).toBe(true);
+  });
+});
