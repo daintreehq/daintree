@@ -938,6 +938,41 @@ describe("engines.daintree compatibility gate", () => {
   });
 });
 
+describe("strict schema validation", () => {
+  let errorSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    errorSpy.mockRestore();
+  });
+
+  it("rejects manifests with unknown fields like 'renderer'", async () => {
+    await writePlugin("bad-field", {
+      name: "acme.bad-field",
+      version: "1.0.0",
+      renderer: "dist/renderer.js",
+      engines: { daintree: "*" },
+    });
+
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    expect(service.listPlugins()).toEqual([]);
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining("Invalid manifest in bad-field"),
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "unrecognized_keys",
+          keys: ["renderer"],
+        }),
+      ])
+    );
+  });
+});
+
 describe("Plugin unload lifecycle", () => {
   it("unloadPlugin calls all registry unregister functions for the plugin", async () => {
     await writePlugin("unloadable", {
@@ -1325,102 +1360,6 @@ describe("Plugin action registry", () => {
 
     const [descriptor] = service.listPluginActions();
     expect(descriptor.inputSchema).toEqual({ type: "object", properties: { a: 1 } });
-  });
-});
-
-describe("deprecated renderer field", () => {
-  let warnSpy: ReturnType<typeof vi.spyOn>;
-
-  beforeEach(() => {
-    warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-  });
-
-  afterEach(() => {
-    warnSpy.mockRestore();
-  });
-
-  it("warns when plugin manifest contains renderer field", async () => {
-    await writePlugin("renderer-deprecated", {
-      name: "acme.renderer-deprecated",
-      version: "1.0.0",
-      renderer: "dist/renderer.js",
-      engines: { daintree: "*" },
-    });
-
-    const service = new PluginService(tmpDir);
-    await service.initialize();
-
-    expect(service.listPlugins()).toHaveLength(1);
-    expect(warnSpy).toHaveBeenCalledWith(
-      `[PluginService] Plugin "acme.renderer-deprecated" uses deprecated 'renderer' field. This field is no longer supported and will be ignored. Daintree plugins use main process entry points only; renderer-side plugins are not supported.`
-    );
-  });
-
-  it("does not warn when plugin manifest lacks renderer field", async () => {
-    await writePlugin("no-renderer", {
-      name: "acme.no-renderer",
-      version: "1.0.0",
-      engines: { daintree: "*" },
-    });
-
-    const service = new PluginService(tmpDir);
-    await service.initialize();
-
-    expect(service.listPlugins()).toHaveLength(1);
-    expect(warnSpy).not.toHaveBeenCalled();
-  });
-
-  it("does not include resolvedRenderer in listPlugins output", async () => {
-    await writePlugin("renderer-test", {
-      name: "acme.renderer-test",
-      version: "1.0.0",
-      renderer: "dist/renderer.js",
-      engines: { daintree: "*" },
-    });
-
-    const service = new PluginService(tmpDir);
-    await service.initialize();
-
-    const plugins = service.listPlugins();
-    expect(plugins).toHaveLength(1);
-    expect(Object.keys(plugins[0])).not.toContain("resolvedRenderer");
-  });
-
-  it("does not warn for incompatible plugins that fail compatibility gate", async () => {
-    await writePlugin("incompatible-with-renderer", {
-      name: "acme.incompatible-with-renderer",
-      version: "1.0.0",
-      renderer: "dist/renderer.js",
-      engines: { daintree: "^1.0.0" },
-    });
-
-    const service = new PluginService(tmpDir, "0.8.0");
-    await service.initialize();
-
-    expect(service.listPlugins()).toEqual([]);
-    expect(warnSpy).not.toHaveBeenCalledWith(
-      expect.stringContaining("uses deprecated 'renderer' field")
-    );
-  });
-
-  it("warns once per load attempt even with both main and renderer", async () => {
-    await writePlugin("both-entries", {
-      name: "acme.both-entries",
-      version: "1.0.0",
-      main: "dist/main.js",
-      renderer: "dist/renderer.js",
-      engines: { daintree: "*" },
-    });
-
-    const service = new PluginService(tmpDir);
-    await service.initialize();
-
-    expect(service.listPlugins()).toHaveLength(1);
-    const rendererWarns = warnSpy.mock.calls.filter(
-      (call: unknown[]) =>
-        typeof call[0] === "string" && call[0].includes("uses deprecated 'renderer' field")
-    );
-    expect(rendererWarns).toHaveLength(1);
   });
 });
 

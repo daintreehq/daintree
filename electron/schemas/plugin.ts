@@ -43,36 +43,37 @@ export const MenuItemContributionSchema = z.object({
 
 export const PluginPermissionSchema = z.enum(BUILT_IN_PLUGIN_PERMISSIONS);
 
-export const PluginManifestSchema = z.object({
-  name: z.string().min(1).max(64).regex(SCOPED_PLUGIN_NAME_PATTERN, {
-    error: 'Plugin name must be in publisher.name format (e.g. "acme.linear-context")',
-  }),
-  version: z.string().min(1),
-  displayName: z.string().optional(),
-  description: z.string().optional(),
-  main: z.string().optional(),
-  renderer: z.string().optional(),
-  engines: z
-    .object({
-      daintree: z
-        .string()
-        .trim()
-        .min(1)
-        .refine((val) => semver.validRange(val) !== null, {
-          message: "engines.daintree must be a valid semver range",
-        })
-        .optional(),
-    })
-    .optional(),
-  permissions: z.array(PluginPermissionSchema).default([]),
-  contributes: z
-    .object({
-      panels: z.array(PanelContributionSchema).default([]),
-      toolbarButtons: z.array(ToolbarButtonContributionSchema).default([]),
-      menuItems: z.array(MenuItemContributionSchema).default([]),
-    })
-    .default({ panels: [], toolbarButtons: [], menuItems: [] }),
-});
+export const PluginManifestSchema = z
+  .strictObject({
+    name: z.string().min(1).max(64).regex(SCOPED_PLUGIN_NAME_PATTERN, {
+      error: 'Plugin name must be in publisher.name format (e.g. "acme.linear-context")',
+    }),
+    version: z.string().min(1),
+    displayName: z.string().optional(),
+    description: z.string().optional(),
+    main: z.string().optional(),
+    engines: z
+      .object({
+        daintree: z
+          .string()
+          .trim()
+          .min(1)
+          .refine((val) => semver.validRange(val) !== null, {
+            message: "engines.daintree must be a valid semver range",
+          })
+          .optional(),
+      })
+      .optional(),
+    permissions: z.array(PluginPermissionSchema).default([]),
+    contributes: z
+      .object({
+        panels: z.array(PanelContributionSchema).default([]),
+        toolbarButtons: z.array(ToolbarButtonContributionSchema).default([]),
+        menuItems: z.array(MenuItemContributionSchema).default([]),
+      })
+      .default({ panels: [], toolbarButtons: [], menuItems: [] }),
+  })
+  .strict();
 
 export type {
   PluginManifest,
