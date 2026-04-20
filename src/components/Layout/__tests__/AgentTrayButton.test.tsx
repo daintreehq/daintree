@@ -644,6 +644,25 @@ describe("AgentTrayButton", () => {
     );
   });
 
+  it("renders a Set Up Agents footer that dispatches the wizard custom event", () => {
+    const availability = { claude: "ready" } as unknown as CliAvailability;
+    mockSettings = settingsWith({ claude: { pinned: true } });
+
+    const dispatchSpy = vi.spyOn(window, "dispatchEvent");
+    const { container } = render(<AgentTrayButton agentAvailability={availability} />);
+    const setup = Array.from(container.querySelectorAll('[role="menuitem"]')).find((el) =>
+      el.textContent?.includes("Set Up Agents")
+    );
+    expect(setup).toBeTruthy();
+    fireEvent.click(setup!);
+    expect(dispatchSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "daintree:open-agent-setup-wizard",
+      })
+    );
+    dispatchSpy.mockRestore();
+  });
+
   it("handles null store settings gracefully (opt-in default)", () => {
     mockSettings = null;
     const availability = { claude: "ready" } as unknown as CliAvailability;
