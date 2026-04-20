@@ -19,6 +19,7 @@ interface RunData {
   marks: MarkRecord[];
   failed?: boolean;
   error?: string;
+  degraded?: boolean;
 }
 
 interface MarkStats {
@@ -47,8 +48,10 @@ interface JsonOutput {
     notes?: string;
     failed?: boolean;
     error?: string;
+    degraded?: boolean;
   }>;
   failedRuns: number;
+  degradedRuns: number;
   successfulRuns: number;
   aggregates: Aggregate;
 }
@@ -92,28 +95,35 @@ function statsFor(values: number[]): MarkStats {
 }
 
 function aggregate(runs: RunData[]): Aggregate {
+  // Degraded runs (wall-clock fallback — RENDERER_READY mark never arrived)
+  // still produce useful IPC samples but must be excluded from mark/phase
+  // aggregates to avoid contaminating p50/p95 with incomplete timelines.
   const successful = runs.filter((r) => !r.failed);
+  const withMarks = successful.filter((r) => !r.degraded);
 
   const markElapsed = new Map<string, number[]>();
   const phaseElapsed = new Map<string, number[]>();
   const ipcByChannel = new Map<string, { durations: number[]; errors: number }>();
 
   for (const run of successful) {
+    for (const record of run.marks) {
+      if (record.mark !== "ipc_request_sample") continue;
+      const channel = typeof record.meta?.channel === "string" ? record.meta.channel : "unknown";
+      const durationMs =
+        typeof record.meta?.durationMs === "number" ? record.meta.durationMs : null;
+      if (durationMs === null) continue;
+      const errored = Boolean(record.meta?.errored);
+      const bucket = ipcByChannel.get(channel) ?? { durations: [], errors: 0 };
+      bucket.durations.push(durationMs);
+      if (errored) bucket.errors += 1;
+      ipcByChannel.set(channel, bucket);
+    }
+  }
+
+  for (const run of withMarks) {
     const firstByMark = new Map<string, MarkRecord>();
     for (const record of run.marks) {
-      if (record.mark === "ipc_request_sample") {
-        const channel = typeof record.meta?.channel === "string" ? record.meta.channel : "unknown";
-        const durationMs =
-          typeof record.meta?.durationMs === "number" ? record.meta.durationMs : null;
-        if (durationMs === null) continue;
-        const errored = Boolean(record.meta?.errored);
-        const bucket = ipcByChannel.get(channel) ?? { durations: [], errors: 0 };
-        bucket.durations.push(durationMs);
-        if (errored) bucket.errors += 1;
-        ipcByChannel.set(channel, bucket);
-        continue;
-      }
-
+      if (record.mark === "ipc_request_sample") continue;
       if (!firstByMark.has(record.mark)) {
         firstByMark.set(record.mark, record);
         const list = markElapsed.get(record.mark) ?? [];
@@ -127,6 +137,12 @@ function aggregate(runs: RunData[]): Aggregate {
       const to = firstByMark.get(toMark);
       if (!from || !to) continue;
       const delta = to.elapsedMs - from.elapsedMs;
+      if (delta < 0) {
+        console.error(
+          `[cold-start] skipping negative phase delta for ${label} in run ${run.index + 1} (${delta.toFixed(1)}ms)`
+        );
+        continue;
+      }
       const list = phaseElapsed.get(label) ?? [];
       list.push(delta);
       phaseElapsed.set(label, list);
@@ -185,14 +201,21 @@ function renderTextReport(
 ): string {
   const lines: string[] = [];
 
+  const degraded = runs.filter((r) => r.degraded && !r.failed).length;
+  const degradedNote = degraded > 0 ? `, ${degraded} degraded` : "";
   lines.push(
-    `Cold-start perf — ${runs.length} run${runs.length === 1 ? "" : "s"} (${successful} ok, ${failed} failed)`
+    `Cold-start perf — ${runs.length} run${runs.length === 1 ? "" : "s"} (${successful} ok${degradedNote}, ${failed} failed)`
   );
+  if (degraded > 0) {
+    lines.push(
+      `  Degraded runs used wall-clock fallback and are excluded from mark/phase aggregates.`
+    );
+  }
   lines.push("");
 
   const runRows = runs.map((run) => ({
     run: String(run.index + 1),
-    status: run.failed ? "FAIL" : "ok",
+    status: run.failed ? "FAIL" : run.degraded ? "degraded" : "ok",
     durationMs: run.failed ? "—" : formatMs(run.durationMs),
     notes: run.error ?? run.notes ?? "",
   }));
@@ -258,6 +281,7 @@ function renderTextReport(
 
 function buildJsonOutput(runs: RunData[], agg: Aggregate): JsonOutput {
   const successful = runs.filter((r) => !r.failed).length;
+  const degraded = runs.filter((r) => r.degraded && !r.failed).length;
   return {
     runs: runs.map((r) => ({
       index: r.index,
@@ -265,8 +289,10 @@ function buildJsonOutput(runs: RunData[], agg: Aggregate): JsonOutput {
       notes: r.notes,
       failed: r.failed,
       error: r.error,
+      degraded: r.degraded,
     })),
     failedRuns: runs.length - successful,
+    degradedRuns: degraded,
     successfulRuns: successful,
     aggregates: agg,
   };
@@ -300,10 +326,12 @@ Requires a packaged binary under release/. Build one first with:
     return;
   }
 
-  const runs = Math.max(1, Number.parseInt(values.runs ?? "5", 10));
-  if (!Number.isFinite(runs)) {
-    throw new Error(`Invalid --runs value: ${values.runs}`);
+  const rawRuns = Number(values.runs ?? "5");
+  if (!Number.isInteger(rawRuns) || rawRuns < 1) {
+    console.error(`Invalid --runs value: ${values.runs}. Expected a positive integer.`);
+    process.exit(1);
   }
+  const runs = rawRuns;
   const asJson = Boolean(values.json);
 
   const projectRoot = process.cwd();
@@ -337,11 +365,13 @@ Requires a packaged binary under release/. Build one first with:
     try {
       const result = await launchPackagedAndMeasure(executablePath, i, { projectRoot });
       const marks = parseNdjson(result.ndjsonPath);
+      const degraded = Boolean(result.notes);
       results.push({
         index: i,
         durationMs: result.durationMs,
         notes: result.notes,
         marks,
+        degraded,
       });
 
       if (!asJson) {
