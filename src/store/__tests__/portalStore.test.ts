@@ -253,5 +253,24 @@ describe("portalStore", () => {
       usePortalStore.getState().toggle();
       expect(usePortalStore.getState().isOpen).toBe(true);
     });
+
+    it("leaves the rest of the store untouched when the open transition is blocked", () => {
+      usePortalStore.setState({
+        isOpen: false,
+        tabs: [{ id: "tab-1", title: "One", url: "https://example.com" }],
+        activeTabId: "tab-1",
+        createdTabs: new Set<string>(["tab-1"]),
+      });
+      useUIStore.getState().addOverlayClaim("settings");
+
+      const before = usePortalStore.getState();
+      usePortalStore.getState().toggle();
+      const after = usePortalStore.getState();
+
+      expect(after.isOpen).toBe(false);
+      expect(after.tabs).toBe(before.tabs);
+      expect(after.activeTabId).toBe(before.activeTabId);
+      expect(after.createdTabs).toBe(before.createdTabs);
+    });
   });
 });

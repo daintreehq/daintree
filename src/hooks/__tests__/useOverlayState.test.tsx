@@ -99,6 +99,17 @@ describe("useOverlayClaim", () => {
     expect(getClaims().size).toBe(1);
     expect(getClaims().has("b")).toBe(true);
   });
+
+  it("swaps the registered claim when the ID changes while active", () => {
+    const { rerender } = render(<NamedClaim id="a" active={true} />);
+    expect(getClaims().has("a")).toBe(true);
+    expect(getClaims().size).toBe(1);
+
+    rerender(<NamedClaim id="b" active={true} />);
+    expect(getClaims().has("a")).toBe(false);
+    expect(getClaims().has("b")).toBe(true);
+    expect(getClaims().size).toBe(1);
+  });
 });
 
 describe("useOverlayState (backwards-compat shim)", () => {
