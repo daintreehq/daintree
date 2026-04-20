@@ -1426,13 +1426,16 @@ describe("deprecated renderer field", () => {
 
 describe("permissions declaration logging", () => {
   let logSpy: ReturnType<typeof vi.spyOn>;
+  let errorSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
     logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
   });
 
   afterEach(() => {
     logSpy.mockRestore();
+    errorSpy.mockRestore();
   });
 
   it("logs declared permissions when plugin has permissions", async () => {
@@ -1529,13 +1532,38 @@ describe("permissions declaration logging", () => {
       (call: unknown[]) => typeof call[0] === "string" && call[0].includes("declares permissions")
     );
     expect(permLogs).toHaveLength(0);
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining("Invalid manifest"),
+      expect.any(Array)
+    );
   });
 
-  it("rejects plugins with whitespace-padded permissions and does not log them", async () => {
+  it("rejects plugins with newline characters in permission strings", async () => {
     await writePlugin("padded-perm", {
       name: "acme.padded-perm",
       version: "1.0.0",
       permissions: ["fs:project-read\n", "agent:invoke\r"],
+    });
+
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    expect(service.listPlugins()).toEqual([]);
+    const permLogs = logSpy.mock.calls.filter(
+      (call: unknown[]) => typeof call[0] === "string" && call[0].includes("declares permissions")
+    );
+    expect(permLogs).toHaveLength(0);
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining("Invalid manifest"),
+      expect.any(Array)
+    );
+  });
+
+  it("rejects plugins where any one permission in a mixed array is invalid", async () => {
+    await writePlugin("mixed-perm", {
+      name: "acme.mixed-perm",
+      version: "1.0.0",
+      permissions: ["fs:project-read", "invalid:perm", "git:read"],
     });
 
     const service = new PluginService(tmpDir);
