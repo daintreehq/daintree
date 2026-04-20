@@ -1013,6 +1013,38 @@ describe("Plugin unload lifecycle", () => {
     expect(unregisterPluginPanelKinds).toHaveBeenCalledTimes(1);
   });
 
+  it("registers plugin before importing main so sync host-API calls see it as loaded", async () => {
+    const pluginDir = path.join(tmpDir, "sync-init");
+    await fs.mkdir(pluginDir);
+    await fs.writeFile(
+      path.join(pluginDir, "plugin.json"),
+      JSON.stringify({
+        name: "acme.sync-init",
+        version: "1.0.0",
+        main: "main.mjs",
+      })
+    );
+    // Plugin main module calls a global hook synchronously during import to
+    // observe whether its own pluginId is already registered. Proxies the
+    // real-world pattern where a host API call depends on this.plugins.has().
+    await fs.writeFile(
+      path.join(pluginDir, "main.mjs"),
+      "globalThis.__pluginInitObserved = globalThis.__pluginInitCheck('acme.sync-init');"
+    );
+
+    const service = new PluginService(tmpDir);
+    (globalThis as { __pluginInitCheck?: (name: string) => boolean }).__pluginInitCheck = (name) =>
+      service.hasPlugin(name);
+
+    try {
+      await service.initialize();
+      expect((globalThis as { __pluginInitObserved?: boolean }).__pluginInitObserved).toBe(true);
+    } finally {
+      delete (globalThis as { __pluginInitCheck?: unknown }).__pluginInitCheck;
+      delete (globalThis as { __pluginInitObserved?: unknown }).__pluginInitObserved;
+    }
+  });
+
   it("supports load → unload → reload lifecycle via fresh service instance", async () => {
     await writePlugin("lifecycle", {
       name: "acme.lifecycle",
@@ -1118,6 +1150,172 @@ describe("createHost (plugin activation API)", () => {
       /host revoked: registerHandler/
     );
     expect(() => host.broadcastToRenderer("x", null)).toThrow(/host revoked: broadcastToRenderer/);
+describe("Plugin action registry", () => {
+  let service: PluginService;
+
+  const validContribution = () => ({
+    id: "acme.my-plugin.doThing",
+    title: "Do Thing",
+    description: "Does a thing",
+    category: "plugin",
+    kind: "command" as const,
+    danger: "safe" as const,
+  });
+
+  beforeEach(async () => {
+    await writePlugin("test-plugin", { name: "acme.my-plugin", version: "1.0.0" });
+    service = new PluginService(tmpDir);
+    await service.initialize();
+    broadcastToRendererMock.mockClear();
+  });
+
+  it("registerPluginAction adds a descriptor and broadcasts the full list", () => {
+    service.registerPluginAction("acme.my-plugin", validContribution());
+
+    const actions = service.listPluginActions();
+    expect(actions).toHaveLength(1);
+    expect(actions[0]).toMatchObject({
+      pluginId: "acme.my-plugin",
+      id: "acme.my-plugin.doThing",
+      title: "Do Thing",
+      category: "plugin",
+      kind: "command",
+      danger: "safe",
+    });
+    expect(broadcastToRendererMock).toHaveBeenCalledWith(CHANNELS.PLUGIN_ACTIONS_CHANGED, {
+      actions,
+    });
+  });
+
+  it("registerPluginAction throws when the plugin is not loaded", () => {
+    expect(() => service.registerPluginAction("acme.unknown", validContribution())).toThrow(
+      /Unknown plugin/
+    );
+  });
+
+  it("registerPluginAction throws for ids not prefixed with the plugin id", () => {
+    expect(() =>
+      service.registerPluginAction("acme.my-plugin", {
+        ...validContribution(),
+        id: "other.plugin.doThing",
+      })
+    ).toThrow(/must be prefixed with the plugin's own id/);
+  });
+
+  it("registerPluginAction throws for malformed ids", () => {
+    for (const badId of ["no-dot", "Acme.UpperCase", "", "acme..double"]) {
+      expect(() =>
+        service.registerPluginAction("acme.my-plugin", {
+          ...validContribution(),
+          id: badId,
+        })
+      ).toThrow(/invalid/i);
+    }
+  });
+
+  it("registerPluginAction throws when id has no suffix after the pluginId", () => {
+    expect(() =>
+      service.registerPluginAction("acme.my-plugin", {
+        ...validContribution(),
+        id: "acme.my-plugin",
+      })
+    ).toThrow(/must be prefixed with the plugin's own id/);
+  });
+
+  it("registerPluginAction rejects restricted danger", () => {
+    expect(() =>
+      service.registerPluginAction("acme.my-plugin", {
+        ...validContribution(),
+        danger: "restricted" as unknown as "safe",
+      })
+    ).toThrow(/invalid danger/i);
+  });
+
+  it("registerPluginAction rejects unknown kind", () => {
+    expect(() =>
+      service.registerPluginAction("acme.my-plugin", {
+        ...validContribution(),
+        kind: "navigation" as unknown as "command",
+      })
+    ).toThrow(/invalid kind/i);
+  });
+
+  it("registerPluginAction throws on duplicate id", () => {
+    service.registerPluginAction("acme.my-plugin", validContribution());
+    expect(() => service.registerPluginAction("acme.my-plugin", validContribution())).toThrow(
+      /already registered/
+    );
+  });
+
+  it("unregisterPluginAction removes a single action and broadcasts", () => {
+    service.registerPluginAction("acme.my-plugin", validContribution());
+    broadcastToRendererMock.mockClear();
+
+    service.unregisterPluginAction("acme.my-plugin", "acme.my-plugin.doThing");
+
+    expect(service.listPluginActions()).toEqual([]);
+    expect(broadcastToRendererMock).toHaveBeenCalledWith(CHANNELS.PLUGIN_ACTIONS_CHANGED, {
+      actions: [],
+    });
+  });
+
+  it("unregisterPluginAction is a silent no-op for unknown ids", () => {
+    service.unregisterPluginAction("acme.my-plugin", "acme.my-plugin.missing");
+    expect(broadcastToRendererMock).not.toHaveBeenCalled();
+  });
+
+  it("unregisterPluginAction does not remove actions owned by a different plugin", async () => {
+    await writePlugin("other", { name: "acme.other", version: "1.0.0" });
+    const svc = new PluginService(tmpDir);
+    await svc.initialize();
+
+    svc.registerPluginAction("acme.my-plugin", validContribution());
+
+    svc.unregisterPluginAction("acme.other", "acme.my-plugin.doThing");
+    expect(svc.listPluginActions()).toHaveLength(1);
+  });
+
+  it("unloadPlugin bulk-removes plugin actions", async () => {
+    service.registerPluginAction("acme.my-plugin", validContribution());
+    service.registerPluginAction("acme.my-plugin", {
+      ...validContribution(),
+      id: "acme.my-plugin.other",
+    });
+    expect(service.listPluginActions()).toHaveLength(2);
+
+    broadcastToRendererMock.mockClear();
+    service.unloadPlugin("acme.my-plugin");
+
+    expect(service.listPluginActions()).toEqual([]);
+    // Exactly one broadcast for the bulk removal (no per-action spam)
+    const broadcasts = broadcastToRendererMock.mock.calls.filter(
+      (call: unknown[]) => call[0] === CHANNELS.PLUGIN_ACTIONS_CHANGED
+    );
+    expect(broadcasts).toHaveLength(1);
+  });
+
+  it("descriptor keeps a defensive copy of keywords", () => {
+    const keywords = ["foo", "bar"];
+    service.registerPluginAction("acme.my-plugin", {
+      ...validContribution(),
+      keywords,
+    });
+    keywords.push("mutated");
+
+    const [descriptor] = service.listPluginActions();
+    expect(descriptor.keywords).toEqual(["foo", "bar"]);
+  });
+
+  it("descriptor keeps a defensive copy of inputSchema", () => {
+    const inputSchema: Record<string, unknown> = { type: "object", properties: { a: 1 } };
+    service.registerPluginAction("acme.my-plugin", {
+      ...validContribution(),
+      inputSchema,
+    });
+    (inputSchema as Record<string, unknown>).properties = { a: 999 };
+
+    const [descriptor] = service.listPluginActions();
+    expect(descriptor.inputSchema).toEqual({ type: "object", properties: { a: 1 } });
   });
 });
 

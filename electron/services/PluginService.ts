@@ -11,6 +11,8 @@ import type {
   PluginIpcContext,
   PluginHostApi,
   PluginActivate,
+  PluginActionContribution,
+  PluginActionDescriptor,
 } from "../../shared/types/plugin.js";
 import {
   registerPanelKind,
@@ -26,6 +28,12 @@ import { CHANNELS } from "../ipc/channels.js";
 import type { LoadedPluginInfo } from "../../shared/types/plugin.js";
 import type { PluginToolbarButtonId } from "../../shared/types/toolbar.js";
 
+/** Plugin action IDs must be `{pluginId}.{actionId}`. Built-in IDs use colons, so the formats cannot collide. */
+const PLUGIN_ACTION_ID_RE = /^[a-z0-9][a-z0-9-]*\.[a-z0-9][a-zA-Z0-9._-]*$/;
+
+const PLUGIN_ACTION_KINDS = new Set(["command", "query"]);
+const PLUGIN_ACTION_DANGERS = new Set(["safe", "confirm"]);
+
 interface LoadedPlugin {
   manifest: PluginManifest;
   dir: string;
@@ -39,6 +47,8 @@ export class PluginService {
   private plugins = new Map<string, LoadedPlugin>();
   private handlerMap = new Map<string, PluginIpcHandler>();
   private cleanupMap = new Map<string, () => void>();
+  private pluginActions = new Map<string, PluginActionDescriptor>();
+  private pluginActionOwners = new Map<string, Set<string>>();
   private initialized = false;
   private pluginsRoot: string;
   private appVersion: string;
@@ -189,6 +199,12 @@ export class PluginService {
       registerPluginMenuItem(manifest.name, menuItem);
     }
 
+    // Insert the plugin into the registry BEFORE importing its main module so
+    // synchronous host-API calls made during module evaluation (e.g., a plugin
+    // that calls host.registerAction/registerHandler at import time) see the
+    // plugin as loaded. Without this, `hasPlugin(pluginId)` returns false
+    // inside the plugin's own init, and registerHandler/registerPluginAction
+    // throw "Unknown plugin" even for a correctly loaded plugin.
     if (this.plugins.has(manifest.name)) {
       console.warn(
         `[PluginService] Duplicate plugin name "${manifest.name}" in ${dirName}, tearing down previous instance`
@@ -342,6 +358,7 @@ export class PluginService {
       this.cleanupMap.delete(pluginId);
     }
     this.removeHandlers(pluginId);
+    this.unregisterPluginActions(pluginId);
     unregisterPluginMenuItems(pluginId);
     unregisterPluginToolbarButtons(pluginId);
     unregisterPluginPanelKinds(pluginId);
@@ -354,6 +371,115 @@ export class PluginService {
       dir: p.dir,
       loadedAt: p.loadedAt,
     }));
+  }
+
+  /**
+   * Register a runtime-contributed action for a loaded plugin.
+   * Validates id format, namespace ownership, and rejects "restricted" danger.
+   * Broadcasts the full action list to all renderers so windows stay in sync.
+   */
+  registerPluginAction(pluginId: string, contribution: PluginActionContribution): void {
+    if (!this.plugins.has(pluginId)) {
+      throw new Error(`Unknown plugin: ${pluginId}`);
+    }
+    if (!contribution || typeof contribution !== "object") {
+      throw new Error("Plugin action contribution must be an object");
+    }
+    const { id, title, description, category, kind, danger } = contribution;
+    if (typeof id !== "string" || !PLUGIN_ACTION_ID_RE.test(id)) {
+      throw new Error(
+        `Plugin action id "${id}" is invalid. Expected "{pluginId}.{actionId}" (lowercase start, alphanumerics, dot/dash/underscore).`
+      );
+    }
+    if (!id.startsWith(`${pluginId}.`)) {
+      throw new Error(
+        `Plugin "${pluginId}" cannot register action "${id}": id must be prefixed with the plugin's own id.`
+      );
+    }
+    if (typeof title !== "string" || !title.trim()) {
+      throw new Error(`Plugin action "${id}" must have a non-empty title`);
+    }
+    if (typeof description !== "string") {
+      throw new Error(`Plugin action "${id}" must have a string description`);
+    }
+    if (typeof category !== "string" || !category.trim()) {
+      throw new Error(`Plugin action "${id}" must have a non-empty category`);
+    }
+    if (!PLUGIN_ACTION_KINDS.has(kind as string)) {
+      throw new Error(`Plugin action "${id}" has invalid kind "${kind}"`);
+    }
+    if (!PLUGIN_ACTION_DANGERS.has(danger as string)) {
+      throw new Error(
+        `Plugin action "${id}" has invalid danger "${danger}". Plugins may only register "safe" or "confirm" actions.`
+      );
+    }
+    if (this.pluginActions.has(id)) {
+      throw new Error(`Plugin action "${id}" is already registered`);
+    }
+
+    const descriptor: PluginActionDescriptor = {
+      pluginId,
+      id,
+      title,
+      description,
+      category,
+      kind,
+      danger,
+      keywords: Array.isArray(contribution.keywords) ? [...contribution.keywords] : undefined,
+      inputSchema:
+        contribution.inputSchema && typeof contribution.inputSchema === "object"
+          ? { ...contribution.inputSchema }
+          : undefined,
+    };
+
+    this.pluginActions.set(id, descriptor);
+    let owners = this.pluginActionOwners.get(pluginId);
+    if (!owners) {
+      owners = new Set();
+      this.pluginActionOwners.set(pluginId, owners);
+    }
+    owners.add(id);
+
+    this.broadcastPluginActions();
+  }
+
+  /** Remove a single plugin-registered action. Silent no-op if unknown. */
+  unregisterPluginAction(pluginId: string, actionId: string): void {
+    const descriptor = this.pluginActions.get(actionId);
+    if (!descriptor || descriptor.pluginId !== pluginId) return;
+
+    this.pluginActions.delete(actionId);
+    const owners = this.pluginActionOwners.get(pluginId);
+    if (owners) {
+      owners.delete(actionId);
+      if (owners.size === 0) this.pluginActionOwners.delete(pluginId);
+    }
+
+    this.broadcastPluginActions();
+  }
+
+  /** Bulk cleanup when a plugin is unloaded. Emits a single broadcast. */
+  unregisterPluginActions(pluginId: string): void {
+    const owners = this.pluginActionOwners.get(pluginId);
+    if (!owners || owners.size === 0) return;
+
+    for (const id of owners) {
+      this.pluginActions.delete(id);
+    }
+    this.pluginActionOwners.delete(pluginId);
+
+    this.broadcastPluginActions();
+  }
+
+  /** Flattened snapshot of all plugin-registered actions (for renderer pull-on-mount). */
+  listPluginActions(): PluginActionDescriptor[] {
+    return Array.from(this.pluginActions.values());
+  }
+
+  private broadcastPluginActions(): void {
+    broadcastToRenderer(CHANNELS.PLUGIN_ACTIONS_CHANGED, {
+      actions: this.listPluginActions(),
+    });
   }
 }
 

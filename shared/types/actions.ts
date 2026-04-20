@@ -387,6 +387,8 @@ export interface ActionManifestEntry {
   disabledReason?: string;
   requiresArgs: boolean;
   keywords?: string[];
+  /** Set when this action was registered by a plugin (not a built-in). */
+  pluginId?: string;
 }
 
 export interface ActionDispatchSuccess<Result = unknown> {

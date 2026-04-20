@@ -1389,6 +1389,19 @@ export interface ElectronAPI {
       }>
     >;
     validateActionIds(actionIds: string[]): Promise<void>;
+    /** Pull the current set of plugin-registered actions. */
+    getActions(): Promise<import("../plugin.js").PluginActionDescriptor[]>;
+    /** Register a plugin-contributed action. Intended to be called from main-side bridges; not for direct UI use. */
+    registerAction(
+      pluginId: string,
+      contribution: import("../plugin.js").PluginActionContribution
+    ): Promise<void>;
+    /** Unregister a single plugin-contributed action. */
+    unregisterAction(pluginId: string, actionId: string): Promise<void>;
+    /** Subscribe to plugin-action registry changes. Returns a cleanup. */
+    onActionsChanged(
+      callback: (payload: { actions: import("../plugin.js").PluginActionDescriptor[] }) => void
+    ): () => void;
   };
   crashRecovery: {
     getPending(): Promise<import("./crashRecovery.js").PendingCrash | null>;
