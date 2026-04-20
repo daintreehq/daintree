@@ -13,9 +13,9 @@ import type {
   PluginActivate,
   PluginActionContribution,
   PluginActionDescriptor,
-  PluginWorktreeSnapshot,
 } from "../../shared/types/plugin.js";
 import type { WorktreeSnapshot } from "../../shared/types/workspace-host.js";
+import { toPluginWorktreeSnapshot } from "../../shared/utils/pluginWorktreeSnapshot.js";
 import type { WorkspaceClient } from "./WorkspaceClient.js";
 import {
   registerPanelKind,
@@ -46,6 +46,8 @@ interface LoadedPlugin {
 
 const ACTIVATE_TIMEOUT_MS = 5000;
 
+type WorkspaceWorktreeEvent = "worktree-update" | "worktree-activated" | "worktree-removed";
+
 export class PluginService {
   private plugins = new Map<string, LoadedPlugin>();
   private handlerMap = new Map<string, PluginIpcHandler>();
@@ -54,6 +56,18 @@ export class PluginService {
   private pluginActionOwners = new Map<string, Set<string>>();
   private pluginEventCleanups = new Map<string, Array<() => void>>();
   private workspaceClient: WorkspaceClient | null = null;
+  /**
+   * Event subscriptions registered during plugin `activate()` when the
+   * WorkspaceClient did not yet exist. Replayed in `setWorkspaceClient()`
+   * so early-boot subscriptions attach to the real client instead of being
+   * silently dropped.
+   */
+  private pendingWorktreeSubs: Array<{
+    pluginId: string;
+    event: WorkspaceWorktreeEvent;
+    handler: () => void;
+    activate: (client: WorkspaceClient) => void;
+  }> = [];
   private initialized = false;
   private pluginsRoot: string;
   private appVersion: string;
@@ -64,13 +78,21 @@ export class PluginService {
   }
 
   /**
-   * Inject the WorkspaceClient after it's been created. PluginService is
+   * Inject the WorkspaceClient after it's been created. PluginService may be
    * initialized before WorkspaceClient in the startup sequence, so we can't
    * take it in the constructor. Safe to call multiple times; the latest
-   * reference wins.
+   * reference wins. When set for the first time, replays any pending event
+   * subscriptions that were registered during early plugin activate().
    */
   setWorkspaceClient(client: WorkspaceClient | null): void {
     this.workspaceClient = client;
+    if (client && this.pendingWorktreeSubs.length > 0) {
+      const pending = this.pendingWorktreeSubs;
+      this.pendingWorktreeSubs = [];
+      for (const sub of pending) {
+        sub.activate(client);
+      }
+    }
   }
 
   async initialize(): Promise<void> {
@@ -277,11 +299,11 @@ export class PluginService {
       getActiveWorktree: async () => {
         const snapshots = await this.fetchAllWorktreeSnapshots();
         const active = snapshots.find((s) => s.isCurrent === true);
-        return active ? this.toPluginSnapshot(active) : null;
+        return active ? toPluginWorktreeSnapshot(active) : null;
       },
       getWorktrees: async () => {
         const snapshots = await this.fetchAllWorktreeSnapshots();
-        return snapshots.map((s) => this.toPluginSnapshot(s));
+        return snapshots.map(toPluginWorktreeSnapshot);
       },
       onDidChangeActiveWorktree: (callback) => {
         if (revoked) {
@@ -293,8 +315,11 @@ export class PluginService {
           if (!this.plugins.has(pluginId)) return;
           try {
             const snapshots = await this.fetchAllWorktreeSnapshots();
+            // Re-check after the async fetch so a racing unloadPlugin()
+            // doesn't fire the callback into a disposed plugin closure.
+            if (!this.plugins.has(pluginId)) return;
             const active = snapshots.find((s) => s.isCurrent === true);
-            callback(active ? this.toPluginSnapshot(active) : null);
+            callback(active ? toPluginWorktreeSnapshot(active) : null);
           } catch (err) {
             console.error(
               `[PluginService] onDidChangeActiveWorktree callback for "${pluginId}" failed:`,
@@ -309,18 +334,31 @@ export class PluginService {
             `Plugin "${pluginId}" host revoked: onDidChangeWorktrees called after activate() returned or timed out`
           );
         }
-        return this.subscribeWorktreeEvent(pluginId, "worktree-update", async () => {
+        const emit = async (): Promise<void> => {
           if (!this.plugins.has(pluginId)) return;
           try {
             const snapshots = await this.fetchAllWorktreeSnapshots();
-            callback(snapshots.map((s) => this.toPluginSnapshot(s)));
+            if (!this.plugins.has(pluginId)) return;
+            callback(snapshots.map(toPluginWorktreeSnapshot));
           } catch (err) {
             console.error(
               `[PluginService] onDidChangeWorktrees callback for "${pluginId}" failed:`,
               err
             );
           }
-        });
+        };
+        // Fires on both add/update and remove so plugins' cached lists stay
+        // correct after deletions. Each subscription is tracked separately
+        // so a single disposer stops both.
+        const disposeUpdate = this.subscribeWorktreeEvent(pluginId, "worktree-update", emit);
+        const disposeRemove = this.subscribeWorktreeEvent(pluginId, "worktree-removed", emit);
+        let disposed = false;
+        return () => {
+          if (disposed) return;
+          disposed = true;
+          disposeUpdate();
+          disposeRemove();
+        };
       },
     };
     return {
@@ -346,26 +384,30 @@ export class PluginService {
    * Register a listener on WorkspaceClient for the given event and track it
    * against the plugin so `unloadPlugin()` can dispose it. Returns a disposer
    * that removes just this subscription; safe to call multiple times.
+   *
+   * If WorkspaceClient is not yet wired (early plugin activate during boot),
+   * the subscription is queued in `pendingWorktreeSubs` and replayed when
+   * `setWorkspaceClient()` is later called. The returned disposer handles
+   * both the queued and the live state.
    */
   private subscribeWorktreeEvent(
     pluginId: string,
-    event: "worktree-update" | "worktree-activated" | "worktree-removed",
+    event: WorkspaceWorktreeEvent,
     handler: () => void
   ): () => void {
-    const client = this.workspaceClient;
-    if (!client) {
-      // No workspace available — return a no-op disposer rather than throw,
-      // so plugins can be written defensively.
-      return () => {};
-    }
-
-    client.on(event, handler);
-
+    let boundClient: WorkspaceClient | null = null;
+    let pendingRecord: (typeof this.pendingWorktreeSubs)[number] | null = null;
     let disposed = false;
+
     const dispose = (): void => {
       if (disposed) return;
       disposed = true;
-      client.off(event, handler);
+      if (boundClient) {
+        boundClient.off(event, handler);
+      } else if (pendingRecord) {
+        const idx = this.pendingWorktreeSubs.indexOf(pendingRecord);
+        if (idx >= 0) this.pendingWorktreeSubs.splice(idx, 1);
+      }
       const list = this.pluginEventCleanups.get(pluginId);
       if (!list) return;
       const idx = list.indexOf(dispose);
@@ -380,33 +422,26 @@ export class PluginService {
     }
     list.push(dispose);
 
-    return dispose;
-  }
+    const client = this.workspaceClient;
+    if (client) {
+      client.on(event, handler);
+      boundClient = client;
+    } else {
+      pendingRecord = {
+        pluginId,
+        event,
+        handler,
+        activate: (c: WorkspaceClient) => {
+          if (disposed) return;
+          c.on(event, handler);
+          boundClient = c;
+          pendingRecord = null;
+        },
+      };
+      this.pendingWorktreeSubs.push(pendingRecord);
+    }
 
-  private toPluginSnapshot(snapshot: WorktreeSnapshot): PluginWorktreeSnapshot {
-    // Explicit field allowlist — do NOT spread. Internal shape changes must
-    // not implicitly leak to third-party plugins.
-    const projection: PluginWorktreeSnapshot = {
-      id: snapshot.id,
-      worktreeId: snapshot.worktreeId,
-      path: snapshot.path,
-      name: snapshot.name,
-      isCurrent: snapshot.isCurrent,
-      branch: snapshot.branch,
-      isMainWorktree: snapshot.isMainWorktree,
-      aheadCount: snapshot.aheadCount,
-      behindCount: snapshot.behindCount,
-      issueNumber: snapshot.issueNumber,
-      issueTitle: snapshot.issueTitle,
-      prNumber: snapshot.prNumber,
-      prUrl: snapshot.prUrl,
-      prState: snapshot.prState,
-      prTitle: snapshot.prTitle,
-      mood: snapshot.mood,
-      lastActivityTimestamp: snapshot.lastActivityTimestamp ?? null,
-      createdAt: snapshot.createdAt,
-    };
-    return Object.freeze(projection);
+    return dispose;
   }
 
   private async runActivate(

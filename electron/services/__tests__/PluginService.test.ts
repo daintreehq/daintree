@@ -1761,4 +1761,128 @@ describe("Plugin worktree host API", () => {
     await new Promise((r) => setTimeout(r, 10));
     expect(cb).not.toHaveBeenCalled();
   });
+
+  it("subscriptions registered before setWorkspaceClient replay against the new client", async () => {
+    await writePlugin("wt-boot", { name: "acme.wt-boot", version: "1.0.0" });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+    // Intentionally do NOT set the workspace client yet — this simulates a
+    // plugin calling host.onDidChange* during its activate() on cold boot,
+    // before windowServices wires up WorkspaceClient.
+    const { host, revoke } = (
+      service as unknown as {
+        createHost: (id: string) => { host: HostWithWorktree; revoke: () => void };
+      }
+    ).createHost("acme.wt-boot");
+
+    const cb = vi.fn();
+    host.onDidChangeActiveWorktree(cb);
+    revoke();
+
+    // Now the client becomes available — subscriptions must be replayed.
+    const client = createMockClient([mkSnap({ id: "b", isCurrent: true, branch: "dev" })]);
+    (service as unknown as { setWorkspaceClient: (c: unknown) => void }).setWorkspaceClient(client);
+
+    expect(client.listenerCount("worktree-activated")).toBe(1);
+
+    client.emit("worktree-activated", { worktreeId: "b", projectPath: "/p" });
+    await vi.waitFor(() => expect(cb).toHaveBeenCalledTimes(1));
+    const arg = cb.mock.calls[0][0] as Record<string, unknown>;
+    expect(arg.id).toBe("b");
+  });
+
+  it("disposing a pending subscription before setWorkspaceClient stops replay", async () => {
+    await writePlugin("wt-boot2", { name: "acme.wt-boot2", version: "1.0.0" });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+    const { host, revoke } = (
+      service as unknown as {
+        createHost: (id: string) => { host: HostWithWorktree; revoke: () => void };
+      }
+    ).createHost("acme.wt-boot2");
+
+    const cb = vi.fn();
+    const dispose = host.onDidChangeActiveWorktree(cb);
+    revoke();
+    dispose();
+
+    const client = createMockClient([mkSnap({ id: "a", isCurrent: true })]);
+    (service as unknown as { setWorkspaceClient: (c: unknown) => void }).setWorkspaceClient(client);
+
+    expect(client.listenerCount("worktree-activated")).toBe(0);
+    client.emit("worktree-activated", { worktreeId: "a", projectPath: "/p" });
+    await new Promise((r) => setTimeout(r, 10));
+    expect(cb).not.toHaveBeenCalled();
+  });
+
+  it("onDidChangeWorktrees fires on worktree-removed with the post-removal list", async () => {
+    const { host, client, revoke } = await setup([
+      mkSnap({ id: "a", isCurrent: true }),
+      mkSnap({ id: "b", isCurrent: false }),
+    ]);
+
+    const cb = vi.fn();
+    host.onDidChangeWorktrees(cb);
+    revoke();
+
+    client.setStates([mkSnap({ id: "a", isCurrent: true })]);
+    client.emit("worktree-removed", { worktreeId: "b", projectPath: "/p" });
+
+    await vi.waitFor(() => expect(cb).toHaveBeenCalledTimes(1));
+    const list = cb.mock.calls[0][0] as Array<Record<string, unknown>>;
+    expect(list.map((s) => s.id)).toEqual(["a"]);
+  });
+
+  it("onDidChangeWorktrees disposer stops both update and remove subscriptions", async () => {
+    const { host, client, revoke } = await setup([mkSnap({ id: "a", isCurrent: true })]);
+
+    const cb = vi.fn();
+    const dispose = host.onDidChangeWorktrees(cb);
+    revoke();
+    expect(client.listenerCount("worktree-update")).toBe(1);
+    expect(client.listenerCount("worktree-removed")).toBe(1);
+
+    dispose();
+    expect(client.listenerCount("worktree-update")).toBe(0);
+    expect(client.listenerCount("worktree-removed")).toBe(0);
+  });
+
+  it("plugin snapshot exposes exactly the documented allowlist fields", async () => {
+    const { host } = await setup([
+      mkSnap({
+        id: "a",
+        isCurrent: true,
+        branch: "main",
+        aheadCount: 1,
+        // A field that must NOT leak to plugins — the real WorktreeSnapshot
+        // has dozens of these; we sample one as a guard.
+        _secret: "leak-me",
+      }),
+    ]);
+
+    const active = (await host.getActiveWorktree()) as Record<string, unknown>;
+    expect(active).not.toBeNull();
+    const expected = [
+      "aheadCount",
+      "behindCount",
+      "branch",
+      "createdAt",
+      "id",
+      "isCurrent",
+      "isMainWorktree",
+      "issueNumber",
+      "issueTitle",
+      "lastActivityTimestamp",
+      "mood",
+      "name",
+      "path",
+      "prNumber",
+      "prState",
+      "prTitle",
+      "prUrl",
+      "worktreeId",
+    ];
+    expect(Object.keys(active).sort()).toEqual(expected);
+    expect("_secret" in active).toBe(false);
+  });
 });
