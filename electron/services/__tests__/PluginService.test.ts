@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { EventEmitter } from "node:events";
 import fs from "fs/promises";
 import path from "path";
 import os from "os";
@@ -1535,5 +1536,229 @@ describe("permissions declaration logging", () => {
       (call: unknown[]) => typeof call[0] === "string" && call[0].includes("declares permissions")
     );
     expect(permLogs).toHaveLength(0);
+  });
+});
+
+describe("Plugin worktree host API", () => {
+  type WorktreeSnapshotLike = {
+    id: string;
+    worktreeId: string;
+    path: string;
+    name: string;
+    isCurrent: boolean;
+    branch?: string;
+    aheadCount?: number;
+    issueNumber?: number;
+    lastActivityTimestamp?: number | null;
+    _secret?: string;
+  };
+
+  function mkSnap(over: Partial<WorktreeSnapshotLike> & { id: string }): WorktreeSnapshotLike {
+    return {
+      worktreeId: over.id,
+      path: `/tmp/${over.id}`,
+      name: over.id,
+      isCurrent: false,
+      ...over,
+    };
+  }
+
+  function createMockClient(initial: WorktreeSnapshotLike[] = []) {
+    const emitter = new EventEmitter();
+    let states = initial;
+    const getAllStatesAsync = vi.fn(() => Promise.resolve(states));
+    const client = Object.assign(emitter, {
+      getAllStatesAsync,
+      setStates: (next: WorktreeSnapshotLike[]) => {
+        states = next;
+      },
+    });
+    return client;
+  }
+
+  type HostWithWorktree = {
+    pluginId: string;
+    registerHandler: (c: string, h: (...args: unknown[]) => unknown) => void;
+    broadcastToRenderer: (c: string, p: unknown) => void;
+    getActiveWorktree: () => Promise<unknown>;
+    getWorktrees: () => Promise<unknown[]>;
+    onDidChangeActiveWorktree: (cb: (s: unknown) => void) => () => void;
+    onDidChangeWorktrees: (cb: (list: unknown[]) => void) => () => void;
+  };
+
+  async function setup(snapshots: WorktreeSnapshotLike[] = []) {
+    await writePlugin("wt-host", { name: "acme.wt-host", version: "1.0.0" });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+    const client = createMockClient(snapshots);
+    (service as unknown as { setWorkspaceClient: (c: unknown) => void }).setWorkspaceClient(client);
+    const { host, revoke } = (
+      service as unknown as {
+        createHost: (id: string) => {
+          host: HostWithWorktree;
+          revoke: () => void;
+        };
+      }
+    ).createHost("acme.wt-host");
+    return { service, client, host, revoke };
+  }
+
+  it("getActiveWorktree returns a frozen projection of the isCurrent snapshot", async () => {
+    const { host } = await setup([
+      mkSnap({ id: "a", isCurrent: false }),
+      mkSnap({ id: "b", isCurrent: true, branch: "feature/x", _secret: "leak" }),
+    ]);
+
+    const active = (await host.getActiveWorktree()) as Record<string, unknown> | null;
+    expect(active).not.toBeNull();
+    expect(active!.id).toBe("b");
+    expect(active!.branch).toBe("feature/x");
+    // Internal fields must not leak through the projection
+    expect("_secret" in active!).toBe(false);
+    expect(Object.isFrozen(active)).toBe(true);
+  });
+
+  it("getActiveWorktree returns null when no worktree is current", async () => {
+    const { host } = await setup([mkSnap({ id: "a", isCurrent: false })]);
+    expect(await host.getActiveWorktree()).toBeNull();
+  });
+
+  it("getWorktrees returns frozen snapshots for every worktree", async () => {
+    const { host } = await setup([
+      mkSnap({ id: "a", isCurrent: false }),
+      mkSnap({ id: "b", isCurrent: true }),
+    ]);
+    const list = (await host.getWorktrees()) as Array<Record<string, unknown>>;
+    expect(list).toHaveLength(2);
+    expect(list.map((s) => s.id).sort()).toEqual(["a", "b"]);
+    expect(list.every((s) => Object.isFrozen(s))).toBe(true);
+  });
+
+  it("getActiveWorktree returns null when WorkspaceClient is not wired", async () => {
+    await writePlugin("wt-nowsc", { name: "acme.wt-nowsc", version: "1.0.0" });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+    // Intentionally skip setWorkspaceClient
+    const { host } = (
+      service as unknown as {
+        createHost: (id: string) => { host: HostWithWorktree; revoke: () => void };
+      }
+    ).createHost("acme.wt-nowsc");
+    expect(await host.getActiveWorktree()).toBeNull();
+    expect(await host.getWorktrees()).toEqual([]);
+  });
+
+  it("onDidChangeActiveWorktree fires with the new active snapshot", async () => {
+    const snaps = [mkSnap({ id: "a", isCurrent: true })];
+    const { host, client, revoke } = await setup(snaps);
+
+    // Subscribe during "activate" window (before revoke), as a real plugin would.
+    const cb = vi.fn();
+    const dispose = host.onDidChangeActiveWorktree(cb);
+    revoke();
+
+    client.setStates([mkSnap({ id: "b", isCurrent: true, branch: "dev" })]);
+    client.emit("worktree-activated", { worktreeId: "b", projectPath: "/p" });
+
+    await vi.waitFor(() => expect(cb).toHaveBeenCalledTimes(1));
+    const arg = cb.mock.calls[0][0] as Record<string, unknown>;
+    expect(arg.id).toBe("b");
+    expect(arg.branch).toBe("dev");
+
+    dispose();
+    client.emit("worktree-activated", { worktreeId: "a", projectPath: "/p" });
+    // Ensure no additional calls after dispose
+    await new Promise((r) => setTimeout(r, 10));
+    expect(cb).toHaveBeenCalledTimes(1);
+  });
+
+  it("onDidChangeWorktrees fires with the full list on worktree-update", async () => {
+    const { host, client, revoke } = await setup([
+      mkSnap({ id: "a", isCurrent: true }),
+      mkSnap({ id: "b", isCurrent: false }),
+    ]);
+
+    const cb = vi.fn();
+    host.onDidChangeWorktrees(cb);
+    revoke();
+
+    client.emit("worktree-update", {
+      worktree: mkSnap({ id: "a", isCurrent: true }),
+      projectPath: "/p",
+    });
+
+    await vi.waitFor(() => expect(cb).toHaveBeenCalledTimes(1));
+    const list = cb.mock.calls[0][0] as Array<Record<string, unknown>>;
+    expect(list.map((s) => s.id).sort()).toEqual(["a", "b"]);
+  });
+
+  it("disposers are idempotent and only remove the matching listener", async () => {
+    const { host, client, revoke } = await setup();
+
+    const cbA = vi.fn();
+    const cbB = vi.fn();
+    const disposeA = host.onDidChangeActiveWorktree(cbA);
+    host.onDidChangeActiveWorktree(cbB);
+    revoke();
+
+    disposeA();
+    disposeA(); // no-op
+
+    client.setStates([mkSnap({ id: "a", isCurrent: true })]);
+    client.emit("worktree-activated", { worktreeId: "a", projectPath: "/p" });
+    await vi.waitFor(() => expect(cbB).toHaveBeenCalledTimes(1));
+    expect(cbA).not.toHaveBeenCalled();
+  });
+
+  it("unloadPlugin flushes every worktree event listener for the plugin", async () => {
+    const { service, host, client, revoke } = await setup();
+
+    const cb1 = vi.fn();
+    const cb2 = vi.fn();
+    host.onDidChangeActiveWorktree(cb1);
+    host.onDidChangeWorktrees(cb2);
+    revoke();
+
+    expect(client.listenerCount("worktree-activated")).toBe(1);
+    expect(client.listenerCount("worktree-update")).toBe(1);
+
+    service.unloadPlugin("acme.wt-host");
+
+    expect(client.listenerCount("worktree-activated")).toBe(0);
+    expect(client.listenerCount("worktree-update")).toBe(0);
+
+    client.emit("worktree-activated", { worktreeId: "x", projectPath: "/p" });
+    client.emit("worktree-update", { worktree: mkSnap({ id: "x" }), projectPath: "/p" });
+    await new Promise((r) => setTimeout(r, 10));
+    expect(cb1).not.toHaveBeenCalled();
+    expect(cb2).not.toHaveBeenCalled();
+  });
+
+  it("registering an event subscription after revoke throws", async () => {
+    const { host, revoke } = await setup();
+
+    // Pre-revoke registration is allowed (this is the activate() window).
+    expect(() => host.onDidChangeActiveWorktree(() => {})).not.toThrow();
+
+    revoke();
+
+    // Post-revoke registration is rejected — simulates a plugin holding the
+    // host reference and trying to subscribe after activate() returned.
+    expect(() => host.onDidChangeActiveWorktree(() => {})).toThrow(/host revoked/);
+    expect(() => host.onDidChangeWorktrees(() => {})).toThrow(/host revoked/);
+  });
+
+  it("callbacks do not fire after unloadPlugin even if the client emits again", async () => {
+    const { service, host, client, revoke } = await setup();
+    const cb = vi.fn();
+    host.onDidChangeActiveWorktree(cb);
+    revoke();
+
+    service.unloadPlugin("acme.wt-host");
+
+    client.setStates([mkSnap({ id: "a", isCurrent: true })]);
+    client.emit("worktree-activated", { worktreeId: "a", projectPath: "/p" });
+    await new Promise((r) => setTimeout(r, 10));
+    expect(cb).not.toHaveBeenCalled();
   });
 });

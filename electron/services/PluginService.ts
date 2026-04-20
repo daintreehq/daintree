@@ -13,7 +13,10 @@ import type {
   PluginActivate,
   PluginActionContribution,
   PluginActionDescriptor,
+  PluginWorktreeSnapshot,
 } from "../../shared/types/plugin.js";
+import type { WorktreeSnapshot } from "../../shared/types/workspace-host.js";
+import type { WorkspaceClient } from "./WorkspaceClient.js";
 import {
   registerPanelKind,
   unregisterPluginPanelKinds,
@@ -49,6 +52,8 @@ export class PluginService {
   private cleanupMap = new Map<string, () => void>();
   private pluginActions = new Map<string, PluginActionDescriptor>();
   private pluginActionOwners = new Map<string, Set<string>>();
+  private pluginEventCleanups = new Map<string, Array<() => void>>();
+  private workspaceClient: WorkspaceClient | null = null;
   private initialized = false;
   private pluginsRoot: string;
   private appVersion: string;
@@ -56,6 +61,16 @@ export class PluginService {
   constructor(pluginsRoot?: string, appVersion?: string) {
     this.pluginsRoot = pluginsRoot ?? path.join(os.homedir(), ".daintree", "plugins");
     this.appVersion = appVersion ?? app.getVersion();
+  }
+
+  /**
+   * Inject the WorkspaceClient after it's been created. PluginService is
+   * initialized before WorkspaceClient in the startup sequence, so we can't
+   * take it in the constructor. Safe to call multiple times; the latest
+   * reference wins.
+   */
+  setWorkspaceClient(client: WorkspaceClient | null): void {
+    this.workspaceClient = client;
   }
 
   async initialize(): Promise<void> {
@@ -259,6 +274,54 @@ export class PluginService {
         }
         broadcastToRenderer(`plugin:${pluginId}:${channel}`, payload);
       },
+      getActiveWorktree: async () => {
+        const snapshots = await this.fetchAllWorktreeSnapshots();
+        const active = snapshots.find((s) => s.isCurrent === true);
+        return active ? this.toPluginSnapshot(active) : null;
+      },
+      getWorktrees: async () => {
+        const snapshots = await this.fetchAllWorktreeSnapshots();
+        return snapshots.map((s) => this.toPluginSnapshot(s));
+      },
+      onDidChangeActiveWorktree: (callback) => {
+        if (revoked) {
+          throw new Error(
+            `Plugin "${pluginId}" host revoked: onDidChangeActiveWorktree called after activate() returned or timed out`
+          );
+        }
+        return this.subscribeWorktreeEvent(pluginId, "worktree-activated", async () => {
+          if (!this.plugins.has(pluginId)) return;
+          try {
+            const snapshots = await this.fetchAllWorktreeSnapshots();
+            const active = snapshots.find((s) => s.isCurrent === true);
+            callback(active ? this.toPluginSnapshot(active) : null);
+          } catch (err) {
+            console.error(
+              `[PluginService] onDidChangeActiveWorktree callback for "${pluginId}" failed:`,
+              err
+            );
+          }
+        });
+      },
+      onDidChangeWorktrees: (callback) => {
+        if (revoked) {
+          throw new Error(
+            `Plugin "${pluginId}" host revoked: onDidChangeWorktrees called after activate() returned or timed out`
+          );
+        }
+        return this.subscribeWorktreeEvent(pluginId, "worktree-update", async () => {
+          if (!this.plugins.has(pluginId)) return;
+          try {
+            const snapshots = await this.fetchAllWorktreeSnapshots();
+            callback(snapshots.map((s) => this.toPluginSnapshot(s)));
+          } catch (err) {
+            console.error(
+              `[PluginService] onDidChangeWorktrees callback for "${pluginId}" failed:`,
+              err
+            );
+          }
+        });
+      },
     };
     return {
       host,
@@ -266,6 +329,84 @@ export class PluginService {
         revoked = true;
       },
     };
+  }
+
+  private async fetchAllWorktreeSnapshots(): Promise<WorktreeSnapshot[]> {
+    const client = this.workspaceClient;
+    if (!client) return [];
+    try {
+      return await client.getAllStatesAsync();
+    } catch (err) {
+      console.error("[PluginService] Failed to fetch worktree snapshots:", err);
+      return [];
+    }
+  }
+
+  /**
+   * Register a listener on WorkspaceClient for the given event and track it
+   * against the plugin so `unloadPlugin()` can dispose it. Returns a disposer
+   * that removes just this subscription; safe to call multiple times.
+   */
+  private subscribeWorktreeEvent(
+    pluginId: string,
+    event: "worktree-update" | "worktree-activated" | "worktree-removed",
+    handler: () => void
+  ): () => void {
+    const client = this.workspaceClient;
+    if (!client) {
+      // No workspace available — return a no-op disposer rather than throw,
+      // so plugins can be written defensively.
+      return () => {};
+    }
+
+    client.on(event, handler);
+
+    let disposed = false;
+    const dispose = (): void => {
+      if (disposed) return;
+      disposed = true;
+      client.off(event, handler);
+      const list = this.pluginEventCleanups.get(pluginId);
+      if (!list) return;
+      const idx = list.indexOf(dispose);
+      if (idx >= 0) list.splice(idx, 1);
+      if (list.length === 0) this.pluginEventCleanups.delete(pluginId);
+    };
+
+    let list = this.pluginEventCleanups.get(pluginId);
+    if (!list) {
+      list = [];
+      this.pluginEventCleanups.set(pluginId, list);
+    }
+    list.push(dispose);
+
+    return dispose;
+  }
+
+  private toPluginSnapshot(snapshot: WorktreeSnapshot): PluginWorktreeSnapshot {
+    // Explicit field allowlist — do NOT spread. Internal shape changes must
+    // not implicitly leak to third-party plugins.
+    const projection: PluginWorktreeSnapshot = {
+      id: snapshot.id,
+      worktreeId: snapshot.worktreeId,
+      path: snapshot.path,
+      name: snapshot.name,
+      isCurrent: snapshot.isCurrent,
+      branch: snapshot.branch,
+      isMainWorktree: snapshot.isMainWorktree,
+      aheadCount: snapshot.aheadCount,
+      behindCount: snapshot.behindCount,
+      issueNumber: snapshot.issueNumber,
+      issueTitle: snapshot.issueTitle,
+      prNumber: snapshot.prNumber,
+      prUrl: snapshot.prUrl,
+      prState: snapshot.prState,
+      prTitle: snapshot.prTitle,
+      mood: snapshot.mood,
+      lastActivityTimestamp: snapshot.lastActivityTimestamp ?? null,
+      createdAt: snapshot.createdAt,
+    };
+    return Object.freeze(projection);
   }
 
   private async runActivate(
@@ -351,12 +492,31 @@ export class PluginService {
       }
       this.cleanupMap.delete(pluginId);
     }
+    this.flushPluginEventCleanups(pluginId);
     this.removeHandlers(pluginId);
     this.unregisterPluginActions(pluginId);
     unregisterPluginMenuItems(pluginId);
     unregisterPluginToolbarButtons(pluginId);
     unregisterPluginPanelKinds(pluginId);
     this.plugins.delete(pluginId);
+  }
+
+  private flushPluginEventCleanups(pluginId: string): void {
+    const list = this.pluginEventCleanups.get(pluginId);
+    if (!list || list.length === 0) {
+      this.pluginEventCleanups.delete(pluginId);
+      return;
+    }
+    // Snapshot & clear before invoking so each dispose() call (which mutates
+    // the list via splice) doesn't interfere with iteration.
+    this.pluginEventCleanups.delete(pluginId);
+    for (const dispose of [...list]) {
+      try {
+        dispose();
+      } catch (err) {
+        console.error(`[PluginService] Event cleanup for "${pluginId}" threw during unload:`, err);
+      }
+    }
   }
 
   listPlugins(): LoadedPluginInfo[] {

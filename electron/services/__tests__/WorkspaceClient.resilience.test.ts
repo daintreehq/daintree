@@ -574,6 +574,90 @@ describe("WorkspaceClient multi-process manager", () => {
         worktree: expect.objectContaining({ id: "wt-1" }),
       });
     });
+
+    it("emits top-level worktree-update event so plugin subscribers can observe", async () => {
+      const load = client.loadProject("/project-a", 1);
+      await readyAndResolveLoad(0);
+      await load;
+
+      const listener = vi.fn();
+      client.on("worktree-update", listener);
+
+      h(0).emit("host-event", {
+        type: "worktree-update",
+        worktree: { id: "wt-1", path: "/a/wt", name: "wt", branch: "main" },
+      });
+
+      expect(listener).toHaveBeenCalledTimes(1);
+      expect(listener).toHaveBeenCalledWith({
+        worktree: expect.objectContaining({ id: "wt-1" }),
+        projectPath: "/project-a",
+      });
+    });
+
+    it("emits top-level worktree-removed event when a worktree is removed", async () => {
+      const load = client.loadProject("/project-a", 1);
+      await readyAndResolveLoad(0);
+      await load;
+
+      const listener = vi.fn();
+      client.on("worktree-removed", listener);
+
+      h(0).emit("host-event", {
+        type: "worktree-removed",
+        worktreeId: "wt-1",
+      });
+
+      expect(listener).toHaveBeenCalledTimes(1);
+      expect(listener).toHaveBeenCalledWith({
+        worktreeId: "wt-1",
+        projectPath: "/project-a",
+      });
+    });
+
+    it("emits top-level worktree-activated event when setActiveWorktree succeeds", async () => {
+      const load = client.loadProject("/project-a", 1);
+      await readyAndResolveLoad(0);
+      await load;
+
+      const listener = vi.fn();
+      client.on("worktree-activated", listener);
+
+      const activatePromise = client.setActiveWorktree("wt-1", 1);
+      // The set-active request is queued on sendWithResponse — resolve it
+      // so setActiveWorktree finishes and emits.
+      await tick();
+      const setActiveReq = h(0)
+        .getAllRequests()
+        .find((r) => r.type === "set-active");
+      expect(setActiveReq).toBeDefined();
+      h(0).resolveRequest(setActiveReq!.requestId, { success: true });
+      await activatePromise;
+
+      expect(listener).toHaveBeenCalledWith({
+        worktreeId: "wt-1",
+        projectPath: "/project-a",
+      });
+    });
+
+    it("does not emit worktree-activated when setActiveWorktree is silent", async () => {
+      const load = client.loadProject("/project-a", 1);
+      await readyAndResolveLoad(0);
+      await load;
+
+      const listener = vi.fn();
+      client.on("worktree-activated", listener);
+
+      const activatePromise = client.setActiveWorktree("wt-1", 1, { silent: true });
+      await tick();
+      const setActiveReq = h(0)
+        .getAllRequests()
+        .find((r) => r.type === "set-active");
+      h(0).resolveRequest(setActiveReq!.requestId, { success: true });
+      await activatePromise;
+
+      expect(listener).not.toHaveBeenCalled();
+    });
   });
 
   describe("early windowId detachment during project switch", () => {

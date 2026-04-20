@@ -835,6 +835,15 @@ export async function setupWindowServices(
       showCrashDialog: false,
     });
 
+    // Give PluginService the WorkspaceClient reference now that it's ready —
+    // PluginService.initialize() ran earlier before workspaceClient existed.
+    try {
+      const { pluginService } = await import("../services/PluginService.js");
+      pluginService.setWorkspaceClient(workspaceClient);
+    } catch (err) {
+      console.error("[MAIN] Failed to wire WorkspaceClient into PluginService:", err);
+    }
+
     markPerformance(PERF_MARKS.SERVICE_INIT_WORKSPACE_READY);
 
     // Create WorktreePortBroker alongside WorkspaceClient
@@ -1166,6 +1175,15 @@ export async function setupWindowServices(
     if (workspaceClient) workspaceClient.dispose();
     workspaceClient = null;
     disposeWorkspaceClient();
+
+    // Drop PluginService's WorkspaceClient reference so plugin event handlers
+    // can't fire into the disposed instance during late teardown.
+    try {
+      const { pluginService } = await import("../services/PluginService.js");
+      pluginService.setWorkspaceClient(null);
+    } catch {
+      // module load errors during teardown are non-fatal
+    }
 
     disposeTaskOrchestrator();
     disposeAgentRouter();

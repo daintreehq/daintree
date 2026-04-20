@@ -223,6 +223,7 @@ export class WorkspaceClient extends EventEmitter {
         this.sendToEntryWindows(entry, CHANNELS.WORKTREE_UPDATE, {
           worktree,
         });
+        this.emit("worktree-update", { worktree, projectPath: entry.projectPath });
         events.emit("sys:worktree:update", {
           id: worktree.id,
           path: worktree.path,
@@ -253,6 +254,10 @@ export class WorkspaceClient extends EventEmitter {
       case "worktree-removed":
         this.sendToEntryWindows(entry, CHANNELS.WORKTREE_REMOVE, {
           worktreeId: event.worktreeId,
+        });
+        this.emit("worktree-removed", {
+          worktreeId: event.worktreeId,
+          projectPath: entry.projectPath,
         });
         break;
 
@@ -762,11 +767,19 @@ export class WorkspaceClient extends EventEmitter {
         const entry = this.resolveEntryForWindow(windowId);
         if (entry) {
           this.sendToEntryWindows(entry, CHANNELS.WORKTREE_ACTIVATED, { worktreeId });
+          this.emit("worktree-activated", {
+            worktreeId,
+            projectPath: entry.projectPath,
+          });
         }
       } else {
         // Broadcast to all entries' views (no windowId → fan out)
         for (const entry of this.entries.values()) {
           this.sendToEntryWindows(entry, CHANNELS.WORKTREE_ACTIVATED, { worktreeId });
+          this.emit("worktree-activated", {
+            worktreeId,
+            projectPath: entry.projectPath,
+          });
         }
       }
     }

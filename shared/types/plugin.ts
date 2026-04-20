@@ -80,10 +80,62 @@ export type PluginIpcHandler = (
   ...args: unknown[]
 ) => unknown | Promise<unknown>;
 
+/**
+ * Read-only, deep-frozen projection of a worktree exposed to plugins.
+ * This is an explicit allowlist of fields from the internal WorktreeSnapshot;
+ * do not add fields by spreading — every field must be intentionally exposed
+ * so internal shape changes don't leak to third-party plugins.
+ */
+export interface PluginWorktreeSnapshot {
+  readonly id: string;
+  readonly worktreeId: string;
+  readonly path: string;
+  readonly name: string;
+  readonly isCurrent: boolean;
+  readonly branch?: string;
+  readonly isMainWorktree?: boolean;
+  readonly aheadCount?: number;
+  readonly behindCount?: number;
+  readonly issueNumber?: number;
+  readonly issueTitle?: string;
+  readonly prNumber?: number;
+  readonly prUrl?: string;
+  readonly prState?: "open" | "merged" | "closed";
+  readonly prTitle?: string;
+  readonly mood?: "stable" | "active" | "stale" | "error";
+  readonly lastActivityTimestamp?: number | null;
+  readonly createdAt?: number;
+}
+
 export interface PluginHostApi {
   readonly pluginId: string;
   registerHandler(channel: string, handler: PluginIpcHandler): void;
   broadcastToRenderer(channel: string, payload: unknown): void;
+  /**
+   * Returns the currently-active worktree (`isCurrent === true`) across all
+   * projects as a frozen snapshot, or `null` if none is active. In multi-project
+   * sessions this returns the first match; plugins needing per-project scoping
+   * should filter from `getWorktrees()`.
+   */
+  getActiveWorktree(): Promise<PluginWorktreeSnapshot | null>;
+  /** Returns all worktrees across all loaded projects as frozen snapshots. */
+  getWorktrees(): Promise<PluginWorktreeSnapshot[]>;
+  /**
+   * Subscribe to active-worktree changes. The callback fires with the new
+   * active snapshot (or `null` when none is active). Returns a disposer;
+   * calling it more than once is a no-op. All subscriptions are automatically
+   * disposed when the plugin is unloaded.
+   */
+  onDidChangeActiveWorktree(
+    callback: (snapshot: PluginWorktreeSnapshot | null) => void
+  ): () => void;
+  /**
+   * Subscribe to the worktree set changing. The callback fires with the full
+   * current list on any worktree add/update/remove. Returns a disposer;
+   * calling it more than once is a no-op. All subscriptions are automatically
+   * disposed when the plugin is unloaded.
+   */
+  onDidChangeWorktrees(callback: (snapshots: PluginWorktreeSnapshot[]) => void): () => void;
 }
 
 export type PluginActivate = (
