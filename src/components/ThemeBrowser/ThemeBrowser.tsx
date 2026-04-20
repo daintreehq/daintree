@@ -15,6 +15,7 @@ import {
 import { PaletteStrip } from "@/components/ui/PaletteStrip";
 import type { AppColorScheme, AppThemeValidationWarning } from "@shared/types/appTheme";
 import { useEscapeStack } from "@/hooks/useEscapeStack";
+import { useOverlayClaim } from "@/hooks";
 
 const PANEL_WIDTH = 380;
 
@@ -89,6 +90,8 @@ function ThemeRow({
 }
 
 export function ThemeBrowser() {
+  useOverlayClaim("theme-browser", true);
+
   const close = useThemeBrowserStore((s) => s.close);
   const selectedSchemeId = useAppThemeStore((s) => s.selectedSchemeId);
   const customSchemes = useAppThemeStore((s) => s.customSchemes);

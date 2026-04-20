@@ -7,6 +7,7 @@ import { getPortalPlaceholderBounds } from "@/lib/portalBounds";
 import { useDiagnosticsStore } from "@/store/diagnosticsStore";
 import { usePortalStore } from "@/store/portalStore";
 import { usePanelStore, type TerminalInstance } from "@/store/panelStore";
+import { useUIStore } from "@/store/uiStore";
 
 export function registerPanelActions(actions: ActionRegistry, callbacks: ActionCallbacks): void {
   // Query action: list all panels with metadata
@@ -541,6 +542,12 @@ export function registerPanelActions(actions: ActionRegistry, callbacks: ActionC
         }
         return;
       }
+
+      // Suppress foreground portal reveal while another surface owns the
+      // viewport (e.g. theme browser). Mirrors portalStore.toggle()'s guard —
+      // without it, setOpen(true) would flip isOpen unconditionally and the
+      // portal would pop into view the moment the overlay closed.
+      if (useUIStore.getState().overlayClaims.size > 0) return;
 
       // Ensure portal is visible before activating a tab
       if (!state.isOpen) {

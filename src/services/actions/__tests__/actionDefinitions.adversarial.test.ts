@@ -245,6 +245,7 @@ const { registerPanelActions } = await import("../definitions/panelActions");
 const { registerWorktreeActions } = await import("../definitions/worktreeActions");
 const { usePanelStore } = await import("../../../store/panelStore");
 const { usePortalStore } = await import("../../../store/portalStore");
+const { useUIStore } = await import("../../../store/uiStore");
 const { useWorktreeSelectionStore } = await import("../../../store/worktreeStore");
 const { useWorktreeFilterStore } = await import("../../../store/worktreeFilterStore");
 const worktreeViewStore = mocks.worktreeViewStore;
@@ -333,6 +334,8 @@ beforeEach(() => {
     links: [],
     defaultNewTabUrl: null,
   });
+
+  useUIStore.setState({ overlayClaims: new Set<string>() });
 
   useWorktreeSelectionStore.setState({
     activeWorktreeId: null,
@@ -705,6 +708,27 @@ describe("panel action hardening", () => {
 
     expect(usePortalStore.getState().tabs).toEqual([]);
     expect(usePortalStore.getState().createdTabs.size).toBe(0);
+  });
+
+  it("portal.openUrl is a no-op while an overlay claim is active", async () => {
+    const actions = buildRegistry(registerPanelActions);
+    const openUrl = actions.get("portal.openUrl")!();
+
+    useUIStore.setState({ overlayClaims: new Set(["theme-browser"]) });
+    usePortalStore.setState({
+      isOpen: false,
+      activeTabId: null,
+      tabs: [],
+      createdTabs: new Set<string>(),
+    });
+
+    await openUrl.run({ url: "https://example.com/blocked", title: "Blocked" }, {} as never);
+
+    const state = usePortalStore.getState();
+    expect(state.isOpen).toBe(false);
+    expect(state.tabs).toEqual([]);
+    expect(mocks.portal.create).not.toHaveBeenCalled();
+    expect(mocks.portal.show).not.toHaveBeenCalled();
   });
 
   it("reuses the active blank tab when opening a foreground URL", async () => {

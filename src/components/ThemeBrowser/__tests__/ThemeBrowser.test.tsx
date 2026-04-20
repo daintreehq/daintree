@@ -4,6 +4,8 @@ import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
 import { BUILT_IN_APP_SCHEMES, DEFAULT_APP_SCHEME_ID } from "@/config/appColorSchemes";
 import { useAppThemeStore } from "@/store/appThemeStore";
 import { useThemeBrowserStore } from "@/store/themeBrowserStore";
+import { useUIStore } from "@/store/uiStore";
+import { usePortalStore } from "@/store/portalStore";
 import { _resetForTests } from "@/lib/escapeStack";
 import { useGlobalEscapeDispatcher } from "@/hooks/useGlobalEscapeDispatcher";
 
@@ -47,6 +49,8 @@ describe("ThemeBrowser", () => {
       previewSchemeId: null,
     });
     useThemeBrowserStore.setState({ isOpen: true });
+    useUIStore.setState({ overlayClaims: new Set<string>() });
+    usePortalStore.setState({ isOpen: false });
   });
 
   afterEach(() => {
@@ -54,6 +58,7 @@ describe("ThemeBrowser", () => {
     _resetForTests();
     useAppThemeStore.setState({ previewSchemeId: null });
     useThemeBrowserStore.setState({ isOpen: false });
+    useUIStore.setState({ overlayClaims: new Set<string>() });
   });
 
   it("clicking a theme row sets previewSchemeId instantly (no debounce)", () => {
@@ -189,5 +194,28 @@ describe("ThemeBrowser", () => {
     for (const option of options) {
       expect(option.textContent?.toLowerCase()).toContain(target.name.toLowerCase());
     }
+  });
+
+  it("registers a 'theme-browser' overlay claim while mounted", () => {
+    render(<Harness />);
+    expect(useUIStore.getState().overlayClaims.has("theme-browser")).toBe(true);
+  });
+
+  it("releases the 'theme-browser' overlay claim on unmount", () => {
+    const { unmount } = render(<Harness />);
+    expect(useUIStore.getState().overlayClaims.has("theme-browser")).toBe(true);
+
+    unmount();
+
+    expect(useUIStore.getState().overlayClaims.has("theme-browser")).toBe(false);
+  });
+
+  it("portal toggle is a no-op while the browser is mounted", () => {
+    render(<Harness />);
+    expect(usePortalStore.getState().isOpen).toBe(false);
+
+    usePortalStore.getState().toggle();
+
+    expect(usePortalStore.getState().isOpen).toBe(false);
   });
 });
