@@ -184,8 +184,9 @@ export class PluginService {
 
     if (this.plugins.has(manifest.name)) {
       console.warn(
-        `[PluginService] Duplicate plugin name "${manifest.name}" in ${dirName}, overwriting previous`
+        `[PluginService] Duplicate plugin name "${manifest.name}" in ${dirName}, tearing down previous instance`
       );
+      this.unloadPlugin(manifest.name);
     }
     this.plugins.set(manifest.name, plugin);
 
@@ -196,10 +197,14 @@ export class PluginService {
         };
         if (typeof mod.activate === "function") {
           const activate = mod.activate as PluginActivate;
-          const host = this.createHost(manifest.name);
-          const cleanup = await this.runActivate(manifest.name, activate, host);
-          if (typeof cleanup === "function") {
-            this.cleanupMap.set(manifest.name, cleanup);
+          const { host, revoke } = this.createHost(manifest.name);
+          try {
+            const cleanup = await this.runActivate(manifest.name, activate, host);
+            if (typeof cleanup === "function") {
+              this.cleanupMap.set(manifest.name, cleanup);
+            }
+          } finally {
+            revoke();
           }
         }
       } catch (err) {
@@ -210,21 +215,38 @@ export class PluginService {
     return plugin;
   }
 
-  private createHost(pluginId: string): PluginHostApi {
-    return {
+  private createHost(pluginId: string): { host: PluginHostApi; revoke: () => void } {
+    let revoked = false;
+    const host: PluginHostApi = {
       get pluginId() {
         return pluginId;
       },
       registerHandler: (channel, handler) => {
+        if (revoked) {
+          throw new Error(
+            `Plugin "${pluginId}" host revoked: registerHandler called after activate() returned or timed out`
+          );
+        }
         this.registerHandler(pluginId, channel, handler);
       },
       broadcastToRenderer: (channel, payload) => {
+        if (revoked) {
+          throw new Error(
+            `Plugin "${pluginId}" host revoked: broadcastToRenderer called after activate() returned or timed out`
+          );
+        }
         if (typeof channel !== "string" || channel.includes(":")) {
           throw new Error(
             `Plugin broadcast channel must be a string without colons: ${String(channel)}`
           );
         }
         broadcastToRenderer(`plugin:${pluginId}:${channel}`, payload);
+      },
+    };
+    return {
+      host,
+      revoke: () => {
+        revoked = true;
       },
     };
   }

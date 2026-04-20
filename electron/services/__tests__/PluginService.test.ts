@@ -922,23 +922,24 @@ describe("Plugin unload lifecycle", () => {
   });
 });
 
+type CreateHostShape = (pluginId: string) => {
+  host: {
+    pluginId: string;
+    registerHandler: (channel: string, handler: (...args: unknown[]) => unknown) => void;
+    broadcastToRenderer: (channel: string, payload: unknown) => void;
+  };
+  revoke: () => void;
+};
+
 describe("createHost (plugin activation API)", () => {
   it("host.registerHandler delegates with the plugin's own namespace", async () => {
     await writePlugin("host-test", { name: "acme.host-test", version: "1.0.0" });
     const service = new PluginService(tmpDir);
     await service.initialize();
 
-    // Access the private createHost via a targeted cast. The host is normally
-    // constructed inside loadPlugin, but we unit-test the factory directly.
-    const host = (
-      service as unknown as {
-        createHost: (pluginId: string) => {
-          pluginId: string;
-          registerHandler: (channel: string, handler: (...args: unknown[]) => unknown) => void;
-          broadcastToRenderer: (channel: string, payload: unknown) => void;
-        };
-      }
-    ).createHost("acme.host-test");
+    const { host } = (service as unknown as { createHost: CreateHostShape }).createHost(
+      "acme.host-test"
+    );
 
     expect(host.pluginId).toBe("acme.host-test");
 
@@ -956,13 +957,9 @@ describe("createHost (plugin activation API)", () => {
     const service = new PluginService(tmpDir);
     await service.initialize();
 
-    const host = (
-      service as unknown as {
-        createHost: (pluginId: string) => {
-          broadcastToRenderer: (channel: string, payload: unknown) => void;
-        };
-      }
-    ).createHost("acme.bcast-test");
+    const { host } = (service as unknown as { createHost: CreateHostShape }).createHost(
+      "acme.bcast-test"
+    );
 
     broadcastToRendererMock.mockClear();
     host.broadcastToRenderer("status", { ok: true });
@@ -976,17 +973,30 @@ describe("createHost (plugin activation API)", () => {
     const service = new PluginService(tmpDir);
     await service.initialize();
 
-    const host = (
-      service as unknown as {
-        createHost: (pluginId: string) => {
-          broadcastToRenderer: (channel: string, payload: unknown) => void;
-        };
-      }
-    ).createHost("acme.bcast-reject");
+    const { host } = (service as unknown as { createHost: CreateHostShape }).createHost(
+      "acme.bcast-reject"
+    );
 
     expect(() => host.broadcastToRenderer("bad:channel", null)).toThrow(
       "Plugin broadcast channel must be a string without colons"
     );
+  });
+
+  it("revoked host rejects registerHandler and broadcastToRenderer calls", async () => {
+    await writePlugin("revoke-test", { name: "acme.revoke-test", version: "1.0.0" });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host, revoke } = (service as unknown as { createHost: CreateHostShape }).createHost(
+      "acme.revoke-test"
+    );
+
+    revoke();
+
+    expect(() => host.registerHandler("x", () => undefined)).toThrow(
+      /host revoked: registerHandler/
+    );
+    expect(() => host.broadcastToRenderer("x", null)).toThrow(/host revoked: broadcastToRenderer/);
   });
 });
 
