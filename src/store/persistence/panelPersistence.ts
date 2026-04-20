@@ -25,6 +25,7 @@ const BASE_PANEL_FIELDS = new Set<string>([
   "worktreeId",
   "location",
   "extensionState",
+  "pluginId",
 ]);
 
 export function panelToSnapshot(
@@ -38,6 +39,7 @@ export function panelToSnapshot(
     worktreeId: t.worktreeId,
     location: t.location === "trash" || t.location === "background" ? "grid" : t.location,
     ...(t.extensionState !== undefined && { extensionState: t.extensionState }),
+    ...(t.pluginId !== undefined && { pluginId: t.pluginId }),
   };
 
   const config = getPanelKindConfig(t.kind ?? "terminal");

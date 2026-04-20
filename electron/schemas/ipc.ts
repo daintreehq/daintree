@@ -68,6 +68,7 @@ export const AppStateTerminalEntrySchema = z
     devServerTerminalId: z.string().optional(),
     browserConsoleOpen: z.boolean().optional(),
     devPreviewConsoleOpen: z.boolean().optional(),
+    pluginId: z.string().optional(),
   })
   .passthrough()
   .refine(
@@ -130,6 +131,7 @@ export const TerminalSnapshotSchema = z
     browserConsoleOpen: z.boolean().optional(),
     devPreviewConsoleOpen: z.boolean().optional(),
     agentSessionId: z.string().optional(),
+    pluginId: z.string().optional(),
   })
   .passthrough()
   .refine(

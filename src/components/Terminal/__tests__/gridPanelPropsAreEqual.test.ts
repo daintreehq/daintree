@@ -175,6 +175,16 @@ describe("gridPanelPropsAreEqual", () => {
     expect(gridPanelPropsAreEqual(prev, next)).toBe(false);
   });
 
+  it("returns false when terminal.pluginId changes", () => {
+    const prev = baseProps({
+      terminal: { ...baseTerminal, pluginId: undefined } as TerminalInstance,
+    });
+    const next = baseProps({
+      terminal: { ...baseTerminal, pluginId: "my-plugin" } as TerminalInstance,
+    });
+    expect(gridPanelPropsAreEqual(prev, next)).toBe(false);
+  });
+
   it("returns false when terminal.detectedProcessId changes", () => {
     const prev = baseProps({ terminal: { ...baseTerminal } as TerminalInstance });
     const next = baseProps({

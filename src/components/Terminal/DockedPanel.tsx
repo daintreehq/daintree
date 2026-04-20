@@ -2,7 +2,7 @@ import { useCallback, useMemo } from "react";
 import { usePanelStore, type TerminalInstance } from "@/store";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { getPanelKindDefinition, type PanelComponentProps } from "@/registry";
-import { ContentPanel, triggerPanelTransition } from "@/components/Panel";
+import { ContentPanel, PluginMissingPanel, triggerPanelTransition } from "@/components/Panel";
 import { usePanelLifecycle } from "@/hooks/usePanelLifecycle";
 import { usePanelHandlers } from "@/hooks/usePanelHandlers";
 import { buildPanelProps } from "@/utils/panelProps";
@@ -95,7 +95,10 @@ export function DockedPanel({ terminal, onPopoverClose, onAddTab }: DockedPanelP
   );
 
   if (!definition) {
-    console.warn(`[DockedPanel] No component registered for kind: ${kind}`);
+    const isPluginOwned = Boolean(terminal.pluginId) || kind.includes(".");
+    if (!isPluginOwned) {
+      console.warn(`[DockedPanel] No component registered for kind: ${kind}`);
+    }
     return (
       <ContentPanel
         id={terminal.id}
@@ -109,15 +112,23 @@ export function DockedPanel({ terminal, onPopoverClose, onAddTab }: DockedPanelP
         onMinimize={handleMinimize}
         onTitleChange={handleTitleChange}
       >
-        <div className="flex flex-1 items-center justify-center bg-surface-panel text-text-muted">
-          <div className="text-center">
-            <p className="text-sm font-medium">Unknown Panel Type</p>
-            <p className="text-xs mt-1 text-daintree-text/50">Kind: {kind}</p>
-            <p className="text-xs mt-2 text-daintree-text/40">
-              No component registered for this panel kind
-            </p>
+        {isPluginOwned ? (
+          <PluginMissingPanel
+            kind={kind}
+            pluginId={terminal.pluginId}
+            onRemove={() => handleClose(true)}
+          />
+        ) : (
+          <div className="flex flex-1 items-center justify-center bg-surface-panel text-text-muted">
+            <div className="text-center">
+              <p className="text-sm font-medium">Unknown Panel Type</p>
+              <p className="text-xs mt-1 text-daintree-text/50">Kind: {kind}</p>
+              <p className="text-xs mt-2 text-daintree-text/40">
+                No component registered for this panel kind
+              </p>
+            </div>
           </div>
-        </div>
+        )}
       </ContentPanel>
     );
   }

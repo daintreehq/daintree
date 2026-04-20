@@ -8,7 +8,7 @@ import { useWorktrees } from "@/hooks/useWorktrees";
 import { AGENT_IDS, getAgentConfig } from "@/config/agents";
 import { isValidBrowserUrl } from "@/components/Browser/browserUtils";
 import { actionService } from "@/services/ActionService";
-import { panelKindHasPty } from "@shared/config/panelKindRegistry";
+import { isRegisteredPanelKind, panelKindHasPty } from "@shared/config/panelKindRegistry";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import { computeGridSelectedAgentIds } from "./contentGridAgentFilter";
@@ -284,11 +284,13 @@ export function TerminalContextMenu({
     return new Set([...filtered, currentAgentId]);
   }, [hasRealData, availability, currentAgentId]);
 
+  const isKnownKind = terminal?.kind ? isRegisteredPanelKind(terminal.kind) : true;
   const showConvertTo =
-    !isPlainTerminal ||
-    !!currentAgentId ||
-    hasRealData === false ||
-    (visibleAgentIds?.size ?? 0) > 0;
+    isKnownKind &&
+    (!isPlainTerminal ||
+      !!currentAgentId ||
+      hasRealData === false ||
+      (visibleAgentIds?.size ?? 0) > 0);
 
   if (!terminal) {
     return <div className="contents">{children}</div>;

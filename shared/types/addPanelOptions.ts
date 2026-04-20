@@ -23,6 +23,12 @@ export interface AddPanelOptionsBase {
   existingId?: string;
   /** Opaque state bag for extension panels — survives the save/restore round-trip */
   extensionState?: Record<string, unknown>;
+  /**
+   * Extension ID of the plugin that registered this panel's kind, if applicable.
+   * Preserved across save/restore so the placeholder can name the missing plugin
+   * when its registration is gone.
+   */
+  pluginId?: string;
   /** Origin that spawned this terminal */
   spawnedBy?: TerminalSpawnSource;
   /** Bypass rate limiter during session restore (consumes main-process quota) */

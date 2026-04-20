@@ -243,6 +243,11 @@ export const createCorePanelActions = (
 
       const kindConfig = getPanelKindConfig(requestedKind);
       const kindFields = kindConfig?.createDefaults?.(options) ?? getExtensionFallbackDefaults();
+      // Stamp pluginId at creation time while the registry still has the entry —
+      // by render time the plugin may be gone. `options.pluginId` (from hydration
+      // of an unregistered kind) wins over a live registry lookup only when the
+      // registry has no matching entry.
+      const pluginId = kindConfig?.extensionId ?? options.pluginId;
       const terminal: TerminalInstance = {
         id,
         kind: requestedKind,
@@ -252,6 +257,7 @@ export const createCorePanelActions = (
         isVisible: location === "grid",
         runtimeStatus,
         extensionState: options.extensionState,
+        pluginId,
         ...kindFields,
       };
 
@@ -432,6 +438,10 @@ export const createCorePanelActions = (
         ? options.lastStateChange
         : (options.lastStateChange ?? (agentState !== undefined ? Date.now() : undefined));
 
+      // PTY-backed plugin-contributed kinds are rare today, but stamp pluginId
+      // if the registry has an entry so the panel survives plugin removal.
+      const ptyKindConfig = getPanelKindConfig(kind);
+      const ptyPluginId = ptyKindConfig?.extensionId ?? options.pluginId;
       const terminal: TerminalInstance = {
         id,
         kind,
@@ -461,6 +471,7 @@ export const createCorePanelActions = (
         isUsingFallback: options.isUsingFallback,
         fallbackChainIndex: options.fallbackChainIndex,
         extensionState: options.extensionState,
+        pluginId: ptyPluginId,
         spawnedBy: options.spawnedBy,
         startedAt: Date.now(),
       };

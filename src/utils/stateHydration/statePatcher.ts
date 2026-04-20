@@ -71,6 +71,7 @@ export interface SavedTerminalData {
   /** @deprecated pre-#5459 legacy key; read-only fallback, never written. */
   agentFlavorColor?: string;
   extensionState?: Record<string, unknown>;
+  pluginId?: string;
 }
 
 function readPresetId(saved: SavedTerminalData): string | undefined {
@@ -194,6 +195,7 @@ export function buildArgsForBackendTerminal(
     agentPresetId: readPresetId(saved),
     agentPresetColor: readPresetColor(saved),
     extensionState: saved.extensionState,
+    pluginId: saved.pluginId,
   };
 }
 
@@ -246,6 +248,7 @@ export function buildArgsForReconnectedFallback(
     agentPresetId: readPresetId(saved),
     agentPresetColor: readPresetColor(saved),
     extensionState: saved.extensionState,
+    pluginId: saved.pluginId,
   };
 }
 
@@ -376,6 +379,7 @@ export function buildArgsForRespawn(
     agentPresetColor: respawnAgentPresetColor,
     env: presetEnv,
     extensionState: saved.extensionState,
+    pluginId: saved.pluginId,
     restore: true,
   };
 }
@@ -397,6 +401,7 @@ export function buildArgsForNonPtyRecreation(
     agentPresetId: readPresetId(saved),
     agentPresetColor: readPresetColor(saved),
     extensionState: saved.extensionState,
+    pluginId: saved.pluginId,
   };
 
   const deserializer = getDeserializer(kind);

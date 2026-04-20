@@ -932,6 +932,56 @@ describe("buildArgsForRespawn — extensionState", () => {
   });
 });
 
+describe("pluginId forwarding", () => {
+  it("buildArgsForBackendTerminal forwards pluginId from saved data", () => {
+    const result = buildArgsForBackendTerminal(
+      { id: "t1", kind: "terminal", title: "Shell", cwd: "/p" },
+      { id: "t1", pluginId: "my-plugin" },
+      "/p"
+    );
+    expect(result.pluginId).toBe("my-plugin");
+  });
+
+  it("buildArgsForReconnectedFallback forwards pluginId from saved data", () => {
+    const result = buildArgsForReconnectedFallback(
+      { id: "t1", kind: "terminal", title: "Shell", cwd: "/p" },
+      { id: "t1", pluginId: "my-plugin" },
+      "/p"
+    );
+    expect(result.pluginId).toBe("my-plugin");
+  });
+
+  it("buildArgsForRespawn forwards pluginId from saved data", () => {
+    const result = buildArgsForRespawn(
+      { id: "t1", kind: "terminal", title: "Shell", cwd: "/p", pluginId: "my-plugin" },
+      "terminal",
+      "/p",
+      undefined,
+      false,
+      undefined
+    );
+    expect(result.pluginId).toBe("my-plugin");
+  });
+
+  it("buildArgsForNonPtyRecreation forwards pluginId from saved data", () => {
+    const result = buildArgsForNonPtyRecreation(
+      { id: "t1", kind: "my-plugin.custom", title: "Custom", pluginId: "my-plugin" },
+      "my-plugin.custom",
+      "/p"
+    );
+    expect(result.pluginId).toBe("my-plugin");
+  });
+
+  it("buildArgsForNonPtyRecreation leaves pluginId undefined when not set", () => {
+    const result = buildArgsForNonPtyRecreation(
+      { id: "t1", kind: "browser", title: "Browser" },
+      "browser",
+      "/p"
+    );
+    expect(result.pluginId).toBeUndefined();
+  });
+});
+
 describe("buildArgsForBackendTerminal — agent launch flags", () => {
   it("prefers backend agentLaunchFlags over saved", () => {
     const result = buildArgsForBackendTerminal(

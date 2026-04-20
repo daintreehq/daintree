@@ -113,6 +113,12 @@ export interface PanelSnapshot {
   lastStateChange?: number;
   /** Opaque state bag for extension panels — survives the save/restore round-trip */
   extensionState?: Record<string, unknown>;
+  /**
+   * Extension ID of the plugin that registered this panel's kind, if applicable.
+   * Preserved across save/restore so the placeholder can name the missing plugin
+   * when its registration is gone.
+   */
+  pluginId?: string;
   // Note: Tab membership is now stored in ProjectState.tabGroups, not on terminals
 }
 

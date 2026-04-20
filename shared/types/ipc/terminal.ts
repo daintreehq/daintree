@@ -97,6 +97,12 @@ export interface TerminalState {
   agentLaunchFlags?: string[];
   /** Model ID selected at launch time for per-panel model selection */
   agentModelId?: string;
+  /**
+   * Extension ID of the plugin that registered this panel's kind, if applicable.
+   * Preserved across save/restore so the placeholder can name the missing plugin
+   * when its registration is gone.
+   */
+  pluginId?: string;
 }
 
 /** Terminal data payload for IPC */

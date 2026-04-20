@@ -469,6 +469,35 @@ describe("PanelPersistence", () => {
         })
       );
     });
+
+    it("persists pluginId for unregistered extension kind so placeholder can survive restart", () => {
+      // Regression test for #5580. When a plugin is disabled, its panel kind is
+      // no longer registered — `panelToSnapshot` must still include `pluginId`
+      // in the base snapshot so hydration can resurrect the panel as a
+      // PluginMissingPanel instead of silently dropping it.
+      const panel = createMockTerminal({
+        id: "ext-missing",
+        kind: "my-plugin.panel",
+        title: "Custom",
+        location: "grid",
+        pluginId: "my-plugin",
+      });
+
+      const snapshot = panelToSnapshot(panel);
+      expect(snapshot).toEqual(
+        expect.objectContaining({
+          id: "ext-missing",
+          kind: "my-plugin.panel",
+          pluginId: "my-plugin",
+        })
+      );
+    });
+
+    it("omits pluginId from snapshot when absent", () => {
+      const panel = createMockTerminal({ id: "no-plugin", kind: "browser" });
+      const snapshot = panelToSnapshot(panel);
+      expect(snapshot).not.toHaveProperty("pluginId");
+    });
   });
 
   describe("unregistered extension kind", () => {
