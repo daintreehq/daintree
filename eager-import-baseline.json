@@ -1,6 +1,6 @@
 {
-  "count": 1367,
-  "moduleCount": 1367,
+  "count": 1368,
+  "moduleCount": 1368,
   "allowlist": [
     "electron/ipc/errorHandlers.ts",
     "electron/ipc/handlers/agentCapabilities.ts",
@@ -1195,17 +1195,17 @@
     },
     {
       "file": "electron/services/WorkspaceClient.ts",
-      "line": 361,
+      "line": 366,
       "pattern": "sync-store-get"
     },
     {
       "file": "electron/services/WorkspaceClient.ts",
-      "line": 502,
+      "line": 507,
       "pattern": "sync-store-get"
     },
     {
       "file": "electron/services/WorkspaceClient.ts",
-      "line": 566,
+      "line": 571,
       "pattern": "sync-store-get"
     },
     {
