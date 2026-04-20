@@ -647,7 +647,9 @@ export function AgentSettings({
                   className="rounded-[var(--radius-lg)] border border-daintree-border bg-surface p-4 space-y-4"
                 >
                   {/* Header: title + Add button */}
-                  <div className={`pb-3${allPresets.length > 0 ? " border-b border-daintree-border" : ""}`}>
+                  <div
+                    className={`pb-3${allPresets.length > 0 ? " border-b border-daintree-border" : ""}`}
+                  >
                     <div className="flex items-center justify-between">
                       <div>
                         <label className="text-sm font-medium text-daintree-text">
