@@ -378,7 +378,15 @@ export function ThemeBrowser() {
         <div className="flex rounded-[var(--radius-md)] border border-daintree-border overflow-hidden shrink-0">
           <button
             type="button"
-            onClick={() => setTypeFilter("dark")}
+            onClick={() => {
+              if (typeFilter === "dark") return;
+              // Switching filter away from the previewed type hides the
+              // previewed row from the list. Revert the preview so the hero
+              // and committed state realign with what the user can actually
+              // see — otherwise a hidden preview could still be committed.
+              revertPreview();
+              setTypeFilter("dark");
+            }}
             className={cn(
               "px-2.5 py-0.5 text-[11px] font-medium transition-colors",
               typeFilter === "dark"
@@ -390,7 +398,11 @@ export function ThemeBrowser() {
           </button>
           <button
             type="button"
-            onClick={() => setTypeFilter("light")}
+            onClick={() => {
+              if (typeFilter === "light") return;
+              revertPreview();
+              setTypeFilter("light");
+            }}
             className={cn(
               "px-2.5 py-0.5 text-[11px] font-medium transition-colors border-l border-daintree-border",
               typeFilter === "light"

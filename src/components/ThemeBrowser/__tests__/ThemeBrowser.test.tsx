@@ -140,15 +140,29 @@ describe("ThemeBrowser", () => {
     expect(live?.textContent).toBe(`Previewing: ${target.name}`);
   });
 
-  it("ArrowDown on the list moves the preview to the next theme", () => {
+  it("ArrowDown on the list previews the specific next theme row", () => {
     render(<Harness />);
+
+    const darkSchemes = BUILT_IN_APP_SCHEMES.filter((s) => s.type !== "light");
+    const initialIndex = darkSchemes.findIndex((s) => s.id === DEFAULT_APP_SCHEME_ID);
+    const expectedNext = darkSchemes[initialIndex + 1];
 
     const list = screen.getByRole("listbox", { name: "Theme list" });
     fireEvent.keyDown(list, { key: "ArrowDown" });
 
-    const previewed = useAppThemeStore.getState().previewSchemeId;
-    expect(previewed).not.toBeNull();
-    expect(previewed).not.toBe(DEFAULT_APP_SCHEME_ID);
+    expect(useAppThemeStore.getState().previewSchemeId).toBe(expectedNext?.id);
+  });
+
+  it("switching the type filter reverts an active preview", () => {
+    const target = otherDarkScheme();
+    render(<Harness />);
+
+    fireEvent.click(findRowByName(target.name));
+    expect(useAppThemeStore.getState().previewSchemeId).toBe(target.id);
+
+    fireEvent.click(screen.getByRole("button", { name: "Light" }));
+
+    expect(useAppThemeStore.getState().previewSchemeId).toBeNull();
   });
 
   it("unmounting while previewing reverts the DOM to the committed scheme", () => {

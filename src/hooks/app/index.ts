@@ -14,6 +14,7 @@ export { usePerformanceMonitors } from "./usePerformanceMonitors";
 export { useSettingsDialog } from "./useSettingsDialog";
 export { useWorktreeOverview } from "./useWorktreeOverview";
 export { useAppEventListeners } from "./useAppEventListeners";
+export { useThemeBrowserSettingsBridge } from "./useThemeBrowserSettingsBridge";
 export { useErrorRetry } from "./useErrorRetry";
 export { useActiveWorktreeSync } from "./useActiveWorktreeSync";
 export { useOrchestrationMilestones } from "./useOrchestrationMilestones";
