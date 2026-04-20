@@ -1,0 +1,575 @@
+
+> daintree@0.7.1 lint
+> eslint . --max-warnings 0
+
+[0m
+[4m/Users/gpriday/Projects/canopy-worktrees/feature-issue-5613-remove-one-shot-action-id/e2e/full/preset-ccr-discovery.spec.ts[24m
+  [2m130:13[22m  [33mwarning[39m  'join' is assigned a value but never used. Allowed unused vars must match /^_/u  [2m@typescript-eslint/no-unused-vars[22m
+
+[4m/Users/gpriday/Projects/canopy-worktrees/feature-issue-5613-remove-one-shot-action-id/e2e/full/preset-custom-duplicate.spec.ts[24m
+  [2m6:19[22m  [33mwarning[39m  'T_MEDIUM' is defined but never used. Allowed unused vars must match /^_/u  [2m@typescript-eslint/no-unused-vars[22m
+
+[4m/Users/gpriday/Projects/canopy-worktrees/feature-issue-5613-remove-one-shot-action-id/electron/ipc/handlers/__tests__/project.close.test.ts[24m
+  [2m154:10[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m208:10[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+
+[4m/Users/gpriday/Projects/canopy-worktrees/feature-issue-5613-remove-one-shot-action-id/electron/ipc/handlers/app/state.ts[24m
+  [2m116:60[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m117:60[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m144:60[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m145:60[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m169:58[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m170:58[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m301:67[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+
+[4m/Users/gpriday/Projects/canopy-worktrees/feature-issue-5613-remove-one-shot-action-id/electron/ipc/handlers/github.ts[24m
+  [2m307:7[22m  [33mwarning[39m  There is no `cause` attached to the symptom error being thrown  [2mpreserve-caught-error[22m
+
+[4m/Users/gpriday/Projects/canopy-worktrees/feature-issue-5613-remove-one-shot-action-id/electron/ipc/handlers/projectCrud/settings.ts[24m
+  [2m101:9[22m  [33mwarning[39m  There is no `cause` attached to the symptom error being thrown  [2mpreserve-caught-error[22m
+  [2m119:9[22m  [33mwarning[39m  There is no `cause` attached to the symptom error being thrown  [2mpreserve-caught-error[22m
+  [2m122:9[22m  [33mwarning[39m  There is no `cause` attached to the symptom error being thrown  [2mpreserve-caught-error[22m
+  [2m125:9[22m  [33mwarning[39m  There is no `cause` attached to the symptom error being thrown  [2mpreserve-caught-error[22m
+
+[4m/Users/gpriday/Projects/canopy-worktrees/feature-issue-5613-remove-one-shot-action-id/electron/ipc/handlers/projectInRepoSettings.ts[24m
+  [2m36:9[22m  [33mwarning[39m  There is no `cause` attached to the symptom error being thrown  [2mpreserve-caught-error[22m
+
+[4m/Users/gpriday/Projects/canopy-worktrees/feature-issue-5613-remove-one-shot-action-id/electron/ipc/handlers/terminal/__tests__/snapshots.getForProject.test.ts[24m
+  [2m124:11[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+
+[4m/Users/gpriday/Projects/canopy-worktrees/feature-issue-5613-remove-one-shot-action-id/electron/ipc/handlers/terminal/artifacts.ts[24m
+  [2m78:7[22m  [33mwarning[39m  There is no `cause` attached to the symptom error being thrown  [2mpreserve-caught-error[22m
+
+[4m/Users/gpriday/Projects/canopy-worktrees/feature-issue-5613-remove-one-shot-action-id/electron/ipc/handlers/terminal/io.ts[24m
+  [2m75:7[22m  [33mwarning[39m  There is no `cause` attached to the symptom error being thrown  [2mpreserve-caught-error[22m
+
+[4m/Users/gpriday/Projects/canopy-worktrees/feature-issue-5613-remove-one-shot-action-id/electron/ipc/handlers/terminal/lifecycle.ts[24m
+  [2m227:7[22m  [33mwarning[39m  There is no `cause` attached to the symptom error being thrown  [2mpreserve-caught-error[22m
+  [2m240:7[22m  [33mwarning[39m  There is no `cause` attached to the symptom error being thrown  [2mpreserve-caught-error[22m
+  [2m261:7[22m  [33mwarning[39m  There is no `cause` attached to the symptom error being thrown  [2mpreserve-caught-error[22m
+  [2m274:7[22m  [33mwarning[39m  There is no `cause` attached to the symptom error being thrown  [2mpreserve-caught-error[22m
+
+[4m/Users/gpriday/Projects/canopy-worktrees/feature-issue-5613-remove-one-shot-action-id/electron/ipc/handlers/terminal/snapshots.ts[24m
+   [2m29:7[22m  [33mwarning[39m  There is no `cause` attached to the symptom error being thrown  [2mpreserve-caught-error[22m
+   [2m50:7[22m  [33mwarning[39m  There is no `cause` attached to the symptom error being thrown  [2mpreserve-caught-error[22m
+  [2m114:7[22m  [33mwarning[39m  There is no `cause` attached to the symptom error being thrown  [2mpreserve-caught-error[22m
+  [2m162:7[22m  [33mwarning[39m  There is no `cause` attached to the symptom error being thrown  [2mpreserve-caught-error[22m
+  [2m222:7[22m  [33mwarning[39m  There is no `cause` attached to the symptom error being thrown  [2mpreserve-caught-error[22m
+  [2m258:7[22m  [33mwarning[39m  There is no `cause` attached to the symptom error being thrown  [2mpreserve-caught-error[22m
+  [2m305:7[22m  [33mwarning[39m  There is no `cause` attached to the symptom error being thrown  [2mpreserve-caught-error[22m
+  [2m341:7[22m  [33mwarning[39m  There is no `cause` attached to the symptom error being thrown  [2mpreserve-caught-error[22m
+  [2m388:7[22m  [33mwarning[39m  There is no `cause` attached to the symptom error being thrown  [2mpreserve-caught-error[22m
+
+[4m/Users/gpriday/Projects/canopy-worktrees/feature-issue-5613-remove-one-shot-action-id/electron/pty-host.ts[24m
+  [2m689:35[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+
+[4m/Users/gpriday/Projects/canopy-worktrees/feature-issue-5613-remove-one-shot-action-id/electron/schemas/__tests__/tabGroupValidation.test.ts[24m
+  [2m129:58[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m199:32[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m216:14[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m228:34[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m247:14[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m265:40[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m265:64[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m265:82[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m361:39[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m361:52[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m361:64[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m405:14[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m452:32[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m505:34[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+
+[4m/Users/gpriday/Projects/canopy-worktrees/feature-issue-5613-remove-one-shot-action-id/electron/schemas/__tests__/terminalEntryValidation.test.ts[24m
+  [2m401:20[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m469:29[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m489:20[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m501:29[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+
+[4m/Users/gpriday/Projects/canopy-worktrees/feature-issue-5613-remove-one-shot-action-id/electron/services/AgentHelpService.ts[24m
+  [2m59:9[22m   [33mwarning[39m  The value assigned to 'stdout' is not used in subsequent statements    [2mno-useless-assignment[22m
+  [2m60:9[22m   [33mwarning[39m  The value assigned to 'stderr' is not used in subsequent statements    [2mno-useless-assignment[22m
+  [2m61:9[22m   [33mwarning[39m  The value assigned to 'exitCode' is not used in subsequent statements  [2mno-useless-assignment[22m
+  [2m76:21[22m  [33mwarning[39m  Unexpected any. Specify a different type                               [2m@typescript-eslint/no-explicit-any[22m
+
+[4m/Users/gpriday/Projects/canopy-worktrees/feature-issue-5613-remove-one-shot-action-id/electron/services/AgentVersionService.ts[24m
+  [2m150:19[22m  [33mwarning[39m  Unexpected any. Specify a different type                             [2m@typescript-eslint/no-explicit-any[22m
+  [2m156:19[22m  [33mwarning[39m  Unexpected any. Specify a different type                             [2m@typescript-eslint/no-explicit-any[22m
+  [2m181:9[22m   [33mwarning[39m  The value assigned to 'stdout' is not used in subsequent statements  [2mno-useless-assignment[22m
+  [2m191:21[22m  [33mwarning[39m  Unexpected any. Specify a different type                             [2m@typescript-eslint/no-explicit-any[22m
+  [2m196:9[22m   [33mwarning[39m  There is no `cause` attached to the symptom error being thrown       [2mpreserve-caught-error[22m
+  [2m199:9[22m   [33mwarning[39m  There is no `cause` attached to the symptom error being thrown       [2mpreserve-caught-error[22m
+  [2m203:9[22m   [33mwarning[39m  There is no `cause` attached to the symptom error being thrown       [2mpreserve-caught-error[22m
+  [2m225:23[22m  [33mwarning[39m  Unexpected any. Specify a different type                             [2m@typescript-eslint/no-explicit-any[22m
+  [2m260:21[22m  [33mwarning[39m  Unexpected any. Specify a different type                             [2m@typescript-eslint/no-explicit-any[22m
+  [2m261:7[22m   [33mwarning[39m  There is no `cause` attached to the symptom error being thrown       [2mpreserve-caught-error[22m
+  [2m309:21[22m  [33mwarning[39m  Unexpected any. Specify a different type                             [2m@typescript-eslint/no-explicit-any[22m
+  [2m310:7[22m   [33mwarning[39m  There is no `cause` attached to the symptom error being thrown       [2mpreserve-caught-error[22m
+
+[4m/Users/gpriday/Projects/canopy-worktrees/feature-issue-5613-remove-one-shot-action-id/electron/services/DevPreviewSessionService.ts[24m
+  [2m853:9[22m  [33mwarning[39m  There is no `cause` attached to the symptom error being thrown  [2mpreserve-caught-error[22m
+
+[4m/Users/gpriday/Projects/canopy-worktrees/feature-issue-5613-remove-one-shot-action-id/electron/services/EventBuffer.ts[24m
+   [2m74:71[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+   [2m74:77[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+   [2m98:71[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m138:22[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m139:20[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m153:15[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+
+[4m/Users/gpriday/Projects/canopy-worktrees/feature-issue-5613-remove-one-shot-action-id/electron/services/FileTreeService.ts[24m
+  [2m119:9[22m  [33mwarning[39m  There is no `cause` attached to the symptom error being thrown  [2mpreserve-caught-error[22m
+  [2m121:7[22m  [33mwarning[39m  There is no `cause` attached to the symptom error being thrown  [2mpreserve-caught-error[22m
+
+[4m/Users/gpriday/Projects/canopy-worktrees/feature-issue-5613-remove-one-shot-action-id/electron/services/GitHubService.ts[24m
+   [2m907:7[22m  [33mwarning[39m  There is no `cause` attached to the symptom error being thrown  [2mpreserve-caught-error[22m
+  [2m1376:7[22m  [33mwarning[39m  There is no `cause` attached to the symptom error being thrown  [2mpreserve-caught-error[22m
+  [2m1613:7[22m  [33mwarning[39m  There is no `cause` attached to the symptom error being thrown  [2mpreserve-caught-error[22m
+  [2m1789:5[22m  [33mwarning[39m  There is no `cause` attached to the symptom error being thrown  [2mpreserve-caught-error[22m
+  [2m1823:5[22m  [33mwarning[39m  There is no `cause` attached to the symptom error being thrown  [2mpreserve-caught-error[22m
+
+[4m/Users/gpriday/Projects/canopy-worktrees/feature-issue-5613-remove-one-shot-action-id/electron/services/GitService.ts[24m
+  [2m137:7[22m  [33mwarning[39m  There is no `cause` attached to the symptom error being thrown  [2mpreserve-caught-error[22m
+  [2m184:7[22m  [33mwarning[39m  There is no `cause` attached to the symptom error being thrown  [2mpreserve-caught-error[22m
+  [2m252:9[22m  [33mwarning[39m  There is no `cause` attached to the symptom error being thrown  [2mpreserve-caught-error[22m
+  [2m283:7[22m  [33mwarning[39m  There is no `cause` attached to the symptom error being thrown  [2mpreserve-caught-error[22m
+  [2m331:9[22m  [33mwarning[39m  There is no `cause` attached to the symptom error being thrown  [2mpreserve-caught-error[22m
+  [2m371:7[22m  [33mwarning[39m  There is no `cause` attached to the symptom error being thrown  [2mpreserve-caught-error[22m
+
+[4m/Users/gpriday/Projects/canopy-worktrees/feature-issue-5613-remove-one-shot-action-id/electron/services/ProjectPulseService.ts[24m
+  [2m180:7[22m  [33mwarning[39m  There is no `cause` attached to the symptom error being thrown  [2mpreserve-caught-error[22m
+
+[4m/Users/gpriday/Projects/canopy-worktrees/feature-issue-5613-remove-one-shot-action-id/electron/services/ProjectStore.ts[24m
+  [2m141:9[22m   [33mwarning[39m  There is no `cause` attached to the symptom error being thrown       [2mpreserve-caught-error[22m
+  [2m147:9[22m   [33mwarning[39m  There is no `cause` attached to the symptom error being thrown       [2mpreserve-caught-error[22m
+  [2m153:9[22m   [33mwarning[39m  There is no `cause` attached to the symptom error being thrown       [2mpreserve-caught-error[22m
+  [2m156:7[22m   [33mwarning[39m  There is no `cause` attached to the symptom error being thrown       [2mpreserve-caught-error[22m
+  [2m355:13[22m  [33mwarning[39m  The value assigned to 'exists' is not used in subsequent statements  [2mno-useless-assignment[22m
+
+[4m/Users/gpriday/Projects/canopy-worktrees/feature-issue-5613-remove-one-shot-action-id/electron/services/PtyClient.ts[24m
+  [2m720:39[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m720:65[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m724:39[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m724:65[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m728:39[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m728:65[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m762:39[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m762:65[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m766:39[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m767:28[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m768:31[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m773:39[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m773:65[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m799:21[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m800:21[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+
+[4m/Users/gpriday/Projects/canopy-worktrees/feature-issue-5613-remove-one-shot-action-id/electron/services/SlashCommandService.ts[24m
+  [2m114:9[22m  [33mwarning[39m  The value assigned to 'entries' is not used in subsequent statements  [2mno-useless-assignment[22m
+  [2m175:9[22m  [33mwarning[39m  The value assigned to 'entries' is not used in subsequent statements  [2mno-useless-assignment[22m
+  [2m324:7[22m  [33mwarning[39m  The value assigned to 'entries' is not used in subsequent statements  [2mno-useless-assignment[22m
+
+[4m/Users/gpriday/Projects/canopy-worktrees/feature-issue-5613-remove-one-shot-action-id/electron/services/WorkspaceClient.ts[24m
+  [2m249:14[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+
+[4m/Users/gpriday/Projects/canopy-worktrees/feature-issue-5613-remove-one-shot-action-id/electron/services/__tests__/AgentHelpService.test.ts[24m
+   [2m26:72[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+   [2m28:22[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+   [2m55:72[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+   [2m57:22[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+   [2m79:26[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+   [2m87:33[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+   [2m91:72[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+   [2m92:22[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+   [2m97:22[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m112:72[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m113:22[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m119:22[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m129:72[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m130:22[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m135:22[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m145:72[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m147:22[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m158:72[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m160:22[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m171:72[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m173:22[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m190:26[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m198:33[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m204:26[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m212:33[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+
+[4m/Users/gpriday/Projects/canopy-worktrees/feature-issue-5613-remove-one-shot-action-id/electron/services/__tests__/AgentStateDetection.integration.test.ts[24m
+    [2m8:22[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+    [2m9:16[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m271:46[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+
+[4m/Users/gpriday/Projects/canopy-worktrees/feature-issue-5613-remove-one-shot-action-id/electron/services/__tests__/EventBuffer.test.ts[24m
+  [2m161:12[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m437:30[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m441:18[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m612:12[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+
+[4m/Users/gpriday/Projects/canopy-worktrees/feature-issue-5613-remove-one-shot-action-id/electron/services/__tests__/PtyClient.handshake.test.ts[24m
+  [2m281:12[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m306:36[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m309:36[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m330:12[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m349:36[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+
+[4m/Users/gpriday/Projects/canopy-worktrees/feature-issue-5613-remove-one-shot-action-id/electron/services/__tests__/PtyManager.integration.test.ts[24m
+    [2m5:22[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+    [2m6:16[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m230:18[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+
+[4m/Users/gpriday/Projects/canopy-worktrees/feature-issue-5613-remove-one-shot-action-id/electron/services/__tests__/helpers/ptyTestUtils.ts[24m
+  [2m198:28[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m228:28[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+
+[4m/Users/gpriday/Projects/canopy-worktrees/feature-issue-5613-remove-one-shot-action-id/electron/services/commands/githubWorkIssue.ts[24m
+  [2m114:7[22m  [33mwarning[39m  There is no `cause` attached to the symptom error being thrown  [2mpreserve-caught-error[22m
+  [2m117:7[22m  [33mwarning[39m  There is no `cause` attached to the symptom error being thrown  [2mpreserve-caught-error[22m
+  [2m120:7[22m  [33mwarning[39m  There is no `cause` attached to the symptom error being thrown  [2mpreserve-caught-error[22m
+  [2m122:5[22m  [33mwarning[39m  There is no `cause` attached to the symptom error being thrown  [2mpreserve-caught-error[22m
+
+[4m/Users/gpriday/Projects/canopy-worktrees/feature-issue-5613-remove-one-shot-action-id/electron/services/events.ts[24m
+  [2m857:46[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m859:49[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m867:47[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m877:38[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+
+[4m/Users/gpriday/Projects/canopy-worktrees/feature-issue-5613-remove-one-shot-action-id/electron/services/gemini/GeminiConfigService.ts[24m
+   [2m47:7[22m  [33mwarning[39m  There is no `cause` attached to the symptom error being thrown  [2mpreserve-caught-error[22m
+  [2m117:7[22m  [33mwarning[39m  There is no `cause` attached to the symptom error being thrown  [2mpreserve-caught-error[22m
+
+[4m/Users/gpriday/Projects/canopy-worktrees/feature-issue-5613-remove-one-shot-action-id/electron/services/pty/__tests__/TerminalProcess.exitCode.test.ts[24m
+  [2m71:36[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+
+[4m/Users/gpriday/Projects/canopy-worktrees/feature-issue-5613-remove-one-shot-action-id/electron/services/pty/__tests__/TerminalProcess.osc.test.ts[24m
+  [2m68:12[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m92:12[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+
+[4m/Users/gpriday/Projects/canopy-worktrees/feature-issue-5613-remove-one-shot-action-id/electron/services/pty/__tests__/TerminalProcess.submit.test.ts[24m
+  [2m56:36[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m65:12[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+
+[4m/Users/gpriday/Projects/canopy-worktrees/feature-issue-5613-remove-one-shot-action-id/electron/services/smokeTest.ts[24m
+  [2m57:7[22m  [33mwarning[39m  There is no `cause` attached to the symptom error being thrown  [2mpreserve-caught-error[22m
+
+[4m/Users/gpriday/Projects/canopy-worktrees/feature-issue-5613-remove-one-shot-action-id/electron/utils/fs.ts[24m
+  [2m195:9[22m   [33mwarning[39m  There is no `cause` attached to the symptom error being thrown  [2mpreserve-caught-error[22m
+  [2m210:21[22m  [33mwarning[39m  Unexpected any. Specify a different type                        [2m@typescript-eslint/no-explicit-any[22m
+
+[4m/Users/gpriday/Projects/canopy-worktrees/feature-issue-5613-remove-one-shot-action-id/electron/workspace-host.ts[24m
+   [2m92:30[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m177:34[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m218:63[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m233:66[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m264:35[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m596:75[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+
+[4m/Users/gpriday/Projects/canopy-worktrees/feature-issue-5613-remove-one-shot-action-id/electron/workspace-host/WorkspaceService.ts[24m
+   [2m559:52[22m  [33mwarning[39m  Unexpected any. Specify a different type                        [2m@typescript-eslint/no-explicit-any[22m
+   [2m568:52[22m  [33mwarning[39m  Unexpected any. Specify a different type                        [2m@typescript-eslint/no-explicit-any[22m
+  [2m1327:13[22m  [33mwarning[39m  There is no `cause` attached to the symptom error being thrown  [2mpreserve-caught-error[22m
+  [2m1331:13[22m  [33mwarning[39m  There is no `cause` attached to the symptom error being thrown  [2mpreserve-caught-error[22m
+  [2m1333:13[22m  [33mwarning[39m  There is no `cause` attached to the symptom error being thrown  [2mpreserve-caught-error[22m
+
+[4m/Users/gpriday/Projects/canopy-worktrees/feature-issue-5613-remove-one-shot-action-id/electron/workspace-host/__tests__/WorkspaceService.createWorktree.test.ts[24m
+  [2m126:26[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m127:22[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+
+[4m/Users/gpriday/Projects/canopy-worktrees/feature-issue-5613-remove-one-shot-action-id/electron/workspace-host/__tests__/WorkspaceService.deleteWorktree.test.ts[24m
+  [2m149:76[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m155:39[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m249:23[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m292:23[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+
+[4m/Users/gpriday/Projects/canopy-worktrees/feature-issue-5613-remove-one-shot-action-id/electron/workspace-host/__tests__/WorkspaceService.externalRemoval.test.ts[24m
+  [2m148:76[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m154:39[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+
+[4m/Users/gpriday/Projects/canopy-worktrees/feature-issue-5613-remove-one-shot-action-id/electron/workspace-host/__tests__/WorkspaceService.pauseResume.test.ts[24m
+  [2m151:76[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m157:39[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m249:16[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m254:23[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m259:23[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+
+[4m/Users/gpriday/Projects/canopy-worktrees/feature-issue-5613-remove-one-shot-action-id/shared/types/pty-host.ts[24m
+  [2m207:66[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+
+[4m/Users/gpriday/Projects/canopy-worktrees/feature-issue-5613-remove-one-shot-action-id/shared/utils/__tests__/serialization.test.ts[24m
+   [2m14:48[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+   [2m27:48[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+   [2m37:48[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+   [2m48:48[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+   [2m56:10[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+   [2m57:48[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+   [2m67:48[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+   [2m77:48[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+   [2m87:48[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m109:48[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m111:27[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m161:17[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m228:56[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m254:56[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m272:56[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m303:56[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+
+[4m/Users/gpriday/Projects/canopy-worktrees/feature-issue-5613-remove-one-shot-action-id/shared/utils/serialization.ts[24m
+  [2m31:5[22m  [33mwarning[39m  There is no `cause` attached to the symptom error being thrown  [2mpreserve-caught-error[22m
+
+[4m/Users/gpriday/Projects/canopy-worktrees/feature-issue-5613-remove-one-shot-action-id/shared/utils/trustedRenderer.ts[24m
+  [2m26:44[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+
+[4m/Users/gpriday/Projects/canopy-worktrees/feature-issue-5613-remove-one-shot-action-id/src/components/Browser/FindBar.tsx[24m
+  [2m52:11[22m  [33mwarning[39m  Mutating component props or hook arguments is not allowed. Consider using a local variable instead  [2mreact-compiler/react-compiler[22m
+
+[4m/Users/gpriday/Projects/canopy-worktrees/feature-issue-5613-remove-one-shot-action-id/src/components/DragDrop/DndProvider.tsx[24m
+   [2m400:11[22m  [33mwarning[39m  The value assigned to 'groupIndex' is not used in subsequent statements                                                                                                                                                                                                              [2mno-useless-assignment[22m
+   [2m611:13[22m  [33mwarning[39m  The value assigned to 'targetIndex' is not used in subsequent statements                                                                                                                                                                                                             [2mno-useless-assignment[22m
+  [2m1016:26[22m  [33mwarning[39m  The ref value 'dockRetryTimersRef.current' will likely have changed by the time this effect cleanup function runs. If this ref points to a node rendered by React, copy 'dockRetryTimersRef.current' to a variable inside the effect, and use that variable in the cleanup function  [2mreact-hooks/exhaustive-deps[22m
+
+[4m/Users/gpriday/Projects/canopy-worktrees/feature-issue-5613-remove-one-shot-action-id/src/components/KeyboardShortcuts/ShortcutReferenceDialog.tsx[24m
+  [2m181:9[22m  [33mwarning[39m  The 'categoryOrder' array makes the dependencies of useMemo Hook (at line 202) change on every render. Move it inside the useMemo callback. Alternatively, wrap the initialization of 'categoryOrder' in its own useMemo() Hook  [2mreact-hooks/exhaustive-deps[22m
+
+[4m/Users/gpriday/Projects/canopy-worktrees/feature-issue-5613-remove-one-shot-action-id/src/components/Layout/AppLayout.tsx[24m
+  [2m237:6[22m  [33mwarning[39m  React Hook useEffect has a missing dependency: 'layout'. Either include it or remove the dependency array  [2mreact-hooks/exhaustive-deps[22m
+
+[4m/Users/gpriday/Projects/canopy-worktrees/feature-issue-5613-remove-one-shot-action-id/src/components/Portal/PortalDock.tsx[24m
+  [2m188:6[22m  [33mwarning[39m  React Hook useCallback has an unnecessary dependency: 'activeTabId'. Either exclude it or remove the dependency array  [2mreact-hooks/exhaustive-deps[22m
+  [2m197:6[22m  [33mwarning[39m  React Hook useCallback has an unnecessary dependency: 'activeTabId'. Either exclude it or remove the dependency array  [2mreact-hooks/exhaustive-deps[22m
+  [2m204:6[22m  [33mwarning[39m  React Hook useCallback has an unnecessary dependency: 'activeTabId'. Either exclude it or remove the dependency array  [2mreact-hooks/exhaustive-deps[22m
+
+[4m/Users/gpriday/Projects/canopy-worktrees/feature-issue-5613-remove-one-shot-action-id/src/components/Project/__tests__/ProjectSettingsDialog.inRepoSettings.test.ts[24m
+  [2m32:9[22m  [33mwarning[39m  The value assigned to 'inRepoExpanded' is not used in subsequent statements  [2mno-useless-assignment[22m
+  [2m42:9[22m  [33mwarning[39m  The value assigned to 'inRepoSettings' is not used in subsequent statements  [2mno-useless-assignment[22m
+  [2m53:9[22m  [33mwarning[39m  The value assigned to 'inRepoError' is not used in subsequent statements     [2mno-useless-assignment[22m
+  [2m54:9[22m  [33mwarning[39m  The value assigned to 'inRepoEnabling' is not used in subsequent statements  [2mno-useless-assignment[22m
+
+[4m/Users/gpriday/Projects/canopy-worktrees/feature-issue-5613-remove-one-shot-action-id/src/components/Settings/GitHubSettingsTab.tsx[24m
+   [2m68:47[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m100:43[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+
+[4m/Users/gpriday/Projects/canopy-worktrees/feature-issue-5613-remove-one-shot-action-id/src/components/Settings/ResourceEnvironmentsSection.tsx[24m
+  [2m163:58[22m  [33mwarning[39m  Unexpected any. Specify a different type                                                                                  [2m@typescript-eslint/no-explicit-any[22m
+  [2m164:73[22m  [33mwarning[39m  Unexpected any. Specify a different type                                                                                  [2m@typescript-eslint/no-explicit-any[22m
+  [2m181:65[22m  [33mwarning[39m  Unexpected any. Specify a different type                                                                                  [2m@typescript-eslint/no-explicit-any[22m
+  [2m303:5[22m   [33mwarning[39m  React Hook useCallback has an unnecessary dependency: 'envKeys.length'. Either exclude it or remove the dependency array  [2mreact-hooks/exhaustive-deps[22m
+
+[4m/Users/gpriday/Projects/canopy-worktrees/feature-issue-5613-remove-one-shot-action-id/src/components/Settings/SettingsDialog.tsx[24m
+  [2m581:11[22m  [33mwarning[39m  The value assigned to 'nextIndex' is not used in subsequent statements  [2mno-useless-assignment[22m
+
+[4m/Users/gpriday/Projects/canopy-worktrees/feature-issue-5613-remove-one-shot-action-id/src/components/Settings/SettingsSubtabBar.tsx[24m
+  [2m25:11[22m  [33mwarning[39m  The value assigned to 'nextIndex' is not used in subsequent statements  [2mno-useless-assignment[22m
+
+[4m/Users/gpriday/Projects/canopy-worktrees/feature-issue-5613-remove-one-shot-action-id/src/components/Sidebar/SidebarContent.tsx[24m
+  [2m489:6[22m  [33mwarning[39m  React Hook useMemo has an unnecessary dependency: 'getWorktreeErrors'. Either exclude it or remove the dependency array  [2mreact-hooks/exhaustive-deps[22m
+
+[4m/Users/gpriday/Projects/canopy-worktrees/feature-issue-5613-remove-one-shot-action-id/src/components/Terminal/PromptHistoryPalette.tsx[24m
+  [2m52:5[22m  [33mwarning[39m  Mutating component props or hook arguments is not allowed. Consider using a local variable instead  [2mreact-compiler/react-compiler[22m
+
+[4m/Users/gpriday/Projects/canopy-worktrees/feature-issue-5613-remove-one-shot-action-id/src/components/Terminal/TerminalInfoDialogHost.tsx[24m
+  [2m12:84[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+
+[4m/Users/gpriday/Projects/canopy-worktrees/feature-issue-5613-remove-one-shot-action-id/src/components/Terminal/__tests__/inputEditorExtensions.test.tsx[24m
+  [2m134:67[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m166:67[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m202:67[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m244:67[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m279:67[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m311:67[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m346:67[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+
+[4m/Users/gpriday/Projects/canopy-worktrees/feature-issue-5613-remove-one-shot-action-id/src/components/Terminal/hooks/useEditorKeymap.ts[24m
+  [2m107:9[22m  [33mwarning[39m  Mutating component props or hook arguments is not allowed. Consider using a local variable instead  [2mreact-compiler/react-compiler[22m
+
+[4m/Users/gpriday/Projects/canopy-worktrees/feature-issue-5613-remove-one-shot-action-id/src/components/Worktree/NewWorktreeDialog.tsx[24m
+  [2m530:6[22m  [33mwarning[39m  React Hook useMemo has missing dependencies: 'branchInputTouchedRef', 'issueTouchedRef', 'pathTouchedRef', and 'recipeSelectionTouchedRef'. Either include them or remove the dependency array  [2mreact-hooks/exhaustive-deps[22m
+
+[4m/Users/gpriday/Projects/canopy-worktrees/feature-issue-5613-remove-one-shot-action-id/src/components/Worktree/WorktreeCard/hooks/useWorktreeActions.ts[24m
+  [2m83:5[22m  [33mwarning[39m  React Hook useCallback has missing dependencies: 'worktree.branch', 'worktree.issueNumber', and 'worktree.prNumber'. Either include them or remove the dependency array  [2mreact-hooks/exhaustive-deps[22m
+
+[4m/Users/gpriday/Projects/canopy-worktrees/feature-issue-5613-remove-one-shot-action-id/src/hooks/useContextInjection.ts[24m
+  [2m289:9[22m  [33mwarning[39m  The value assigned to 'terminal' is not used in subsequent statements  [2mno-useless-assignment[22m
+
+[4m/Users/gpriday/Projects/canopy-worktrees/feature-issue-5613-remove-one-shot-action-id/src/hooks/usePanelLifecycle.ts[24m
+  [2m19:33[22m  [33mwarning[39m  The ref value 'timeoutRef.current' will likely have changed by the time this effect cleanup function runs. If this ref points to a node rendered by React, copy 'timeoutRef.current' to a variable inside the effect, and use that variable in the cleanup function  [2mreact-hooks/exhaustive-deps[22m
+
+[4m/Users/gpriday/Projects/canopy-worktrees/feature-issue-5613-remove-one-shot-action-id/src/hooks/usePanelPalette.ts[24m
+  [2m178:6[22m  [33mwarning[39m  React Hook useMemo has unnecessary dependencies: 'keybindingVersion' and 'userRegistry'. Either exclude them or remove the dependency array  [2mreact-hooks/exhaustive-deps[22m
+
+[4m/Users/gpriday/Projects/canopy-worktrees/feature-issue-5613-remove-one-shot-action-id/src/lib/__tests__/projectExplanationPrompt.test.ts[24m
+  [2m122:49[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+
+[4m/Users/gpriday/Projects/canopy-worktrees/feature-issue-5613-remove-one-shot-action-id/src/services/ActionService.ts[24m
+  [2m245:9[22m  [33mwarning[39m  The value assigned to 'enabled' is not used in subsequent statements  [2mno-useless-assignment[22m
+
+[4m/Users/gpriday/Projects/canopy-worktrees/feature-issue-5613-remove-one-shot-action-id/src/services/actions/__tests__/actionDefinitions.test.ts[24m
+    [2m4:18[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+   [2m89:42[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m112:42[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+
+[4m/Users/gpriday/Projects/canopy-worktrees/feature-issue-5613-remove-one-shot-action-id/src/services/actions/definitions/gitActions.ts[24m
+  [2m23:64[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m46:77[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m66:60[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+
+[4m/Users/gpriday/Projects/canopy-worktrees/feature-issue-5613-remove-one-shot-action-id/src/services/actions/definitions/logActions.ts[24m
+   [2m35:49[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m261:75[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+
+[4m/Users/gpriday/Projects/canopy-worktrees/feature-issue-5613-remove-one-shot-action-id/src/services/actions/definitions/panelActions.ts[24m
+  [2m323:59[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+
+[4m/Users/gpriday/Projects/canopy-worktrees/feature-issue-5613-remove-one-shot-action-id/src/services/actions/definitions/preferencesActions.ts[24m
+  [2m293:74[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+
+[4m/Users/gpriday/Projects/canopy-worktrees/feature-issue-5613-remove-one-shot-action-id/src/services/actions/definitions/projectActions.ts[24m
+  [2m138:76[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m227:63[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+
+[4m/Users/gpriday/Projects/canopy-worktrees/feature-issue-5613-remove-one-shot-action-id/src/services/actions/definitions/terminalLayoutActions.ts[24m
+  [2m331:59[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m347:59[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+
+[4m/Users/gpriday/Projects/canopy-worktrees/feature-issue-5613-remove-one-shot-action-id/src/services/terminal/__tests__/TerminalInstanceService.restore.test.ts[24m
+   [2m68:12[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+   [2m71:21[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m104:11[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m172:18[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m196:18[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m202:56[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m221:19[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m237:18[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m243:56[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m250:23[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m268:18[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m274:56[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m302:18[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m308:50[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m312:50[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m333:18[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m348:56[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m372:18[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m380:56[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m407:18[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m431:18[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m438:56[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m464:18[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m507:18[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m532:18[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m556:56[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m585:18[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m619:18[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m636:56[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m660:16[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m666:18[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m672:56[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+
+[4m/Users/gpriday/Projects/canopy-worktrees/feature-issue-5613-remove-one-shot-action-id/src/services/terminal/__tests__/TerminalParserHandler.test.ts[24m
+    [2m9:21[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+   [2m11:20[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+   [2m12:20[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+   [2m13:20[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+   [2m46:10[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m156:30[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+
+[4m/Users/gpriday/Projects/canopy-worktrees/feature-issue-5613-remove-one-shot-action-id/src/services/terminal/__tests__/TerminalResizeController.test.ts[24m
+   [2m78:8[22m   [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m135:12[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m152:12[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m170:12[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m190:12[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m210:12[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m227:12[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m309:12[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m338:12[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m360:12[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m554:25[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m658:18[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m678:18[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+
+[4m/Users/gpriday/Projects/canopy-worktrees/feature-issue-5613-remove-one-shot-action-id/src/services/terminal/__tests__/TerminalRestoreController.test.ts[24m
+  [2m224:25[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m311:18[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+
+[4m/Users/gpriday/Projects/canopy-worktrees/feature-issue-5613-remove-one-shot-action-id/src/services/terminal/__tests__/TerminalWakeManager.test.ts[24m
+   [2m27:43[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+   [2m43:43[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+   [2m67:43[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m179:43[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+
+[4m/Users/gpriday/Projects/canopy-worktrees/feature-issue-5613-remove-one-shot-action-id/src/store/agentSettingsStore.ts[24m
+  [2m3:1[22m  [33mwarning[39m  '@/clients' import is restricted from being used by a pattern. Store files should not import IPC clients directly. Use controllers to encapsulate IPC calls  [2mno-restricted-imports[22m
+
+[4m/Users/gpriday/Projects/canopy-worktrees/feature-issue-5613-remove-one-shot-action-id/src/store/cliAvailabilityStore.ts[24m
+  [2m4:1[22m  [33mwarning[39m  '@/clients' import is restricted from being used by a pattern. Store files should not import IPC clients directly. Use controllers to encapsulate IPC calls  [2mno-restricted-imports[22m
+
+[4m/Users/gpriday/Projects/canopy-worktrees/feature-issue-5613-remove-one-shot-action-id/src/store/commandStore.ts[24m
+  [2m8:1[22m  [33mwarning[39m  '@/clients/commandsClient' import is restricted from being used by a pattern. Store files should not import IPC clients directly. Use controllers to encapsulate IPC calls  [2mno-restricted-imports[22m
+
+[4m/Users/gpriday/Projects/canopy-worktrees/feature-issue-5613-remove-one-shot-action-id/src/store/dockStore.ts[24m
+  [2m2:1[22m  [33mwarning[39m  '@/clients' import is restricted from being used by a pattern. Store files should not import IPC clients directly. Use controllers to encapsulate IPC calls  [2mno-restricted-imports[22m
+
+[4m/Users/gpriday/Projects/canopy-worktrees/feature-issue-5613-remove-one-shot-action-id/src/store/githubConfigStore.ts[24m
+  [2m3:1[22m  [33mwarning[39m  '@/clients' import is restricted from being used by a pattern. Store files should not import IPC clients directly. Use controllers to encapsulate IPC calls  [2mno-restricted-imports[22m
+
+[4m/Users/gpriday/Projects/canopy-worktrees/feature-issue-5613-remove-one-shot-action-id/src/store/persistence/panelPersistence.ts[24m
+  [2m2:1[22m  [33mwarning[39m  '@/clients' import is restricted from being used by a pattern. Store files should not import IPC clients directly. Use controllers to encapsulate IPC calls  [2mno-restricted-imports[22m
+
+[4m/Users/gpriday/Projects/canopy-worktrees/feature-issue-5613-remove-one-shot-action-id/src/store/projectSettingsStore.ts[24m
+  [2m3:1[22m  [33mwarning[39m  '@/clients' import is restricted from being used by a pattern. Store files should not import IPC clients directly. Use controllers to encapsulate IPC calls  [2mno-restricted-imports[22m
+
+[4m/Users/gpriday/Projects/canopy-worktrees/feature-issue-5613-remove-one-shot-action-id/src/store/projectStore.ts[24m
+  [2m4:1[22m  [33mwarning[39m  '@/clients' import is restricted from being used by a pattern. Store files should not import IPC clients directly. Use controllers to encapsulate IPC calls  [2mno-restricted-imports[22m
+
+[4m/Users/gpriday/Projects/canopy-worktrees/feature-issue-5613-remove-one-shot-action-id/src/store/recipeStore.ts[24m
+    [2m4:1[22m  [33mwarning[39m  '@/clients' import is restricted from being used by a pattern. Store files should not import IPC clients directly. Use controllers to encapsulate IPC calls  [2mno-restricted-imports[22m
+  [2m633:7[22m  [33mwarning[39m  There is no `cause` attached to the symptom error being thrown                                                                                               [2mpreserve-caught-error[22m
+
+[4m/Users/gpriday/Projects/canopy-worktrees/feature-issue-5613-remove-one-shot-action-id/src/store/slices/__tests__/gridCapacity.test.ts[24m
+  [2m45:34[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m47:54[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m48:33[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m57:88[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m69:46[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m73:48[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+
+[4m/Users/gpriday/Projects/canopy-worktrees/feature-issue-5613-remove-one-shot-action-id/src/store/slices/__tests__/terminalCommandQueueSlice.test.ts[24m
+  [2m6:1[22m  [33mwarning[39m  '@/clients' import is restricted from being used by a pattern. Store files should not import IPC clients directly. Use controllers to encapsulate IPC calls  [2mno-restricted-imports[22m
+
+[4m/Users/gpriday/Projects/canopy-worktrees/feature-issue-5613-remove-one-shot-action-id/src/store/slices/__tests__/terminalFocusSlice.test.ts[24m
+   [2m47:17[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+   [2m48:17[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m191:17[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m192:17[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m547:21[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m549:17[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m550:17[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+
+[4m/Users/gpriday/Projects/canopy-worktrees/feature-issue-5613-remove-one-shot-action-id/src/store/slices/panelRegistry/core.ts[24m
+  [2m9:1[22m  [33mwarning[39m  '@/clients' import is restricted from being used by a pattern. Store files should not import IPC clients directly. Use controllers to encapsulate IPC calls  [2mno-restricted-imports[22m
+
+[4m/Users/gpriday/Projects/canopy-worktrees/feature-issue-5613-remove-one-shot-action-id/src/store/slices/panelRegistry/restart.ts[24m
+  [2m3:1[22m  [33mwarning[39m  '@/clients' import is restricted from being used by a pattern. Store files should not import IPC clients directly. Use controllers to encapsulate IPC calls  [2mno-restricted-imports[22m
+
+[4m/Users/gpriday/Projects/canopy-worktrees/feature-issue-5613-remove-one-shot-action-id/src/store/slices/panelRegistry/trashActions.ts[24m
+  [2m3:1[22m  [33mwarning[39m  '@/clients' import is restricted from being used by a pattern. Store files should not import IPC clients directly. Use controllers to encapsulate IPC calls  [2mno-restricted-imports[22m
+
+[4m/Users/gpriday/Projects/canopy-worktrees/feature-issue-5613-remove-one-shot-action-id/src/store/slices/terminalCommandQueueSlice.ts[24m
+  [2m4:1[22m  [33mwarning[39m  '@/clients' import is restricted from being used by a pattern. Store files should not import IPC clients directly. Use controllers to encapsulate IPC calls  [2mno-restricted-imports[22m
+
+[4m/Users/gpriday/Projects/canopy-worktrees/feature-issue-5613-remove-one-shot-action-id/src/store/userAgentRegistryStore.ts[24m
+  [2m3:1[22m  [33mwarning[39m  '@/clients/userAgentRegistryClient' import is restricted from being used by a pattern. Store files should not import IPC clients directly. Use controllers to encapsulate IPC calls  [2mno-restricted-imports[22m
+
+[4m/Users/gpriday/Projects/canopy-worktrees/feature-issue-5613-remove-one-shot-action-id/src/types/modules.d.ts[24m
+  [2m28:20[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m33:16[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m35:17[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m38:45[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m40:78[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+  [2m60:27[22m  [33mwarning[39m  Unexpected any. Specify a different type  [2m@typescript-eslint/no-explicit-any[22m
+
+[33m[1m✖ 361 problems (0 errors, 361 warnings)[22m[39m
+[0m
+ESLint found too many warnings (maximum: 0).
