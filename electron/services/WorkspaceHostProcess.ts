@@ -362,6 +362,15 @@ export class WorkspaceHostProcess extends EventEmitter {
 
     stdout?.on("data", (chunk: Buffer) => this.forwardHostOutput("stdout", chunk));
     stderr?.on("data", (chunk: Buffer) => this.forwardHostOutput("stderr", chunk));
+    // Swallow post-exit pipe errors so an unhandled Readable error can't
+    // surface as an uncaughtException after the host is already shutting down.
+    stdout?.on("error", () => {});
+    stderr?.on("error", () => {});
+    // Flush any partial line buffered at close — 'exit' fires before pipes
+    // fully drain, so the tail of a crash stack trace can arrive after the
+    // exit-time flush would otherwise clear the buffer.
+    stdout?.on("close", () => this.flushHostOutputBuffers());
+    stderr?.on("close", () => this.flushHostOutputBuffers());
   }
 
   private flushHostOutputBuffers(): void {
