@@ -15,7 +15,7 @@ const sendToAgentMock = vi.hoisted(() => ({ openSendToAgentPalette: vi.fn() }));
 const fleetDeckMock = vi.hoisted(() => ({
   useFleetDeckStore: {
     getState: vi.fn(() => ({
-      openWithScope: vi.fn(),
+      open: vi.fn(),
     })),
   },
 }));

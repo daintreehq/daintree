@@ -11,4 +11,3 @@ export {
   type FleetTargetPreview,
   type FleetExecutionResult,
 } from "./fleetExecution";
-export { MirrorTile } from "./MirrorTile";

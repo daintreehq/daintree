@@ -528,8 +528,6 @@ describe("MigrationRunner", () => {
           hasSeenWelcome: true,
           panelGridConfig: { strategy: "automatic", value: 3 },
           fleetDeckOpen: false,
-          fleetDeckEdge: "right",
-          fleetDeckWidth: 480,
         },
         userConfig: {},
         worktreeConfig: { pathPattern: "{parent-dir}/{base-folder}-worktrees/{branch-slug}" },

@@ -105,9 +105,6 @@ export function AppLayout({
         });
         useFleetDeckStore.getState().hydrate({
           isOpen: appState.fleetDeckOpen,
-          edge: appState.fleetDeckEdge,
-          width: appState.fleetDeckWidth,
-          height: appState.fleetDeckHeight,
         });
         useFleetScopeFlagStore.getState().hydrate(appState.fleetScopeMode);
       } catch (error) {

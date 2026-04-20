@@ -105,9 +105,6 @@ export interface StoreSchema {
     mruList?: string[];
     actionMruList?: ActionFrecencyEntry[] | string[];
     fleetDeckOpen?: boolean;
-    fleetDeckEdge?: "right" | "left" | "bottom";
-    fleetDeckWidth?: number;
-    fleetDeckHeight?: number;
     fleetScopeMode?: "legacy" | "scoped";
   };
   userConfig: {
@@ -263,8 +260,6 @@ const storeOptions = {
       hasSeenWelcome: false,
       panelGridConfig: { strategy: "automatic" as const, value: 3 },
       fleetDeckOpen: false,
-      fleetDeckEdge: "right" as const,
-      fleetDeckWidth: 480,
     },
     userConfig: {},
     worktreeConfig: {

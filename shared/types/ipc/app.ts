@@ -85,12 +85,6 @@ export interface AppState {
   actionMruList?: ActionFrecencyEntry[] | string[];
   /** Whether the Fleet Deck panel is open */
   fleetDeckOpen?: boolean;
-  /** Which edge the Fleet Deck is docked to */
-  fleetDeckEdge?: "right" | "left" | "bottom";
-  /** Width of the Fleet Deck in pixels (when docked to a side edge) */
-  fleetDeckWidth?: number;
-  /** Height of the Fleet Deck in pixels (when docked to the bottom edge) */
-  fleetDeckHeight?: number;
   /** Whether Enter in Fleet Composer always opens dry-run preview */
   fleetDeckAlwaysPreview?: boolean;
   /** Number of armed targets that triggers quorum confirmation */

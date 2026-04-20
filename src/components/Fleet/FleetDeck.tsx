@@ -1,99 +1,52 @@
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type ReactElement,
-  type MouseEvent,
-  type KeyboardEvent,
-} from "react";
+import { useCallback, useMemo, type ReactElement } from "react";
 import { X } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
 import { cn } from "@/lib/utils";
 import { usePanelStore } from "@/store/panelStore";
 import { useFleetArmingStore, collectEligibleIds } from "@/store/fleetArmingStore";
-import { useWorktreeSelectionStore } from "@/store/worktreeStore";
-import {
-  useFleetDeckStore,
-  FLEET_DECK_MIN_WIDTH,
-  FLEET_DECK_MAX_WIDTH,
-  FLEET_DECK_LIVE_TILE_CAP,
-  type FleetDeckScope,
-  type FleetDeckStateFilter,
-} from "@/store/fleetDeckStore";
-import { computeLiveSlotIds } from "@/utils/fleetDeckLiveSlots";
+import { useFleetDeckStore, type FleetDeckStateFilter } from "@/store/fleetDeckStore";
+import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { matchesDeckFilter, DECK_FILTER_ORDER, DECK_FILTER_LABELS } from "@/utils/agentStateFilter";
 import { ClusterAttentionPill } from "./ClusterAttentionPill";
 import { FleetComposer } from "./FleetComposer";
 import { FleetScopeBar } from "./FleetScopeBar";
-import { MirrorTile } from "./MirrorTile";
+import { FleetDeckRow } from "./FleetDeckRow";
 
-interface ScopeOption {
-  value: FleetDeckScope;
-  label: string;
+const FLEET_DECK_WIDTH = 340;
+
+interface WorktreeGroup {
+  worktreeId: string | null;
+  worktreeName: string | null;
+  ids: string[];
 }
 
-const SCOPE_OPTIONS: ScopeOption[] = [
-  { value: "current", label: "Current worktree" },
-  { value: "all", label: "All worktrees" },
-];
-
-const RESIZE_KEYBOARD_STEP = 16;
-
 export function FleetDeck(): ReactElement | null {
-  const {
-    isOpen,
-    width,
-    edge,
-    scope,
-    stateFilter,
-    pinnedLiveIds,
-    close,
-    setWidth,
-    setScope,
-    setStateFilter,
-    prunePins,
-  } = useFleetDeckStore(
+  const { isOpen, stateFilter, close, setStateFilter } = useFleetDeckStore(
     useShallow((s) => ({
       isOpen: s.isOpen,
-      width: s.width,
-      edge: s.edge,
-      scope: s.scope,
       stateFilter: s.stateFilter,
-      pinnedLiveIds: s.pinnedLiveIds,
       close: s.close,
-      setWidth: s.setWidth,
-      setScope: s.setScope,
       setStateFilter: s.setStateFilter,
-      prunePins: s.prunePins,
     }))
   );
   const armedIds = useFleetArmingStore((s) => s.armedIds);
-  const armAll = useFleetArmingStore((s) => s.armAll);
+  const armIds = useFleetArmingStore((s) => s.armIds);
   const clearArmed = useFleetArmingStore((s) => s.clear);
   const panelsById = usePanelStore((s) => s.panelsById);
   // panelIds also drives eligibleIds (appearance order) — subscribe so that
   // reorders (which mutate panelIds without touching panelsById) trigger a
   // re-render.
   const panelIds = usePanelStore((s) => s.panelIds);
-  const activeWorktreeId = useWorktreeSelectionStore((s) => s.activeWorktreeId ?? null);
-
-  const [isResizing, setIsResizing] = useState(false);
-  const snapshotsRef = useRef<Map<string, string>>(new Map());
-  // Mirror into state so JSX doesn't read the ref during render (React Compiler).
-  // The ref remains the live accumulator; state snapshots it for render.
-  const [snapshots, setSnapshots] = useState<Map<string, string>>(() => new Map());
+  const worktrees = useWorktreeStore((s) => s.worktrees);
 
   const eligibleIds = useMemo(() => {
     // collectEligibleIds reads panelsById and panelIds from usePanelStore
     // directly. Referencing both here ensures the memo re-runs whenever
-    // either mutates (panelsById on agent state updates, panelIds on
-    // reorder/add/remove).
+    // either mutates.
     void panelsById;
     void panelIds;
-    return collectEligibleIds(scope, activeWorktreeId);
-  }, [scope, activeWorktreeId, panelsById, panelIds]);
+    return collectEligibleIds("all", null);
+  }, [panelsById, panelIds]);
 
   const filteredIds = useMemo(() => {
     if (stateFilter === "all") return eligibleIds;
@@ -103,146 +56,43 @@ export function FleetDeck(): ReactElement | null {
     });
   }, [eligibleIds, stateFilter, panelsById]);
 
-  const liveIds = useMemo(() => {
-    return computeLiveSlotIds(
-      filteredIds,
-      armedIds,
-      pinnedLiveIds,
-      panelsById,
-      FLEET_DECK_LIVE_TILE_CAP
-    );
-  }, [filteredIds, armedIds, pinnedLiveIds, panelsById]);
-
-  const liveIdSet = useMemo(() => new Set(liveIds), [liveIds]);
-
-  // Prune pinned ids whose terminals have disappeared (trashed/killed) so the
-  // pin count never represents stale panels. Also evict stale snapshot
-  // entries so the session-lifetime Map doesn't accumulate for terminals
-  // the user has killed.
-  useEffect(() => {
-    const validIds = new Set<string>(eligibleIds);
-    if (pinnedLiveIds.size > 0) {
-      for (const id of pinnedLiveIds) {
-        if (!validIds.has(id)) {
-          prunePins(validIds);
-          break;
-        }
+  const groups = useMemo<WorktreeGroup[]>(() => {
+    const out: WorktreeGroup[] = [];
+    const byId = new Map<string, WorktreeGroup>();
+    for (const id of filteredIds) {
+      const panel = panelsById[id];
+      const wtId = panel?.worktreeId ?? null;
+      const key = wtId ?? "__none__";
+      let group = byId.get(key);
+      if (!group) {
+        const wtName = wtId ? (worktrees.get(wtId)?.name ?? wtId) : null;
+        group = { worktreeId: wtId, worktreeName: wtName, ids: [] };
+        byId.set(key, group);
+        out.push(group);
       }
+      group.ids.push(id);
     }
-    if (snapshotsRef.current.size > 0) {
-      let changed = false;
-      for (const id of Array.from(snapshotsRef.current.keys())) {
-        if (!validIds.has(id)) {
-          snapshotsRef.current.delete(id);
-          changed = true;
-        }
-      }
-      if (changed) setSnapshots(new Map(snapshotsRef.current));
-    }
-  }, [eligibleIds, pinnedLiveIds, prunePins]);
-
-  const handleCaptureSnapshot = useCallback((id: string, snapshot: string) => {
-    snapshotsRef.current.set(id, snapshot);
-    setSnapshots(new Map(snapshotsRef.current));
-  }, []);
+    return out;
+  }, [filteredIds, panelsById, worktrees]);
 
   const handleArmFiltered = useCallback(() => {
     if (filteredIds.length === 0) return;
-    if (filteredIds.length === eligibleIds.length) {
-      armAll(scope);
-      return;
-    }
-    useFleetArmingStore.getState().armIds(filteredIds);
-  }, [armAll, filteredIds, eligibleIds.length, scope]);
-
-  const handleResizeMouseDown = useCallback(
-    (event: MouseEvent<HTMLDivElement>) => {
-      event.preventDefault();
-      setIsResizing(true);
-      const startX = event.clientX;
-      const startWidth = width;
-
-      const handleMove = (e: globalThis.MouseEvent) => {
-        const delta = edge === "left" ? e.clientX - startX : startX - e.clientX;
-        setWidth(startWidth + delta);
-      };
-
-      const handleUp = () => {
-        setIsResizing(false);
-        document.removeEventListener("mousemove", handleMove);
-        document.removeEventListener("mouseup", handleUp);
-      };
-
-      document.addEventListener("mousemove", handleMove);
-      document.addEventListener("mouseup", handleUp);
-    },
-    [edge, setWidth, width]
-  );
-
-  const handleResizeKeyDown = useCallback(
-    (event: KeyboardEvent<HTMLDivElement>) => {
-      // Arrow keys grow/shrink the deck — semantics mirror PortalDock.
-      if (event.key === "ArrowLeft") {
-        event.preventDefault();
-        setWidth(width + (edge === "left" ? -RESIZE_KEYBOARD_STEP : RESIZE_KEYBOARD_STEP));
-      } else if (event.key === "ArrowRight") {
-        event.preventDefault();
-        setWidth(width + (edge === "left" ? RESIZE_KEYBOARD_STEP : -RESIZE_KEYBOARD_STEP));
-      }
-    },
-    [edge, setWidth, width]
-  );
-
-  useEffect(() => {
-    return () => {
-      setIsResizing(false);
-    };
-  }, []);
+    armIds(filteredIds);
+  }, [armIds, filteredIds]);
 
   if (!isOpen) return null;
-
-  const dockSide = edge === "left" ? "left-0 border-r" : "right-0 border-l";
-  const resizeHandleSide = edge === "left" ? "-right-1.5" : "-left-1.5";
 
   return (
     <div
       role="region"
       aria-label="Fleet Deck"
       data-testid="fleet-deck"
-      data-edge={edge}
       className={cn(
-        "absolute top-0 bottom-0 z-40 flex flex-col h-full bg-daintree-bg shadow-2xl border-daintree-border",
-        dockSide
+        "absolute top-0 bottom-0 right-0 z-40 flex flex-col h-full",
+        "bg-daintree-bg shadow-2xl border-l border-daintree-border"
       )}
-      style={{ width }}
+      style={{ width: FLEET_DECK_WIDTH }}
     >
-      <div
-        role="separator"
-        aria-label="Resize Fleet Deck"
-        aria-orientation="vertical"
-        aria-valuenow={Math.round(width)}
-        aria-valuemin={FLEET_DECK_MIN_WIDTH}
-        aria-valuemax={FLEET_DECK_MAX_WIDTH}
-        tabIndex={0}
-        className={cn(
-          "group absolute top-0 bottom-0 w-3 cursor-col-resize flex items-center justify-center z-50",
-          "hover:bg-overlay-soft transition-colors focus:outline-none focus:bg-tint/[0.04] focus:ring-1 focus:ring-daintree-accent/50",
-          resizeHandleSide,
-          isResizing && "bg-daintree-accent/20"
-        )}
-        onMouseDown={handleResizeMouseDown}
-        onKeyDown={handleResizeKeyDown}
-      >
-        <div
-          className={cn(
-            "w-px h-8 rounded-full transition-[width] duration-150 delay-100 group-hover:w-0.5",
-            "bg-daintree-text/20",
-            "group-hover:bg-daintree-text/35 group-focus:bg-daintree-accent",
-            isResizing && "bg-daintree-accent"
-          )}
-        />
-      </div>
-
       <header className="flex items-center gap-2 px-3 py-2 border-b border-daintree-border">
         <span className="text-[13px] font-medium text-daintree-text">Fleet Deck</span>
         <span
@@ -272,33 +122,9 @@ export function FleetDeck(): ReactElement | null {
       </div>
 
       <nav
-        aria-label="Fleet Deck scope and filters"
+        aria-label="Fleet Deck filters"
         className="flex flex-wrap items-center gap-2 px-3 py-2 border-b border-daintree-border"
       >
-        <div role="tablist" aria-label="Scope" className="inline-flex rounded-md bg-tint/[0.06]">
-          {SCOPE_OPTIONS.map((opt) => {
-            const active = opt.value === scope;
-            return (
-              <button
-                key={opt.value}
-                role="tab"
-                aria-selected={active}
-                type="button"
-                onClick={() => setScope(opt.value)}
-                className={cn(
-                  "rounded-md px-2 py-1 text-[11px] transition-colors",
-                  active
-                    ? "bg-daintree-accent/20 text-daintree-text"
-                    : "text-daintree-text/70 hover:text-daintree-text"
-                )}
-                data-testid={`fleet-deck-scope-${opt.value}`}
-              >
-                {opt.label}
-              </button>
-            );
-          })}
-        </div>
-
         <div role="toolbar" aria-label="State filter" className="flex items-center gap-1">
           {DECK_FILTER_ORDER.map((filter) => {
             const active = filter === stateFilter;
@@ -352,30 +178,42 @@ export function FleetDeck(): ReactElement | null {
         </div>
       </nav>
 
-      <div className="flex-1 min-h-0 overflow-y-auto p-3" data-testid="fleet-deck-grid-scroll">
+      <div className="flex-1 min-h-0 overflow-y-auto py-1" data-testid="fleet-deck-list">
         {filteredIds.length === 0 ? (
           <div
             role="status"
-            className="flex h-full items-center justify-center text-[12px] text-daintree-text/60"
+            className="flex h-full items-center justify-center px-3 text-[12px] text-daintree-text/60"
           >
-            No agents match the current scope and filter.
+            No agents match the current filter.
           </div>
         ) : (
-          <div
-            data-testid="fleet-deck-grid"
-            className="grid gap-3"
-            style={{ gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))" }}
-          >
-            {filteredIds.map((id) => (
-              <MirrorTile
-                key={id}
-                terminalId={id}
-                isLive={liveIdSet.has(id)}
-                initialSnapshot={snapshots.get(id)}
-                onCaptureSnapshot={handleCaptureSnapshot}
-              />
-            ))}
-          </div>
+          groups.map((group) => (
+            <div
+              key={group.worktreeId ?? "__none__"}
+              data-testid="fleet-deck-group"
+              data-worktree-id={group.worktreeId ?? undefined}
+              className="mb-1"
+            >
+              {group.worktreeName !== null && (
+                <div
+                  className="px-3 pt-1 pb-0.5 text-[10px] uppercase tracking-wide text-daintree-text/50"
+                  data-testid="fleet-deck-group-header"
+                >
+                  {group.worktreeName}
+                </div>
+              )}
+              <div className="px-1">
+                {group.ids.map((id) => (
+                  <FleetDeckRow
+                    key={id}
+                    panelId={id}
+                    filteredIds={filteredIds}
+                    worktreeName={group.worktreeName}
+                  />
+                ))}
+              </div>
+            </div>
+          ))
         )}
       </div>
 

@@ -163,7 +163,7 @@ export function registerTerminalInputActions(
     scope: "renderer",
     keywords: ["broadcast", "fleet", "multi"],
     run: async () => {
-      useFleetDeckStore.getState().openWithScope("all");
+      useFleetDeckStore.getState().open();
     },
   }));
 
