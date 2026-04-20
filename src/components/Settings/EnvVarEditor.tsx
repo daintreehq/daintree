@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Eye, EyeOff, Plus, RotateCcw, X } from "lucide-react";
+import { Eye, EyeOff, Plus, RotateCcw, Upload, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { looksLikeSecret } from "@/utils/secretDetection";
 import { isSensitiveEnvKey } from "../../../shared/utils/envVars";
+import { ImportEnvDialog } from "./ImportEnvDialog";
 
 /**
  * Inline env var CRUD editor with validation and optional inheritance.
@@ -174,6 +175,7 @@ export function EnvVarEditor({
   const [revealedRows, setRevealedRows] = useState<Set<string>>(() => new Set());
   // When non-null, the focus-recovery effect focuses the key input for that rowId.
   const [pendingFocusKey, setPendingFocusKey] = useState<string | null>(null);
+  const [isImportOpen, setIsImportOpen] = useState(false);
   const lastEnvRef = useRef<Record<string, string>>(env);
   const lastInheritedRef = useRef<Record<string, string> | undefined>(inheritedEnv);
   const lastContextKeyRef = useRef<string | undefined>(contextKey);
@@ -386,6 +388,20 @@ export function EnvVarEditor({
     else keyInputRefs.current.delete(rowId);
   }, []);
 
+  const handleImportConfirm = useCallback(
+    (mergedEnv: Record<string, string>) => {
+      // Imports always commit the merged map directly — the parent re-seeds
+      // `rows` through the reseed effect when its source-of-truth env changes.
+      // We update `lastEnvRef` so the reseed effect treats this as a committed
+      // change rather than an external reset that would stomp in-progress edits.
+      lastEnvRef.current = mergedEnv;
+      setRows(envToDraft(mergedEnv));
+      setTouchedKeys({});
+      onChange(mergedEnv);
+    },
+    [onChange]
+  );
+
   const duplicateKeys = findDuplicateKeys(rows);
   const isEmpty = rows.length === 0;
 
@@ -409,15 +425,26 @@ export function EnvVarEditor({
       </div>
       {/* Body */}
       {isEmpty ? (
-        <button
-          type="button"
-          onClick={handleAdd}
-          className="w-full flex items-center justify-center gap-1.5 py-4 text-[12px] text-daintree-text/50 hover:text-daintree-accent hover:bg-daintree-bg/50 transition-colors border border-dashed border-daintree-border/60 m-2 rounded-[var(--radius-sm)]"
-          data-testid="env-editor-add"
-        >
-          <Plus size={12} aria-hidden="true" />
-          <span>Add your first variable</span>
-        </button>
+        <div className="m-2 flex flex-col gap-1.5">
+          <button
+            type="button"
+            onClick={handleAdd}
+            className="w-full flex items-center justify-center gap-1.5 py-4 text-[12px] text-daintree-text/50 hover:text-daintree-accent hover:bg-daintree-bg/50 transition-colors border border-dashed border-daintree-border/60 rounded-[var(--radius-sm)]"
+            data-testid="env-editor-add"
+          >
+            <Plus size={12} aria-hidden="true" />
+            <span>Add your first variable</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setIsImportOpen(true)}
+            className="w-full flex items-center justify-center gap-1.5 py-2 text-[11px] text-daintree-text/50 hover:text-daintree-accent hover:bg-daintree-bg/50 transition-colors rounded-[var(--radius-sm)]"
+            data-testid="env-editor-import"
+          >
+            <Upload size={12} aria-hidden="true" />
+            <span>Import .env</span>
+          </button>
+        </div>
       ) : (
         <div className="divide-y divide-daintree-border">
           {rows.map((row) => {
@@ -609,16 +636,33 @@ export function EnvVarEditor({
       )}
       {/* Add row (only when non-empty — empty state has its own affordance) */}
       {!isEmpty && (
-        <button
-          type="button"
-          onClick={handleAdd}
-          className="w-full flex items-center justify-center gap-1.5 py-2 text-[11px] text-daintree-text/50 hover:text-daintree-accent hover:bg-daintree-bg/50 transition-colors border-t border-daintree-border"
-          data-testid="env-editor-add"
-        >
-          <Plus size={12} aria-hidden="true" />
-          <span>Add variable</span>
-        </button>
+        <div className="grid grid-cols-2 divide-x divide-daintree-border border-t border-daintree-border">
+          <button
+            type="button"
+            onClick={handleAdd}
+            className="flex items-center justify-center gap-1.5 py-2 text-[11px] text-daintree-text/50 hover:text-daintree-accent hover:bg-daintree-bg/50 transition-colors"
+            data-testid="env-editor-add"
+          >
+            <Plus size={12} aria-hidden="true" />
+            <span>Add variable</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setIsImportOpen(true)}
+            className="flex items-center justify-center gap-1.5 py-2 text-[11px] text-daintree-text/50 hover:text-daintree-accent hover:bg-daintree-bg/50 transition-colors"
+            data-testid="env-editor-import"
+          >
+            <Upload size={12} aria-hidden="true" />
+            <span>Import .env</span>
+          </button>
+        </div>
       )}
+      <ImportEnvDialog
+        isOpen={isImportOpen}
+        onClose={() => setIsImportOpen(false)}
+        env={env}
+        onImport={handleImportConfirm}
+      />
     </div>
   );
 }

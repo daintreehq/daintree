@@ -11,8 +11,9 @@
  *  - Removing a row commits the updated env immediately.
  *  - Renaming a key commits only when the new name is non-empty and unique.
  */
+import { useState } from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, fireEvent } from "@testing-library/react";
+import { render, fireEvent, screen } from "@testing-library/react";
 import { EnvVarEditor } from "../EnvVarEditor";
 
 vi.mock("lucide-react", () => ({
@@ -21,7 +22,66 @@ vi.mock("lucide-react", () => ({
   EyeOff: () => <span data-testid="eye-off-icon" />,
   Plus: () => <span data-testid="plus-icon" />,
   RotateCcw: () => <span data-testid="rotate-ccw-icon" />,
+  Upload: () => <span data-testid="upload-icon" />,
+  AlertTriangle: () => <span data-testid="alert-triangle-icon" />,
 }));
+
+interface DialogAction {
+  label: string;
+  onClick: () => void;
+  disabled?: boolean;
+}
+
+vi.mock("@/components/ui/AppDialog", () => {
+  const Dialog = ({
+    children,
+    isOpen,
+    "data-testid": testId,
+  }: {
+    children: React.ReactNode;
+    isOpen: boolean;
+    onClose?: () => void;
+    size?: string;
+    zIndex?: string;
+    "data-testid"?: string;
+  }) => (isOpen ? <div data-testid={testId ?? "app-dialog"}>{children}</div> : null);
+  Dialog.Header = ({ children }: { children: React.ReactNode }) => <div>{children}</div>;
+  Dialog.Title = ({ children }: { children: React.ReactNode }) => <h2>{children}</h2>;
+  Dialog.CloseButton = () => <button type="button" aria-label="Close dialog" />;
+  Dialog.Body = ({ children }: { children: React.ReactNode }) => <div>{children}</div>;
+  Dialog.Description = ({ children }: { children: React.ReactNode }) => <p>{children}</p>;
+  Dialog.Footer = ({
+    primaryAction,
+    secondaryAction,
+  }: {
+    primaryAction?: DialogAction;
+    secondaryAction?: DialogAction;
+  }) => (
+    <div>
+      {secondaryAction && (
+        <button
+          type="button"
+          onClick={secondaryAction.onClick}
+          disabled={secondaryAction.disabled}
+          data-testid="app-dialog-secondary"
+        >
+          {secondaryAction.label}
+        </button>
+      )}
+      {primaryAction && (
+        <button
+          type="button"
+          onClick={primaryAction.onClick}
+          disabled={primaryAction.disabled}
+          data-testid="app-dialog-primary"
+        >
+          {primaryAction.label}
+        </button>
+      )}
+    </div>
+  );
+  return { AppDialog: Dialog };
+});
 
 describe("EnvVarEditor", () => {
   let onChange: ReturnType<typeof vi.fn<(env: Record<string, string>) => void>>;
@@ -501,6 +561,179 @@ describe("EnvVarEditor", () => {
       expect(onChange.mock.calls.length).toBe(commitsBeforeRerender);
       const valueInput = getAllByTestId("env-editor-value")[0] as HTMLInputElement;
       expect(valueInput.disabled).toBe(false); // still an override, not reseeded back to inherited
+    });
+  });
+
+  describe("Import .env flow", () => {
+    it("renders Import button in the empty state", () => {
+      renderEditor({});
+      expect(screen.getByTestId("env-editor-import")).toBeTruthy();
+    });
+
+    it("renders Import button in the non-empty toolbar", () => {
+      renderEditor({ FOO: "bar" });
+      expect(screen.getByTestId("env-editor-import")).toBeTruthy();
+    });
+
+    it("clicking Import opens the dialog", () => {
+      renderEditor({ FOO: "bar" });
+      fireEvent.click(screen.getByTestId("env-editor-import"));
+      expect(screen.getByTestId("import-env-dialog")).toBeTruthy();
+      expect(screen.getByTestId("import-env-textarea")).toBeTruthy();
+    });
+
+    it("parse errors block the confirm button and surface the error block", () => {
+      renderEditor({});
+      fireEvent.click(screen.getByTestId("env-editor-import"));
+      const textarea = screen.getByTestId("import-env-textarea") as HTMLTextAreaElement;
+      fireEvent.change(textarea, { target: { value: "NOT_A_PAIR" } });
+
+      expect(screen.getByTestId("import-env-errors")).toBeTruthy();
+      const primary = screen.getByTestId("app-dialog-primary") as HTMLButtonElement;
+      expect(primary.disabled).toBe(true);
+    });
+
+    it("no-conflict import merges additively and calls onChange", () => {
+      renderEditor({ EXISTING: "keep" });
+      fireEvent.click(screen.getByTestId("env-editor-import"));
+      const textarea = screen.getByTestId("import-env-textarea") as HTMLTextAreaElement;
+      fireEvent.change(textarea, { target: { value: "NEW_ONE=1\nNEW_TWO=2" } });
+
+      const primary = screen.getByTestId("app-dialog-primary") as HTMLButtonElement;
+      expect(primary.disabled).toBe(false);
+      expect(primary.textContent).toMatch(/Import 2/);
+      fireEvent.click(primary);
+
+      expect(onChange).toHaveBeenLastCalledWith({
+        EXISTING: "keep",
+        NEW_ONE: "1",
+        NEW_TWO: "2",
+      });
+      // Dialog closes after import
+      expect(screen.queryByTestId("import-env-dialog")).toBeNull();
+    });
+
+    it("conflicting import advances to conflict step and 'keep existing' preserves old values", () => {
+      renderEditor({ EXISTING: "old", OTHER: "untouched" });
+      fireEvent.click(screen.getByTestId("env-editor-import"));
+      fireEvent.change(screen.getByTestId("import-env-textarea"), {
+        target: { value: "EXISTING=new\nBRAND_NEW=fresh" },
+      });
+
+      const primary = screen.getByTestId("app-dialog-primary") as HTMLButtonElement;
+      expect(primary.textContent).toMatch(/Review 1 conflict/);
+      fireEvent.click(primary);
+
+      // Now on the conflict step — "keep" is the default.
+      expect(screen.getByTestId("import-env-conflict-list")).toBeTruthy();
+      const confirm = screen.getByTestId("app-dialog-primary") as HTMLButtonElement;
+      expect(confirm.textContent).toMatch(/Import, keep existing/);
+      fireEvent.click(confirm);
+
+      expect(onChange).toHaveBeenLastCalledWith({
+        EXISTING: "old",
+        OTHER: "untouched",
+        BRAND_NEW: "fresh",
+      });
+    });
+
+    it("'overwrite conflicts' replaces colliding values", () => {
+      renderEditor({ EXISTING: "old" });
+      fireEvent.click(screen.getByTestId("env-editor-import"));
+      fireEvent.change(screen.getByTestId("import-env-textarea"), {
+        target: { value: "EXISTING=new" },
+      });
+      fireEvent.click(screen.getByTestId("app-dialog-primary"));
+
+      // Switch to overwrite mode.
+      fireEvent.click(screen.getByTestId("import-env-mode-overwrite"));
+      fireEvent.click(screen.getByTestId("app-dialog-primary"));
+
+      expect(onChange).toHaveBeenLastCalledWith({ EXISTING: "new" });
+    });
+
+    it("imported rows appear in the editor after merge (controlled parent)", () => {
+      function Controlled() {
+        const [env, setEnv] = useState<Record<string, string>>({});
+        return (
+          <EnvVarEditor
+            env={env}
+            onChange={(next) => {
+              onChange(next);
+              setEnv(next);
+            }}
+          />
+        );
+      }
+      const { getAllByTestId } = render(<Controlled />);
+      fireEvent.click(screen.getByTestId("env-editor-import"));
+      fireEvent.change(screen.getByTestId("import-env-textarea"), {
+        target: { value: 'FOO=bar\nBAZ="hello world"' },
+      });
+      fireEvent.click(screen.getByTestId("app-dialog-primary"));
+
+      const keyInputs = getAllByTestId("env-editor-key") as HTMLInputElement[];
+      expect(keyInputs.map((el) => el.value).sort()).toEqual(["BAZ", "FOO"]);
+      const valueInputs = getAllByTestId("env-editor-value") as HTMLInputElement[];
+      expect(valueInputs.some((el) => el.value === "hello world")).toBe(true);
+    });
+
+    it("closing and reopening the dialog clears the textarea", () => {
+      renderEditor({});
+      fireEvent.click(screen.getByTestId("env-editor-import"));
+      const first = screen.getByTestId("import-env-textarea") as HTMLTextAreaElement;
+      fireEvent.change(first, { target: { value: "FOO=bar" } });
+      expect(first.value).toBe("FOO=bar");
+
+      // Cancel closes the dialog.
+      fireEvent.click(screen.getByTestId("app-dialog-secondary"));
+      expect(screen.queryByTestId("import-env-dialog")).toBeNull();
+
+      // Reopening yields a fresh empty textarea.
+      fireEvent.click(screen.getByTestId("env-editor-import"));
+      const second = screen.getByTestId("import-env-textarea") as HTMLTextAreaElement;
+      expect(second.value).toBe("");
+    });
+
+    it("imported value that looks like a secret triggers the row warning (controlled parent)", () => {
+      function Controlled() {
+        const [env, setEnv] = useState<Record<string, string>>({});
+        return (
+          <EnvVarEditor
+            env={env}
+            onChange={(next) => {
+              onChange(next);
+              setEnv(next);
+            }}
+          />
+        );
+      }
+      render(<Controlled />);
+      fireEvent.click(screen.getByTestId("env-editor-import"));
+      fireEvent.change(screen.getByTestId("import-env-textarea"), {
+        target: { value: "ANTHROPIC_API_KEY=sk-ant-abcdefghijklmnopqrstuvwxyz123456" },
+      });
+      fireEvent.click(screen.getByTestId("app-dialog-primary"));
+
+      expect(screen.getByTestId("env-editor-warning-secret")).toBeTruthy();
+    });
+
+    it("Back button from conflict step returns to paste step preserving text", () => {
+      renderEditor({ FOO: "old" });
+      fireEvent.click(screen.getByTestId("env-editor-import"));
+      fireEvent.change(screen.getByTestId("import-env-textarea"), {
+        target: { value: "FOO=new" },
+      });
+      fireEvent.click(screen.getByTestId("app-dialog-primary"));
+
+      // On conflict step — secondary is "Back".
+      const back = screen.getByTestId("app-dialog-secondary") as HTMLButtonElement;
+      expect(back.textContent).toBe("Back");
+      fireEvent.click(back);
+
+      // Paste step with retained text.
+      const textarea = screen.getByTestId("import-env-textarea") as HTMLTextAreaElement;
+      expect(textarea.value).toBe("FOO=new");
     });
   });
 });
