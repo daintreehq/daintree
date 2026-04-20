@@ -395,6 +395,13 @@ export function EnvVarEditor({
                     onKeyDown={(e) => {
                       if (e.key === "Enter") {
                         e.preventDefault();
+                        // Blur first so the current row commits its value to
+                        // the parent; only then add the new row. Without this,
+                        // the browser's focus-change blur fires after handleAdd
+                        // has already appended the placeholder row, and
+                        // handleValueBlur's commit sweeps in an unintended
+                        // NEW_VAR: "" entry.
+                        e.currentTarget.blur();
                         handleAdd();
                       } else if (e.key === "Escape") {
                         e.currentTarget.blur();

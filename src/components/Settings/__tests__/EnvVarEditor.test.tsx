@@ -265,6 +265,21 @@ describe("EnvVarEditor", () => {
       expect(getAllByTestId("env-editor-key")).toHaveLength(2);
     });
 
+    it("Enter on a value input does NOT commit a placeholder NEW_VAR entry", () => {
+      const { getAllByTestId } = renderEditor({ FOO: "bar" });
+      const valueInput = getAllByTestId("env-editor-value")[0] as HTMLInputElement;
+
+      // Change value then press Enter — the old row's value must commit, but
+      // the newly-appended placeholder row (NEW_VAR: "") must NOT leak into
+      // the committed env.
+      fireEvent.change(valueInput, { target: { value: "baz" } });
+      fireEvent.keyDown(valueInput, { key: "Enter" });
+
+      for (const call of onChange.mock.calls) {
+        expect(Object.keys(call[0])).not.toContain("NEW_VAR");
+      }
+    });
+
     it("Escape on a value input blurs it", () => {
       const { getAllByTestId } = renderEditor({ FOO: "bar" });
       const valueInput = getAllByTestId("env-editor-value")[0] as HTMLInputElement;
