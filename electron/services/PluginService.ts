@@ -199,6 +199,12 @@ export class PluginService {
       registerPluginMenuItem(manifest.name, menuItem);
     }
 
+    // Insert the plugin into the registry BEFORE importing its main module so
+    // synchronous host-API calls made during module evaluation (e.g., a plugin
+    // that calls host.registerAction/registerHandler at import time) see the
+    // plugin as loaded. Without this, `hasPlugin(pluginId)` returns false
+    // inside the plugin's own init, and registerHandler/registerPluginAction
+    // throw "Unknown plugin" even for a correctly loaded plugin.
     if (this.plugins.has(manifest.name)) {
       console.warn(
         `[PluginService] Duplicate plugin name "${manifest.name}" in ${dirName}, tearing down previous instance`
@@ -420,7 +426,10 @@ export class PluginService {
       kind,
       danger,
       keywords: Array.isArray(contribution.keywords) ? [...contribution.keywords] : undefined,
-      inputSchema: contribution.inputSchema,
+      inputSchema:
+        contribution.inputSchema && typeof contribution.inputSchema === "object"
+          ? { ...contribution.inputSchema }
+          : undefined,
     };
 
     this.pluginActions.set(id, descriptor);

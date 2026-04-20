@@ -11,38 +11,47 @@ import { logWarn } from "@/utils/logger";
  * ActionDefinitions whose run() bounces back to main via `plugin:invoke` —
  * the real handler lives in the plugin's main-process module.
  *
- * Pull-on-mount + push-on-change: a full-list broadcast makes pull and push
- * semantically identical, so a missed event during load cannot leave stale
- * state on a cached WebContentsView.
+ * Pull-on-mount is a safety net for cached WebContentsViews that may have
+ * missed a broadcast. Push-on-change is authoritative. Once a push has
+ * arrived, any later-resolving pull from mount-time is ignored to avoid
+ * rolling back state to an older snapshot.
  */
 export function usePluginActions(): void {
   useEffect(() => {
     let disposed = false;
-    const registeredIds = new Set<string>();
+    let pushReceived = false;
+    const registered = new Map<string, PluginActionDescriptor>();
 
     const sync = (descriptors: PluginActionDescriptor[]): void => {
       if (disposed) return;
 
       const incoming = new Map(descriptors.map((d) => [d.id, d]));
 
-      for (const id of registeredIds) {
-        if (!incoming.has(id)) {
+      for (const [id, current] of registered) {
+        const next = incoming.get(id);
+        if (!next) {
           actionService.unregister(id);
-          registeredIds.delete(id);
+          registered.delete(id);
+          continue;
+        }
+        if (!descriptorsEqual(current, next)) {
+          // Re-register so stale title/category/schema is replaced.
+          actionService.unregister(id);
+          actionService.register(toSyntheticDefinition(next));
+          registered.set(id, next);
         }
       }
 
       for (const [id, descriptor] of incoming) {
-        if (registeredIds.has(id)) continue;
+        if (registered.has(id)) continue;
         if (actionService.has(id)) {
           logWarn(
             `[PluginActions] Action "${id}" already registered in renderer — skipping plugin-sourced registration`
           );
           continue;
         }
-        const definition = toSyntheticDefinition(descriptor);
-        actionService.register(definition);
-        registeredIds.add(id);
+        actionService.register(toSyntheticDefinition(descriptor));
+        registered.set(id, descriptor);
       }
     };
 
@@ -52,25 +61,44 @@ export function usePluginActions(): void {
     void electron.plugin
       .getActions()
       .then((actions) => {
-        if (!disposed) sync(actions);
+        if (disposed) return;
+        // A push may have overtaken the mount-time pull. Trust the push and
+        // drop the older snapshot rather than reverting.
+        if (pushReceived) return;
+        sync(actions);
       })
       .catch((err: unknown) => {
         logWarn("[PluginActions] Failed to fetch initial plugin actions", { error: err });
       });
 
     const cleanup = electron.plugin.onActionsChanged((payload) => {
+      pushReceived = true;
       sync(payload.actions);
     });
 
     return () => {
       disposed = true;
       cleanup();
-      for (const id of registeredIds) {
+      for (const id of registered.keys()) {
         actionService.unregister(id);
       }
-      registeredIds.clear();
+      registered.clear();
     };
   }, []);
+}
+
+function descriptorsEqual(a: PluginActionDescriptor, b: PluginActionDescriptor): boolean {
+  return (
+    a.pluginId === b.pluginId &&
+    a.id === b.id &&
+    a.title === b.title &&
+    a.description === b.description &&
+    a.category === b.category &&
+    a.kind === b.kind &&
+    a.danger === b.danger &&
+    JSON.stringify(a.keywords ?? null) === JSON.stringify(b.keywords ?? null) &&
+    JSON.stringify(a.inputSchema ?? null) === JSON.stringify(b.inputSchema ?? null)
+  );
 }
 
 function toSyntheticDefinition(descriptor: PluginActionDescriptor): AnyActionDefinition {
@@ -93,6 +121,6 @@ function toSyntheticDefinition(descriptor: PluginActionDescriptor): AnyActionDef
 
   const synthetic = definition as AnyActionDefinition;
   synthetic.pluginId = pluginId;
-  if (inputSchema) synthetic.rawInputSchema = inputSchema;
+  if (inputSchema) synthetic.rawInputSchema = { ...inputSchema };
   return synthetic;
 }

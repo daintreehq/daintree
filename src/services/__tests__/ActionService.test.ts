@@ -98,6 +98,49 @@ describe("ActionService", () => {
       if (!result.ok) expect(result.error.code).toBe("NOT_FOUND");
     });
 
+    it("propagates pluginId and rawInputSchema onto ActionManifestEntry for plugin actions", () => {
+      const action = {
+        id: "acme.my-plugin.doThing" as ActionId,
+        title: "Do Thing",
+        description: "Does a thing",
+        category: "plugin",
+        kind: "command",
+        danger: "safe",
+        scope: "renderer",
+        pluginId: "acme.my-plugin",
+        rawInputSchema: {
+          type: "object",
+          properties: { name: { type: "string" } },
+          required: ["name"],
+        },
+        run: vi.fn().mockResolvedValue(undefined),
+      };
+      service.register(action as unknown as ActionDefinition);
+
+      const entry = service.get("acme.my-plugin.doThing" as ActionId);
+      expect(entry).not.toBeNull();
+      expect(entry!.pluginId).toBe("acme.my-plugin");
+      expect(entry!.inputSchema).toEqual(action.rawInputSchema);
+      // required:["name"] means args are required
+      expect(entry!.requiresArgs).toBe(true);
+    });
+
+    it("treats rawInputSchema without a non-empty required array as args-optional", () => {
+      const action = {
+        id: "acme.plugin.maybe" as ActionId,
+        title: "Maybe",
+        description: "Optional args",
+        category: "plugin",
+        kind: "command",
+        danger: "safe",
+        scope: "renderer",
+        rawInputSchema: { type: "object", properties: { foo: { type: "string" } } },
+        run: vi.fn().mockResolvedValue(undefined),
+      };
+      service.register(action as unknown as ActionDefinition);
+      expect(service.get("acme.plugin.maybe" as ActionId)!.requiresArgs).toBe(false);
+    });
+
     it("should throw when registering duplicate action and preserve the original registration", async () => {
       const originalRun = vi.fn().mockResolvedValue("original");
       const original: ActionDefinition = {

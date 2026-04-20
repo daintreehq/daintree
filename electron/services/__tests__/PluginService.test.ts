@@ -1013,6 +1013,38 @@ describe("Plugin unload lifecycle", () => {
     expect(unregisterPluginPanelKinds).toHaveBeenCalledTimes(1);
   });
 
+  it("registers plugin before importing main so sync host-API calls see it as loaded", async () => {
+    const pluginDir = path.join(tmpDir, "sync-init");
+    await fs.mkdir(pluginDir);
+    await fs.writeFile(
+      path.join(pluginDir, "plugin.json"),
+      JSON.stringify({
+        name: "acme.sync-init",
+        version: "1.0.0",
+        main: "main.mjs",
+      })
+    );
+    // Plugin main module calls a global hook synchronously during import to
+    // observe whether its own pluginId is already registered. Proxies the
+    // real-world pattern where a host API call depends on this.plugins.has().
+    await fs.writeFile(
+      path.join(pluginDir, "main.mjs"),
+      "globalThis.__pluginInitObserved = globalThis.__pluginInitCheck('acme.sync-init');"
+    );
+
+    const service = new PluginService(tmpDir);
+    (globalThis as { __pluginInitCheck?: (name: string) => boolean }).__pluginInitCheck = (name) =>
+      service.hasPlugin(name);
+
+    try {
+      await service.initialize();
+      expect((globalThis as { __pluginInitObserved?: boolean }).__pluginInitObserved).toBe(true);
+    } finally {
+      delete (globalThis as { __pluginInitCheck?: unknown }).__pluginInitCheck;
+      delete (globalThis as { __pluginInitObserved?: unknown }).__pluginInitObserved;
+    }
+  });
+
   it("supports load → unload → reload lifecycle via fresh service instance", async () => {
     await writePlugin("lifecycle", {
       name: "acme.lifecycle",
@@ -1272,6 +1304,18 @@ describe("Plugin action registry", () => {
 
     const [descriptor] = service.listPluginActions();
     expect(descriptor.keywords).toEqual(["foo", "bar"]);
+  });
+
+  it("descriptor keeps a defensive copy of inputSchema", () => {
+    const inputSchema: Record<string, unknown> = { type: "object", properties: { a: 1 } };
+    service.registerPluginAction("acme.my-plugin", {
+      ...validContribution(),
+      inputSchema,
+    });
+    (inputSchema as Record<string, unknown>).properties = { a: 999 };
+
+    const [descriptor] = service.listPluginActions();
+    expect(descriptor.inputSchema).toEqual({ type: "object", properties: { a: 1 } });
   });
 });
 

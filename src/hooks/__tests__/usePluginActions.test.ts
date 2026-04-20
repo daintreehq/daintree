@@ -105,6 +105,67 @@ describe("usePluginActions", () => {
     expect(actionService.has("acme.my-plugin.doThing")).toBe(false);
   });
 
+  it("ignores a stale mount-time pull when a push has already arrived", async () => {
+    const { actionService } = await import("@/services/ActionService");
+    const { usePluginActions } = await import("../usePluginActions");
+
+    let emitPush: ((payload: { actions: PluginActionDescriptor[] }) => void) | null = null;
+    onActionsChangedMock.mockImplementation(
+      (cb: (payload: { actions: PluginActionDescriptor[] }) => void) => {
+        emitPush = cb;
+        return () => {};
+      }
+    );
+
+    // getActions resolves only after we explicitly settle it, so we can
+    // interleave a push before the pull completes.
+    let resolveGet: ((value: PluginActionDescriptor[]) => void) | null = null;
+    getActionsMock.mockImplementation(
+      () =>
+        new Promise<PluginActionDescriptor[]>((resolve) => {
+          resolveGet = resolve;
+        })
+    );
+
+    renderHook(() => usePluginActions());
+    await waitFor(() => expect(onActionsChangedMock).toHaveBeenCalled());
+
+    const action = descriptor();
+    // Push arrives first — registers the action.
+    act(() => emitPush!({ actions: [action] }));
+    expect(actionService.has(action.id)).toBe(true);
+
+    // Stale pull resolves with empty — must NOT unregister the newly-pushed action.
+    await act(async () => {
+      resolveGet!([]);
+      await Promise.resolve();
+    });
+
+    expect(actionService.has(action.id)).toBe(true);
+  });
+
+  it("re-registers when an incoming descriptor differs (title/schema update)", async () => {
+    const { actionService } = await import("@/services/ActionService");
+    const { usePluginActions } = await import("../usePluginActions");
+
+    let emit: ((payload: { actions: PluginActionDescriptor[] }) => void) | null = null;
+    onActionsChangedMock.mockImplementation(
+      (cb: (payload: { actions: PluginActionDescriptor[] }) => void) => {
+        emit = cb;
+        return () => {};
+      }
+    );
+    getActionsMock.mockResolvedValue([descriptor({ title: "Original" })]);
+
+    renderHook(() => usePluginActions());
+    await waitFor(() =>
+      expect(actionService.get("acme.my-plugin.doThing")?.title).toBe("Original")
+    );
+
+    act(() => emit!({ actions: [descriptor({ title: "Updated" })] }));
+    expect(actionService.get("acme.my-plugin.doThing")?.title).toBe("Updated");
+  });
+
   it("does not clobber an already-registered built-in action of the same id", async () => {
     const { actionService } = await import("@/services/ActionService");
     const { usePluginActions } = await import("../usePluginActions");

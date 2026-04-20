@@ -41,6 +41,19 @@ function zodSchemaToJsonSchema(schema: z.ZodType): Record<string, unknown> | und
   }
 }
 
+/**
+ * Heuristic for plugin-contributed actions that declare a raw JSON Schema.
+ * Treat the action as requiring args if the schema has a non-empty
+ * `required` array. Anything else (no schema, schema without required) is
+ * treated as taking no required args — matches how argsSchema=undefined
+ * behaves for built-ins.
+ */
+function rawSchemaRequiresArgs(schema: Record<string, unknown> | undefined): boolean {
+  if (!schema || typeof schema !== "object") return false;
+  const required = (schema as { required?: unknown }).required;
+  return Array.isArray(required) && required.length > 0;
+}
+
 /** Sources whose successful dispatches are eligible to be recorded as the "last action". */
 const REPEATABLE_SOURCES: ReadonlySet<ActionSource> = new Set<ActionSource>([
   "user",
@@ -264,7 +277,7 @@ export class ActionService {
       requiresArgs: definition.argsSchema
         ? !definition.argsSchema.safeParse(undefined).success &&
           !definition.argsSchema.safeParse({}).success
-        : false,
+        : rawSchemaRequiresArgs(definition.rawInputSchema),
       keywords: definition.keywords?.slice(),
       ...(definition.pluginId ? { pluginId: definition.pluginId } : {}),
     };
