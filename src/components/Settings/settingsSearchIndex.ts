@@ -638,7 +638,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
     keywords: ["agent", "enable", "disable", ...BUILT_IN_AGENT_IDS, "select"],
   },
   {
-    id: "agents-skip-permissions-default",
+    id: "agents-skip-permissions",
     tab: "agents",
     scope: "global",
     tabLabel: "CLI Agents",
@@ -650,7 +650,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
     keywords: ["permissions", "auto-approve", "confirm", "prompts", "dangerous", "allow", "bypass"],
   },
   {
-    id: "agents-inline-mode-default",
+    id: "agents-inline-mode",
     tab: "agents",
     scope: "global",
     tabLabel: "CLI Agents",
@@ -674,7 +674,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
     keywords: ["clipboard", "images", "share", "gemini", "paste", "screenshot"],
   },
   {
-    id: "agents-custom-args-default",
+    id: "agents-custom-args",
     tab: "agents",
     scope: "global",
     tabLabel: "CLI Agents",

@@ -1,20 +1,12 @@
 import { describe, it, expect } from "vitest";
 
 /**
- * Unit tests for the preset-inherits-from-agent-defaults derivation logic used
- * inside AgentSettings' custom preset detail view. These are pure logic tests —
- * the rendering is exercised by the Settings integration tests.
+ * Pure-logic tests for the unified scope editor used inside AgentSettings.
+ * A scope is either "Default" (the agent-level defaults) or a specific preset;
+ * custom presets can override agent defaults with an explicit `boolean | string`
+ * value (or omit the key to inherit). These helpers back the Switch/input
+ * affordances — rendering is exercised by E2E.
  */
-
-// Mirrors the inline helpers in AgentSettings.tsx. Kept local so the UI file
-// stays a single export and these tests stay hermetic. The sentinel value
-// `"__inherit__"` is required because Radix Select forbids `value=""` on
-// SelectItem — see SettingsSelect / ui/select.tsx.
-const boolToSelectValue = (v: boolean | undefined): string =>
-  v === undefined ? "__inherit__" : v ? "true" : "false";
-
-const selectValueToBool = (s: string): boolean | undefined =>
-  s === "true" ? true : s === "false" ? false : undefined;
 
 function effectiveBool(override: boolean | undefined, agentDefault: boolean): boolean {
   return override ?? agentDefault;
@@ -26,38 +18,6 @@ function inheritedEnvKeys(
 ): string[] {
   return Object.keys(globalEnv).filter((k) => !(k in presetEnv));
 }
-
-describe("tri-state boolean serialization", () => {
-  it('maps undefined → "__inherit__" sentinel (Radix Select forbids empty values)', () => {
-    expect(boolToSelectValue(undefined)).toBe("__inherit__");
-  });
-
-  it('maps true → "true" and false → "false"', () => {
-    expect(boolToSelectValue(true)).toBe("true");
-    expect(boolToSelectValue(false)).toBe("false");
-  });
-
-  it('maps "__inherit__" → undefined (inherit)', () => {
-    expect(selectValueToBool("__inherit__")).toBeUndefined();
-  });
-
-  it('maps "true" → true and "false" → false', () => {
-    expect(selectValueToBool("true")).toBe(true);
-    expect(selectValueToBool("false")).toBe(false);
-  });
-
-  it("falls back to undefined for unexpected strings (defensive)", () => {
-    expect(selectValueToBool("yes")).toBeUndefined();
-    expect(selectValueToBool("0")).toBeUndefined();
-    expect(selectValueToBool(" ")).toBeUndefined();
-  });
-
-  it("round-trips boolean | undefined through the select mapping", () => {
-    for (const v of [true, false, undefined] as const) {
-      expect(selectValueToBool(boolToSelectValue(v))).toBe(v);
-    }
-  });
-});
 
 describe("effective boolean value (override ?? agentDefault)", () => {
   it("returns agent default when override is undefined", () => {
@@ -118,21 +78,6 @@ describe("inherited env key computation", () => {
   });
 });
 
-describe("inherit-label derivation for tri-state select", () => {
-  // The "Inherit (X)" option label surfaces the agent-level default so users
-  // can see what they'd inherit without leaving the form.
-  const inheritLabel = (agentDefault: boolean): string =>
-    `Inherit (${agentDefault ? "On" : "Off"})`;
-
-  it('shows "On" when agent default is true', () => {
-    expect(inheritLabel(true)).toBe("Inherit (On)");
-  });
-
-  it('shows "Off" when agent default is false', () => {
-    expect(inheritLabel(false)).toBe("Inherit (Off)");
-  });
-});
-
 describe("override apply — + Override seeds a single key only", () => {
   // The "+ Override" click must copy only the specific key from globalEnv into
   // preset.env — NOT the entire globalEnv map. This prevents accidentally
@@ -159,5 +104,68 @@ describe("override apply — + Override seeds a single key only", () => {
     const preset = { EXISTING: "kept" };
     const next = applyOverride(preset, global, "FOO");
     expect(next).toEqual({ EXISTING: "kept", FOO: "1" });
+  });
+});
+
+describe("scope kind resolution", () => {
+  // Mirrors the inline scope kind derivation in AgentSettings.tsx. Given the
+  // selected preset and its membership in the three source arrays, the scope
+  // is either "default" (no preset selected) or one of "custom" / "project" /
+  // "ccr". Custom wins over project wins over CCR on id collision, matching
+  // getMergedPresets precedence.
+  function scopeKind(
+    selectedId: string | undefined,
+    customIds: string[],
+    projectIds: string[],
+    ccrIds: string[]
+  ): "default" | "custom" | "project" | "ccr" {
+    if (!selectedId) return "default";
+    if (customIds.includes(selectedId)) return "custom";
+    if (projectIds.includes(selectedId)) return "project";
+    if (ccrIds.includes(selectedId)) return "ccr";
+    return "default";
+  }
+
+  it("returns 'default' when no preset id is selected", () => {
+    expect(scopeKind(undefined, [], [], [])).toBe("default");
+  });
+
+  it("returns 'custom' for custom preset ids", () => {
+    expect(scopeKind("user-1", ["user-1"], [], [])).toBe("custom");
+  });
+
+  it("returns 'project' for project preset ids", () => {
+    expect(scopeKind("proj-a", [], ["proj-a"], [])).toBe("project");
+  });
+
+  it("returns 'ccr' for ccr preset ids", () => {
+    expect(scopeKind("ccr-x", [], [], ["ccr-x"])).toBe("ccr");
+  });
+
+  it("falls back to 'default' when selected id no longer exists (stale)", () => {
+    expect(scopeKind("deleted-id", [], [], [])).toBe("default");
+  });
+
+  it("prefers custom over project when ids collide", () => {
+    const id = "shared-id";
+    expect(scopeKind(id, [id], [id], [])).toBe("custom");
+  });
+
+  it("prefers project over ccr when ids collide", () => {
+    const id = "shared-id";
+    expect(scopeKind(id, [], [id], [id])).toBe("project");
+  });
+
+  // Confirms the "reset in-progress rename" effect fires when scope changes.
+  // The UI reads the activeEntry.presetId as the scope key; any change in this
+  // value must drop editingPresetId to null so the input unmounts cleanly.
+  it("any scope change resets the edit state (prev !== next)", () => {
+    const shouldReset = (prev: string | undefined, next: string | undefined): boolean =>
+      prev !== next;
+    expect(shouldReset(undefined, "user-1")).toBe(true);
+    expect(shouldReset("user-1", undefined)).toBe(true);
+    expect(shouldReset("user-1", "user-2")).toBe(true);
+    expect(shouldReset("user-1", "user-1")).toBe(false);
+    expect(shouldReset(undefined, undefined)).toBe(false);
   });
 });

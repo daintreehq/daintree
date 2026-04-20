@@ -141,21 +141,26 @@ export function AgentSettings({
     }
   };
 
-  // Reset preset-editing state when switching between agent subtabs. Without
-  // this, an in-progress rename on one agent's preset would leak into a
-  // different agent's panel after a tab switch (and can silently commit the
-  // rename to the wrong agent on blur).
-  useEffect(() => {
-    setEditingPresetId(null);
-    setEditName("");
-  }, [activeSubtab]);
-
   const agentIds = useMemo(() => getAgentIds(), []);
   const effectiveSettings = settings ?? DEFAULT_AGENT_SETTINGS;
 
   const isGeneralActive =
     activeSubtab === GENERAL_SUBTAB_ID || activeSubtab === null || !agentIds.includes(activeSubtab);
   const activeAgentId = isGeneralActive ? null : activeSubtab;
+
+  // Reset preset-editing state when switching agent subtabs OR scopes. Without
+  // activeSubtab we leak an in-progress rename from one agent into another on
+  // tab switch; without presetId the unified scope editor's keyed remount
+  // unmounts the input (editingPresetId stays set, so returning to that preset
+  // reopens it in edit mode with stale buffer text). Cancel rather than
+  // commit — matches handleCancelEdit's existing gesture semantics for blur.
+  const activeEntryPresetId = activeAgentId
+    ? (settings?.agents?.[activeAgentId]?.presetId ?? null)
+    : null;
+  useEffect(() => {
+    setEditingPresetId(null);
+    setEditName("");
+  }, [activeSubtab, activeEntryPresetId]);
 
   // Stale-preset cleanup in Settings: when a saved presetId no longer resolves
   // (deleted custom preset, CCR route removed from config), clear it so the
@@ -388,116 +393,13 @@ export function AgentSettings({
               />
             </div>
 
-            {/* Agent-level Defaults — always visible */}
-            <div
-              id="agents-defaults"
-              className="rounded-[var(--radius-lg)] border border-daintree-border bg-surface p-4 space-y-4"
-            >
-              <div className="pb-3 border-b border-daintree-border">
-                <label className="text-sm font-medium text-daintree-text">Defaults</label>
-                <p className="text-xs text-daintree-text/40 select-text">
-                  Base settings for every launch. Custom presets can override these.
-                </p>
-              </div>
-              <div className="space-y-3">
-                {(() => {
-                  const agentCfg = getAgentConfig(activeAgent.id);
-                  const supportsInlineMode = !!agentCfg?.capabilities?.inlineModeFlag;
-                  const skipPerms = activeEntry.dangerousEnabled ?? false;
-                  const inlineMode = activeEntry.inlineMode ?? true;
-                  const customFlags = activeEntry.customFlags ?? "";
-                  return (
-                    <>
-                      <div id="agents-skip-permissions-default" className="space-y-1.5">
-                        <SettingsSwitchCard
-                          variant="compact"
-                          title="Skip Permissions"
-                          subtitle="Auto-approve all file, command, and network actions"
-                          isEnabled={skipPerms}
-                          onChange={() => {
-                            void (async () => {
-                              await updateAgent(activeAgent.id, { dangerousEnabled: !skipPerms });
-                              onSettingsChange?.();
-                            })();
-                          }}
-                          ariaLabel={`Skip permissions for ${activeAgent.name}`}
-                          colorScheme="danger"
-                        />
-                        {skipPerms && defaultDangerousArg && (
-                          <div className="flex items-center gap-2 px-3 py-1.5 rounded-[var(--radius-md)] bg-status-error/10 border border-status-error/20">
-                            <code className="text-xs text-status-error font-mono">
-                              {defaultDangerousArg}
-                            </code>
-                            <span className="text-xs text-daintree-text/40">added to command</span>
-                          </div>
-                        )}
-                      </div>
-                      {supportsInlineMode && (
-                        <div id="agents-inline-mode-default">
-                          <SettingsSwitchCard
-                            variant="compact"
-                            title="Inline Mode"
-                            subtitle="Disable fullscreen TUI for better resize handling and scrollback"
-                            isEnabled={inlineMode}
-                            onChange={() => {
-                              void (async () => {
-                                await updateAgent(activeAgent.id, { inlineMode: !inlineMode });
-                                onSettingsChange?.();
-                              })();
-                            }}
-                            ariaLabel={`Inline mode for ${activeAgent.name}`}
-                          />
-                        </div>
-                      )}
-                      <div id="agents-custom-args-default" className="space-y-1.5">
-                        <label className="text-sm font-medium text-daintree-text">
-                          Custom Arguments
-                        </label>
-                        <input
-                          className="w-full rounded-[var(--radius-md)] border border-border-strong bg-daintree-bg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-daintree-accent/50 placeholder:text-text-muted"
-                          value={customFlags}
-                          onChange={(e) => {
-                            void updateAgent(activeAgent.id, { customFlags: e.target.value });
-                          }}
-                          placeholder="--verbose --max-tokens=4096"
-                        />
-                        <p className="text-xs text-daintree-text/40 select-text">
-                          Extra CLI flags appended when launching
-                        </p>
-                      </div>
-                    </>
-                  );
-                })()}
-                <div id="agents-global-env" className="space-y-2">
-                  <div>
-                    <label className="text-sm font-medium text-daintree-text">
-                      Global env vars
-                    </label>
-                    <p className="text-xs text-daintree-text/40 select-text">
-                      Applied to every launch. Preset-specific vars take precedence.
-                    </p>
-                  </div>
-                  <EnvVarEditor
-                    env={(activeEntry.globalEnv as Record<string, string>) ?? {}}
-                    onChange={(globalEnv) => {
-                      void (async () => {
-                        await updateAgent(activeAgent.id, {
-                          globalEnv: Object.keys(globalEnv).length > 0 ? globalEnv : undefined,
-                        });
-                        onSettingsChange?.();
-                      })();
-                    }}
-                    suggestions={getAgentConfig(activeAgent.id)?.envSuggestions ?? []}
-                    datalistId="env-key-suggestions-global"
-                    contextKey={`global-${activeAgent.id}`}
-                    valuePlaceholder="value"
-                    data-testid="global-env-editor"
-                  />
-                </div>
-              </div>
-            </div>
-
-            {/* Preset section — picker + all per-preset settings inside */}
+            {/* Unified scope editor — one set of controls for Default or a
+                preset. The scope selector lives at the top; the editor body
+                is keyed on the scope id so rename/edit state resets naturally
+                when the user switches scopes (avoids a parallel reset effect
+                — see issue #4958). CCR and project presets render read-only
+                with a Duplicate affordance; the shared `globalEnv` and agent
+                defaults apply when scope is "default". */}
             {(() => {
               const ccrPresets = ccrPresetsByAgent[activeAgent.id];
               const projectPresets = projectPresetsByAgent[activeAgent.id];
@@ -533,6 +435,24 @@ export function AgentSettings({
                 !selectedIsProject &&
                 selectedPreset.id.startsWith("ccr-");
 
+              type ScopeKind = "default" | "custom" | "project" | "ccr";
+              const scopeKind: ScopeKind = !selectedPreset
+                ? "default"
+                : selectedIsCustom
+                  ? "custom"
+                  : selectedIsProject
+                    ? "project"
+                    : selectedIsCcr
+                      ? "ccr"
+                      : "default";
+              const stripCcr = (n: string) => n.replace(/^CCR:\s*/, "");
+              const scopeLabel =
+                scopeKind === "default"
+                  ? "Default"
+                  : scopeKind === "ccr" && selectedPreset
+                    ? stripCcr(selectedPreset.name)
+                    : (selectedPreset?.name ?? "Default");
+
               // ── handlers ──────────────────────────────────────────────────
 
               const openAddDialog = () => {
@@ -546,8 +466,10 @@ export function AgentSettings({
                   ...(activeEntry.customPresets ?? []),
                   { ...preset, id, name: `${preset.name} (copy)` },
                 ];
+                // Select the new copy so the user lands in the editor for the
+                // duplicated preset — parallels handleCreatePreset's auto-select.
                 void (async () => {
-                  await updateAgent(activeAgent.id, { customPresets: updated });
+                  await updateAgent(activeAgent.id, { customPresets: updated, presetId: id });
                   onSettingsChange?.();
                 })();
               };
@@ -616,16 +538,7 @@ export function AgentSettings({
                 setEditName("");
               };
 
-              // ── custom preset behavioral overrides ────────────────────────
-              // Only rendered inside the custom-preset detail panel. Reads
-              // from the preset, falling back to agent-level defaults when
-              // the preset omits an override. Writes via handleUpdatePreset.
-              //
-              // Booleans render as tri-state selects (Inherit/On/Off): a
-              // `boolean | undefined` override where `undefined` inherits the
-              // agent-level default at launch. Custom Arguments uses a text
-              // input with a reset button that clears the override.
-
+              // ── scope-aware values ────────────────────────────────────────
               const agentDefaultDangerous = activeEntry.dangerousEnabled ?? false;
               const agentDefaultInline = activeEntry.inlineMode ?? true;
               const agentDefaultCustomFlags = activeEntry.customFlags ?? "";
@@ -634,146 +547,71 @@ export function AgentSettings({
               const inlineOverride = selectedPreset?.inlineMode;
               const customFlagsOverride = selectedPreset?.customFlags;
 
-              // Effective (merged) values — the dangerous-arg strip must
-              // reflect what actually gets passed to the CLI at launch.
-              const effectiveSkipPerms = dangerousOverride ?? agentDefaultDangerous;
+              // Dangerous-arg strip reflects what actually gets passed to the
+              // CLI at launch — agent default in Default scope, preset merge
+              // result in custom scope.
+              const effectiveSkipPerms =
+                scopeKind === "custom"
+                  ? (dangerousOverride ?? agentDefaultDangerous)
+                  : agentDefaultDangerous;
 
-              const onDangerousOverrideChange = (value: boolean | undefined) => {
-                if (!selectedPreset) return;
-                handleUpdatePreset(selectedPreset.id, { dangerousEnabled: value });
+              const effectiveInlineMode =
+                scopeKind === "custom"
+                  ? (inlineOverride ?? agentDefaultInline)
+                  : agentDefaultInline;
+
+              const handleSkipPermsChange = () => {
+                if (scopeKind === "default") {
+                  void (async () => {
+                    await updateAgent(activeAgent.id, {
+                      dangerousEnabled: !agentDefaultDangerous,
+                    });
+                    onSettingsChange?.();
+                  })();
+                } else if (scopeKind === "custom" && selectedPreset) {
+                  handleUpdatePreset(selectedPreset.id, { dangerousEnabled: !effectiveSkipPerms });
+                }
               };
 
-              const onInlineOverrideChange = (value: boolean | undefined) => {
-                if (!selectedPreset) return;
-                handleUpdatePreset(selectedPreset.id, { inlineMode: value });
+              const handleInlineModeChange = () => {
+                if (scopeKind === "default") {
+                  void (async () => {
+                    await updateAgent(activeAgent.id, { inlineMode: !agentDefaultInline });
+                    onSettingsChange?.();
+                  })();
+                } else if (scopeKind === "custom" && selectedPreset) {
+                  handleUpdatePreset(selectedPreset.id, { inlineMode: !effectiveInlineMode });
+                }
               };
 
-              const onCustomFlagsOverrideChange = (value: string) => {
-                if (!selectedPreset) return;
-                handleUpdatePreset(selectedPreset.id, { customFlags: value });
+              const handleCustomFlagsChange = (value: string) => {
+                if (scopeKind === "default") {
+                  void updateAgent(activeAgent.id, { customFlags: value });
+                } else if (scopeKind === "custom" && selectedPreset) {
+                  handleUpdatePreset(selectedPreset.id, { customFlags: value });
+                }
               };
 
-              const onCustomFlagsOverrideReset = () => {
-                if (!selectedPreset) return;
-                handleUpdatePreset(selectedPreset.id, { customFlags: undefined });
+              const handleDangerousOverrideReset = () => {
+                if (scopeKind === "custom" && selectedPreset) {
+                  handleUpdatePreset(selectedPreset.id, { dangerousEnabled: undefined });
+                }
               };
 
-              // Tri-state select serialization: a non-empty sentinel stands
-              // in for "no override" because Radix Select forbids `value=""`
-              // on SelectItem. The sentinel is never persisted — it is mapped
-              // back to `undefined` in `selectValueToBool` before any write.
-              const boolToSelectValue = (v: boolean | undefined): string =>
-                v === undefined ? "__inherit__" : v ? "true" : "false";
-              // Defensively fall back to `undefined` for unexpected strings so
-              // a future option-value typo can't silently write `false`.
-              const selectValueToBool = (s: string): boolean | undefined =>
-                s === "true" ? true : s === "false" ? false : undefined;
+              const handleInlineOverrideReset = () => {
+                if (scopeKind === "custom" && selectedPreset) {
+                  handleUpdatePreset(selectedPreset.id, { inlineMode: undefined });
+                }
+              };
 
-              const dangerousSelectOptions = [
-                {
-                  value: "__inherit__",
-                  label: `Inherit (${agentDefaultDangerous ? "On" : "Off"})`,
-                },
-                { value: "true", label: "On" },
-                { value: "false", label: "Off" },
-              ];
+              const handleCustomFlagsOverrideReset = () => {
+                if (scopeKind === "custom" && selectedPreset) {
+                  handleUpdatePreset(selectedPreset.id, { customFlags: undefined });
+                }
+              };
 
-              const inlineSelectOptions = [
-                {
-                  value: "__inherit__",
-                  label: `Inherit (${agentDefaultInline ? "On" : "Off"})`,
-                },
-                { value: "true", label: "On" },
-                { value: "false", label: "Off" },
-              ];
-
-              // Only build when a preset is selected — the aria-label template
-              // literals below dereference `selectedPreset.name`, so building
-              // this unconditionally would throw on the re-render that follows
-              // deleting the currently selected preset (presetId reset to
-              // undefined → selectedPreset becomes undefined).
-              const behavioralSettings = selectedPreset ? (
-                <div className="space-y-3">
-                  <div id="agents-skip-permissions-preset" className="space-y-1.5">
-                    <SettingsSelect
-                      label="Skip Permissions"
-                      description="Auto-approve all file, command, and network actions"
-                      value={boolToSelectValue(dangerousOverride)}
-                      onValueChange={(v) => onDangerousOverrideChange(selectValueToBool(v))}
-                      isModified={dangerousOverride !== undefined}
-                      onReset={() => onDangerousOverrideChange(undefined)}
-                      resetAriaLabel={`Reset skip permissions override for ${selectedPreset.name}`}
-                      options={dangerousSelectOptions}
-                    />
-                    {effectiveSkipPerms && defaultDangerousArg && (
-                      <div className="flex items-center gap-2 px-3 py-1.5 rounded-[var(--radius-md)] bg-status-error/10 border border-status-error/20">
-                        <code className="text-xs text-status-error font-mono">
-                          {defaultDangerousArg}
-                        </code>
-                        <span className="text-xs text-daintree-text/40">added to command</span>
-                      </div>
-                    )}
-                  </div>
-
-                  {supportsInlineMode && (
-                    <div id="agents-inline-mode-preset">
-                      <SettingsSelect
-                        label="Inline Mode"
-                        description="Disable fullscreen TUI for better resize handling and scrollback"
-                        value={boolToSelectValue(inlineOverride)}
-                        onValueChange={(v) => onInlineOverrideChange(selectValueToBool(v))}
-                        isModified={inlineOverride !== undefined}
-                        onReset={() => onInlineOverrideChange(undefined)}
-                        resetAriaLabel={`Reset inline mode override for ${selectedPreset.name}`}
-                        options={inlineSelectOptions}
-                      />
-                    </div>
-                  )}
-
-                  <div id="agents-custom-args-preset" className="group space-y-1.5">
-                    <div className="flex items-center gap-2">
-                      <label className="text-sm font-medium text-daintree-text">
-                        Custom Arguments
-                      </label>
-                      {customFlagsOverride !== undefined && (
-                        <>
-                          <span
-                            className="w-1.5 h-1.5 rounded-full bg-daintree-accent"
-                            aria-hidden="true"
-                          />
-                          <button
-                            type="button"
-                            aria-label={`Reset custom arguments override for ${selectedPreset.name}`}
-                            className="p-0.5 rounded-sm text-daintree-text/40 hover:text-daintree-accent invisible group-hover:visible group-focus-within:visible focus-visible:visible focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent transition-colors"
-                            onClick={onCustomFlagsOverrideReset}
-                            data-testid="preset-custom-flags-reset"
-                          >
-                            <RotateCcw className="w-3 h-3" />
-                          </button>
-                        </>
-                      )}
-                    </div>
-                    <input
-                      className="w-full rounded-[var(--radius-md)] border border-border-strong bg-daintree-bg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-daintree-accent/50 placeholder:text-text-muted"
-                      value={customFlagsOverride ?? ""}
-                      onChange={(e) => onCustomFlagsOverrideChange(e.target.value)}
-                      placeholder={
-                        customFlagsOverride === undefined
-                          ? agentDefaultCustomFlags || "Inherit (no flags)"
-                          : "--verbose --max-tokens=4096"
-                      }
-                      data-testid="preset-custom-flags-input"
-                    />
-                    <p className="text-xs text-daintree-text/40 select-text">
-                      {customFlagsOverride === undefined
-                        ? "Inheriting from agent default. Type to override."
-                        : "Extra CLI flags for this preset"}
-                    </p>
-                  </div>
-                </div>
-              ) : null;
-
-              // ── env var reference (always shown) ─────────────────────────
+              // Env var suggestions for the always-visible reference strip
+              // shown under the custom preset's env editor.
               const agentEnvSuggestions = getAgentConfig(activeAgent.id)?.envSuggestions ?? [];
               const envVarReference = (
                 <div className="space-y-0.5 pt-1">
@@ -794,17 +632,34 @@ export function AgentSettings({
                 </div>
               );
 
+              const isEditableScope = scopeKind === "default" || scopeKind === "custom";
+              const customArgsValue =
+                scopeKind === "custom" ? (customFlagsOverride ?? "") : agentDefaultCustomFlags;
+              const customArgsPlaceholder =
+                scopeKind === "custom" && customFlagsOverride === undefined
+                  ? agentDefaultCustomFlags || "Using default (no flags)"
+                  : "--verbose --max-tokens=4096";
+              const customArgsDescription =
+                scopeKind === "custom"
+                  ? customFlagsOverride === undefined
+                    ? "Using default. Type to override."
+                    : "Extra CLI flags for this preset"
+                  : "Extra CLI flags appended when launching";
+
               return (
                 <div
                   id="agents-presets"
                   className="rounded-[var(--radius-lg)] border border-daintree-border bg-surface p-4 space-y-4"
                 >
+                  {/* Header: title + Add button */}
                   <div className="pb-3 border-b border-daintree-border">
                     <div className="flex items-center justify-between">
                       <div>
-                        <label className="text-sm font-medium text-daintree-text">Presets</label>
+                        <label className="text-sm font-medium text-daintree-text">
+                          Runtime Settings
+                        </label>
                         <p className="text-xs text-daintree-text/40 select-text">
-                          Variants with different env overrides and model routes
+                          Pick a scope — Default applies everywhere; presets override it.
                         </p>
                       </div>
                       <Button
@@ -815,151 +670,84 @@ export function AgentSettings({
                         onClick={openAddDialog}
                       >
                         <Plus size={14} />
-                        Add
+                        Add Preset
                       </Button>
                     </div>
                   </div>
 
-                  {allPresets.length > 0 && (
-                    <>
-                      {/* Unified preset picker — Popover listbox with color swatches and grouping */}
-                      <PresetSelector
-                        selectedPresetId={activeEntry.presetId ?? undefined}
-                        allPresets={allPresets}
-                        ccrPresets={ccrPresets ?? []}
-                        projectPresets={projectPresets ?? []}
-                        customPresets={customPresets ?? []}
-                        onChange={(presetId) => {
-                          void (async () => {
-                            await updateAgent(activeAgent.id, { presetId: presetId ?? undefined });
-                            onSettingsChange?.();
-                          })();
-                        }}
-                        agentColor={getAgentConfig(activeAgent.id)?.color ?? "#888888"}
-                      />
+                  {/* Scope picker — always shown so Default and presets live on the same selector */}
+                  <PresetSelector
+                    selectedPresetId={activeEntry.presetId ?? undefined}
+                    allPresets={allPresets}
+                    ccrPresets={ccrPresets ?? []}
+                    projectPresets={projectPresets ?? []}
+                    customPresets={customPresets ?? []}
+                    onChange={(presetId) => {
+                      void (async () => {
+                        await updateAgent(activeAgent.id, { presetId: presetId ?? undefined });
+                        onSettingsChange?.();
+                      })();
+                    }}
+                    agentColor={getAgentConfig(activeAgent.id)?.color ?? "#888888"}
+                  />
 
-                      {/* Hidden datalist retained for any remaining text inputs that still reference it */}
-                      <datalist id="env-key-suggestions">
-                        {(getAgentConfig(activeAgent.id)?.envSuggestions ?? []).map(({ key }) => (
-                          <option key={key} value={key} />
-                        ))}
-                      </datalist>
-                    </>
-                  )}
-
-                  {/* Detail view for selected CCR preset */}
-                  {selectedPreset && selectedIsCcr && (
-                    <div className="rounded-[var(--radius-md)] border border-daintree-border bg-daintree-bg/30 divide-y divide-daintree-border/50">
-                      <div className="px-3 py-2.5 space-y-2">
-                        <div className="flex items-center gap-1.5">
-                          <span className="text-xs font-medium text-daintree-text">
-                            {selectedPreset.name.replace(/^CCR:\s*/, "")}
-                          </span>
-                          <span
-                            data-testid="preset-badge-auto"
-                            className="text-[10px] text-daintree-text/40 bg-daintree-text/10 px-1.5 py-0.5 rounded"
-                          >
-                            auto
-                          </span>
-                          <button
-                            className="ml-auto text-daintree-text/30 hover:text-daintree-text transition-colors"
-                            onClick={() => handleDuplicatePreset(selectedPreset)}
-                            aria-label={`Duplicate ${selectedPreset.name.replace(/^CCR:\s*/, "")}`}
-                            title="Duplicate as custom"
-                          >
-                            <Copy size={13} />
-                          </button>
-                        </div>
-                        {selectedPreset.env && Object.keys(selectedPreset.env).length > 0 && (
-                          <div className="space-y-1">
-                            {Object.entries(selectedPreset.env).map(([k, v]) => (
-                              <div
-                                key={k}
-                                className="flex items-center gap-2 font-mono text-[11px]"
-                              >
-                                <span className="text-daintree-text/50 shrink-0">{k}</span>
-                                <span className="text-daintree-text/30">=</span>
-                                <span className="text-daintree-accent/70 truncate">{v}</span>
-                              </div>
-                            ))}
-                          </div>
-                        )}
-                        {selectedPreset.description && (
-                          <p className="text-[11px] text-daintree-text/40 select-text">
-                            {selectedPreset.description}
-                          </p>
-                        )}
-                      </div>
-                      <div className="px-3 py-2">
-                        <p className="text-xs text-daintree-text/40 select-text">
-                          Uses agent-level defaults above, unless overridden in a custom preset.
-                        </p>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Detail view for selected project-shared preset — read-only, mirrors CCR */}
-                  {selectedPreset && selectedIsProject && (
-                    <div className="rounded-[var(--radius-md)] border border-daintree-border bg-daintree-bg/30 divide-y divide-daintree-border/50">
-                      <div className="px-3 py-2.5 space-y-2">
-                        <div className="flex items-center gap-1.5">
-                          <span className="text-xs font-medium text-daintree-text">
-                            {selectedPreset.name}
-                          </span>
-                          <span
-                            data-testid="preset-badge-project"
-                            className="text-[10px] text-daintree-text/40 bg-daintree-text/10 px-1.5 py-0.5 rounded"
-                          >
-                            project
-                          </span>
-                          <button
-                            className="ml-auto text-daintree-text/30 hover:text-daintree-text transition-colors"
-                            onClick={() => handleDuplicatePreset(selectedPreset)}
-                            aria-label={`Duplicate ${selectedPreset.name}`}
-                            title="Duplicate as custom"
-                          >
-                            <Copy size={13} />
-                          </button>
-                        </div>
-                        {selectedPreset.env && Object.keys(selectedPreset.env).length > 0 && (
-                          <div className="space-y-1">
-                            {Object.entries(selectedPreset.env).map(([k, v]) => (
-                              <div
-                                key={k}
-                                className="flex items-center gap-2 font-mono text-[11px]"
-                              >
-                                <span className="text-daintree-text/50 shrink-0">{k}</span>
-                                <span className="text-daintree-text/30">=</span>
-                                <span className="text-daintree-accent/70 truncate">{v}</span>
-                              </div>
-                            ))}
-                          </div>
-                        )}
-                        {selectedPreset.description && (
-                          <p className="text-[11px] text-daintree-text/40 select-text">
-                            {selectedPreset.description}
-                          </p>
-                        )}
-                        <p className="text-[10px] text-daintree-text/40 select-text">
-                          Sourced from <code>.daintree/presets/</code> in this project.
-                        </p>
-                      </div>
-                      <div className="px-3 py-2">
-                        <p className="text-xs text-daintree-text/40 select-text">
-                          Uses agent-level defaults above, unless overridden in a custom preset.
-                        </p>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Detail view for selected custom preset */}
-                  {selectedPreset && selectedIsCustom && (
-                    <div
-                      id="agents-preset-detail"
-                      className="rounded-[var(--radius-md)] border border-daintree-border bg-daintree-bg/30 divide-y divide-daintree-border/50"
+                  {/* Scope banner — mitigates context-hijack confusion when
+                      a new preset is auto-selected on create */}
+                  <div className="flex items-center gap-2 text-xs">
+                    <span className="text-daintree-text/50">Editing:</span>
+                    <span
+                      className="text-daintree-text font-medium"
+                      data-testid="scope-banner-label"
                     >
-                      {/* Name row */}
-                      <div className="flex items-center gap-2 px-3 py-2.5">
+                      {scopeLabel}
+                    </span>
+                    {scopeKind === "ccr" && (
+                      <span
+                        data-testid="preset-badge-auto"
+                        className="text-[10px] text-daintree-text/40 bg-daintree-text/10 px-1.5 py-0.5 rounded"
+                      >
+                        auto
+                      </span>
+                    )}
+                    {scopeKind === "project" && (
+                      <span
+                        data-testid="preset-badge-project"
+                        className="text-[10px] text-daintree-text/40 bg-daintree-text/10 px-1.5 py-0.5 rounded"
+                      >
+                        project
+                      </span>
+                    )}
+                    {scopeKind === "custom" && (
+                      <span
+                        data-testid="preset-badge-custom"
+                        className="text-[10px] text-daintree-accent bg-daintree-accent/10 px-1.5 py-0.5 rounded"
+                      >
+                        custom
+                      </span>
+                    )}
+                  </div>
+
+                  {/* Hidden datalist retained for custom flags input autocomplete */}
+                  <datalist id="env-key-suggestions">
+                    {agentEnvSuggestions.map(({ key }) => (
+                      <option key={key} value={key} />
+                    ))}
+                  </datalist>
+
+                  {/* Editor body — keyed on the scope so React unmounts/remounts
+                      the rename input and form state naturally on scope change.
+                      Outer card (scope picker + header) stays mounted. */}
+                  <div
+                    key={activeEntry.presetId ?? "default"}
+                    className="space-y-3"
+                    data-testid="scope-editor-body"
+                  >
+                    {/* Custom preset scope chrome: rename / duplicate / delete */}
+                    {scopeKind === "custom" && selectedPreset && (
+                      <div
+                        id="agents-preset-detail"
+                        className="flex items-center gap-2 rounded-[var(--radius-md)] border border-daintree-border bg-daintree-bg/30 px-3 py-2.5"
+                      >
                         {/* Color picker — preset palette with Clear + Custom escape hatch */}
                         <PresetColorPicker
                           color={selectedPreset.color}
@@ -967,7 +755,6 @@ export function AgentSettings({
                           onChange={(color) => handleUpdatePreset(selectedPreset.id, { color })}
                           ariaLabel="Preset color"
                         />
-
                         {editingPresetId === selectedPreset.id ? (
                           <input
                             className="flex-1 text-sm font-medium bg-daintree-bg border border-daintree-accent rounded px-2 py-0.5 focus:outline-none"
@@ -1000,8 +787,6 @@ export function AgentSettings({
                             <Pencil size={12} className="text-daintree-text/30" />
                           </button>
                         )}
-
-                        {/* Duplicate / Delete inline */}
                         <div className="flex items-center gap-1.5 ml-auto shrink-0">
                           <button
                             className="text-daintree-text/30 hover:text-daintree-text transition-colors"
@@ -1019,136 +804,319 @@ export function AgentSettings({
                           >
                             <Trash2 size={13} />
                           </button>
-                          <span
-                            data-testid="preset-badge-custom"
-                            className="text-[10px] text-daintree-accent bg-daintree-accent/10 px-1.5 py-0.5 rounded"
-                          >
-                            custom
-                          </span>
                         </div>
                       </div>
+                    )}
 
-                      {/* Env var editor — draft-row state with empty/duplicate key validation */}
-                      <div className="px-3 py-2.5 space-y-1.5">
-                        <span className="text-[11px] text-daintree-text/50 font-medium uppercase tracking-wide block">
-                          Env overrides
-                        </span>
-                        <EnvVarEditor
-                          env={selectedPreset.env ?? {}}
-                          onChange={(env) => handleUpdatePreset(selectedPreset.id, { env })}
-                          suggestions={getAgentConfig(activeAgent.id)?.envSuggestions ?? []}
-                          datalistId="env-key-suggestions"
-                          contextKey={selectedPreset.id}
-                          inheritedEnv={activeEntry.globalEnv as Record<string, string> | undefined}
-                          data-testid="preset-env-editor"
-                        />
-                        {envVarReference}
-                      </div>
+                    {/* Behavioral settings (Default / Custom scopes — editable) */}
+                    {isEditableScope && (
+                      <>
+                        <div id="agents-skip-permissions" className="space-y-1.5">
+                          <SettingsSwitchCard
+                            variant="compact"
+                            title="Skip Permissions"
+                            subtitle={
+                              scopeKind === "custom" && dangerousOverride === undefined
+                                ? `Using default (${agentDefaultDangerous ? "On" : "Off"})`
+                                : "Auto-approve all file, command, and network actions"
+                            }
+                            isEnabled={effectiveSkipPerms}
+                            onChange={handleSkipPermsChange}
+                            ariaLabel={`Skip permissions for ${scopeLabel}`}
+                            colorScheme="danger"
+                            isModified={scopeKind === "custom" && dangerousOverride !== undefined}
+                            onReset={
+                              scopeKind === "custom" ? handleDangerousOverrideReset : undefined
+                            }
+                            resetAriaLabel={
+                              scopeKind === "custom"
+                                ? `Reset skip permissions override for ${scopeLabel}`
+                                : undefined
+                            }
+                          />
+                          {effectiveSkipPerms && defaultDangerousArg && (
+                            <div className="flex items-center gap-2 px-3 py-1.5 rounded-[var(--radius-md)] bg-status-error/10 border border-status-error/20">
+                              <code className="text-xs text-status-error font-mono">
+                                {defaultDangerousArg}
+                              </code>
+                              <span className="text-xs text-daintree-text/40">
+                                added to command
+                              </span>
+                            </div>
+                          )}
+                        </div>
 
-                      {/* Behavioral settings */}
-                      <div className="px-3 py-2.5">{behavioralSettings}</div>
+                        {supportsInlineMode && (
+                          <div id="agents-inline-mode">
+                            <SettingsSwitchCard
+                              variant="compact"
+                              title="Inline Mode"
+                              subtitle={
+                                scopeKind === "custom" && inlineOverride === undefined
+                                  ? `Using default (${agentDefaultInline ? "On" : "Off"})`
+                                  : "Disable fullscreen TUI for better resize handling and scrollback"
+                              }
+                              isEnabled={effectiveInlineMode}
+                              onChange={handleInlineModeChange}
+                              ariaLabel={`Inline mode for ${scopeLabel}`}
+                              isModified={scopeKind === "custom" && inlineOverride !== undefined}
+                              onReset={
+                                scopeKind === "custom" ? handleInlineOverrideReset : undefined
+                              }
+                              resetAriaLabel={
+                                scopeKind === "custom"
+                                  ? `Reset inline mode override for ${scopeLabel}`
+                                  : undefined
+                              }
+                            />
+                          </div>
+                        )}
 
-                      {/* Fallback chain editor */}
-                      <div className="px-3 py-2.5 space-y-1.5">
-                        <div>
-                          <label className="text-sm font-medium text-daintree-text">
-                            Fallback presets
-                          </label>
+                        <div id="agents-custom-args" className="group/args space-y-1.5">
+                          <div className="flex items-center gap-2">
+                            <label className="text-sm font-medium text-daintree-text">
+                              Custom Arguments
+                            </label>
+                            {scopeKind === "custom" && customFlagsOverride !== undefined && (
+                              <>
+                                <span
+                                  className="w-1.5 h-1.5 rounded-full bg-daintree-accent"
+                                  aria-hidden="true"
+                                />
+                                <button
+                                  type="button"
+                                  aria-label={`Reset custom arguments override for ${scopeLabel}`}
+                                  className="p-0.5 rounded-sm text-daintree-text/40 hover:text-daintree-accent invisible group-hover/args:visible group-focus-within/args:visible focus-visible:visible focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent transition-colors"
+                                  onClick={handleCustomFlagsOverrideReset}
+                                  data-testid="preset-custom-flags-reset"
+                                >
+                                  <RotateCcw className="w-3 h-3" />
+                                </button>
+                              </>
+                            )}
+                          </div>
+                          <input
+                            className="w-full rounded-[var(--radius-md)] border border-border-strong bg-daintree-bg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-daintree-accent/50 placeholder:text-text-muted"
+                            value={customArgsValue}
+                            onChange={(e) => handleCustomFlagsChange(e.target.value)}
+                            placeholder={customArgsPlaceholder}
+                            data-testid={
+                              scopeKind === "custom" ? "preset-custom-flags-input" : undefined
+                            }
+                          />
                           <p className="text-xs text-daintree-text/40 select-text">
-                            Tried in order if this preset's provider is unreachable. No retry for
-                            rate limits or prompt errors.
+                            {customArgsDescription}
                           </p>
                         </div>
-                        {(() => {
-                          const chain = selectedPreset.fallbacks ?? [];
-                          const candidates = allPresets.filter(
-                            (p) => p.id !== selectedPreset.id && !chain.includes(p.id)
-                          );
-                          const removeFallback = (id: string) => {
-                            handleUpdatePreset(selectedPreset.id, {
-                              fallbacks: chain.filter((f) => f !== id),
-                            });
-                          };
-                          const addFallback = (id: string) => {
-                            if (!id || chain.includes(id) || chain.length >= FALLBACK_CHAIN_MAX)
-                              return;
-                            handleUpdatePreset(selectedPreset.id, {
-                              fallbacks: [...chain, id],
-                            });
-                          };
-                          return (
-                            <>
-                              {chain.length > 0 && (
-                                <ul className="space-y-1">
-                                  {chain.map((id, idx) => {
-                                    const preset = allPresets.find((p) => p.id === id);
-                                    const name = preset?.name ?? id;
-                                    const missing = !preset;
-                                    return (
-                                      <li
-                                        key={id}
-                                        className="flex items-center gap-2 rounded-[var(--radius-md)] border border-daintree-border bg-daintree-bg/30 px-2 py-1.5"
-                                      >
-                                        <span className="text-[10px] text-daintree-text/40 font-mono shrink-0">
-                                          {idx + 1}.
-                                        </span>
-                                        <span
-                                          className={
-                                            missing
-                                              ? "text-xs text-status-error truncate"
-                                              : "text-xs text-daintree-text truncate"
-                                          }
-                                        >
-                                          {name}
-                                          {missing && " (missing)"}
-                                        </span>
-                                        <button
-                                          className="ml-auto text-daintree-text/30 hover:text-status-error transition-colors shrink-0"
-                                          onClick={() => removeFallback(id)}
-                                          aria-label={`Remove ${name} from fallback chain`}
-                                          title="Remove"
-                                        >
-                                          <XIcon size={13} />
-                                        </button>
-                                      </li>
-                                    );
-                                  })}
-                                </ul>
-                              )}
-                              {chain.length < FALLBACK_CHAIN_MAX && candidates.length > 0 && (
-                                <select
-                                  className="w-full rounded-[var(--radius-md)] border border-border-strong bg-daintree-bg px-3 py-2 text-sm"
-                                  value=""
-                                  onChange={(e) => {
-                                    const v = e.target.value;
-                                    if (v) addFallback(v);
-                                  }}
-                                  aria-label="Add fallback preset"
-                                >
-                                  <option value="">Add fallback preset…</option>
-                                  {candidates.map((p) => (
-                                    <option key={p.id} value={p.id}>
-                                      {p.name}
-                                    </option>
-                                  ))}
-                                </select>
-                              )}
-                              {chain.length >= FALLBACK_CHAIN_MAX && (
-                                <p className="text-[11px] text-daintree-text/40">
-                                  Maximum of {FALLBACK_CHAIN_MAX} fallbacks reached.
-                                </p>
-                              )}
-                              {chain.length < FALLBACK_CHAIN_MAX && candidates.length === 0 && (
-                                <p className="text-[11px] text-daintree-text/40">
-                                  No other presets available for this agent.
-                                </p>
-                              )}
-                            </>
-                          );
-                        })()}
+                      </>
+                    )}
+
+                    {/* Env editor — Default scope writes globalEnv; custom
+                        scope writes preset.env with inheritance surfaced. */}
+                    {scopeKind === "default" && (
+                      <div id="agents-global-env" className="space-y-2">
+                        <div>
+                          <label className="text-sm font-medium text-daintree-text">
+                            Global env vars
+                          </label>
+                          <p className="text-xs text-daintree-text/40 select-text">
+                            Applied to every launch. Preset-specific vars take precedence.
+                          </p>
+                        </div>
+                        <EnvVarEditor
+                          env={(activeEntry.globalEnv as Record<string, string>) ?? {}}
+                          onChange={(globalEnv) => {
+                            void (async () => {
+                              await updateAgent(activeAgent.id, {
+                                globalEnv:
+                                  Object.keys(globalEnv).length > 0 ? globalEnv : undefined,
+                              });
+                              onSettingsChange?.();
+                            })();
+                          }}
+                          suggestions={getAgentConfig(activeAgent.id)?.envSuggestions ?? []}
+                          datalistId="env-key-suggestions-global"
+                          contextKey={`global-${activeAgent.id}`}
+                          valuePlaceholder="value"
+                          data-testid="global-env-editor"
+                        />
                       </div>
-                    </div>
-                  )}
+                    )}
+
+                    {scopeKind === "custom" && selectedPreset && (
+                      <>
+                        <div className="space-y-1.5">
+                          <span className="text-[11px] text-daintree-text/50 font-medium uppercase tracking-wide block">
+                            Env overrides
+                          </span>
+                          <EnvVarEditor
+                            env={selectedPreset.env ?? {}}
+                            onChange={(env) => handleUpdatePreset(selectedPreset.id, { env })}
+                            suggestions={getAgentConfig(activeAgent.id)?.envSuggestions ?? []}
+                            datalistId="env-key-suggestions"
+                            contextKey={selectedPreset.id}
+                            inheritedEnv={
+                              activeEntry.globalEnv as Record<string, string> | undefined
+                            }
+                            data-testid="preset-env-editor"
+                          />
+                          {envVarReference}
+                        </div>
+
+                        {/* Fallback chain editor */}
+                        <div className="space-y-1.5">
+                          <div>
+                            <label className="text-sm font-medium text-daintree-text">
+                              Fallback presets
+                            </label>
+                            <p className="text-xs text-daintree-text/40 select-text">
+                              Tried in order if this preset's provider is unreachable. No retry for
+                              rate limits or prompt errors.
+                            </p>
+                          </div>
+                          {(() => {
+                            const chain = selectedPreset.fallbacks ?? [];
+                            const candidates = allPresets.filter(
+                              (p) => p.id !== selectedPreset.id && !chain.includes(p.id)
+                            );
+                            const removeFallback = (id: string) => {
+                              handleUpdatePreset(selectedPreset.id, {
+                                fallbacks: chain.filter((f) => f !== id),
+                              });
+                            };
+                            const addFallback = (id: string) => {
+                              if (!id || chain.includes(id) || chain.length >= FALLBACK_CHAIN_MAX)
+                                return;
+                              handleUpdatePreset(selectedPreset.id, {
+                                fallbacks: [...chain, id],
+                              });
+                            };
+                            return (
+                              <>
+                                {chain.length > 0 && (
+                                  <ul className="space-y-1">
+                                    {chain.map((id, idx) => {
+                                      const preset = allPresets.find((p) => p.id === id);
+                                      const name = preset?.name ?? id;
+                                      const missing = !preset;
+                                      return (
+                                        <li
+                                          key={id}
+                                          className="flex items-center gap-2 rounded-[var(--radius-md)] border border-daintree-border bg-daintree-bg/30 px-2 py-1.5"
+                                        >
+                                          <span className="text-[10px] text-daintree-text/40 font-mono shrink-0">
+                                            {idx + 1}.
+                                          </span>
+                                          <span
+                                            className={
+                                              missing
+                                                ? "text-xs text-status-error truncate"
+                                                : "text-xs text-daintree-text truncate"
+                                            }
+                                          >
+                                            {name}
+                                            {missing && " (missing)"}
+                                          </span>
+                                          <button
+                                            className="ml-auto text-daintree-text/30 hover:text-status-error transition-colors shrink-0"
+                                            onClick={() => removeFallback(id)}
+                                            aria-label={`Remove ${name} from fallback chain`}
+                                            title="Remove"
+                                          >
+                                            <XIcon size={13} />
+                                          </button>
+                                        </li>
+                                      );
+                                    })}
+                                  </ul>
+                                )}
+                                {chain.length < FALLBACK_CHAIN_MAX && candidates.length > 0 && (
+                                  <select
+                                    className="w-full rounded-[var(--radius-md)] border border-border-strong bg-daintree-bg px-3 py-2 text-sm"
+                                    value=""
+                                    onChange={(e) => {
+                                      const v = e.target.value;
+                                      if (v) addFallback(v);
+                                    }}
+                                    aria-label="Add fallback preset"
+                                  >
+                                    <option value="">Add fallback preset…</option>
+                                    {candidates.map((p) => (
+                                      <option key={p.id} value={p.id}>
+                                        {p.name}
+                                      </option>
+                                    ))}
+                                  </select>
+                                )}
+                                {chain.length >= FALLBACK_CHAIN_MAX && (
+                                  <p className="text-[11px] text-daintree-text/40">
+                                    Maximum of {FALLBACK_CHAIN_MAX} fallbacks reached.
+                                  </p>
+                                )}
+                                {chain.length < FALLBACK_CHAIN_MAX && candidates.length === 0 && (
+                                  <p className="text-[11px] text-daintree-text/40">
+                                    No other presets available for this agent.
+                                  </p>
+                                )}
+                              </>
+                            );
+                          })()}
+                        </div>
+                      </>
+                    )}
+
+                    {/* Read-only detail views for CCR and project presets */}
+                    {(scopeKind === "ccr" || scopeKind === "project") && selectedPreset && (
+                      <div className="rounded-[var(--radius-md)] border border-daintree-border bg-daintree-bg/30 divide-y divide-daintree-border/50">
+                        <div className="px-3 py-2.5 space-y-2">
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-xs font-medium text-daintree-text">
+                              {scopeKind === "ccr"
+                                ? stripCcr(selectedPreset.name)
+                                : selectedPreset.name}
+                            </span>
+                            <button
+                              className="ml-auto text-daintree-text/30 hover:text-daintree-text transition-colors"
+                              onClick={() => handleDuplicatePreset(selectedPreset)}
+                              aria-label={`Duplicate ${scopeKind === "ccr" ? stripCcr(selectedPreset.name) : selectedPreset.name}`}
+                              title="Duplicate as custom"
+                            >
+                              <Copy size={13} />
+                            </button>
+                          </div>
+                          {selectedPreset.env && Object.keys(selectedPreset.env).length > 0 && (
+                            <div className="space-y-1">
+                              {Object.entries(selectedPreset.env).map(([k, v]) => (
+                                <div
+                                  key={k}
+                                  className="flex items-center gap-2 font-mono text-[11px]"
+                                >
+                                  <span className="text-daintree-text/50 shrink-0">{k}</span>
+                                  <span className="text-daintree-text/30">=</span>
+                                  <span className="text-daintree-accent/70 truncate">{v}</span>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                          {selectedPreset.description && (
+                            <p className="text-[11px] text-daintree-text/40 select-text">
+                              {selectedPreset.description}
+                            </p>
+                          )}
+                          {scopeKind === "project" && (
+                            <p className="text-[10px] text-daintree-text/40 select-text">
+                              Sourced from <code>.daintree/presets/</code> in this project.
+                            </p>
+                          )}
+                        </div>
+                        <div className="px-3 py-2">
+                          <p className="text-xs text-daintree-text/40 select-text">
+                            Read-only. Duplicate as custom to override behavioral settings or env.
+                          </p>
+                        </div>
+                      </div>
+                    )}
+                  </div>
                 </div>
               );
             })()}
