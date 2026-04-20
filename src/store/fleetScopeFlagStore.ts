@@ -11,7 +11,7 @@ interface FleetScopeFlagState {
 }
 
 export const useFleetScopeFlagStore = create<FleetScopeFlagState>()((set, get) => ({
-  mode: "legacy",
+  mode: "scoped",
   isHydrated: false,
 
   setMode: (mode) => {
@@ -22,7 +22,7 @@ export const useFleetScopeFlagStore = create<FleetScopeFlagState>()((set, get) =
 
   hydrate: (mode) => {
     if (get().isHydrated) return;
-    set({ mode: mode === "scoped" ? "scoped" : "legacy", isHydrated: true });
+    set({ mode: mode === "legacy" ? "legacy" : "scoped", isHydrated: true });
   },
 }));
 

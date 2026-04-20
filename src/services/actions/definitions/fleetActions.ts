@@ -362,7 +362,8 @@ export function registerFleetActions(actions: ActionRegistry): void {
     danger: "safe",
     scope: "renderer",
     run: async () => {
-      if (useFleetScopeFlagStore.getState().mode !== "scoped") return;
+      const flag = useFleetScopeFlagStore.getState();
+      if (!flag.isHydrated || flag.mode !== "scoped") return;
       useWorktreeSelectionStore.getState().enterFleetScope();
     },
   }));
@@ -377,7 +378,8 @@ export function registerFleetActions(actions: ActionRegistry): void {
     danger: "safe",
     scope: "renderer",
     run: async () => {
-      if (useFleetScopeFlagStore.getState().mode !== "scoped") return;
+      const flag = useFleetScopeFlagStore.getState();
+      if (!flag.isHydrated || flag.mode !== "scoped") return;
       useWorktreeSelectionStore.getState().exitFleetScope();
     },
   }));

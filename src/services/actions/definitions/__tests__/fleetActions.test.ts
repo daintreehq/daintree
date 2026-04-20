@@ -339,6 +339,20 @@ describe("fleet scope actions — flag gating", () => {
     expect(state.activeWorktreeId).toBe("wt-1");
   });
 
+  it("fleet.scope.enter is a no-op before hydration resolves", async () => {
+    // With the "scoped" default, an unhydrated store could let a persisted-legacy
+    // user briefly enter scope before hydrate() runs. The isHydrated guard
+    // prevents the stuck isFleetScopeActive state that would follow when late
+    // hydration flips mode back to "legacy".
+    const { useFleetScopeFlagStore } = await import("@/store/fleetScopeFlagStore");
+    const { useWorktreeSelectionStore } = await import("@/store/worktreeStore");
+    useFleetScopeFlagStore.setState({ mode: "scoped", isHydrated: false });
+    useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-1" });
+    const registry = await buildRegistry();
+    await run(registry, "fleet.scope.enter");
+    expect(useWorktreeSelectionStore.getState().isFleetScopeActive).toBe(false);
+  });
+
   it("flag is read at execution time, not at registration time", async () => {
     const { useFleetScopeFlagStore } = await import("@/store/fleetScopeFlagStore");
     const { useWorktreeSelectionStore } = await import("@/store/worktreeStore");
