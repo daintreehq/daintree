@@ -1401,6 +1401,18 @@ export interface IpcInvokeMap {
     args: [actionIds: string[]];
     result: void;
   };
+  "plugin:actions-get": {
+    args: [];
+    result: import("../plugin.js").PluginActionDescriptor[];
+  };
+  "plugin:actions-register": {
+    args: [pluginId: string, contribution: import("../plugin.js").PluginActionContribution];
+    result: void;
+  };
+  "plugin:actions-unregister": {
+    args: [pluginId: string, actionId: string];
+    result: void;
+  };
 
   // Dev Preview channels
   "dev-preview:ensure": {
@@ -2458,6 +2470,11 @@ export interface IpcEventMap {
 
   // Agent preset events
   "agent-presets:updated": { agentId: string; presets: AgentPreset[] };
+
+  // Plugin action registry events
+  "plugin:actions-changed": {
+    actions: import("../plugin.js").PluginActionDescriptor[];
+  };
 }
 
 export type IpcInvokeArgs<K extends keyof IpcInvokeMap> = IpcInvokeMap[K]["args"];

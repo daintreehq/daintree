@@ -6,7 +6,16 @@ import type { AddPanelOptions } from "@/store";
 type AddTerminalOptions = AddPanelOptions;
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-export type AnyActionDefinition = ActionDefinition<any, any>;
+export type AnyActionDefinition = ActionDefinition<any, any> & {
+  /** Present on synthetic definitions backing plugin-contributed actions. */
+  pluginId?: string;
+  /**
+   * Raw JSON-Schema object for plugin-contributed actions. Plugins cannot
+   * ship a Zod schema across IPC, so they declare a plain JSON Schema object
+   * which is surfaced directly in the MCP manifest.
+   */
+  rawInputSchema?: Record<string, unknown>;
+};
 
 export type ActionRegistry = Map<ActionId, () => AnyActionDefinition>;
 

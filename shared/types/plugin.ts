@@ -95,3 +95,26 @@ export interface PluginHostApi {
 export type PluginActivate = (
   host: PluginHostApi
 ) => void | (() => void) | Promise<void | (() => void)>;
+
+/**
+ * Serializable shape a plugin uses to register an action at runtime via the
+ * host API. The renderer converts this into a synthetic ActionDefinition
+ * whose run() dispatches back into main via plugin:invoke. Action handlers
+ * themselves live in main and cannot cross the IPC boundary, so only
+ * metadata travels here. `danger: "restricted"` is rejected server-side
+ * — plugins cannot register restricted-danger actions.
+ */
+export interface PluginActionContribution {
+  id: string;
+  title: string;
+  description: string;
+  category: string;
+  kind: "command" | "query";
+  danger: "safe" | "confirm";
+  keywords?: string[];
+  inputSchema?: Record<string, unknown>;
+}
+
+export interface PluginActionDescriptor extends PluginActionContribution {
+  pluginId: string;
+}

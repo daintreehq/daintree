@@ -3036,6 +3036,19 @@ const api: ElectronAPI = {
     menuItems: () => _unwrappingInvoke(CHANNELS.PLUGIN_MENU_ITEMS),
     validateActionIds: (actionIds: string[]) =>
       _unwrappingInvoke(CHANNELS.PLUGIN_VALIDATE_ACTION_IDS, actionIds),
+
+    getActions: () => _unwrappingInvoke(CHANNELS.PLUGIN_ACTIONS_GET),
+    registerAction: (pluginId: string, contribution: unknown) =>
+      _unwrappingInvoke(CHANNELS.PLUGIN_ACTIONS_REGISTER, pluginId, contribution),
+    unregisterAction: (pluginId: string, actionId: string) =>
+      _unwrappingInvoke(CHANNELS.PLUGIN_ACTIONS_UNREGISTER, pluginId, actionId),
+    onActionsChanged: (callback: (payload: unknown) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, payload: unknown) => callback(payload);
+      ipcRenderer.on(CHANNELS.PLUGIN_ACTIONS_CHANGED, handler);
+      return () => {
+        ipcRenderer.removeListener(CHANNELS.PLUGIN_ACTIONS_CHANGED, handler);
+      };
+    },
   },
 
   crashRecovery: {

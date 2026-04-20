@@ -630,6 +630,10 @@ export const CHANNELS = {
   PLUGIN_TOOLBAR_BUTTONS: "plugin:toolbar-buttons",
   PLUGIN_MENU_ITEMS: "plugin:menu-items",
   PLUGIN_VALIDATE_ACTION_IDS: "plugin:validate-action-ids",
+  PLUGIN_ACTIONS_GET: "plugin:actions-get",
+  PLUGIN_ACTIONS_REGISTER: "plugin:actions-register",
+  PLUGIN_ACTIONS_UNREGISTER: "plugin:actions-unregister",
+  PLUGIN_ACTIONS_CHANGED: "plugin:actions-changed",
 
   RESOURCE_PROFILE_CHANGED: "resource:profile-changed",
 

@@ -88,6 +88,16 @@ export class ActionService {
     this.registry.set(definition.id, definition as AnyActionDefinition);
   }
 
+  /** Whether an action id is present in the registry. */
+  has(id: ActionId): boolean {
+    return this.registry.has(id);
+  }
+
+  /** Remove an action from the registry. Silent no-op if unknown — safe for unload cleanup. */
+  unregister(id: ActionId): void {
+    this.registry.delete(id);
+  }
+
   setContextProvider(provider: (() => ActionContext) | null): void {
     this.contextProvider = provider;
   }
@@ -243,7 +253,9 @@ export class ActionService {
       category: definition.category,
       kind: definition.kind,
       danger: definition.danger,
-      inputSchema: definition.argsSchema ? zodSchemaToJsonSchema(definition.argsSchema) : undefined,
+      inputSchema: definition.argsSchema
+        ? zodSchemaToJsonSchema(definition.argsSchema)
+        : definition.rawInputSchema,
       outputSchema: definition.resultSchema
         ? zodSchemaToJsonSchema(definition.resultSchema)
         : undefined,
@@ -254,6 +266,7 @@ export class ActionService {
           !definition.argsSchema.safeParse({}).success
         : false,
       keywords: definition.keywords?.slice(),
+      ...(definition.pluginId ? { pluginId: definition.pluginId } : {}),
     };
   }
 

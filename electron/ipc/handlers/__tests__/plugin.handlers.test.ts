@@ -4,6 +4,9 @@ const mockDispatchHandler = vi.fn();
 const mockRegisterHandler = vi.fn();
 const mockRemoveHandlers = vi.fn();
 const mockListPlugins = vi.fn();
+const mockListPluginActions = vi.fn();
+const mockRegisterPluginAction = vi.fn();
+const mockUnregisterPluginAction = vi.fn();
 
 vi.mock("../../../services/PluginService.js", () => ({
   pluginService: {
@@ -11,6 +14,9 @@ vi.mock("../../../services/PluginService.js", () => ({
     dispatchHandler: (...args: unknown[]) => mockDispatchHandler(...args),
     registerHandler: (...args: unknown[]) => mockRegisterHandler(...args),
     removeHandlers: (...args: unknown[]) => mockRemoveHandlers(...args),
+    listPluginActions: (...args: unknown[]) => mockListPluginActions(...args),
+    registerPluginAction: (...args: unknown[]) => mockRegisterPluginAction(...args),
+    unregisterPluginAction: (...args: unknown[]) => mockUnregisterPluginAction(...args),
   },
 }));
 
@@ -42,18 +48,25 @@ beforeEach(() => {
   mockGetPluginToolbarButtonIds.mockReturnValue([]);
   mockGetToolbarButtonConfig.mockReturnValue(undefined);
   mockGetPluginMenuItems.mockReturnValue([]);
+  mockListPluginActions.mockReturnValue([]);
 });
 
 describe("registerPluginHandlers", () => {
-  it("registers handlers for PLUGIN_LIST, PLUGIN_INVOKE, PLUGIN_TOOLBAR_BUTTONS, PLUGIN_MENU_ITEMS, and PLUGIN_VALIDATE_ACTION_IDS", () => {
+  it("registers handlers for all plugin channels", () => {
     registerPluginHandlers();
-    expect(mockIpcMainHandle).toHaveBeenCalledTimes(5);
+    expect(mockIpcMainHandle).toHaveBeenCalledTimes(8);
     expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:list", expect.any(Function));
     expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:invoke", expect.any(Function));
     expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:toolbar-buttons", expect.any(Function));
     expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:menu-items", expect.any(Function));
     expect(mockIpcMainHandle).toHaveBeenCalledWith(
       "plugin:validate-action-ids",
+      expect.any(Function)
+    );
+    expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:actions-get", expect.any(Function));
+    expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:actions-register", expect.any(Function));
+    expect(mockIpcMainHandle).toHaveBeenCalledWith(
+      "plugin:actions-unregister",
       expect.any(Function)
     );
   });
@@ -66,6 +79,9 @@ describe("registerPluginHandlers", () => {
     expect(mockIpcMainRemoveHandler).toHaveBeenCalledWith("plugin:toolbar-buttons");
     expect(mockIpcMainRemoveHandler).toHaveBeenCalledWith("plugin:menu-items");
     expect(mockIpcMainRemoveHandler).toHaveBeenCalledWith("plugin:validate-action-ids");
+    expect(mockIpcMainRemoveHandler).toHaveBeenCalledWith("plugin:actions-get");
+    expect(mockIpcMainRemoveHandler).toHaveBeenCalledWith("plugin:actions-register");
+    expect(mockIpcMainRemoveHandler).toHaveBeenCalledWith("plugin:actions-unregister");
   });
 
   it("PLUGIN_LIST handler delegates to pluginService.listPlugins", async () => {
@@ -342,6 +358,33 @@ describe("PLUGIN_VALIDATE_ACTION_IDS handler", () => {
     warn.mockRestore();
   });
 
+  it("recognises plugin-registered actionIds from pluginService.listPluginActions", async () => {
+    mockGetPluginToolbarButtonIds.mockReturnValue(["plugin.btn"]);
+    mockGetToolbarButtonConfig.mockReturnValue({
+      id: "plugin.btn",
+      label: "Btn",
+      iconId: "i",
+      actionId: "acme.my-plugin.doThing",
+      priority: 3,
+      pluginId: "acme.my-plugin",
+    });
+    mockGetPluginMenuItems.mockReturnValue([
+      {
+        pluginId: "acme.my-plugin",
+        item: { label: "Do", actionId: "acme.my-plugin.other", location: "terminal" },
+      },
+    ]);
+    mockListPluginActions.mockReturnValue([
+      { pluginId: "acme.my-plugin", id: "acme.my-plugin.doThing" },
+      { pluginId: "acme.my-plugin", id: "acme.my-plugin.other" },
+    ]);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const handler = getValidateHandler();
+    await handler({}, ["terminal.list"]);
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
   it("only validates once per handler lifecycle so multi-window callers don't double-log", async () => {
     mockGetPluginToolbarButtonIds.mockReturnValue(["plugin.a"]);
     mockGetToolbarButtonConfig.mockReturnValue({
@@ -359,6 +402,64 @@ describe("PLUGIN_VALIDATE_ACTION_IDS handler", () => {
     await handler({}, []);
     expect(warn).toHaveBeenCalledTimes(1);
     warn.mockRestore();
+  });
+});
+
+describe("PLUGIN_ACTIONS_GET / REGISTER / UNREGISTER handlers", () => {
+  function getHandler(channel: string) {
+    registerPluginHandlers();
+    return mockIpcMainHandle.mock.calls.find((c: unknown[]) => c[0] === channel)![1] as (
+      ...args: unknown[]
+    ) => unknown;
+  }
+
+  it("PLUGIN_ACTIONS_GET returns the list from pluginService", async () => {
+    const actions = [
+      {
+        pluginId: "acme.my-plugin",
+        id: "acme.my-plugin.doThing",
+        title: "Do Thing",
+        description: "Does a thing",
+        category: "plugin",
+        kind: "command",
+        danger: "safe",
+      },
+    ];
+    mockListPluginActions.mockReturnValue(actions);
+    const handler = getHandler("plugin:actions-get");
+    const result = await handler({});
+    expect(result).toEqual(actions);
+  });
+
+  it("PLUGIN_ACTIONS_REGISTER delegates to pluginService.registerPluginAction", async () => {
+    const handler = getHandler("plugin:actions-register");
+    const contribution = {
+      id: "acme.my-plugin.doThing",
+      title: "Do Thing",
+      description: "Does a thing",
+      category: "plugin",
+      kind: "command",
+      danger: "safe",
+    };
+    await handler({}, "acme.my-plugin", contribution);
+    expect(mockRegisterPluginAction).toHaveBeenCalledWith("acme.my-plugin", contribution);
+  });
+
+  it("PLUGIN_ACTIONS_REGISTER propagates errors from pluginService", async () => {
+    mockRegisterPluginAction.mockImplementation(() => {
+      throw new Error('Plugin action "bad.id" is invalid');
+    });
+    const handler = getHandler("plugin:actions-register");
+    await expect(handler({}, "acme.my-plugin", { id: "bad.id" })).rejects.toThrow(/Plugin action/);
+  });
+
+  it("PLUGIN_ACTIONS_UNREGISTER delegates to pluginService.unregisterPluginAction", async () => {
+    const handler = getHandler("plugin:actions-unregister");
+    await handler({}, "acme.my-plugin", "acme.my-plugin.doThing");
+    expect(mockUnregisterPluginAction).toHaveBeenCalledWith(
+      "acme.my-plugin",
+      "acme.my-plugin.doThing"
+    );
   });
 });
 

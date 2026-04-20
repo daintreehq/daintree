@@ -11,6 +11,8 @@ import type {
   LoadedPluginInfo,
   PluginIpcHandler,
   PluginIpcContext,
+  PluginActionContribution,
+  PluginActionDescriptor,
 } from "../../../shared/types/plugin.js";
 import type { ToolbarButtonConfig } from "../../../shared/config/toolbarButtonRegistry.js";
 import { typedHandle } from "../utils.js";
@@ -42,6 +44,14 @@ export function registerPluginHandlers(): () => void {
 
     const knownIds = new Set(actionIds.filter((id): id is string => typeof id === "string"));
 
+    // Plugin-contributed actions are registered dynamically in the renderer
+    // after this snapshot runs, so their IDs won't appear in `knownIds`. Pull
+    // the live plugin-action registry from the main-side PluginService and
+    // treat those as known.
+    for (const { id } of pluginService.listPluginActions()) {
+      knownIds.add(id);
+    }
+
     for (const id of getPluginToolbarButtonIds()) {
       const config = getToolbarButtonConfig(id);
       if (!config) continue;
@@ -59,6 +69,21 @@ export function registerPluginHandlers(): () => void {
         );
       }
     }
+  };
+
+  const handleActionsGet = async (): Promise<PluginActionDescriptor[]> => {
+    return pluginService.listPluginActions();
+  };
+
+  const handleActionsRegister = async (
+    pluginId: string,
+    contribution: PluginActionContribution
+  ): Promise<void> => {
+    pluginService.registerPluginAction(pluginId, contribution);
+  };
+
+  const handleActionsUnregister = async (pluginId: string, actionId: string): Promise<void> => {
+    pluginService.unregisterPluginAction(pluginId, actionId);
   };
 
   handlers.push(typedHandle(CHANNELS.PLUGIN_LIST, handleList));
@@ -88,6 +113,9 @@ export function registerPluginHandlers(): () => void {
   handlers.push(typedHandle(CHANNELS.PLUGIN_TOOLBAR_BUTTONS, handleToolbarButtons));
   handlers.push(typedHandle(CHANNELS.PLUGIN_MENU_ITEMS, handleMenuItems));
   handlers.push(typedHandle(CHANNELS.PLUGIN_VALIDATE_ACTION_IDS, handleValidateActionIds));
+  handlers.push(typedHandle(CHANNELS.PLUGIN_ACTIONS_GET, handleActionsGet));
+  handlers.push(typedHandle(CHANNELS.PLUGIN_ACTIONS_REGISTER, handleActionsRegister));
+  handlers.push(typedHandle(CHANNELS.PLUGIN_ACTIONS_UNREGISTER, handleActionsUnregister));
 
   return () => handlers.forEach((cleanup) => cleanup());
 }
