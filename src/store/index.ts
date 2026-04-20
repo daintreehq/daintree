@@ -84,17 +84,8 @@ export { useVoiceRecordingStore } from "./voiceRecordingStore";
 
 export { useDockStore } from "./dockStore";
 
-export {
-  useFleetDeckStore,
-  FLEET_DECK_MIN_WIDTH,
-  FLEET_DECK_MAX_WIDTH,
-  FLEET_DECK_DEFAULT_WIDTH,
-  FLEET_DECK_MIN_HEIGHT,
-  FLEET_DECK_MAX_HEIGHT,
-  FLEET_DECK_DEFAULT_HEIGHT,
-  FLEET_DECK_LIVE_TILE_CAP,
-} from "./fleetDeckStore";
-export type { FleetDeckEdge, FleetDeckScope, FleetDeckStateFilter } from "./fleetDeckStore";
+export { useFleetDeckStore } from "./fleetDeckStore";
+export type { FleetDeckStateFilter } from "./fleetDeckStore";
 
 export { useFleetScopeFlagStore } from "./fleetScopeFlagStore";
 export type { FleetScopeMode } from "./fleetScopeFlagStore";

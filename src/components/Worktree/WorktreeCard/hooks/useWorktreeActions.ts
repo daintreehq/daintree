@@ -102,7 +102,7 @@ export function useWorktreeActions({
   const handleBroadcastToAgents = useCallback(() => {
     useWorktreeSelectionStore.getState().setActiveWorktree(worktree.id);
     useFleetArmingStore.getState().armAll("current");
-    useFleetDeckStore.getState().openWithScope("current");
+    useFleetDeckStore.getState().open();
   }, [worktree.id]);
 
   const handleCopyTree = useCallback(async () => {

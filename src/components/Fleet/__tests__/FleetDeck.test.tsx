@@ -1,41 +1,16 @@
 // @vitest-environment jsdom
-import { describe, it, expect, beforeEach, vi, afterEach } from "vitest";
-import { act, render } from "@testing-library/react";
-import type { TerminalInstance } from "@shared/types";
+import { describe, it, expect, beforeEach, vi } from "vitest";
+import { act, render, fireEvent, type RenderOptions } from "@testing-library/react";
+import { createStore } from "zustand/vanilla";
+import type { ReactElement, ReactNode } from "react";
+import type { TerminalInstance, WorktreeSnapshot } from "@shared/types";
 
-// Mock xterm stack — we're testing composition and reactivity here, not
-// the xterm lifecycle (that's covered in MirrorTile.test.tsx).
-vi.mock("@xterm/xterm", () => ({
-  Terminal: class {
-    rows = 24;
-    open = vi.fn();
-    dispose = vi.fn();
-    write = vi.fn();
-    refresh = vi.fn();
-    loadAddon = vi.fn();
-  },
-}));
-vi.mock("@xterm/addon-fit", () => ({
-  FitAddon: class {
-    fit = vi.fn();
-  },
-}));
-vi.mock("@xterm/addon-serialize", () => ({
-  SerializeAddon: class {
-    serialize = vi.fn(() => "");
-  },
-}));
-vi.mock("@/clients/terminalClient", () => ({
-  terminalClient: {
-    onData: vi.fn(() => () => {}),
-  },
-}));
 vi.mock("@/services/ActionService", () => ({
   actionService: { dispatch: vi.fn() },
 }));
 
 // ClusterAttentionPill depends on the WorktreeStore context (via
-// useAgentClusters). Stub it to keep the test focused on Deck composition.
+// useAgentClusters) — stub to keep the test focused on Deck composition.
 vi.mock("../ClusterAttentionPill", () => ({
   ClusterAttentionPill: () => null,
 }));
@@ -46,11 +21,18 @@ vi.mock("../FleetComposer", () => ({
   FleetComposer: () => <span data-testid="fleet-composer-stub" />,
 }));
 
+// FleetScopeBar subscribes to several stores we don't care about here.
+vi.mock("../FleetScopeBar", () => ({
+  FleetScopeBar: () => <span data-testid="fleet-scope-bar-stub" />,
+}));
+
 import { FleetDeck } from "../FleetDeck";
 import { useFleetDeckStore } from "@/store/fleetDeckStore";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { usePanelStore } from "@/store/panelStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
+import { WorktreeStoreContext } from "@/contexts/WorktreeStoreContext";
+import type { WorktreeViewState, WorktreeViewActions } from "@/store/createWorktreeStore";
 
 function makeAgent(id: string, overrides: Partial<TerminalInstance> = {}): TerminalInstance {
   return {
@@ -66,6 +48,22 @@ function makeAgent(id: string, overrides: Partial<TerminalInstance> = {}): Termi
   } as TerminalInstance;
 }
 
+function makeWorktreeSnapshot(
+  id: string,
+  name: string,
+  overrides: Partial<WorktreeSnapshot> = {}
+): WorktreeSnapshot {
+  return {
+    id,
+    worktreeId: id,
+    path: `/repo/${id}`,
+    name,
+    branch: `feature/${id}`,
+    isCurrent: true,
+    ...overrides,
+  } as WorktreeSnapshot;
+}
+
 function seedPanels(agents: TerminalInstance[]): void {
   const panelsById: Record<string, TerminalInstance> = {};
   const panelIds: string[] = [];
@@ -77,7 +75,6 @@ function seedPanels(agents: TerminalInstance[]): void {
 }
 
 function reorderPanels(newOrder: string[]): void {
-  // Simulate a drag-reorder: panelsById stays the same, panelIds changes.
   const current = usePanelStore.getState();
   usePanelStore.setState({ panelsById: current.panelsById, panelIds: newOrder });
 }
@@ -85,13 +82,10 @@ function reorderPanels(newOrder: string[]): void {
 function resetStores(): void {
   useFleetDeckStore.setState({
     isOpen: true,
-    edge: "right",
-    width: 480,
-    height: 320,
-    scope: "all",
     stateFilter: "all",
-    pinnedLiveIds: new Set<string>(),
     isHydrated: true,
+    alwaysPreview: false,
+    quorumThreshold: 5,
   });
   useFleetArmingStore.setState({
     armedIds: new Set<string>(),
@@ -103,110 +97,174 @@ function resetStores(): void {
   useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-1" });
 }
 
-function withNonZeroLayout(): () => void {
-  const origW = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "clientWidth");
-  const origH = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "clientHeight");
-  Object.defineProperty(HTMLElement.prototype, "clientWidth", {
-    configurable: true,
-    get() {
-      return 320;
-    },
-  });
-  Object.defineProperty(HTMLElement.prototype, "clientHeight", {
-    configurable: true,
-    get() {
-      return 200;
-    },
-  });
-  return () => {
-    if (origW) Object.defineProperty(HTMLElement.prototype, "clientWidth", origW);
-    if (origH) Object.defineProperty(HTMLElement.prototype, "clientHeight", origH);
-  };
+function makeViewStore(worktrees: Map<string, WorktreeSnapshot>) {
+  return createStore<WorktreeViewState & WorktreeViewActions>(() => ({
+    worktrees,
+    version: 0,
+    isLoading: false,
+    error: null,
+    isInitialized: true,
+    isReconnecting: false,
+    nextVersion: () => 0,
+    applySnapshot: () => {},
+    applyUpdate: () => {},
+    applyRemove: () => {},
+    setLoading: () => {},
+    setError: () => {},
+    setFatalError: () => {},
+    setReconnecting: () => {},
+  }));
 }
 
-function installResizeObserverMock(): () => void {
-  class MockRO {
-    observe(): void {}
-    unobserve(): void {}
-    disconnect(): void {}
-  }
-  const original = globalThis.ResizeObserver;
-  globalThis.ResizeObserver = MockRO as unknown as typeof ResizeObserver;
-  return () => {
-    globalThis.ResizeObserver = original;
-  };
+function renderWithWorktrees(
+  ui: ReactElement,
+  worktrees: Map<string, WorktreeSnapshot> = new Map([
+    ["wt-1", makeWorktreeSnapshot("wt-1", "main")],
+    ["wt-2", makeWorktreeSnapshot("wt-2", "feature-x")],
+  ]),
+  options?: RenderOptions
+): ReturnType<typeof render> {
+  const store = makeViewStore(worktrees);
+  const Wrapper = ({ children }: { children: ReactNode }) => (
+    <WorktreeStoreContext value={store}>{children}</WorktreeStoreContext>
+  );
+  return render(ui, { wrapper: Wrapper, ...options });
 }
 
 describe("FleetDeck", () => {
-  let restoreLayout: () => void;
-  let restoreRO: () => void;
-
   beforeEach(() => {
     resetStores();
-    restoreLayout = withNonZeroLayout();
-    restoreRO = installResizeObserverMock();
-  });
-
-  afterEach(() => {
-    restoreLayout();
-    restoreRO();
   });
 
   it("renders nothing when the deck is closed", () => {
     useFleetDeckStore.setState({ isOpen: false });
     seedPanels([makeAgent("a")]);
-    const { container } = render(<FleetDeck />);
+    const { container } = renderWithWorktrees(<FleetDeck />);
     expect(container.firstChild).toBeNull();
   });
 
-  it("renders a tile per eligible agent when open", () => {
+  it("renders one row per eligible agent when open", () => {
     seedPanels([makeAgent("a"), makeAgent("b"), makeAgent("c")]);
-    const { getAllByTestId } = render(<FleetDeck />);
-    expect(getAllByTestId("fleet-mirror-tile")).toHaveLength(3);
+    const { getAllByTestId } = renderWithWorktrees(<FleetDeck />);
+    expect(getAllByTestId("fleet-deck-row")).toHaveLength(3);
   });
 
-  it("re-renders tiles when panelIds is reordered", async () => {
-    seedPanels([makeAgent("a"), makeAgent("b"), makeAgent("c"), makeAgent("d"), makeAgent("e")]);
-    const { getAllByTestId } = render(<FleetDeck />);
-    const initialOrder = getAllByTestId("fleet-mirror-tile").map(
-      (el) => el.getAttribute("data-terminal-id") ?? ""
+  it("re-renders rows in order when panelIds is reordered", async () => {
+    seedPanels([makeAgent("a"), makeAgent("b"), makeAgent("c")]);
+    const { getAllByTestId } = renderWithWorktrees(<FleetDeck />);
+    const initial = getAllByTestId("fleet-deck-row").map(
+      (el) => el.getAttribute("data-panel-id") ?? ""
     );
-    expect(initialOrder).toEqual(["a", "b", "c", "d", "e"]);
+    expect(initial).toEqual(["a", "b", "c"]);
 
     await act(async () => {
-      reorderPanels(["e", "d", "c", "b", "a"]);
+      reorderPanels(["c", "b", "a"]);
     });
 
-    const newOrder = getAllByTestId("fleet-mirror-tile").map(
-      (el) => el.getAttribute("data-terminal-id") ?? ""
+    const reordered = getAllByTestId("fleet-deck-row").map(
+      (el) => el.getAttribute("data-panel-id") ?? ""
     );
-    expect(newOrder).toEqual(["e", "d", "c", "b", "a"]);
+    expect(reordered).toEqual(["c", "b", "a"]);
   });
 
-  it("live tiles respect the 4-slot cap with priority ordering", () => {
+  it("groups rows by worktree with a header per worktree", () => {
+    seedPanels([
+      makeAgent("a", { worktreeId: "wt-1" }),
+      makeAgent("b", { worktreeId: "wt-1" }),
+      makeAgent("c", { worktreeId: "wt-2" }),
+    ]);
+    const { getAllByTestId } = renderWithWorktrees(<FleetDeck />);
+    const headers = getAllByTestId("fleet-deck-group-header").map((el) => el.textContent);
+    expect(headers).toEqual(["main", "feature-x"]);
+  });
+
+  it("clicking a row arms that agent; clicking again disarms", () => {
+    seedPanels([makeAgent("a"), makeAgent("b")]);
+    const { getAllByTestId } = renderWithWorktrees(<FleetDeck />);
+    const rows = getAllByTestId("fleet-deck-row");
+    fireEvent.click(rows[0]!);
+    expect(useFleetArmingStore.getState().armedIds.has("a")).toBe(true);
+    fireEvent.click(rows[0]!);
+    expect(useFleetArmingStore.getState().armedIds.has("a")).toBe(false);
+  });
+
+  it("shift-click extends range selection across visible rows", () => {
+    seedPanels([makeAgent("a"), makeAgent("b"), makeAgent("c"), makeAgent("d")]);
+    const { getAllByTestId } = renderWithWorktrees(<FleetDeck />);
+    const rows = getAllByTestId("fleet-deck-row");
+    fireEvent.click(rows[0]!); // Arm "a" (anchor)
+    fireEvent.click(rows[2]!, { shiftKey: true }); // Extend to "c"
+    const armed = useFleetArmingStore.getState().armedIds;
+    expect(armed.has("a")).toBe(true);
+    expect(armed.has("b")).toBe(true);
+    expect(armed.has("c")).toBe(true);
+    expect(armed.has("d")).toBe(false);
+  });
+
+  it("state filter narrows visible rows", () => {
     seedPanels([
       makeAgent("a", { agentState: "idle" }),
       makeAgent("b", { agentState: "waiting" }),
       makeAgent("c", { agentState: "working" }),
-      makeAgent("d", { agentState: "idle" }),
-      makeAgent("e", { agentState: "idle" }),
     ]);
+    useFleetDeckStore.setState({ stateFilter: "waiting" });
+    const { getAllByTestId } = renderWithWorktrees(<FleetDeck />);
+    const rows = getAllByTestId("fleet-deck-row");
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.getAttribute("data-panel-id")).toBe("b");
+  });
+
+  it("renders empty state when no agents match", () => {
+    useFleetDeckStore.setState({ stateFilter: "completed" });
+    seedPanels([makeAgent("a", { agentState: "idle" })]);
+    const { getByRole, queryAllByTestId } = renderWithWorktrees(<FleetDeck />);
+    expect(queryAllByTestId("fleet-deck-row")).toHaveLength(0);
+    expect(getByRole("status")).toBeTruthy();
+  });
+
+  it("shift-click range follows grouped render order when worktrees are interleaved", () => {
+    // Panels in panelIds order: wt1:a, wt2:b, wt1:c.
+    // Visual render order (after grouping by worktree) is: a, c (wt-1), then b (wt-2).
+    // Shift-click from "a" to visible "c" must arm {a, c} only — NOT b,
+    // which is visually below "c" but appears before it in panelIds order.
+    seedPanels([
+      makeAgent("a", { worktreeId: "wt-1" }),
+      makeAgent("b", { worktreeId: "wt-2" }),
+      makeAgent("c", { worktreeId: "wt-1" }),
+    ]);
+    const { getAllByTestId } = renderWithWorktrees(<FleetDeck />);
+    const rows = getAllByTestId("fleet-deck-row");
+    const orderIds = rows.map((el) => el.getAttribute("data-panel-id"));
+    expect(orderIds).toEqual(["a", "c", "b"]);
+
+    fireEvent.click(rows[0]!); // Arm "a" (anchor)
+    fireEvent.click(rows[1]!, { shiftKey: true }); // Extend to visually-next row "c"
+    const armed = useFleetArmingStore.getState().armedIds;
+    expect(armed.has("a")).toBe(true);
+    expect(armed.has("c")).toBe(true);
+    expect(armed.has("b")).toBe(false);
+  });
+
+  it("group header falls back to worktree id when snapshot is missing", () => {
+    seedPanels([makeAgent("a", { worktreeId: "wt-orphan" })]);
+    const { getByTestId } = renderWithWorktrees(
+      <FleetDeck />,
+      new Map([["wt-1", makeWorktreeSnapshot("wt-1", "main")]])
+    );
+    expect(getByTestId("fleet-deck-group-header").textContent).toBe("wt-orphan");
+  });
+
+  it("armed row exposes data-armed attribute and aria-pressed", () => {
+    seedPanels([makeAgent("a")]);
     useFleetArmingStore.setState({
-      armedIds: new Set(["d"]),
-      armOrder: ["d"],
-      armOrderById: { d: 1 },
-      lastArmedId: "d",
+      armedIds: new Set(["a"]),
+      armOrder: ["a"],
+      armOrderById: { a: 1 },
+      lastArmedId: "a",
     });
-    const { getAllByTestId } = render(<FleetDeck />);
-    const tiles = getAllByTestId("fleet-mirror-tile");
-    const liveTiles = tiles.filter((el) => el.getAttribute("data-live") === "true");
-    expect(liveTiles).toHaveLength(4);
-    // Armed "d" (tier 1) > waiting "b" (tier 2) > working "c" (tier 3) >
-    // first idle "a" (tier 4). "e" (second idle) is the odd one out.
-    const ids = liveTiles.map((el) => el.getAttribute("data-terminal-id"));
-    expect(ids).toContain("d");
-    expect(ids).toContain("b");
-    expect(ids).toContain("c");
-    expect(ids).not.toContain("e");
+    const { getByTestId } = renderWithWorktrees(<FleetDeck />);
+    const row = getByTestId("fleet-deck-row");
+    expect(row.getAttribute("data-armed")).toBe("true");
+    expect(row.getAttribute("aria-pressed")).toBe("true");
   });
 });
