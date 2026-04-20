@@ -25,13 +25,12 @@ describe("MissingPluginPanel", () => {
     const onRemove = vi.fn();
     render(<MissingPluginPanel kind="x" onRemove={onRemove} />);
 
-    fireEvent.click(screen.getByTestId("missing-plugin-panel-remove"));
+    fireEvent.click(screen.getByRole("button", { name: /remove panel/i }));
     expect(onRemove).toHaveBeenCalledTimes(1);
   });
 
-  it("does not call onRemove on initial render", () => {
-    const onRemove = vi.fn();
-    render(<MissingPluginPanel kind="x" onRemove={onRemove} />);
-    expect(onRemove).not.toHaveBeenCalled();
+  it("does not promise cross-session persistence", () => {
+    render(<MissingPluginPanel kind="x" onRemove={vi.fn()} />);
+    expect(screen.queryByText(/state is preserved/i)).toBeNull();
   });
 });

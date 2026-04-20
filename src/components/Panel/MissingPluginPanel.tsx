@@ -25,8 +25,8 @@ export function MissingPluginPanel({ kind, onRemove }: MissingPluginPanelProps) 
         <div className="space-y-1">
           <p className="text-sm font-semibold text-status-warning">Plugin not available</p>
           <p className="text-xs text-daintree-text/80">
-            The plugin that provides this panel is disabled or missing. The panel's state is
-            preserved — re-enable the plugin to restore it.
+            The plugin that provides this panel is disabled or missing. Re-enable the plugin in this
+            session to restore the panel.
           </p>
           <p className="mt-2 font-mono text-xs text-daintree-text/50">Kind: {kind}</p>
         </div>
