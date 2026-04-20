@@ -27,9 +27,7 @@ describe("fleetScopeFlagStore", () => {
       // Load the module fresh so we observe the real initial state instead of
       // whatever resetStore() seeded between tests.
       vi.resetModules();
-      const { useFleetScopeFlagStore: freshStore } = await import(
-        "../fleetScopeFlagStore"
-      );
+      const { useFleetScopeFlagStore: freshStore } = await import("../fleetScopeFlagStore");
       const state = freshStore.getState();
       expect(state.mode).toBe("scoped");
       expect(state.isHydrated).toBe(false);
