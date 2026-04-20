@@ -25,6 +25,7 @@ export interface TabInfo {
   presetColor?: string;
   isUsingFallback?: boolean;
   fallbackTooltip?: string;
+  hasDangerousFlags?: boolean;
 }
 
 export interface TabButtonProps {
@@ -44,6 +45,7 @@ export interface TabButtonProps {
   onRename?: (newTitle: string) => void;
   isUsingFallback?: boolean;
   fallbackTooltip?: string;
+  hasDangerousFlags?: boolean;
 }
 
 const TabButtonComponent = forwardRef<HTMLDivElement, TabButtonProps>(function TabButtonComponent(
@@ -64,6 +66,7 @@ const TabButtonComponent = forwardRef<HTMLDivElement, TabButtonProps>(function T
     onRename,
     isUsingFallback,
     fallbackTooltip,
+    hasDangerousFlags,
   },
   ref
 ) {
@@ -303,6 +306,22 @@ const TabButtonComponent = forwardRef<HTMLDivElement, TabButtonProps>(function T
                   <TooltipContent side="bottom">
                     {fallbackTooltip ??
                       "Running on fallback preset — original provider unavailable"}
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            )}
+
+            {hasDangerousFlags && (
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span
+                      className="w-2 h-2 rounded-full bg-status-danger shrink-0"
+                      aria-label="Launched with dangerous permissions"
+                    />
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">
+                    Launched with dangerous permissions — agent can modify files without prompting
                   </TooltipContent>
                 </Tooltip>
               </TooltipProvider>

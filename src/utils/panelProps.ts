@@ -67,6 +67,7 @@ export function buildPanelProps({
     agentId: terminal.agentId,
     agentPresetId: terminal.agentPresetId,
     presetColor: terminal.agentPresetColor,
+    agentLaunchFlags: terminal.agentLaunchFlags,
     cwd: terminal.cwd,
     agentState: terminal.agentState,
     activity: getStableActivity(

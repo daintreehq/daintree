@@ -158,6 +158,13 @@ export const GridTabGroup = React.memo(function GridTabGroup({
 
   // Build tabs array for PanelHeader
   const tabs: TabInfo[] = useMemo(() => {
+    const dangerousFlags = new Set([
+      "--dangerously-skip-permissions",
+      "--yolo",
+      "--dangerously-bypass-approvals-and-sandbox",
+      "--force",
+    ]);
+
     return panels.map((p) => {
       let presetColor = p.agentPresetColor;
       let fallbackTooltip: string | undefined;
@@ -177,6 +184,10 @@ export const GridTabGroup = React.memo(function GridTabGroup({
           fallbackTooltip = `Using fallback "${activeName}" — "${originalName}" unavailable`;
         }
       }
+
+      const hasDangerousFlags =
+        p.agentLaunchFlags?.some((flag) => dangerousFlags.has(flag)) ?? false;
+
       return {
         id: p.id,
         title: p.title,
@@ -189,6 +200,7 @@ export const GridTabGroup = React.memo(function GridTabGroup({
         presetColor,
         isUsingFallback: p.isUsingFallback,
         fallbackTooltip,
+        hasDangerousFlags,
       };
     });
   }, [panels, activeTabId, agentSettings, ccrPresetsByAgent, projectPresetsByAgent]);

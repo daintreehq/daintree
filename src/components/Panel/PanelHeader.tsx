@@ -79,6 +79,7 @@ export interface PanelHeaderProps {
   isMaximized?: boolean;
   location?: "grid" | "dock";
   isDragging?: boolean;
+  agentLaunchFlags?: string[];
 
   // Title editing (provided by TitleEditingContext consumer)
   isEditingTitle: boolean;
@@ -131,6 +132,7 @@ function PanelHeaderComponent({
   isMaximized = false,
   location = "grid",
   isDragging = false,
+  agentLaunchFlags,
   isEditingTitle,
   editingValue,
   titleInputRef,
@@ -204,6 +206,17 @@ function PanelHeaderComponent({
 
   // Get background activity stats for Zen Mode header
   const { activeCount, workingCount } = useBackgroundPanelStats(id);
+
+  // Check if panel has dangerous launch flags
+  const hasDangerousFlags = (() => {
+    const dangerousFlags = new Set([
+      "--dangerously-skip-permissions",
+      "--yolo",
+      "--dangerously-bypass-approvals-and-sandbox",
+      "--force",
+    ]);
+    return agentLaunchFlags?.some((flag) => dangerousFlags.has(flag)) ?? false;
+  })();
 
   // Watch state — only relevant for agent panels
   const isWatched = usePanelStore((state) => state.watchedPanels.has(id));
@@ -704,6 +717,22 @@ function PanelHeaderComponent({
                 </Tooltip>
               </TooltipProvider>
             </div>
+          )}
+
+          {hasDangerousFlags && (
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span
+                    className="w-2 h-2 rounded-full bg-status-danger shrink-0"
+                    aria-label="Launched with dangerous permissions"
+                  />
+                </TooltipTrigger>
+                <TooltipContent side="bottom">
+                  Launched with dangerous permissions — agent can modify files without prompting
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
           )}
 
           {/* Watch status indicator — non-interactive, shown when actively watching */}

@@ -467,4 +467,66 @@ describe("PanelHeader", () => {
       expect(mockDispatch).not.toHaveBeenCalledWith("nav.toggleFocusMode");
     });
   });
+
+  describe("dangerous flags indicator", () => {
+    it("shows red dot indicator when agentLaunchFlags contain dangerous flag", () => {
+      render(
+        <PanelHeader
+          {...makeProps({
+            agentLaunchFlags: ["--dangerously-skip-permissions"],
+          })}
+        />
+      );
+
+      const indicator = screen.getByLabelText("Launched with dangerous permissions");
+      expect(indicator).toBeDefined();
+      expect(indicator.className).toContain("bg-status-danger");
+    });
+
+    it("shows red dot indicator for all dangerous flag types", () => {
+      const dangerousFlags = [
+        ["--dangerously-skip-permissions"],
+        ["--yolo"],
+        ["--dangerously-bypass-approvals-and-sandbox"],
+        ["--force"],
+      ];
+
+      for (const flags of dangerousFlags) {
+        const { unmount } = render(<PanelHeader {...makeProps({ agentLaunchFlags: flags })} />);
+        const indicator = screen.getByLabelText("Launched with dangerous permissions");
+        expect(indicator).toBeDefined();
+        unmount();
+      }
+    });
+
+    it("does not show indicator when agentLaunchFlags does not contain dangerous flag", () => {
+      render(<PanelHeader {...makeProps({ agentLaunchFlags: ["--model", "claude-3-7"] })} />);
+
+      const indicator = screen.queryByLabelText("Launched with dangerous permissions");
+      expect(indicator).toBeNull();
+    });
+
+    it("does not show indicator when agentLaunchFlags is undefined", () => {
+      render(<PanelHeader {...makeProps()} />);
+
+      const indicator = screen.queryByLabelText("Launched with dangerous permissions");
+      expect(indicator).toBeNull();
+    });
+
+    it("does not show indicator when agentLaunchFlags is empty array", () => {
+      render(<PanelHeader {...makeProps({ agentLaunchFlags: [] })} />);
+
+      const indicator = screen.queryByLabelText("Launched with dangerous permissions");
+      expect(indicator).toBeNull();
+    });
+
+    it("shows tooltip with correct text for dangerous flags", () => {
+      render(<PanelHeader {...makeProps({ agentLaunchFlags: ["--yolo"] })} />);
+
+      const tooltipContent = screen.queryByText(
+        "Launched with dangerous permissions — agent can modify files without prompting"
+      );
+      expect(tooltipContent).toBeDefined();
+    });
+  });
 });
