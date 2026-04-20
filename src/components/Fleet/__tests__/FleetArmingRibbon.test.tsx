@@ -5,6 +5,7 @@ import { FleetArmingRibbon } from "../FleetArmingRibbon";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { useFleetPendingActionStore } from "@/store/fleetPendingActionStore";
 import { useFleetDeckStore } from "@/store/fleetDeckStore";
+import { useFleetScopeFlagStore } from "@/store/fleetScopeFlagStore";
 import { usePanelStore } from "@/store/panelStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
@@ -19,6 +20,7 @@ function resetStores() {
   });
   useFleetPendingActionStore.setState({ pending: null });
   useFleetDeckStore.setState({ isOpen: false });
+  useFleetScopeFlagStore.setState({ mode: "legacy", isHydrated: true });
   usePanelStore.setState({ panelsById: {}, panelIds: [] });
   useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-1" });
   useAnnouncerStore.setState({ polite: null, assertive: null });
@@ -225,6 +227,19 @@ describe("FleetArmingRibbon", () => {
       expect(screen.queryByTestId("fleet-composer")).toBeNull();
       // The ribbon itself still renders — only the composer is suppressed.
       expect(screen.queryByTestId("fleet-arming-ribbon")).toBeTruthy();
+    });
+
+    it("suppresses the embedded FleetComposer when Fleet scope is active", () => {
+      useFleetArmingStore.getState().armIds(["a"]);
+      useFleetDeckStore.setState({ isOpen: false });
+      useFleetScopeFlagStore.setState({ mode: "scoped", isHydrated: true });
+      render(<FleetArmingRibbon />);
+      // Composer moves to the pinned grid header when scope is active.
+      expect(screen.queryByTestId("fleet-composer")).toBeNull();
+      // The ribbon itself — including quick-action buttons — still renders.
+      expect(screen.queryByTestId("fleet-arming-ribbon")).toBeTruthy();
+      expect(screen.queryByTestId("fleet-quick-accept")).toBeTruthy();
+      expect(screen.queryByTestId("fleet-quick-kill")).toBeTruthy();
     });
   });
 });

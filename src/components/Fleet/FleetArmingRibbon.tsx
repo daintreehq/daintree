@@ -5,6 +5,7 @@ import { cn } from "@/lib/utils";
 import { useEscapeStack } from "@/hooks";
 import { useFleetArmingStore, type FleetArmStatePreset } from "@/store/fleetArmingStore";
 import { useFleetDeckStore } from "@/store/fleetDeckStore";
+import { useFleetScopeFlagStore } from "@/store/fleetScopeFlagStore";
 import {
   useFleetPendingActionStore,
   type FleetPendingActionKind,
@@ -114,6 +115,10 @@ export function FleetArmingRibbon(): ReactElement | null {
   const pending = useFleetPendingActionStore((s) => s.pending);
   const clearPending = useFleetPendingActionStore((s) => s.clear);
   const isDeckOpen = useFleetDeckStore((s) => s.isOpen);
+  // When Fleet scope is active, the composer renders in the pinned grid
+  // header (FleetScopeComposerHeader) above ContentGrid instead of here —
+  // avoid double-mounting which would duplicate the focus handler.
+  const isFleetScopeActive = useFleetScopeFlagStore((s) => s.mode === "scoped");
 
   // Escape stack: confirmation cancel sits above the fleet-disarm entry, so
   // the first Escape while confirming clears the pending action and a
@@ -349,7 +354,7 @@ export function FleetArmingRibbon(): ReactElement | null {
           <X className="h-3.5 w-3.5" />
         </button>
       </div>
-      {!isDeckOpen && <FleetComposer />}
+      {!isDeckOpen && !isFleetScopeActive && <FleetComposer />}
     </div>
   );
 }
