@@ -71,6 +71,7 @@ import type {
 } from "../shared/types/portal.js";
 import type { ShowContextMenuPayload } from "../shared/types/menu.js";
 import type { ResourceProfilePayload } from "../shared/types/resourceProfile.js";
+import type { PluginActionDescriptor } from "../shared/types/plugin.js";
 
 export type { ElectronAPI };
 
@@ -1147,6 +1148,10 @@ const CHANNELS = {
   PLUGIN_TOOLBAR_BUTTONS: "plugin:toolbar-buttons",
   PLUGIN_MENU_ITEMS: "plugin:menu-items",
   PLUGIN_VALIDATE_ACTION_IDS: "plugin:validate-action-ids",
+  PLUGIN_ACTIONS_GET: "plugin:actions-get",
+  PLUGIN_ACTIONS_REGISTER: "plugin:actions-register",
+  PLUGIN_ACTIONS_UNREGISTER: "plugin:actions-unregister",
+  PLUGIN_ACTIONS_CHANGED: "plugin:actions-changed",
 
   RESOURCE_PROFILE_CHANGED: "resource:profile-changed",
 
@@ -3042,8 +3047,11 @@ const api: ElectronAPI = {
       _unwrappingInvoke(CHANNELS.PLUGIN_ACTIONS_REGISTER, pluginId, contribution),
     unregisterAction: (pluginId: string, actionId: string) =>
       _unwrappingInvoke(CHANNELS.PLUGIN_ACTIONS_UNREGISTER, pluginId, actionId),
-    onActionsChanged: (callback: (payload: unknown) => void) => {
-      const handler = (_event: Electron.IpcRendererEvent, payload: unknown) => callback(payload);
+    onActionsChanged: (callback: (payload: { actions: PluginActionDescriptor[] }) => void) => {
+      const handler = (
+        _event: Electron.IpcRendererEvent,
+        payload: { actions: PluginActionDescriptor[] }
+      ) => callback(payload);
       ipcRenderer.on(CHANNELS.PLUGIN_ACTIONS_CHANGED, handler);
       return () => {
         ipcRenderer.removeListener(CHANNELS.PLUGIN_ACTIONS_CHANGED, handler);
