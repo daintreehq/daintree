@@ -5,6 +5,8 @@ import { cn } from "@/lib/utils";
 import { useEscapeStack } from "@/hooks";
 import { useFleetArmingStore, type FleetArmStatePreset } from "@/store/fleetArmingStore";
 import { useFleetDeckStore } from "@/store/fleetDeckStore";
+import { useFleetScopeFlagStore } from "@/store/fleetScopeFlagStore";
+import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import {
   useFleetPendingActionStore,
   type FleetPendingActionKind,
@@ -114,6 +116,15 @@ export function FleetArmingRibbon(): ReactElement | null {
   const pending = useFleetPendingActionStore((s) => s.pending);
   const clearPending = useFleetPendingActionStore((s) => s.clear);
   const isDeckOpen = useFleetDeckStore((s) => s.isOpen);
+  // When Fleet scope is active, the composer renders in the pinned grid
+  // header (FleetScopeComposerHeader) above ContentGrid instead of here.
+  // Mirror ContentGrid's `isFleetScopeEnabled` predicate exactly (mode flag
+  // AND session-level `isFleetScopeActive`) — if we hid the ribbon composer
+  // whenever mode="scoped" the user would briefly lose the composer while
+  // the flag is on but scope has not been entered yet.
+  const fleetScopeMode = useFleetScopeFlagStore((s) => s.mode);
+  const isWorktreeScopeActive = useWorktreeSelectionStore((s) => s.isFleetScopeActive);
+  const isFleetScopeHeaderMounted = fleetScopeMode === "scoped" && isWorktreeScopeActive;
 
   // Escape stack: confirmation cancel sits above the fleet-disarm entry, so
   // the first Escape while confirming clears the pending action and a
@@ -349,7 +360,7 @@ export function FleetArmingRibbon(): ReactElement | null {
           <X className="h-3.5 w-3.5" />
         </button>
       </div>
-      {!isDeckOpen && <FleetComposer />}
+      {!isDeckOpen && !isFleetScopeHeaderMounted && <FleetComposer />}
     </div>
   );
 }
