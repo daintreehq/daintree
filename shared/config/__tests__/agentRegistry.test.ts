@@ -898,13 +898,22 @@ describe("ASSISTANT_FAST_MODELS", () => {
 });
 
 describe("claude providerTemplates descriptions", () => {
-  const expected: Record<string, string> = {
-    "anthropic-native": "Direct Anthropic API connection.",
-    zai: "Anthropic-compatible via Z.AI.",
-    openrouter: "Model routing via OpenRouter.",
-    deepseek: "OpenAI-compatible via DeepSeek.",
-    ollama: "Local models via Ollama — no API key needed.",
-    "custom-openai": "Custom OpenAI-compatible endpoint.",
+  const expected: Record<string, { name: string; description: string }> = {
+    "anthropic-native": {
+      name: "Anthropic (native)",
+      description: "Direct Anthropic API connection.",
+    },
+    zai: { name: "Z.AI", description: "Anthropic-compatible via Z.AI." },
+    openrouter: { name: "OpenRouter", description: "Model routing via OpenRouter." },
+    deepseek: { name: "DeepSeek", description: "OpenAI-compatible via DeepSeek." },
+    ollama: {
+      name: "Ollama (local)",
+      description: "Local models via Ollama — no API key needed.",
+    },
+    "custom-openai": {
+      name: "Custom (OpenAI-compatible)",
+      description: "Custom OpenAI-compatible endpoint.",
+    },
   };
 
   it("has all six provider templates with the expected ids", () => {
@@ -913,9 +922,16 @@ describe("claude providerTemplates descriptions", () => {
     expect(ids).toEqual(Object.keys(expected));
   });
 
-  it.each(Object.entries(expected))("%s has the short caption copy", (id, description) => {
+  it("all provider template ids are unique", () => {
+    const templates = getAgentConfig("claude")?.providerTemplates ?? [];
+    const ids = templates.map((t) => t.id);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it.each(Object.entries(expected))("%s has the expected name and short caption", (id, meta) => {
     const template = getAgentConfig("claude")?.providerTemplates?.find((t) => t.id === id);
-    expect(template?.description).toBe(description);
+    expect(template?.name).toBe(meta.name);
+    expect(template?.description).toBe(meta.description);
   });
 
   it("all descriptions fit a short caption (<= 60 chars)", () => {
