@@ -258,6 +258,38 @@ describe("DevPreviewSessionService — real-life robustness invariants (adversar
     expect(ptyClient.spawn).toHaveBeenCalledTimes(2);
   });
 
+  // ── Bug TOCTOU ─────────────────────────────────────────────────────────────
+
+  it("BUG-TOCTOU: concurrent ensure() for different panels never assign the same port", async () => {
+    // Force Math.random so both sessions' first candidate is identical (6500).
+    // Without reserve-before-probe, the cross-session allocatePort calls both
+    // see an empty usedPorts snapshot at the start of their loop and both
+    // pick candidate=6500. With the fix, the second caller sees the first
+    // caller's reservation in portRegistry and advances.
+    let rngCallCount = 0;
+    vi.spyOn(Math, "random").mockImplementation(() => {
+      rngCallCount++;
+      // First two calls (one per session, first iteration): collide at 0.5 → 6500.
+      // Subsequent iterations pick a different value so the second session advances.
+      if (rngCallCount <= 2) return 0.5;
+      return 0.6;
+    });
+
+    await Promise.all([
+      service.ensure({ ...base, panelId: "panel-a", worktreeId: "wt-a" }),
+      service.ensure({ ...base, panelId: "panel-b", worktreeId: "wt-b" }),
+    ]);
+
+    const a = service.getByWorktree("wt-a");
+    const b = service.getByWorktree("wt-b");
+    expect(a).not.toBeNull();
+    expect(b).not.toBeNull();
+    expect(a!.assignedUrl).toBeTruthy();
+    expect(b!.assignedUrl).toBeTruthy();
+    // The invariant: two concurrent allocations never produce the same URL.
+    expect(a!.assignedUrl).not.toBe(b!.assignedUrl);
+  });
+
   // ── Real-Life Scenario 1: agent URL pre-fetch ──────────────────────────────
 
   it("RLS-1: assignedUrl is non-null immediately after ensure() before server prints URL", async () => {

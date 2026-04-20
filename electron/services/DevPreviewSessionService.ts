@@ -163,23 +163,34 @@ export class DevPreviewSessionService {
     const existing = this.portRegistry.get(sessionKey);
     if (existing !== undefined) return existing;
 
-    const usedPorts = new Set(this.portRegistry.values());
     for (let attempt = 0; attempt < 20; attempt++) {
       const candidate = 3000 + Math.floor(Math.random() * 7000);
+      const usedPorts = new Set(this.portRegistry.values());
       if (usedPorts.has(candidate)) continue;
+      // Reserve before the async probe so concurrent allocatePort() calls for
+      // different session keys can't pick the same candidate between probe and registration.
+      this.portRegistry.set(sessionKey, candidate);
       const available = await new Promise<boolean>((resolve) => {
         const srv = net.createServer();
         srv.once("error", () => resolve(false));
         srv.listen(candidate, "127.0.0.1", () => srv.close(() => resolve(true)));
       });
       if (available) return candidate;
+      this.portRegistry.delete(sessionKey);
     }
     return new Promise<number>((resolve, reject) => {
       const srv = net.createServer();
       srv.listen(0, "127.0.0.1", () => {
         const addr = srv.address();
         const port = typeof addr === "object" && addr ? addr.port : 0;
-        srv.close(() => (port ? resolve(port) : reject(new Error("Failed to allocate port"))));
+        srv.close(() => {
+          if (port) {
+            this.portRegistry.set(sessionKey, port);
+            resolve(port);
+          } else {
+            reject(new Error("Failed to allocate port"));
+          }
+        });
       });
     });
   }
@@ -240,6 +251,7 @@ export class DevPreviewSessionService {
 
   async ensure(request: DevPreviewEnsureRequest): Promise<DevPreviewSessionState> {
     this.validateEnsureRequest(request);
+    if (this.disposed) return this.getSessionState(request.projectId, request.panelId);
     markPerformance(PERF_MARKS.DEVPREVIEW_ENSURE_START, {
       panelId: request.panelId,
       projectId: request.projectId,
@@ -247,6 +259,7 @@ export class DevPreviewSessionService {
     });
     const key = createSessionKey(request.projectId, request.panelId);
     await this.runLocked(key, async () => {
+      if (this.disposed) return;
       const session = this.getOrCreateSession(request.projectId, request.panelId);
       const envChanged = !envEquals(session.env, request.env);
       const nextTurbopackEnabled = request.turbopackEnabled ?? true;
@@ -364,8 +377,6 @@ export class DevPreviewSessionService {
         terminalId: null,
         isRestarting: false,
       });
-      session.assignedUrl = null;
-      this.releasePort(createSessionKey(session.projectId, session.panelId));
     });
     return this.getSessionState(request.projectId, request.panelId);
   }
@@ -685,7 +696,6 @@ export class DevPreviewSessionService {
 
     const sessionKey = createSessionKey(session.projectId, session.panelId);
     const port = await this.allocatePort(sessionKey);
-    this.portRegistry.set(sessionKey, port);
     const assignedUrl = `http://localhost:${port}`;
 
     const spawnEnv: Record<string, string> = { ...session.env, PORT: String(port) };
