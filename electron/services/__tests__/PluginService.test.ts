@@ -1965,12 +1965,26 @@ describe("reserved contribution point warnings", () => {
     await service.initialize();
 
     expect(service.listPlugins()).toHaveLength(1);
-    const warnMessages = warnSpy.mock.calls.map((call) => String(call[0]));
-    expect(warnMessages).not.toContain(
-      expect.stringContaining("contributes.views is not yet implemented")
-    );
-    expect(warnMessages.some((m) => m.includes("contributes.views"))).toBe(false);
-    expect(warnMessages.some((m) => m.includes("contributes.mcpServers"))).toBe(false);
+    const warnMessages = warnSpy.mock.calls.map((call: unknown[]) => String(call[0]));
+    expect(warnMessages.some((m: string) => m.includes("contributes.views"))).toBe(false);
+    expect(warnMessages.some((m: string) => m.includes("contributes.mcpServers"))).toBe(false);
+  });
+
+  it("does not warn when reserved arrays are explicitly present but empty", async () => {
+    await writePlugin("explicit-empty", {
+      name: "acme.explicit-empty",
+      version: "1.0.0",
+      engines: { daintree: "^0.7.0" },
+      contributes: { views: [], mcpServers: [] },
+    });
+
+    const service = new PluginService(tmpDir, "0.7.5");
+    await service.initialize();
+
+    expect(service.listPlugins()).toHaveLength(1);
+    const warnMessages = warnSpy.mock.calls.map((call: unknown[]) => String(call[0]));
+    expect(warnMessages.some((m: string) => m.includes("contributes.views"))).toBe(false);
+    expect(warnMessages.some((m: string) => m.includes("contributes.mcpServers"))).toBe(false);
   });
 
   it("still processes other contributions when reserved points are present", async () => {
@@ -2015,7 +2029,7 @@ describe("reserved contribution point warnings", () => {
     const service = new PluginService(tmpDir, "0.7.5");
     await service.initialize();
 
-    const viewWarnings = warnSpy.mock.calls.filter((call) =>
+    const viewWarnings = warnSpy.mock.calls.filter((call: unknown[]) =>
       String(call[0]).includes("contributes.views is not yet implemented")
     );
     expect(viewWarnings).toHaveLength(1);
