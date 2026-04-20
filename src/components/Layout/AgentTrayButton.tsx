@@ -9,6 +9,7 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import { Plug, Pin, Settings2, ChevronRight } from "lucide-react";
+import { DaintreeAgentIcon } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import {
@@ -486,6 +487,10 @@ export function AgentTrayButton({
     void actionService.dispatch("app.settings.openTab", { tab: "agents" }, { source: "user" });
   };
 
+  const handleOpenAgentSetupWizard = () => {
+    window.dispatchEvent(new CustomEvent("daintree:open-agent-setup-wizard"));
+  };
+
   const handleOpenChange = (open: boolean) => {
     setTooltipOpen(false);
     if (!open) return;
@@ -639,11 +644,15 @@ export function AgentTrayButton({
         {(hasAnyContent || showFallback) && <DropdownMenuSeparator />}
         <DropdownMenuItem onSelect={handleManageAgents} className="h-7">
           <Settings2 className="mr-2 h-3.5 w-3.5 opacity-60" />
-          Manage Agents…
+          Manage Agents
         </DropdownMenuItem>
         <DropdownMenuItem onSelect={handleCustomizeToolbar} className="h-7">
           <Settings2 className="mr-2 h-3.5 w-3.5 opacity-60" />
-          Customize Toolbar…
+          Customize Toolbar
+        </DropdownMenuItem>
+        <DropdownMenuItem onSelect={handleOpenAgentSetupWizard} className="h-7">
+          <DaintreeAgentIcon className="mr-2 h-3.5 w-3.5" />
+          Set Up Agents
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
