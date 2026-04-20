@@ -9,6 +9,7 @@ const {
   logErrorWithContextMock,
   focusStateGetterMock,
   subscribeMock,
+  panelSetStateMock,
 } = vi.hoisted(() => ({
   appSetStateMock: vi.fn().mockResolvedValue(undefined),
   applyRendererPolicyMock: vi.fn(),
@@ -17,6 +18,7 @@ const {
   logErrorWithContextMock: vi.fn(),
   focusStateGetterMock: vi.fn(() => ({ isFocusMode: false })),
   subscribeMock: vi.fn(() => vi.fn()),
+  panelSetStateMock: vi.fn(),
 }));
 
 type MockTerminal = {
@@ -30,9 +32,15 @@ const terminalStoreState = {
   activeDockTerminalId: null as string | null,
   focusedId: null as string | null,
   mruList: [] as string[],
+  maximizedId: null as string | null,
+  maximizeTarget: null as { type: string; id: string } | null,
+  preMaximizeLayout: null as { gridCols: number } | null,
   recordMru: recordMruMock,
   setFocused: setFocusedMock,
 };
+panelSetStateMock.mockImplementation((patch: Record<string, unknown>) => {
+  Object.assign(terminalStoreState, patch);
+});
 function setMockTerminals(terminals: MockTerminal[]) {
   terminalStoreState.panelsById = Object.fromEntries(terminals.map((t) => [t.id, t]));
   terminalStoreState.panelIds = terminals.map((t) => t.id);
@@ -66,11 +74,15 @@ vi.mock("@/store/focusStore", () => ({
 vi.mock("@/store/panelStore", () => ({
   usePanelStore: {
     getState: vi.fn(() => terminalStoreState),
+    setState: panelSetStateMock,
     subscribe: subscribeMock,
   },
 }));
 
-import { useWorktreeSelectionStore } from "../worktreeStore";
+import { useWorktreeSelectionStore, setFleetArmedIdsGetter } from "../worktreeStore";
+
+let armedIdsForFleet = new Set<string>();
+setFleetArmedIdsGetter(() => armedIdsForFleet);
 
 describe("worktreeStore", () => {
   beforeEach(() => {
@@ -81,6 +93,15 @@ describe("worktreeStore", () => {
     terminalStoreState.activeDockTerminalId = null;
     terminalStoreState.focusedId = null;
     terminalStoreState.mruList = [];
+    terminalStoreState.maximizedId = null;
+    terminalStoreState.maximizeTarget = null;
+    terminalStoreState.preMaximizeLayout = null;
+    // clearAllMocks() wipes the panelSetStateMock implementation too, so
+    // reinstall it on every test — otherwise panelSetStateMock becomes a
+    // noop and the maximize-clear assertions silently miss behavior drift.
+    panelSetStateMock.mockImplementation((patch: Record<string, unknown>) => {
+      Object.assign(terminalStoreState, patch);
+    });
     focusStateGetterMock.mockReturnValue({ isFocusMode: false });
   });
 
@@ -398,6 +419,94 @@ describe("worktreeStore", () => {
       const state = useWorktreeSelectionStore.getState();
       expect(state.isFleetScopeActive).toBe(false);
       expect(state._previousActiveWorktreeId).toBeNull();
+    });
+
+    it("enterFleetScope clears any active maximize so the scope grid is visible", async () => {
+      useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-with-maximize" });
+      terminalStoreState.maximizedId = "term-maxed";
+      terminalStoreState.maximizeTarget = { type: "panel", id: "term-maxed" };
+      terminalStoreState.preMaximizeLayout = { gridCols: 2 };
+
+      useWorktreeSelectionStore.getState().enterFleetScope();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(panelSetStateMock).toHaveBeenCalledWith({
+        maximizedId: null,
+        maximizeTarget: null,
+        preMaximizeLayout: null,
+      });
+      expect(terminalStoreState.maximizedId).toBeNull();
+      expect(terminalStoreState.maximizeTarget).toBeNull();
+      expect(terminalStoreState.preMaximizeLayout).toBeNull();
+    });
+
+    it("exitFleetScope clears any lingering preMaximizeLayout snapshot", async () => {
+      useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-pre-scope" });
+      useWorktreeSelectionStore.getState().enterFleetScope();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      terminalStoreState.preMaximizeLayout = { gridCols: 3 };
+      panelSetStateMock.mockClear();
+
+      useWorktreeSelectionStore.getState().exitFleetScope();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(panelSetStateMock).toHaveBeenCalledWith({ preMaximizeLayout: null });
+      expect(terminalStoreState.preMaximizeLayout).toBeNull();
+    });
+
+    it("enterFleetScope's deferred maximize-clear bails if scope was exited first", async () => {
+      useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-race" });
+      useWorktreeSelectionStore.getState().enterFleetScope();
+      // Exit scope synchronously before the deferred .then() resolves.
+      useWorktreeSelectionStore.getState().exitFleetScope();
+
+      // Simulate the user manually re-maximizing a panel after the exit.
+      terminalStoreState.maximizedId = "term-user-maxed";
+      terminalStoreState.maximizeTarget = { type: "panel", id: "term-user-maxed" };
+      panelSetStateMock.mockClear();
+
+      // Flush the microtask queue so the deferred import/then runs.
+      await Promise.resolve();
+      await Promise.resolve();
+
+      // The enterFleetScope .then() MUST NOT wipe the user's new maximize.
+      expect(panelSetStateMock).not.toHaveBeenCalledWith(
+        expect.objectContaining({ maximizedId: null })
+      );
+      expect(terminalStoreState.maximizedId).toBe("term-user-maxed");
+    });
+
+    it("enterFleetScope pins armed cross-worktree terminals to VISIBLE", async () => {
+      setMockTerminals([
+        { id: "term-active", worktreeId: "wt-pre-scope", location: "grid" },
+        { id: "term-armed-remote", worktreeId: "wt-other", location: "grid" },
+        { id: "term-idle-remote", worktreeId: "wt-other", location: "grid" },
+      ]);
+      useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-pre-scope" });
+      armedIdsForFleet = new Set(["term-armed-remote"]);
+      applyRendererPolicyMock.mockClear();
+
+      useWorktreeSelectionStore.getState().enterFleetScope();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(applyRendererPolicyMock).toHaveBeenCalledWith(
+        "term-active",
+        TerminalRefreshTier.VISIBLE
+      );
+      expect(applyRendererPolicyMock).toHaveBeenCalledWith(
+        "term-armed-remote",
+        TerminalRefreshTier.VISIBLE
+      );
+      expect(applyRendererPolicyMock).toHaveBeenCalledWith(
+        "term-idle-remote",
+        TerminalRefreshTier.BACKGROUND
+      );
+      armedIdsForFleet = new Set();
     });
   });
 });

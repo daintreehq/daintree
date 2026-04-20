@@ -17,6 +17,11 @@ export interface GridPanelProps {
   gridCols?: number;
   // Group-level ambient agent state (highest urgency across all tabs in a tab group)
   ambientAgentState?: AgentState;
+  // Fleet scope render overrides: force input lock, surface broadcast overlay,
+  // and let the caller disambiguate titles when the armed set spans multiple
+  // worktrees. These are transient render-only flags; the store is untouched.
+  isFleetScope?: boolean;
+  titleOverride?: string;
   // Tab support
   tabs?: TabInfo[];
   groupId?: string;
@@ -43,6 +48,8 @@ export function gridPanelPropsAreEqual(prev: GridPanelProps, next: GridPanelProp
     prev.gridPanelCount !== next.gridPanelCount ||
     prev.gridCols !== next.gridCols ||
     prev.ambientAgentState !== next.ambientAgentState ||
+    prev.isFleetScope !== next.isFleetScope ||
+    prev.titleOverride !== next.titleOverride ||
     prev.groupId !== next.groupId
   ) {
     return false;
@@ -119,6 +126,8 @@ export const GridPanel = React.memo(function GridPanel({
   gridPanelCount,
   gridCols,
   ambientAgentState,
+  isFleetScope = false,
+  titleOverride,
   tabs,
   groupId,
   onTabClick,
@@ -187,16 +196,22 @@ export const GridPanel = React.memo(function GridPanel({
           ambientAgentState,
           onFocus: handleFocus,
           onClose: handleClose,
-          onToggleMaximize: handleToggleMaximize,
+          // Fleet scope disables per-panel maximize — the armed grid is a single
+          // read-only composite view; promoting one cell would drop the rest.
+          onToggleMaximize: isFleetScope ? undefined : handleToggleMaximize,
           onTitleChange: handleTitleChange,
-          onMinimize: handleMinimize,
+          onMinimize: isFleetScope ? undefined : handleMinimize,
           tabs,
           groupId,
           onTabClick,
           onTabClose,
           onTabRename,
-          onAddTab,
+          // Adding a new tab in scope would create a cross-worktree tab group,
+          // which violates the tab-group invariant in shared/types/panel.ts.
+          onAddTab: isFleetScope ? undefined : onAddTab,
           onTabReorder,
+          ...(isFleetScope ? { isInputLocked: true, isFleetScope: true } : undefined),
+          ...(titleOverride !== undefined ? { title: titleOverride } : undefined),
         },
       }),
     [
@@ -218,6 +233,8 @@ export const GridPanel = React.memo(function GridPanel({
       onTabRename,
       onAddTab,
       onTabReorder,
+      isFleetScope,
+      titleOverride,
     ]
   );
 

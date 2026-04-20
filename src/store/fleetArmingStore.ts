@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { usePanelStore } from "@/store/panelStore";
-import { useWorktreeSelectionStore } from "@/store/worktreeStore";
+import { useWorktreeSelectionStore, setFleetArmedIdsGetter } from "@/store/worktreeStore";
 import { setFleetArmingClear } from "@/store/projectStore";
 import { isAgentTerminal } from "@/utils/terminalType";
 import type { TerminalInstance } from "@shared/types";
@@ -253,6 +253,12 @@ function getActiveWorktreeId(): string | null {
 setFleetArmingClear(() => {
   useFleetArmingStore.getState().clear();
 });
+
+// Expose the armed-id set to worktreeStore so its terminal-streaming policy
+// can keep armed cross-worktree terminals at VISIBLE during fleet scope.
+// Using a getter-injection pattern (identical to `setFleetArmingClear`)
+// avoids an otherwise cyclic module import.
+setFleetArmedIdsGetter(() => useFleetArmingStore.getState().armedIds);
 
 /**
  * Module-scope subscription: when panels are removed, relocated to trash/background,
