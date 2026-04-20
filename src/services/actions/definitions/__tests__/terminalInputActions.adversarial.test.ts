@@ -12,11 +12,14 @@ const bracketedMock = vi.hoisted(() => ({
   formatWithBracketedPaste: vi.fn((t: string) => `<BP>${t}</BP>`),
 }));
 const sendToAgentMock = vi.hoisted(() => ({ openSendToAgentPalette: vi.fn() }));
-const fleetDeckMock = vi.hoisted(() => ({
-  useFleetDeckStore: {
-    getState: vi.fn(() => ({
-      open: vi.fn(),
-    })),
+const fleetScopeFlagMock = vi.hoisted(() => ({
+  useFleetScopeFlagStore: {
+    getState: vi.fn(() => ({ mode: "legacy", isHydrated: false })),
+  },
+}));
+const worktreeSelectionMock = vi.hoisted(() => ({
+  useWorktreeSelectionStore: {
+    getState: vi.fn(() => ({ enterFleetScope: vi.fn() })),
   },
 }));
 const terminalInputStoreMock = vi.hoisted(() => ({
@@ -46,7 +49,8 @@ vi.mock("@/services/terminal/TerminalInstanceService", () => ({
 vi.mock("@/clients", () => ({ terminalClient: terminalClientMock }));
 vi.mock("@shared/utils/terminalInputProtocol", () => bracketedMock);
 vi.mock("@/hooks/useSendToAgentPalette", () => sendToAgentMock);
-vi.mock("@/store/fleetDeckStore", () => fleetDeckMock);
+vi.mock("@/store/fleetScopeFlagStore", () => fleetScopeFlagMock);
+vi.mock("@/store/worktreeStore", () => worktreeSelectionMock);
 vi.mock("@/store/terminalInputStore", () => terminalInputStoreMock);
 vi.mock("@/store/fleetArmingStore", () => fleetArmingMock);
 vi.mock("@shared/config/panelKindRegistry", () => ({
@@ -287,5 +291,88 @@ describe("terminalInputActions adversarial", () => {
 
     await expect(run("terminal.copyLink", { url: "https://a.example" })).rejects.toThrow("denied");
     expect(writeSpy).toHaveBeenCalledWith("https://a.example");
+  });
+
+  describe("terminal.bulkCommand (fleet broadcast entry)", () => {
+    function setArmed(size: number): { armAll: ReturnType<typeof vi.fn> } {
+      const armAll = vi.fn();
+      fleetArmingMock.useFleetArmingStore.getState.mockReturnValue({
+        armedIds: { size } as Set<string>,
+        armAll,
+      } as never);
+      return { armAll };
+    }
+
+    it("arms current worktree and enters scope when scoped mode is hydrated", async () => {
+      const { armAll } = setArmed(3);
+      fleetScopeFlagMock.useFleetScopeFlagStore.getState.mockReturnValue({
+        mode: "scoped",
+        isHydrated: true,
+      } as never);
+      const enterFleetScope = vi.fn();
+      worktreeSelectionMock.useWorktreeSelectionStore.getState.mockReturnValue({
+        enterFleetScope,
+      } as never);
+
+      const { run } = setupActions();
+      await run("terminal.bulkCommand");
+
+      expect(armAll).toHaveBeenCalledWith("current");
+      expect(enterFleetScope).toHaveBeenCalled();
+    });
+
+    it("arms current worktree but does NOT enter scope in legacy mode", async () => {
+      const { armAll } = setArmed(2);
+      fleetScopeFlagMock.useFleetScopeFlagStore.getState.mockReturnValue({
+        mode: "legacy",
+        isHydrated: true,
+      } as never);
+      const enterFleetScope = vi.fn();
+      worktreeSelectionMock.useWorktreeSelectionStore.getState.mockReturnValue({
+        enterFleetScope,
+      } as never);
+
+      const { run } = setupActions();
+      await run("terminal.bulkCommand");
+
+      expect(armAll).toHaveBeenCalledWith("current");
+      expect(enterFleetScope).not.toHaveBeenCalled();
+    });
+
+    it("arms current worktree but does NOT enter scope before hydration", async () => {
+      const { armAll } = setArmed(1);
+      fleetScopeFlagMock.useFleetScopeFlagStore.getState.mockReturnValue({
+        mode: "scoped",
+        isHydrated: false,
+      } as never);
+      const enterFleetScope = vi.fn();
+      worktreeSelectionMock.useWorktreeSelectionStore.getState.mockReturnValue({
+        enterFleetScope,
+      } as never);
+
+      const { run } = setupActions();
+      await run("terminal.bulkCommand");
+
+      expect(armAll).toHaveBeenCalledWith("current");
+      expect(enterFleetScope).not.toHaveBeenCalled();
+    });
+
+    it("does NOT enter scope when the worktree has zero eligible agents", async () => {
+      const { armAll } = setArmed(0);
+      fleetScopeFlagMock.useFleetScopeFlagStore.getState.mockReturnValue({
+        mode: "scoped",
+        isHydrated: true,
+      } as never);
+      const enterFleetScope = vi.fn();
+      worktreeSelectionMock.useWorktreeSelectionStore.getState.mockReturnValue({
+        enterFleetScope,
+      } as never);
+
+      const { run } = setupActions();
+      await run("terminal.bulkCommand");
+
+      expect(armAll).toHaveBeenCalledWith("current");
+      expect(enterFleetScope).not.toHaveBeenCalled();
+    });
   });
 });

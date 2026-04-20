@@ -37,9 +37,7 @@ import {
   usePanelStore,
   getTerminalRefreshTier,
   useTerminalInputStore,
-  useFleetDeckStore,
 } from "@/store";
-import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { useTerminalLogic } from "@/hooks/useTerminalLogic";
 import { errorsClient } from "@/clients";
 import type { AgentState } from "@/types";
@@ -250,13 +248,7 @@ function TerminalPaneComponent({
         : undefined
   ) as BuiltInAgentId | undefined;
   const isAgentTerminal = effectiveAgentId !== undefined;
-  const isArmed = useFleetArmingStore((s) => s.armedIds.has(id));
-  const isDeckOpen = useFleetDeckStore((s) => s.isOpen);
-  // When the Fleet Deck is open and this terminal is armed, its input flows
-  // through the Deck composer — suppress the per-terminal HybridInputBar so
-  // there are no duplicate input surfaces competing for focus.
-  const suppressForFleetDeck = isArmed && isDeckOpen;
-  const showHybridInputBar = isAgentTerminal && hybridInputEnabled && !suppressForFleetDeck;
+  const showHybridInputBar = isAgentTerminal && hybridInputEnabled;
 
   const queueCount = usePanelStore((state) => state.commandQueueCountById[id] ?? 0);
 

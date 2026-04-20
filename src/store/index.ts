@@ -84,9 +84,6 @@ export { useVoiceRecordingStore } from "./voiceRecordingStore";
 
 export { useDockStore } from "./dockStore";
 
-export { useFleetDeckStore } from "./fleetDeckStore";
-export type { FleetDeckStateFilter } from "./fleetDeckStore";
-
 export { useFleetScopeFlagStore } from "./fleetScopeFlagStore";
 export type { FleetScopeMode } from "./fleetScopeFlagStore";
 

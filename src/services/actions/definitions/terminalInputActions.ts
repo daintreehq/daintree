@@ -1,12 +1,13 @@
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import { z } from "zod";
 import { terminalClient } from "@/clients";
-import { useFleetDeckStore } from "@/store/fleetDeckStore";
 import { openSendToAgentPalette } from "@/hooks/useSendToAgentPalette";
 import { openPanelContextMenu } from "@/lib/panelContextMenu";
 import { terminalInstanceService } from "@/services/terminal/TerminalInstanceService";
 import { useFleetArmingStore, isFleetArmEligible } from "@/store/fleetArmingStore";
+import { useFleetScopeFlagStore } from "@/store/fleetScopeFlagStore";
 import { usePanelStore } from "@/store/panelStore";
+import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { triggerPopStash, triggerStashInput } from "@/store/terminalInputStore";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 import { formatWithBracketedPaste } from "@shared/utils/terminalInputProtocol";
@@ -155,15 +156,22 @@ export function registerTerminalInputActions(
 
   actions.set("terminal.bulkCommand", () => ({
     id: "terminal.bulkCommand",
-    title: "Fleet Deck",
-    description: "Open the Fleet Deck to broadcast to multiple agent terminals",
+    title: "Fleet: Broadcast",
+    description: "Arm every agent in the current worktree and enter Fleet scope to broadcast",
     category: "terminal",
     kind: "command",
     danger: "safe",
     scope: "renderer",
     keywords: ["broadcast", "fleet", "multi"],
     run: async () => {
-      useFleetDeckStore.getState().open();
+      useFleetArmingStore.getState().armAll("current");
+      // Guard against a stuck-scope state when the worktree has no eligible
+      // agents to arm — see useWorktreeActions.handleBroadcastToAgents.
+      if (useFleetArmingStore.getState().armedIds.size === 0) return;
+      const flag = useFleetScopeFlagStore.getState();
+      if (flag.isHydrated && flag.mode === "scoped") {
+        useWorktreeSelectionStore.getState().enterFleetScope();
+      }
     },
   }));
 

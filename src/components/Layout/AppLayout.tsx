@@ -8,18 +8,12 @@ import { PortalDock, PortalVisibilityController } from "../Portal";
 import { HelpPanel } from "../HelpPanel";
 import { ThemeBrowser } from "../ThemeBrowser";
 import { ProjectSwitchOverlay } from "@/components/Project";
-import { FleetArmingRibbon, FleetDeck } from "@/components/Fleet";
+import { FleetArmingRibbon } from "@/components/Fleet";
 import { ChordIndicator } from "./ChordIndicator";
 import { DemoCaptureBridge, DemoCursor, DemoOverlay } from "../Demo";
 
 import { AllClearOverlay } from "../AllClearOverlay";
-import {
-  useDiagnosticsStore,
-  useDockStore,
-  useFleetDeckStore,
-  useThemeBrowserStore,
-  type PanelState,
-} from "@/store";
+import { useDiagnosticsStore, useDockStore, useThemeBrowserStore, type PanelState } from "@/store";
 import { useFleetScopeFlagStore } from "@/store/fleetScopeFlagStore";
 import { useProjectStore } from "@/store/projectStore";
 import { useMacroFocusStore } from "@/store/macroFocusStore";
@@ -102,9 +96,6 @@ export function AppLayout({
         // which reads per-project focus mode state. This ensures each project has its own focus mode.
         useDockStore.getState().hydrate({
           popoverHeight: appState.dockedPopoverHeight,
-        });
-        useFleetDeckStore.getState().hydrate({
-          isOpen: appState.fleetDeckOpen,
         });
         useFleetScopeFlagStore.getState().hydrate(appState.fleetScopeMode);
       } catch (error) {
@@ -382,9 +373,6 @@ export function AppLayout({
                   </div>
                 </ErrorBoundary>
               )}
-              <ErrorBoundary variant="section" componentName="FleetDeck">
-                <FleetDeck />
-              </ErrorBoundary>
             </main>
           </ErrorBoundary>
         </div>

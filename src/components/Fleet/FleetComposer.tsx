@@ -11,7 +11,6 @@ import { useShallow } from "zustand/react/shallow";
 import { cn } from "@/lib/utils";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { useFleetComposerStore } from "@/store/fleetComposerStore";
-import { useFleetDeckStore } from "@/store/fleetDeckStore";
 import { useCommandHistoryStore } from "@/store/commandHistoryStore";
 import { useNotificationStore } from "@/store/notificationStore";
 import { useProjectStore } from "@/store/projectStore";
@@ -36,7 +35,7 @@ const DEFAULT_QUORUM_THRESHOLD = 5;
 
 function getQuorumThreshold(): number {
   try {
-    return useFleetDeckStore.getState().quorumThreshold;
+    return useFleetComposerStore.getState().quorumThreshold;
   } catch {
     return DEFAULT_QUORUM_THRESHOLD;
   }
@@ -118,7 +117,7 @@ export function FleetComposer(): ReactElement | null {
       if (currentDraft.trim() === "") return;
 
       // alwaysPreview: when enabled, Enter opens the dry-run dialog instead of sending directly.
-      if (!force && !isConfirming && useFleetDeckStore.getState().alwaysPreview) {
+      if (!force && !isConfirming && useFleetComposerStore.getState().alwaysPreview) {
         setIsDryRunOpen(true);
         return;
       }

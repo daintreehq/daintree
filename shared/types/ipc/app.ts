@@ -83,12 +83,6 @@ export interface AppState {
   mruList?: string[];
   /** Most-recently-used action frecency entries for the action palette (migrated from legacy string[] format) */
   actionMruList?: ActionFrecencyEntry[] | string[];
-  /** Whether the Fleet Deck panel is open */
-  fleetDeckOpen?: boolean;
-  /** Whether Enter in Fleet Composer always opens dry-run preview */
-  fleetDeckAlwaysPreview?: boolean;
-  /** Number of armed targets that triggers quorum confirmation */
-  fleetDeckQuorumThreshold?: number;
   /** Whether Fleet scope primitive is active ("scoped") or feature is disabled ("legacy", default) */
   fleetScopeMode?: "legacy" | "scoped";
 }

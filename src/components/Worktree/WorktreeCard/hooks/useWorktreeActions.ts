@@ -3,7 +3,6 @@ import type { WorktreeState } from "@/types";
 import { actionService } from "@/services/ActionService";
 import { useRecipeStore } from "@/store/recipeStore";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
-import { useFleetDeckStore } from "@/store/fleetDeckStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 
 export interface ConfirmDialogState {
@@ -102,7 +101,11 @@ export function useWorktreeActions({
   const handleBroadcastToAgents = useCallback(() => {
     useWorktreeSelectionStore.getState().setActiveWorktree(worktree.id);
     useFleetArmingStore.getState().armAll("current");
-    useFleetDeckStore.getState().open();
+    // Avoid a stuck-scope state: if the worktree has no eligible agents, the
+    // ribbon and composer both stay hidden, and the user has no visible exit
+    // from an active but empty fleet scope.
+    if (useFleetArmingStore.getState().armedIds.size === 0) return;
+    void actionService.dispatch("fleet.scope.enter", undefined, { source: "user" });
   }, [worktree.id]);
 
   const handleCopyTree = useCallback(async () => {

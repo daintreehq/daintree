@@ -397,14 +397,6 @@ export const DEFAULT_KEYBINDINGS: KeybindingConfig[] = [
     description: "Focus the fleet broadcast composer",
     category: "Terminal",
   },
-  {
-    actionId: "fleet.deck.toggle",
-    combo: "Cmd+Alt+Shift+B",
-    scope: "global",
-    priority: 0,
-    description: "Toggle Fleet Deck",
-    category: "Fleet",
-  },
   // Directional terminal navigation (Ghostty-style: Cmd+Option+Arrow)
   {
     actionId: "terminal.focusUp",

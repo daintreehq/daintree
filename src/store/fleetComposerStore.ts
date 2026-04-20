@@ -9,6 +9,10 @@ interface FleetComposerState {
   lastFailedIds: string[];
   /** The prompt text from the most recent broadcast (for retry-failed) */
   lastBroadcastPrompt: string;
+  /** When true, pressing Enter opens dry-run preview instead of sending directly */
+  alwaysPreview: boolean;
+  /** Broadcast target count that triggers quorum confirmation */
+  quorumThreshold: number;
   setDraft: (draft: string) => void;
   clearDraft: () => void;
   requestDryRun: () => void;
@@ -22,6 +26,8 @@ export const useFleetComposerStore = create<FleetComposerState>()((set) => ({
   dryRunRequested: false,
   lastFailedIds: [],
   lastBroadcastPrompt: "",
+  alwaysPreview: false,
+  quorumThreshold: 5,
   setDraft: (draft) => set({ draft }),
   clearDraft: () => set({ draft: "" }),
   requestDryRun: () => set({ dryRunRequested: true }),

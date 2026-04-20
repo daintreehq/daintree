@@ -10,7 +10,6 @@ import {
   useFleetPendingActionStore,
   type FleetPendingActionKind,
 } from "@/store/fleetPendingActionStore";
-import { useFleetDeckStore } from "@/store/fleetDeckStore";
 import { useFleetSavedScopesStore } from "@/store/fleetSavedScopesStore";
 import { useFleetComposerStore } from "@/store/fleetComposerStore";
 import { useFleetScopeFlagStore } from "@/store/fleetScopeFlagStore";
@@ -255,46 +254,6 @@ export function registerFleetActions(actions: ActionRegistry): void {
       const ids = new Set(snap.liveTerminals.map((t) => t.id));
       usePanelStore.getState().bulkTrashSet(ids);
       useFleetArmingStore.getState().clear();
-    },
-  }));
-
-  actions.set("fleet.deck.toggle", () => ({
-    id: "fleet.deck.toggle",
-    title: "Fleet Deck: Toggle",
-    description:
-      "Open or close the Fleet Deck — a persistent dockable panel with live agent terminal mirrors",
-    category: "panel",
-    kind: "command",
-    danger: "safe",
-    scope: "renderer",
-    run: async () => {
-      useFleetDeckStore.getState().toggle();
-    },
-  }));
-
-  actions.set("fleet.deck.open", () => ({
-    id: "fleet.deck.open",
-    title: "Fleet Deck: Open",
-    description: "Open the Fleet Deck panel",
-    category: "panel",
-    kind: "command",
-    danger: "safe",
-    scope: "renderer",
-    run: async () => {
-      useFleetDeckStore.getState().open();
-    },
-  }));
-
-  actions.set("fleet.deck.close", () => ({
-    id: "fleet.deck.close",
-    title: "Fleet Deck: Close",
-    description: "Close the Fleet Deck panel",
-    category: "panel",
-    kind: "command",
-    danger: "safe",
-    scope: "renderer",
-    run: async () => {
-      useFleetDeckStore.getState().close();
     },
   }));
 

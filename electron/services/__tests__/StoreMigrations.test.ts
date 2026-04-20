@@ -37,6 +37,7 @@ import { migration006 } from "../migrations/006-rename-theme-canopy-to-daintree.
 import { migration007 } from "../migrations/007-reduce-default-terminal-scrollback.js";
 import { migration008 } from "../migrations/008-split-notification-sounds.js";
 import { migration011 } from "../migrations/011-minimal-soundscape-defaults.js";
+import { migration019 } from "../migrations/019-remove-fleet-deck-open.js";
 
 type MockStoreData = Record<string, unknown>;
 
@@ -431,6 +432,61 @@ describe("MigrationRunner", () => {
     });
   });
 
+  describe("migration 019 — remove orphaned fleet deck keys", () => {
+    it("deletes fleetDeckOpen/fleetDeckAlwaysPreview/fleetDeckQuorumThreshold and preserves siblings", () => {
+      const store = createMockStore(storePath, {
+        appState: {
+          sidebarWidth: 350,
+          fleetDeckOpen: true,
+          fleetDeckAlwaysPreview: true,
+          fleetDeckQuorumThreshold: 8,
+          fleetScopeMode: "scoped",
+        },
+      });
+      migration019.up(store as never);
+      const after = store.data.appState as Record<string, unknown>;
+      expect("fleetDeckOpen" in after).toBe(false);
+      expect("fleetDeckAlwaysPreview" in after).toBe(false);
+      expect("fleetDeckQuorumThreshold" in after).toBe(false);
+      expect(after.sidebarWidth).toBe(350);
+      expect(after.fleetScopeMode).toBe("scoped");
+    });
+
+    it("is a no-op when appState has no fleet deck keys", () => {
+      const store = createMockStore(storePath, {
+        appState: { sidebarWidth: 400, fleetScopeMode: "scoped" },
+      });
+      migration019.up(store as never);
+      expect(store.data.appState).toEqual({ sidebarWidth: 400, fleetScopeMode: "scoped" });
+    });
+
+    it("skips when no appState exists", () => {
+      const store = createMockStore(storePath, {});
+      migration019.up(store as never);
+      expect(store.data.appState).toBeUndefined();
+    });
+
+    it("runs end-to-end through MigrationRunner on a v18 store", async () => {
+      const store = createMockStore(storePath, {
+        _schemaVersion: 18,
+        appState: {
+          sidebarWidth: 350,
+          fleetDeckOpen: true,
+          fleetDeckAlwaysPreview: false,
+          fleetDeckQuorumThreshold: 4,
+        },
+      });
+      const runner = new MigrationRunner(store as never);
+      await runner.runMigrations([migration019]);
+      const after = store.data.appState as Record<string, unknown>;
+      expect(store.data._schemaVersion).toBe(19);
+      expect("fleetDeckOpen" in after).toBe(false);
+      expect("fleetDeckAlwaysPreview" in after).toBe(false);
+      expect("fleetDeckQuorumThreshold" in after).toBe(false);
+      expect(after.sidebarWidth).toBe(350);
+    });
+  });
+
   it("LATEST_SCHEMA_VERSION matches the highest version in the migrations barrel", () => {
     const highest = Math.max(...migrations.map((m) => m.version));
     expect(LATEST_SCHEMA_VERSION).toBe(highest);
@@ -636,6 +692,12 @@ describe("MigrationRunner", () => {
         expect(entry.enabled).toBeUndefined();
         expect(typeof entry.pinned).toBe("boolean");
       }
+
+      // Migration 019: orphaned fleet deck keys should be gone
+      const migratedAppState = store.data.appState as Record<string, unknown>;
+      expect("fleetDeckOpen" in migratedAppState).toBe(false);
+      expect("fleetDeckAlwaysPreview" in migratedAppState).toBe(false);
+      expect("fleetDeckQuorumThreshold" in migratedAppState).toBe(false);
 
       // Single-run sanity check; statistical p95 is measured by PERF-080
       // Use generous tolerance to avoid CI flake under load

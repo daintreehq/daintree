@@ -937,14 +937,12 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
                       })
                     }
                     className="p-1 text-daintree-text/40 hover:text-daintree-text hover:bg-tint/[0.06] rounded transition-colors"
-                    aria-label="Open Fleet Deck"
+                    aria-label="Broadcast to armed agents"
                   >
                     <BroadcastTerminalIcon className="w-3.5 h-3.5" />
                   </button>
                 </TooltipTrigger>
-                <TooltipContent side="bottom">
-                  {createTooltipWithShortcut("Fleet Deck", "Cmd+Alt+Shift+B")}
-                </TooltipContent>
+                <TooltipContent side="bottom">Broadcast to agents</TooltipContent>
               </Tooltip>
               <Tooltip>
                 <TooltipTrigger asChild>

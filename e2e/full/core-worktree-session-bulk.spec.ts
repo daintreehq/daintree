@@ -5,7 +5,7 @@ import { openAndOnboardProject } from "../helpers/project";
 import { getGridPanelCount, getDockPanelCount } from "../helpers/panels";
 import { spawnTerminalAndVerify } from "../helpers/workflows";
 import { SEL } from "../helpers/selectors";
-import { T_SHORT, T_MEDIUM, T_LONG, T_SETTLE } from "../helpers/timeouts";
+import { T_SHORT, T_LONG, T_SETTLE } from "../helpers/timeouts";
 
 let ctx: AppContext;
 const FEATURE = "feature/test-branch";
@@ -82,18 +82,5 @@ test.describe.serial("Core: Worktree Session Bulk", () => {
 
     await expect.poll(() => getGridPanelCount(window), { timeout: T_LONG }).toBe(3);
     await expect.poll(() => getDockPanelCount(window), { timeout: T_LONG }).toBe(0);
-  });
-
-  test("broadcast to agents opens Fleet Deck", async () => {
-    const { window } = ctx;
-
-    await window.waitForTimeout(T_SETTLE);
-
-    await openSessionsSubmenu();
-    await clickSessionsItem(/Broadcast to agents/);
-
-    // Fleet Deck panel should appear
-    const fleetDeck = window.locator('[data-testid="fleet-deck"]');
-    await expect(fleetDeck).toBeVisible({ timeout: T_MEDIUM });
   });
 });

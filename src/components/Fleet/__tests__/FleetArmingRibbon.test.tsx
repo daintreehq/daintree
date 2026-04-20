@@ -4,7 +4,6 @@ import { render, fireEvent, screen, act } from "@testing-library/react";
 import { FleetArmingRibbon } from "../FleetArmingRibbon";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { useFleetPendingActionStore } from "@/store/fleetPendingActionStore";
-import { useFleetDeckStore } from "@/store/fleetDeckStore";
 import { useFleetScopeFlagStore } from "@/store/fleetScopeFlagStore";
 import { usePanelStore } from "@/store/panelStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
@@ -19,7 +18,6 @@ function resetStores() {
     lastArmedId: null,
   });
   useFleetPendingActionStore.setState({ pending: null });
-  useFleetDeckStore.setState({ isOpen: false });
   useFleetScopeFlagStore.setState({ mode: "legacy", isHydrated: true });
   usePanelStore.setState({ panelsById: {}, panelIds: [] });
   useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-1", isFleetScopeActive: false });
@@ -212,26 +210,15 @@ describe("FleetArmingRibbon", () => {
     dispatchSpy.mockRestore();
   });
 
-  describe("Fleet Deck composer suppression", () => {
-    it("renders the embedded FleetComposer when the Deck is closed", () => {
+  describe("Fleet scope composer placement", () => {
+    it("renders the embedded FleetComposer when scope is not active", () => {
       useFleetArmingStore.getState().armIds(["a"]);
-      useFleetDeckStore.setState({ isOpen: false });
       render(<FleetArmingRibbon />);
       expect(screen.queryByTestId("fleet-composer")).toBeTruthy();
     });
 
-    it("suppresses the embedded FleetComposer when the Deck is open", () => {
-      useFleetArmingStore.getState().armIds(["a"]);
-      useFleetDeckStore.setState({ isOpen: true });
-      render(<FleetArmingRibbon />);
-      expect(screen.queryByTestId("fleet-composer")).toBeNull();
-      // The ribbon itself still renders — only the composer is suppressed.
-      expect(screen.queryByTestId("fleet-arming-ribbon")).toBeTruthy();
-    });
-
     it("suppresses the embedded FleetComposer when Fleet scope is active", () => {
       useFleetArmingStore.getState().armIds(["a"]);
-      useFleetDeckStore.setState({ isOpen: false });
       useFleetScopeFlagStore.setState({ mode: "scoped", isHydrated: true });
       useWorktreeSelectionStore.setState({
         activeWorktreeId: "wt-1",
@@ -251,7 +238,6 @@ describe("FleetArmingRibbon", () => {
       // ContentGrid wouldn't render its pinned header in this state, so the
       // ribbon must keep the composer to avoid leaving the user without one.
       useFleetArmingStore.getState().armIds(["a"]);
-      useFleetDeckStore.setState({ isOpen: false });
       useFleetScopeFlagStore.setState({ mode: "scoped", isHydrated: true });
       useWorktreeSelectionStore.setState({
         activeWorktreeId: "wt-1",

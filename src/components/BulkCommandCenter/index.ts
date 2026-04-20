@@ -1,1 +1,0 @@
-export { openBulkCommandPalette } from "./compatibility";

@@ -100,7 +100,6 @@ export function createHeavyMigrationFixture(): StoreSchema {
       recipes,
       hasSeenWelcome: true,
       panelGridConfig: { strategy: "automatic" as const, value: 3 },
-      fleetDeckOpen: false,
     },
     userConfig: {},
     worktreeConfig: {

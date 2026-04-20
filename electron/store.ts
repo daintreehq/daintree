@@ -100,7 +100,6 @@ export interface StoreSchema {
     panelGridConfig?: PanelGridConfig;
     mruList?: string[];
     actionMruList?: ActionFrecencyEntry[] | string[];
-    fleetDeckOpen?: boolean;
     fleetScopeMode?: "legacy" | "scoped";
   };
   userConfig: {
@@ -255,7 +254,6 @@ const storeOptions = {
       recipes: [],
       hasSeenWelcome: false,
       panelGridConfig: { strategy: "automatic" as const, value: 3 },
-      fleetDeckOpen: false,
     },
     userConfig: {},
     worktreeConfig: {
