@@ -1033,64 +1033,13 @@ export function AgentSettings({
                         <span className="text-[11px] text-daintree-text/50 font-medium uppercase tracking-wide block">
                           Env overrides
                         </span>
-                        {(() => {
-                          const globalEnv =
-                            (activeEntry.globalEnv as Record<string, string> | undefined) ?? {};
-                          const presetEnv = selectedPreset.env ?? {};
-                          const inheritedEntries = Object.entries(globalEnv).filter(
-                            ([k]) => !(k in presetEnv)
-                          );
-                          if (inheritedEntries.length === 0) return null;
-                          return (
-                            <div
-                              className="rounded-[var(--radius-md)] border border-daintree-border overflow-hidden bg-daintree-bg/20"
-                              data-testid="preset-env-inherited-strip"
-                            >
-                              <div className="grid grid-cols-[2fr_3fr_auto] text-[10px] uppercase tracking-wide text-daintree-text/50 bg-daintree-bg/40 border-b border-daintree-border">
-                                <div className="px-2.5 py-1.5">Inherited from global env</div>
-                                <div
-                                  className="px-2.5 py-1.5 border-l border-daintree-border/60"
-                                  aria-hidden="true"
-                                />
-                                <div className="px-2.5 py-1.5 w-[88px]" aria-hidden="true" />
-                              </div>
-                              <div className="divide-y divide-daintree-border">
-                                {inheritedEntries.map(([key, value]) => (
-                                  <div
-                                    key={key}
-                                    className="grid grid-cols-[2fr_3fr_auto] items-center font-mono text-[12px] text-daintree-text/50"
-                                  >
-                                    <span className="px-2.5 py-2 truncate">{key}</span>
-                                    <span className="px-2.5 py-2 border-l border-daintree-border/60 truncate text-daintree-text/40">
-                                      {value}
-                                    </span>
-                                    <div className="flex items-center justify-center w-[88px] border-l border-daintree-border/60">
-                                      <button
-                                        type="button"
-                                        className="text-[10px] px-2 py-1 rounded text-daintree-accent hover:text-daintree-accent/80 hover:bg-daintree-bg/60 transition-colors"
-                                        onClick={() =>
-                                          handleUpdatePreset(selectedPreset.id, {
-                                            env: { ...presetEnv, [key]: value },
-                                          })
-                                        }
-                                        aria-label={`Override ${key} in this preset`}
-                                        data-testid="preset-env-inherited-override"
-                                      >
-                                        + Override
-                                      </button>
-                                    </div>
-                                  </div>
-                                ))}
-                              </div>
-                            </div>
-                          );
-                        })()}
                         <EnvVarEditor
                           env={selectedPreset.env ?? {}}
                           onChange={(env) => handleUpdatePreset(selectedPreset.id, { env })}
                           suggestions={getAgentConfig(activeAgent.id)?.envSuggestions ?? []}
                           datalistId="env-key-suggestions"
                           contextKey={selectedPreset.id}
+                          inheritedEnv={activeEntry.globalEnv as Record<string, string> | undefined}
                           data-testid="preset-env-editor"
                         />
                         {envVarReference}

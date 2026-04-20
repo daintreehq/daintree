@@ -20,6 +20,7 @@ vi.mock("lucide-react", () => ({
   Eye: () => <span data-testid="eye-icon" />,
   EyeOff: () => <span data-testid="eye-off-icon" />,
   Plus: () => <span data-testid="plus-icon" />,
+  RotateCcw: () => <span data-testid="rotate-ccw-icon" />,
 }));
 
 describe("EnvVarEditor", () => {
@@ -315,5 +316,191 @@ describe("EnvVarEditor", () => {
     const datalist = container.querySelector("datalist#env-key-suggestions-test");
     expect(datalist).toBeTruthy();
     expect(datalist?.querySelectorAll("option").length).toBe(1);
+  });
+
+  describe("inherited env", () => {
+    it("renders inherited-only keys as muted rows with disabled inputs and an Override action", () => {
+      const { getAllByTestId, queryAllByTestId } = render(
+        <EnvVarEditor
+          env={{}}
+          onChange={onChange}
+          inheritedEnv={{ API_KEY: "from-global", NODE_ENV: "dev" }}
+        />
+      );
+
+      const keyInputs = getAllByTestId("env-editor-key") as HTMLInputElement[];
+      const valueInputs = getAllByTestId("env-editor-value") as HTMLInputElement[];
+      expect(keyInputs).toHaveLength(2);
+      expect(keyInputs.every((el) => el.disabled)).toBe(true);
+      expect(valueInputs.every((el) => el.disabled)).toBe(true);
+      expect(getAllByTestId("env-editor-override")).toHaveLength(2);
+      // No remove/revert buttons when all rows are inherited.
+      expect(queryAllByTestId("env-editor-remove")).toHaveLength(0);
+      expect(queryAllByTestId("env-editor-revert")).toHaveLength(0);
+    });
+
+    it("shows overrides first (insertion order), then inherited-only keys (insertion order)", () => {
+      const { getAllByTestId } = render(
+        <EnvVarEditor
+          env={{ ZETA: "z", ALPHA: "a" }}
+          onChange={onChange}
+          inheritedEnv={{ BETA: "b", GAMMA: "g", ZETA: "inherited-z" }}
+        />
+      );
+      const keyInputs = getAllByTestId("env-editor-key") as HTMLInputElement[];
+      // Override rows keep env's insertion order; ZETA is an override of the
+      // inherited ZETA, ALPHA is preset-only. Then inherited-only tail in
+      // inheritedEnv's insertion order: BETA, GAMMA.
+      expect(keyInputs.map((el) => el.value)).toEqual(["ZETA", "ALPHA", "BETA", "GAMMA"]);
+    });
+
+    it("clicking Override promotes an inherited row to an editable override and commits", () => {
+      const { getAllByTestId, queryAllByTestId } = render(
+        <EnvVarEditor env={{}} onChange={onChange} inheritedEnv={{ API_KEY: "from-global" }} />
+      );
+
+      fireEvent.click(getAllByTestId("env-editor-override")[0]!);
+
+      // The row is no longer inherited — value input is editable now.
+      const valueInput = getAllByTestId("env-editor-value")[0] as HTMLInputElement;
+      expect(valueInput.disabled).toBe(false);
+      // Override got seeded with the inherited value and committed.
+      expect(onChange).toHaveBeenLastCalledWith({ API_KEY: "from-global" });
+      // Action cell now shows Revert (this key is still inherited), not Override.
+      expect(queryAllByTestId("env-editor-override")).toHaveLength(0);
+      expect(queryAllByTestId("env-editor-revert")).toHaveLength(1);
+    });
+
+    it("editing an override's value commits the new value, not the inherited one", () => {
+      const { getAllByTestId } = render(
+        <EnvVarEditor
+          env={{ API_KEY: "preset-val" }}
+          onChange={onChange}
+          inheritedEnv={{ API_KEY: "from-global" }}
+        />
+      );
+      const valueInput = getAllByTestId("env-editor-value")[0] as HTMLInputElement;
+      expect(valueInput.value).toBe("preset-val");
+      expect(valueInput.disabled).toBe(false);
+
+      fireEvent.change(valueInput, { target: { value: "edited" } });
+      fireEvent.blur(valueInput);
+
+      expect(onChange).toHaveBeenLastCalledWith({ API_KEY: "edited" });
+    });
+
+    it("clicking Revert on an override drops the key and commits without it", () => {
+      const { getAllByTestId } = render(
+        <EnvVarEditor
+          env={{ API_KEY: "preset-val", STAY: "s" }}
+          onChange={onChange}
+          inheritedEnv={{ API_KEY: "from-global" }}
+        />
+      );
+
+      fireEvent.click(getAllByTestId("env-editor-revert")[0]!);
+
+      // Revert falls back to inherited — preset env should no longer carry the key.
+      expect(onChange).toHaveBeenLastCalledWith({ STAY: "s" });
+    });
+
+    it("clearing an override's value on blur reverts to inherited (no empty-string override)", () => {
+      const { getAllByTestId } = render(
+        <EnvVarEditor
+          env={{ API_KEY: "preset-val" }}
+          onChange={onChange}
+          inheritedEnv={{ API_KEY: "from-global" }}
+        />
+      );
+      const valueInput = getAllByTestId("env-editor-value")[0] as HTMLInputElement;
+
+      fireEvent.change(valueInput, { target: { value: "" } });
+      fireEvent.blur(valueInput);
+
+      // Must revert to inherited — an empty-string override would silently
+      // mask the inherited value.
+      expect(onChange).toHaveBeenLastCalledWith({});
+      for (const call of onChange.mock.calls) {
+        expect(call[0]).not.toMatchObject({ API_KEY: "" });
+      }
+    });
+
+    it("clearing a preset-only (non-inherited) value keeps the empty-string override", () => {
+      const { getAllByTestId } = render(
+        <EnvVarEditor env={{ LOCAL_ONLY: "v" }} onChange={onChange} inheritedEnv={{ OTHER: "x" }} />
+      );
+      const valueInput = getAllByTestId("env-editor-value")[0] as HTMLInputElement;
+
+      fireEvent.change(valueInput, { target: { value: "" } });
+      fireEvent.blur(valueInput);
+
+      // LOCAL_ONLY has no inherited counterpart — cleared value persists as "".
+      expect(onChange).toHaveBeenLastCalledWith({ LOCAL_ONLY: "" });
+    });
+
+    it("Remove on an override that shadows an inherited key reverts to inherited (preserves row)", () => {
+      const { getAllByTestId, queryAllByTestId } = render(
+        <EnvVarEditor
+          env={{ API_KEY: "preset-val" }}
+          onChange={onChange}
+          inheritedEnv={{ API_KEY: "from-global" }}
+        />
+      );
+
+      // An override that shadows an inherited key renders the Revert action
+      // (not Remove) — there's no X button to click for this row.
+      expect(queryAllByTestId("env-editor-remove")).toHaveLength(0);
+      fireEvent.click(getAllByTestId("env-editor-revert")[0]!);
+      expect(onChange).toHaveBeenLastCalledWith({});
+    });
+
+    it("inherited-only editor with no overrides is not 'empty' (renders inherited rows, not the empty-state CTA)", () => {
+      const { queryByText, getAllByTestId } = render(
+        <EnvVarEditor env={{}} onChange={onChange} inheritedEnv={{ A: "1" }} />
+      );
+      expect(queryByText(/Add your first variable/i)).toBeNull();
+      expect(getAllByTestId("env-editor-key")).toHaveLength(1);
+    });
+
+    it("fully-empty editor (no env, no inherited keys) shows the empty-state CTA", () => {
+      const { getByText } = render(<EnvVarEditor env={{}} onChange={onChange} inheritedEnv={{}} />);
+      expect(getByText(/Add your first variable/i)).toBeTruthy();
+    });
+
+    it("inheritedEnv prop updates trigger a reseed when keys/values differ", () => {
+      const { rerender, getAllByTestId } = render(
+        <EnvVarEditor env={{}} onChange={onChange} inheritedEnv={{ A: "1" }} contextKey="p" />
+      );
+      expect(getAllByTestId("env-editor-key")).toHaveLength(1);
+
+      rerender(
+        <EnvVarEditor
+          env={{}}
+          onChange={onChange}
+          inheritedEnv={{ A: "1", B: "2" }}
+          contextKey="p"
+        />
+      );
+      const keyInputs = getAllByTestId("env-editor-key") as HTMLInputElement[];
+      expect(keyInputs).toHaveLength(2);
+      expect(keyInputs.map((el) => el.value)).toEqual(["A", "B"]);
+    });
+
+    it("a fresh empty-object identity for env/inheritedEnv does NOT trigger a spurious reseed", () => {
+      const { rerender, getAllByTestId } = render(
+        <EnvVarEditor env={{}} onChange={onChange} inheritedEnv={{ A: "1" }} />
+      );
+      fireEvent.click(getAllByTestId("env-editor-override")[0]!);
+      // Onchange fires with the override commit.
+      expect(onChange).toHaveBeenLastCalledWith({ A: "1" });
+      const commitsBeforeRerender = onChange.mock.calls.length;
+
+      // Parent re-renders with the same logical env (now {A:"1"}) but passes a
+      // fresh inherited-env object identity — this must not stomp the override.
+      rerender(<EnvVarEditor env={{ A: "1" }} onChange={onChange} inheritedEnv={{ A: "1" }} />);
+      expect(onChange.mock.calls.length).toBe(commitsBeforeRerender);
+      const valueInput = getAllByTestId("env-editor-value")[0] as HTMLInputElement;
+      expect(valueInput.disabled).toBe(false); // still an override, not reseeded back to inherited
+    });
   });
 });

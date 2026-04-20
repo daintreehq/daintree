@@ -1,18 +1,28 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Eye, EyeOff, Plus, X } from "lucide-react";
+import { Eye, EyeOff, Plus, RotateCcw, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { looksLikeSecret } from "@/utils/secretDetection";
 import { isSensitiveEnvKey } from "../../../shared/utils/envVars";
 
 /**
- * Inline env var CRUD editor with validation.
+ * Inline env var CRUD editor with validation and optional inheritance.
  *
  * Renders a bordered table surface with flush cells, hairline row dividers,
  * and a flush "Add variable" row — matching the chrome of Vercel/Railway/GitHub
  * Actions env editors. Draft rows are the source of truth during editing — we
  * can't represent an in-progress duplicate key as a JS object, so we keep an
- * array of `{rowId, key, value}` and serialize back to a `Record<string,string>`
- * only when all keys are unique and non-empty.
+ * array of `{rowId, key, value, isInherited}` and serialize back to a
+ * `Record<string, string>` only when all keys are unique and non-empty.
+ *
+ * Inheritance (optional, via `inheritedEnv` prop):
+ *  - Inherited rows render disabled and muted, with a `+ Override` action in
+ *    the actions cell that promotes the row to an editable override seeded
+ *    with the inherited value.
+ *  - Override rows (env entries that shadow an inherited key) get an accent
+ *    left-stripe and a revert (RotateCcw) action that clears the override
+ *    back to inherited.
+ *  - Clearing an override's value on blur also reverts to inherited, so we
+ *    don't silently ship empty-string overrides.
  *
  * Validation surfaces:
  *  - Empty key after trim → red left-stripe on the row + "Key required" inline
@@ -48,12 +58,20 @@ export interface EnvVarEditorProps {
   valuePlaceholder?: string;
   /** Optional data-testid for the whole editor surface. */
   "data-testid"?: string;
+  /**
+   * Optional inherited env vars from a parent scope (e.g. an agent's global
+   * env when editing a preset). Inherited rows render as muted, disabled
+   * entries alongside overrides; absence of the prop disables inheritance
+   * entirely (identical to the original editor behaviour).
+   */
+  inheritedEnv?: Record<string, string>;
 }
 
 interface DraftRow {
   rowId: string;
   key: string;
   value: string;
+  isInherited: boolean;
 }
 
 let rowIdCounter = 0;
@@ -62,18 +80,30 @@ function nextRowId(): string {
   return `row-${rowIdCounter}`;
 }
 
-function envToDraft(env: Record<string, string>): DraftRow[] {
-  return Object.entries(env).map(([key, value]) => ({
-    rowId: nextRowId(),
-    key,
-    value,
-  }));
+function envToDraft(
+  env: Record<string, string>,
+  inheritedEnv?: Record<string, string>
+): DraftRow[] {
+  const rows: DraftRow[] = [];
+  // Preserve insertion order of env entries — these are overrides.
+  for (const [key, value] of Object.entries(env)) {
+    rows.push({ rowId: nextRowId(), key, value, isInherited: false });
+  }
+  if (inheritedEnv) {
+    // Append inherited-only keys in their insertion order.
+    for (const [key, value] of Object.entries(inheritedEnv)) {
+      if (key in env) continue;
+      rows.push({ rowId: nextRowId(), key, value, isInherited: true });
+    }
+  }
+  return rows;
 }
 
 function draftToEnv(rows: DraftRow[]): Record<string, string> {
   const out: Record<string, string> = {};
   const seen = new Set<string>();
   for (const row of rows) {
+    if (row.isInherited) continue;
     const k = row.key.trim();
     if (!k) continue;
     if (seen.has(k)) continue; // drop duplicates — the validation surface warns the user
@@ -83,9 +113,26 @@ function draftToEnv(rows: DraftRow[]): Record<string, string> {
   return out;
 }
 
+function shallowEnvEqual(
+  a: Record<string, string> | undefined,
+  b: Record<string, string> | undefined
+): boolean {
+  if (a === b) return true;
+  if (!a || !b) return a === undefined && b === undefined;
+  const aKeys = Object.keys(a);
+  const bKeys = Object.keys(b);
+  if (aKeys.length !== bKeys.length) return false;
+  for (const k of aKeys) {
+    if (!Object.prototype.hasOwnProperty.call(b, k)) return false;
+    if (a[k] !== b[k]) return false;
+  }
+  return true;
+}
+
 function findDuplicateKeys(rows: DraftRow[]): Set<string> {
   const counts = new Map<string, number>();
   for (const row of rows) {
+    if (row.isInherited) continue;
     const k = row.key.trim();
     if (!k) continue;
     counts.set(k, (counts.get(k) ?? 0) + 1);
@@ -100,6 +147,7 @@ function findDuplicateKeys(rows: DraftRow[]): Set<string> {
 function isValid(rows: DraftRow[]): boolean {
   const seen = new Set<string>();
   for (const row of rows) {
+    if (row.isInherited) continue;
     const k = row.key.trim();
     if (!k) return false;
     if (seen.has(k)) return false;
@@ -116,8 +164,9 @@ export function EnvVarEditor({
   contextKey,
   valuePlaceholder = "value or ${ENV_VAR}",
   "data-testid": dataTestId,
+  inheritedEnv,
 }: EnvVarEditorProps) {
-  const [rows, setRows] = useState<DraftRow[]>(() => envToDraft(env));
+  const [rows, setRows] = useState<DraftRow[]>(() => envToDraft(env, inheritedEnv));
   // Track which keys have been "touched" (blurred or modified after creation) —
   // we suppress the empty-key error for newly added rows until first blur.
   const [touchedKeys, setTouchedKeys] = useState<Record<string, boolean>>({});
@@ -126,45 +175,35 @@ export function EnvVarEditor({
   // When non-null, the focus-recovery effect focuses the key input for that rowId.
   const [pendingFocusKey, setPendingFocusKey] = useState<string | null>(null);
   const lastEnvRef = useRef<Record<string, string>>(env);
+  const lastInheritedRef = useRef<Record<string, string> | undefined>(inheritedEnv);
   const lastContextKeyRef = useRef<string | undefined>(contextKey);
   const keyInputRefs = useRef<Map<string, HTMLInputElement>>(new Map());
 
-  // When the parent's env changes externally (different preset selected,
-  // programmatic reset), reseed the draft rows. We use a shallow compare on
-  // keys+values so typing a value doesn't trigger a reseed.
+  // When the parent's env or inheritedEnv changes externally (different preset
+  // selected, programmatic reset, global env updated), reseed the draft rows.
+  // We use shallow key+value compares so typing a value doesn't trigger a
+  // reseed and new-identity empty objects (`{} !== {}`) don't cause thrash.
   useEffect(() => {
-    const curKeys = Object.keys(env).sort().join("\x00");
-    const curVals = Object.keys(env)
-      .sort()
-      .map((k) => env[k])
-      .join("\x00");
-    const prevKeys = Object.keys(lastEnvRef.current).sort().join("\x00");
-    const prevVals = Object.keys(lastEnvRef.current)
-      .sort()
-      .map((k) => lastEnvRef.current[k])
-      .join("\x00");
+    const envChanged = !shallowEnvEqual(env, lastEnvRef.current);
+    const inheritedChanged = !shallowEnvEqual(inheritedEnv, lastInheritedRef.current);
     const contextChanged = lastContextKeyRef.current !== contextKey;
-    if (contextChanged || curKeys !== prevKeys || curVals !== prevVals) {
-      lastEnvRef.current = env;
-      lastContextKeyRef.current = contextKey;
-      if (contextChanged) {
-        setTouchedKeys({});
-        setRevealedRows(new Set());
-      }
-      // Only reseed if the incoming env is actually different from what our
-      // draft would produce. Otherwise typing triggers a parent update that
-      // would otherwise stomp the user's in-progress edit.
-      const draftAsEnv = draftToEnv(rows);
-      const draftKeys = Object.keys(draftAsEnv).sort().join("\x00");
-      const draftVals = Object.keys(draftAsEnv)
-        .sort()
-        .map((k) => draftAsEnv[k])
-        .join("\x00");
-      if (contextChanged || draftKeys !== curKeys || draftVals !== curVals) {
-        setRows(envToDraft(env));
-      }
+    if (!contextChanged && !envChanged && !inheritedChanged) return;
+
+    lastEnvRef.current = env;
+    lastInheritedRef.current = inheritedEnv;
+    lastContextKeyRef.current = contextKey;
+    if (contextChanged) {
+      setTouchedKeys({});
+      setRevealedRows(new Set());
     }
-  }, [env, contextKey, rows]);
+    // Only reseed if the incoming env+inheritance actually differs from what
+    // our current draft would produce. Otherwise the parent's commit echo
+    // would stomp an in-progress edit.
+    const draftAsEnv = draftToEnv(rows);
+    if (contextChanged || inheritedChanged || !shallowEnvEqual(draftAsEnv, env)) {
+      setRows(envToDraft(env, inheritedEnv));
+    }
+  }, [env, inheritedEnv, contextKey, rows]);
 
   // Focus recovery after adding a row. Narrowly keyed to avoid cross-firing
   // with the reseed effect above.
@@ -182,19 +221,13 @@ export function EnvVarEditor({
     (nextRows: DraftRow[]) => {
       if (isValid(nextRows)) {
         const nextEnv = draftToEnv(nextRows);
-        const prev = lastEnvRef.current;
-        const prevKeys = Object.keys(prev).sort().join("\x00");
-        const nextKeys = Object.keys(nextEnv).sort().join("\x00");
-        const prevVals = Object.keys(prev)
-          .sort()
-          .map((k) => prev[k])
-          .join("\x00");
-        const nextVals = Object.keys(nextEnv)
-          .sort()
-          .map((k) => nextEnv[k])
-          .join("\x00");
-        if (prevKeys !== nextKeys || prevVals !== nextVals) {
-          lastEnvRef.current = nextEnv;
+        // Intentionally do NOT update lastEnvRef here. The ref tracks the last
+        // env *prop* value — if we seed it with our synthesized commit, the
+        // subsequent effect pass will read env (still the stale prop) and
+        // mistake it for an external reset, triggering a reseed that stomps
+        // the in-progress edit. Let the prop echo back from the parent and
+        // update lastEnvRef there.
+        if (!shallowEnvEqual(lastEnvRef.current, nextEnv)) {
           onChange(nextEnv);
         }
       }
@@ -205,12 +238,24 @@ export function EnvVarEditor({
   const handleAdd = useCallback(() => {
     const newRowId = nextRowId();
     setRows((prev) => {
-      // Pick a KEY name that isn't already present.
+      // Pick a KEY name that isn't already present (including inherited keys).
       let candidate = "NEW_VAR";
       let i = 1;
       const present = new Set(prev.map((r) => r.key.trim()));
       while (present.has(candidate)) candidate = `NEW_VAR_${i++}`;
-      return [...prev, { rowId: newRowId, key: candidate, value: "" }];
+      const newRow: DraftRow = {
+        rowId: newRowId,
+        key: candidate,
+        value: "",
+        isInherited: false,
+      };
+      // Insert before the inherited-only tail so new overrides stay grouped
+      // with existing overrides.
+      const firstInheritedIdx = prev.findIndex((r) => r.isInherited);
+      if (firstInheritedIdx === -1) {
+        return [...prev, newRow];
+      }
+      return [...prev.slice(0, firstInheritedIdx), newRow, ...prev.slice(firstInheritedIdx)];
     });
     setPendingFocusKey(newRowId);
   }, []);
@@ -218,6 +263,20 @@ export function EnvVarEditor({
   const handleRemove = useCallback(
     (rowId: string) => {
       setRows((prev) => {
+        const row = prev.find((r) => r.rowId === rowId);
+        if (!row) return prev;
+        const key = row.key.trim();
+        // If this override shadows an inherited key, "removing" means reverting
+        // to the inherited value rather than dropping the row altogether —
+        // the inherited entry would otherwise reappear as a separate row.
+        if (!row.isInherited && inheritedEnv && key in inheritedEnv) {
+          const inheritedValue = inheritedEnv[key]!;
+          const next = prev.map((r) =>
+            r.rowId === rowId ? { ...r, value: inheritedValue, isInherited: true } : r
+          );
+          commitIfValid(next);
+          return next;
+        }
         const next = prev.filter((r) => r.rowId !== rowId);
         commitIfValid(next);
         return next;
@@ -229,7 +288,7 @@ export function EnvVarEditor({
         return next;
       });
     },
-    [commitIfValid]
+    [commitIfValid, inheritedEnv]
   );
 
   const handleKeyChange = useCallback((rowId: string, newKey: string) => {
@@ -239,6 +298,40 @@ export function EnvVarEditor({
   const handleValueChange = useCallback((rowId: string, newValue: string) => {
     setRows((prev) => prev.map((r) => (r.rowId === rowId ? { ...r, value: newValue } : r)));
   }, []);
+
+  const handleOverride = useCallback(
+    (rowId: string) => {
+      setRows((prev) => {
+        const row = prev.find((r) => r.rowId === rowId);
+        if (!row || !row.isInherited) return prev;
+        // Promote the inherited row to an override carrying the current value.
+        // This makes the preset env explicitly include the key, so a later
+        // change to the inherited map does not silently alter this preset.
+        const next = prev.map((r) => (r.rowId === rowId ? { ...r, isInherited: false } : r));
+        commitIfValid(next);
+        return next;
+      });
+    },
+    [commitIfValid]
+  );
+
+  const handleRevert = useCallback(
+    (rowId: string) => {
+      setRows((prev) => {
+        const row = prev.find((r) => r.rowId === rowId);
+        if (!row || row.isInherited) return prev;
+        const key = row.key.trim();
+        if (!inheritedEnv || !(key in inheritedEnv)) return prev;
+        const inheritedValue = inheritedEnv[key]!;
+        const next = prev.map((r) =>
+          r.rowId === rowId ? { ...r, value: inheritedValue, isInherited: true } : r
+        );
+        commitIfValid(next);
+        return next;
+      });
+    },
+    [commitIfValid, inheritedEnv]
+  );
 
   const handleKeyBlur = useCallback(
     (rowId: string) => {
@@ -251,12 +344,33 @@ export function EnvVarEditor({
     [commitIfValid]
   );
 
-  const handleValueBlur = useCallback(() => {
-    setRows((prev) => {
-      commitIfValid(prev);
-      return prev;
-    });
-  }, [commitIfValid]);
+  const handleValueBlur = useCallback(
+    (rowId: string) => {
+      setRows((prev) => {
+        const row = prev.find((r) => r.rowId === rowId);
+        if (!row || row.isInherited) {
+          commitIfValid(prev);
+          return prev;
+        }
+        const key = row.key.trim();
+        // If a user clears an override's value and that key is still inherited,
+        // silently reverting is safer than persisting an empty-string override —
+        // otherwise the preset would ship `KEY=""` which masks the inherited
+        // value instead of falling back to it.
+        if (row.value === "" && inheritedEnv && key in inheritedEnv) {
+          const inheritedValue = inheritedEnv[key]!;
+          const next = prev.map((r) =>
+            r.rowId === rowId ? { ...r, value: inheritedValue, isInherited: true } : r
+          );
+          commitIfValid(next);
+          return next;
+        }
+        commitIfValid(prev);
+        return prev;
+      });
+    },
+    [commitIfValid, inheritedEnv]
+  );
 
   const toggleReveal = useCallback((rowId: string) => {
     setRevealedRows((prev) => {
@@ -309,25 +423,32 @@ export function EnvVarEditor({
           {rows.map((row) => {
             const trimmedKey = row.key.trim();
             const touched = !!touchedKeys[row.rowId];
-            const isEmptyKey = touched && trimmedKey === "";
-            const isDuplicate = trimmedKey !== "" && duplicateKeys.has(trimmedKey);
-            const hasSecretWarning = looksLikeSecret(row.value);
-            const isSecret = isSensitiveEnvKey(row.key) || hasSecretWarning;
+            const isEmptyKey = !row.isInherited && touched && trimmedKey === "";
+            const isDuplicate =
+              !row.isInherited && trimmedKey !== "" && duplicateKeys.has(trimmedKey);
+            const hasSecretWarning = !row.isInherited && looksLikeSecret(row.value);
+            const isSecret = !row.isInherited && (isSensitiveEnvKey(row.key) || hasSecretWarning);
             const isRevealed = revealedRows.has(row.rowId);
             const valueInputType = isSecret && !isRevealed ? "password" : "text";
+            const isOverride =
+              !row.isInherited && !!inheritedEnv && trimmedKey !== "" && trimmedKey in inheritedEnv;
             const stripeClass = isEmptyKey
               ? "before:bg-status-error"
               : isDuplicate || hasSecretWarning
                 ? "before:bg-amber-500/70"
-                : "before:bg-transparent";
+                : isOverride
+                  ? "before:bg-daintree-accent"
+                  : "before:bg-transparent";
             return (
               <div
                 key={row.rowId}
                 className={cn(
                   "relative grid grid-cols-[2fr_3fr_auto] items-stretch group",
                   "before:content-[''] before:absolute before:left-0 before:top-0 before:bottom-0 before:w-[2px]",
-                  stripeClass
+                  stripeClass,
+                  row.isInherited && "bg-daintree-bg/20"
                 )}
+                data-testid={row.isInherited ? "env-editor-row-inherited" : "env-editor-row"}
               >
                 {/* Key cell */}
                 <div className="relative">
@@ -337,11 +458,14 @@ export function EnvVarEditor({
                     className={cn(
                       "w-full h-full bg-transparent border-0 outline-none px-2.5 py-2 font-mono text-[12px]",
                       "focus:ring-2 focus:ring-inset focus:ring-daintree-accent/40",
-                      isEmptyKey
-                        ? "text-status-error"
-                        : isDuplicate
-                          ? "text-amber-500"
-                          : "text-daintree-text/80"
+                      "disabled:cursor-default",
+                      row.isInherited
+                        ? "text-daintree-text/40"
+                        : isEmptyKey
+                          ? "text-status-error"
+                          : isDuplicate
+                            ? "text-amber-500"
+                            : "text-daintree-text/80"
                     )}
                     value={row.key}
                     placeholder="KEY"
@@ -349,6 +473,7 @@ export function EnvVarEditor({
                     spellCheck={false}
                     autoCapitalize="off"
                     autoCorrect="off"
+                    disabled={row.isInherited}
                     aria-label={`Env var key for row ${row.rowId}`}
                     aria-invalid={isEmptyKey || isDuplicate ? "true" : undefined}
                     onChange={(e) => handleKeyChange(row.rowId, e.target.value)}
@@ -380,18 +505,24 @@ export function EnvVarEditor({
                   <input
                     type={valueInputType}
                     className={cn(
-                      "w-full h-full bg-transparent border-0 outline-none py-2 font-mono text-[12px] text-daintree-accent/90",
+                      "w-full h-full bg-transparent border-0 outline-none py-2 font-mono text-[12px]",
                       "focus:ring-2 focus:ring-inset focus:ring-daintree-accent/40",
+                      "disabled:cursor-default",
                       isSecret ? "pl-2.5 pr-8" : "px-2.5",
-                      hasSecretWarning && "text-amber-500"
+                      row.isInherited
+                        ? "text-daintree-text/40"
+                        : hasSecretWarning
+                          ? "text-amber-500"
+                          : "text-daintree-accent/90"
                     )}
                     value={row.value}
                     placeholder={valuePlaceholder}
                     spellCheck={false}
                     autoComplete={isSecret ? "new-password" : "off"}
+                    disabled={row.isInherited}
                     aria-label={`Env var value for row ${row.rowId}`}
                     onChange={(e) => handleValueChange(row.rowId, e.target.value)}
-                    onBlur={handleValueBlur}
+                    onBlur={() => handleValueBlur(row.rowId)}
                     onKeyDown={(e) => {
                       if (e.key === "Enter") {
                         e.preventDefault();
@@ -435,17 +566,41 @@ export function EnvVarEditor({
                     </p>
                   )}
                 </div>
-                {/* Actions cell */}
+                {/* Actions cell — remove / revert / override by row kind. */}
                 <div className="flex items-center justify-center w-9 border-l border-daintree-border/60">
-                  <button
-                    type="button"
-                    className="p-1 rounded text-daintree-text/30 hover:text-status-error hover:bg-daintree-bg/60 transition-colors"
-                    aria-label={`Remove ${trimmedKey || "empty"} env var`}
-                    onClick={() => handleRemove(row.rowId)}
-                    data-testid="env-editor-remove"
-                  >
-                    <X size={12} aria-hidden="true" />
-                  </button>
+                  {row.isInherited ? (
+                    <button
+                      type="button"
+                      className="p-1 rounded text-daintree-text/40 hover:text-daintree-accent hover:bg-daintree-bg/60 transition-colors"
+                      aria-label={`Override ${trimmedKey} in this preset`}
+                      onClick={() => handleOverride(row.rowId)}
+                      data-testid="env-editor-override"
+                      title="Override this inherited value"
+                    >
+                      <Plus size={12} aria-hidden="true" />
+                    </button>
+                  ) : isOverride ? (
+                    <button
+                      type="button"
+                      className="p-1 rounded text-daintree-text/40 hover:text-daintree-accent hover:bg-daintree-bg/60 transition-colors"
+                      aria-label={`Revert ${trimmedKey} to inherited value`}
+                      onClick={() => handleRevert(row.rowId)}
+                      data-testid="env-editor-revert"
+                      title="Revert to inherited value"
+                    >
+                      <RotateCcw size={12} aria-hidden="true" />
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      className="p-1 rounded text-daintree-text/30 hover:text-status-error hover:bg-daintree-bg/60 transition-colors"
+                      aria-label={`Remove ${trimmedKey || "empty"} env var`}
+                      onClick={() => handleRemove(row.rowId)}
+                      data-testid="env-editor-remove"
+                    >
+                      <X size={12} aria-hidden="true" />
+                    </button>
+                  )}
                 </div>
               </div>
             );
