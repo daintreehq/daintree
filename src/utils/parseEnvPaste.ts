@@ -32,7 +32,7 @@ export interface ParseEnvResult {
 const KEY_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const EXPORT_RE = /^export\s+/;
 
-function parseDoubleQuoted(body: string): { value: string; ok: boolean } {
+function decodeDoubleQuoted(body: string): string {
   let out = "";
   let i = 0;
   while (i < body.length) {
@@ -56,7 +56,9 @@ function parseDoubleQuoted(body: string): { value: string; ok: boolean } {
           out += '"';
           break;
         default:
-          out += next;
+          // Unknown escape — preserve the backslash so `\q` → `\q`, matching
+          // the way most dotenv parsers (and shell tools) treat the sequence.
+          out += "\\" + next;
           break;
       }
       i += 2;
@@ -65,7 +67,19 @@ function parseDoubleQuoted(body: string): { value: string; ok: boolean } {
     out += ch;
     i += 1;
   }
-  return { value: out, ok: true };
+  return out;
+}
+
+function findUnescapedQuote(body: string, quote: string): number {
+  for (let i = 0; i < body.length; i++) {
+    const ch = body[i];
+    if (ch === "\\" && quote === '"') {
+      i += 1;
+      continue;
+    }
+    if (ch === quote) return i;
+  }
+  return -1;
 }
 
 function parseValue(raw: string): { value: string; ok: boolean; reason?: string } {
@@ -76,16 +90,19 @@ function parseValue(raw: string): { value: string; ok: boolean; reason?: string 
 
   const first = trimmed[0];
   if (first === '"' || first === "'") {
-    const last = trimmed[trimmed.length - 1];
-    if (trimmed.length < 2 || last !== first) {
+    const rest = trimmed.slice(1);
+    const closeIdx = findUnescapedQuote(rest, first);
+    if (closeIdx === -1) {
       return { value: "", ok: false, reason: "Unterminated quoted value" };
     }
-    const body = trimmed.slice(1, -1);
-    if (first === '"') {
-      const parsed = parseDoubleQuoted(body);
-      return { value: parsed.value, ok: true };
+    const body = rest.slice(0, closeIdx);
+    // Anything after the closing quote must be whitespace or a `# comment`.
+    const tail = rest.slice(closeIdx + 1).trim();
+    if (tail.length > 0 && !tail.startsWith("#")) {
+      return { value: "", ok: false, reason: "Unexpected text after closing quote" };
     }
-    return { value: body, ok: true };
+    const value = first === '"' ? decodeDoubleQuoted(body) : body;
+    return { value, ok: true };
   }
 
   // Unquoted: strip inline comment starting at `#` preceded by whitespace.

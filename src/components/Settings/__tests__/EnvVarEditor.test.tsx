@@ -718,6 +718,41 @@ describe("EnvVarEditor", () => {
       expect(screen.getByTestId("env-editor-warning-secret")).toBeTruthy();
     });
 
+    it("same-value paste is NOT flagged as a conflict", () => {
+      renderEditor({ FOO: "bar" });
+      fireEvent.click(screen.getByTestId("env-editor-import"));
+      fireEvent.change(screen.getByTestId("import-env-textarea"), {
+        target: { value: "FOO=bar\nBAZ=baz" },
+      });
+
+      const primary = screen.getByTestId("app-dialog-primary") as HTMLButtonElement;
+      // No conflict — primary should be direct Import, not Review.
+      expect(primary.textContent).toMatch(/Import/);
+      expect(primary.textContent).not.toMatch(/conflict/i);
+      fireEvent.click(primary);
+
+      expect(onChange).toHaveBeenLastCalledWith({ FOO: "bar", BAZ: "baz" });
+    });
+
+    it("duplicate keys within the paste collapse with last-value-wins", () => {
+      renderEditor({ API_KEY: "old" });
+      fireEvent.click(screen.getByTestId("env-editor-import"));
+      fireEvent.change(screen.getByTestId("import-env-textarea"), {
+        target: { value: "API_KEY=one\nAPI_KEY=two" },
+      });
+
+      // Summary should note the collapsed duplicate.
+      expect(screen.getByTestId("import-env-summary").textContent).toMatch(/duplicate key/i);
+
+      // Advance to conflict step and overwrite.
+      fireEvent.click(screen.getByTestId("app-dialog-primary"));
+      fireEvent.click(screen.getByTestId("import-env-mode-overwrite"));
+      fireEvent.click(screen.getByTestId("app-dialog-primary"));
+
+      // Last-value-wins → "two", not "one".
+      expect(onChange).toHaveBeenLastCalledWith({ API_KEY: "two" });
+    });
+
     it("Back button from conflict step returns to paste step preserving text", () => {
       renderEditor({ FOO: "old" });
       fireEvent.click(screen.getByTestId("env-editor-import"));

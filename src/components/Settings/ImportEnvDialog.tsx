@@ -73,6 +73,7 @@ export function ImportEnvDialog({ isOpen, onClose, env, onImport }: ImportEnvDia
   const newCount = incomingCount - conflicts.length;
   const hasErrors = parsed.errors.length > 0;
   const canProceed = !hasErrors && incomingCount > 0;
+  const duplicateInPasteCount = parsed.pairs.length - incomingCount;
 
   const handleImport = (mode: ConflictResolution) => {
     onImport(buildMerged(env, incoming, mode));
@@ -130,8 +131,8 @@ export function ImportEnvDialog({ isOpen, onClose, env, onImport }: ImportEnvDia
           <>
             <AppDialog.Description>
               Paste the contents of a .env file. Keys must match{" "}
-              <code className="text-[11px]">[A-Z_][A-Z0-9_]*</code>. Quoted values, comments, and
-              <code className="text-[11px]"> export</code> prefixes are supported.
+              <code className="text-[11px]">[A-Za-z_][A-Za-z0-9_]*</code>. Quoted values, comments,
+              and <code className="text-[11px]">export</code> prefixes are supported.
             </AppDialog.Description>
             <textarea
               value={pastedText}
@@ -175,6 +176,9 @@ export function ImportEnvDialog({ isOpen, onClose, env, onImport }: ImportEnvDia
                   ? ` · ${conflicts.length} conflict${conflicts.length === 1 ? "" : "s"}`
                   : ""}
                 {newCount > 0 && conflicts.length > 0 ? ` · ${newCount} new` : ""}
+                {duplicateInPasteCount > 0
+                  ? ` · ${duplicateInPasteCount} duplicate key${duplicateInPasteCount === 1 ? "" : "s"} in paste (last value kept)`
+                  : ""}
               </p>
             )}
           </>

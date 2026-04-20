@@ -189,4 +189,41 @@ describe("parseEnvPaste", () => {
     expect(pairs).toEqual([]);
     expect(errors).toEqual([]);
   });
+
+  it("preserves unknown escape sequences (backslash stays)", () => {
+    const { pairs, errors } = parseEnvPaste('RAW="keep \\q as-is"\nP="C:\\foo\\bar"');
+    expect(errors).toEqual([]);
+    expect(pairs).toEqual([
+      { key: "RAW", value: "keep \\q as-is" },
+      { key: "P", value: "C:\\foo\\bar" },
+    ]);
+  });
+
+  it("allows trailing comment after a double-quoted value", () => {
+    const { pairs, errors } = parseEnvPaste('FOO="bar" # from staging');
+    expect(errors).toEqual([]);
+    expect(pairs).toEqual([{ key: "FOO", value: "bar" }]);
+  });
+
+  it("allows trailing comment after a single-quoted value", () => {
+    const { pairs, errors } = parseEnvPaste("FOO='bar' # note");
+    expect(errors).toEqual([]);
+    expect(pairs).toEqual([{ key: "FOO", value: "bar" }]);
+  });
+
+  it("rejects unquoted text after a closing quote", () => {
+    const { pairs, errors } = parseEnvPaste('FOO="bar" trailing');
+    expect(pairs).toEqual([]);
+    expect(errors).toHaveLength(1);
+    expect(errors[0]!.reason).toMatch(/after closing quote/i);
+  });
+
+  it("accepts lowercase and mixed-case keys", () => {
+    const { pairs, errors } = parseEnvPaste("node_env=production\nMixedCase=ok");
+    expect(errors).toEqual([]);
+    expect(pairs).toEqual([
+      { key: "node_env", value: "production" },
+      { key: "MixedCase", value: "ok" },
+    ]);
+  });
 });

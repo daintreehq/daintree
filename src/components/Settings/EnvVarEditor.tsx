@@ -390,14 +390,14 @@ export function EnvVarEditor({
 
   const handleImportConfirm = useCallback(
     (mergedEnv: Record<string, string>) => {
-      // Imports always commit the merged map directly — the parent re-seeds
-      // `rows` through the reseed effect when its source-of-truth env changes.
-      // We update `lastEnvRef` so the reseed effect treats this as a committed
-      // change rather than an external reset that would stomp in-progress edits.
+      // Imports commit the merged map as the new source of truth. Bump the
+      // parent first, then sync local draft + lastEnvRef so the reseed effect
+      // sees the prop and ref already aligned (no stomp on the optimistic
+      // rows) and so a thrown onChange leaves local state untouched.
+      onChange(mergedEnv);
       lastEnvRef.current = mergedEnv;
       setRows(envToDraft(mergedEnv));
       setTouchedKeys({});
-      onChange(mergedEnv);
     },
     [onChange]
   );
