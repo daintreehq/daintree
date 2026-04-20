@@ -9,6 +9,7 @@ import {
   PORTAL_DEFAULT_WIDTH,
   DEFAULT_SYSTEM_LINKS,
 } from "@shared/types";
+import { useUIStore } from "./uiStore";
 import { createSafeJSONStorage } from "./persistence/safeStorage";
 import { registerPersistedStore } from "./persistence/persistedStoreRegistry";
 
@@ -98,7 +99,15 @@ const createPortalStore: StateCreator<PortalState & PortalActions> = (set, get) 
   return {
     ...initialState,
 
-    toggle: () => set((s) => ({ isOpen: !s.isOpen })),
+    toggle: () =>
+      set((s) => {
+        // Suppress the closed→open transition while another surface owns the
+        // viewport (e.g. a settings dialog). Without this the store flips to
+        // isOpen=true but PortalVisibilityController keeps the webview hidden,
+        // leaving the Portal visually closed yet "open" per the store.
+        if (!s.isOpen && useUIStore.getState().overlayClaims.size > 0) return s;
+        return { isOpen: !s.isOpen };
+      }),
 
     setOpen: (open) => set({ isOpen: open }),
 

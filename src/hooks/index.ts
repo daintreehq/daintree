@@ -47,7 +47,7 @@ export { useWaitingTerminalIds, useBackgroundPanelStats } from "./useTerminalSel
 
 export { useWorktreeColorMap } from "./useWorktreeColorMap";
 
-export { useOverlayState } from "./useOverlayState";
+export { useOverlayClaim, useOverlayState } from "./useOverlayState";
 
 export { useEscapeStack } from "./useEscapeStack";
 export { useGlobalEscapeDispatcher } from "./useGlobalEscapeDispatcher";

@@ -29,7 +29,7 @@ import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { formatTimeAgo } from "@/utils/timeAgo";
 import { useKeybindingDisplay } from "@/hooks/useKeybinding";
 import { useModifierKeys } from "@/hooks/useModifierKeys";
-import { useOverlayState } from "@/hooks";
+import { useOverlayClaim } from "@/hooks";
 import { usePaletteStore } from "@/store/paletteStore";
 import type { ProjectSwitcherMode, SearchableProject } from "@/hooks/useProjectSwitcherPalette";
 import { useUIStore } from "@/store/uiStore";
@@ -707,7 +707,7 @@ function ModalContent({
   mode,
   ...innerProps
 }: Omit<ProjectSwitcherPaletteProps, "children" | "dropdownAlign">) {
-  useOverlayState(isOpen);
+  useOverlayClaim("project-switcher", isOpen);
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
@@ -820,8 +820,8 @@ function DropdownContent({
 }: ProjectSwitcherPaletteProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
-  const overlayCount = useUIStore((state) => state.overlayCount);
-  const prevOverlayCountRef = useRef<number>(overlayCount);
+  const overlayClaimsSize = useUIStore((state) => state.overlayClaims.size);
+  const prevOverlayClaimsSizeRef = useRef<number>(overlayClaimsSize);
   const focusRafRef = useRef<number | null>(null);
 
   useEffect(() => {
@@ -839,11 +839,11 @@ function DropdownContent({
   }, [isOpen]);
 
   useEffect(() => {
-    if (isOpen && overlayCount > prevOverlayCountRef.current && overlayCount > 0) {
+    if (isOpen && overlayClaimsSize > prevOverlayClaimsSizeRef.current && overlayClaimsSize > 0) {
       onClose();
     }
-    prevOverlayCountRef.current = overlayCount;
-  }, [isOpen, overlayCount, onClose]);
+    prevOverlayClaimsSizeRef.current = overlayClaimsSize;
+  }, [isOpen, overlayClaimsSize, onClose]);
 
   return (
     <Popover open={isOpen} onOpenChange={(open) => !open && onClose()}>

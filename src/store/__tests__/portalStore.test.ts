@@ -32,6 +32,7 @@ vi.hoisted(() => {
 });
 
 import { usePortalStore } from "../portalStore";
+import { useUIStore } from "../uiStore";
 import { PORTAL_MIN_WIDTH, PORTAL_MAX_WIDTH, PORTAL_DEFAULT_WIDTH } from "@shared/types";
 
 function createLocalStorageMock() {
@@ -213,5 +214,63 @@ describe("portalStore", () => {
   it("unmarkTabCreated is idempotent", () => {
     usePortalStore.getState().unmarkTabCreated("non-existent-tab");
     expect(() => usePortalStore.getState().unmarkTabCreated("non-existent-tab")).not.toThrow();
+  });
+
+  describe("toggle with overlay claims", () => {
+    beforeEach(() => {
+      useUIStore.setState({ overlayClaims: new Set<string>() });
+      usePortalStore.setState({ isOpen: false });
+    });
+
+    afterEach(() => {
+      useUIStore.setState({ overlayClaims: new Set<string>() });
+    });
+
+    it("opens the portal when there are no active claims", () => {
+      usePortalStore.getState().toggle();
+      expect(usePortalStore.getState().isOpen).toBe(true);
+    });
+
+    it("blocks the closed→open transition when a claim is active", () => {
+      useUIStore.getState().addOverlayClaim("settings");
+      usePortalStore.getState().toggle();
+      expect(usePortalStore.getState().isOpen).toBe(false);
+    });
+
+    it("allows closing the portal even when a claim is active", () => {
+      usePortalStore.setState({ isOpen: true });
+      useUIStore.getState().addOverlayClaim("settings");
+      usePortalStore.getState().toggle();
+      expect(usePortalStore.getState().isOpen).toBe(false);
+    });
+
+    it("opens the portal once the blocking claim is released", () => {
+      useUIStore.getState().addOverlayClaim("settings");
+      usePortalStore.getState().toggle();
+      expect(usePortalStore.getState().isOpen).toBe(false);
+
+      useUIStore.getState().removeOverlayClaim("settings");
+      usePortalStore.getState().toggle();
+      expect(usePortalStore.getState().isOpen).toBe(true);
+    });
+
+    it("leaves the rest of the store untouched when the open transition is blocked", () => {
+      usePortalStore.setState({
+        isOpen: false,
+        tabs: [{ id: "tab-1", title: "One", url: "https://example.com" }],
+        activeTabId: "tab-1",
+        createdTabs: new Set<string>(["tab-1"]),
+      });
+      useUIStore.getState().addOverlayClaim("settings");
+
+      const before = usePortalStore.getState();
+      usePortalStore.getState().toggle();
+      const after = usePortalStore.getState();
+
+      expect(after.isOpen).toBe(false);
+      expect(after.tabs).toBe(before.tabs);
+      expect(after.activeTabId).toBe(before.activeTabId);
+      expect(after.createdTabs).toBe(before.createdTabs);
+    });
   });
 });

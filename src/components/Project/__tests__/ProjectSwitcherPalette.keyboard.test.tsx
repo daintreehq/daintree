@@ -37,6 +37,7 @@ vi.mock("@/hooks/useKeybinding", () => ({
 
 vi.mock("@/hooks", () => ({
   useOverlayState: () => {},
+  useOverlayClaim: () => {},
 }));
 
 vi.mock("@/store/paletteStore", () => ({

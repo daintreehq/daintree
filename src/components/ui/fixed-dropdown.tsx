@@ -45,26 +45,26 @@ export function FixedDropdown({
     isOpen: open,
     animationDuration: getUiTransitionDuration("exit"),
   });
-  const overlayCount = useUIStore((state) => state.overlayCount);
+  const overlayClaimsSize = useUIStore((state) => state.overlayClaims.size);
   const [overlayGraceActive, setOverlayGraceActive] = useState(false);
-  const baselineOverlayCountRef = useRef<number>(0);
-  // Carry the latest overlay count into the grace-setup effect without
-  // adding it as a reactive dependency — re-running on every count change
+  const baselineOverlaySizeRef = useRef<number>(0);
+  // Carry the latest overlay-claims size into the grace-setup effect without
+  // adding it as a reactive dependency — re-running on every size change
   // would wrongly reset the grace window on each in-flight rise. Sync in
   // an effect so the React Compiler doesn't reject render-time ref mutation.
-  const latestOverlayCountRef = useRef<number>(overlayCount);
+  const latestOverlaySizeRef = useRef<number>(overlayClaimsSize);
   useEffect(() => {
-    latestOverlayCountRef.current = overlayCount;
-  }, [overlayCount]);
+    latestOverlaySizeRef.current = overlayClaimsSize;
+  }, [overlayClaimsSize]);
 
   useEffect(() => {
     if (!open) {
       setOverlayGraceActive(false);
-      baselineOverlayCountRef.current = 0;
+      baselineOverlaySizeRef.current = 0;
       return;
     }
     setOverlayGraceActive(true);
-    baselineOverlayCountRef.current = latestOverlayCountRef.current;
+    baselineOverlaySizeRef.current = latestOverlaySizeRef.current;
     const handle = setTimeout(() => {
       setOverlayGraceActive(false);
     }, OVERLAY_RACE_GRACE_MS);
@@ -96,14 +96,14 @@ export function FixedDropdown({
     };
   }, [open, updatePosition]);
 
-  const childOverlayActive = persistThroughChildOverlays && overlayCount > 0;
+  const childOverlayActive = persistThroughChildOverlays && overlayClaimsSize > 0;
   useEscapeStack(open && !childOverlayActive, () => onOpenChange(false));
 
   useEffect(() => {
     if (!open) return;
 
     const handlePointerDown = (event: MouseEvent | TouchEvent) => {
-      if (persistThroughChildOverlays && overlayCount > 0) return;
+      if (persistThroughChildOverlays && overlayClaimsSize > 0) return;
       const target = event.target as Node | null;
       if (contentRef.current?.contains(target) || anchorRef.current?.contains(target)) return;
       onOpenChange(false);
@@ -115,30 +115,30 @@ export function FixedDropdown({
       document.removeEventListener("mousedown", handlePointerDown);
       document.removeEventListener("touchstart", handlePointerDown);
     };
-  }, [open, onOpenChange, anchorRef, persistThroughChildOverlays, overlayCount]);
+  }, [open, onOpenChange, anchorRef, persistThroughChildOverlays, overlayClaimsSize]);
 
   useEffect(() => {
     if (persistThroughChildOverlays || !open) return;
     if (overlayGraceActive) {
       // During the grace window, absorb any overlay rises as "already in
       // flight when the dropdown opened." This keeps the baseline tracking
-      // the current count so rises after grace are measured against the
+      // the current size so rises after grace are measured against the
       // settled baseline.
-      baselineOverlayCountRef.current = overlayCount;
+      baselineOverlaySizeRef.current = overlayClaimsSize;
       return;
     }
-    // Decay the baseline when the overlay count drops — e.g. the in-flight
-    // modal that was absorbed during grace has since closed. Without this,
-    // a subsequent user-initiated modal at the same numeric level would
-    // fail to dismiss the dropdown.
-    if (overlayCount < baselineOverlayCountRef.current) {
-      baselineOverlayCountRef.current = overlayCount;
+    // Decay the baseline when the overlay-claims size drops — e.g. the
+    // in-flight modal that was absorbed during grace has since closed.
+    // Without this, a subsequent user-initiated modal at the same numeric
+    // level would fail to dismiss the dropdown.
+    if (overlayClaimsSize < baselineOverlaySizeRef.current) {
+      baselineOverlaySizeRef.current = overlayClaimsSize;
       return;
     }
-    if (overlayCount > baselineOverlayCountRef.current) {
+    if (overlayClaimsSize > baselineOverlaySizeRef.current) {
       onOpenChange(false);
     }
-  }, [open, overlayCount, onOpenChange, persistThroughChildOverlays, overlayGraceActive]);
+  }, [open, overlayClaimsSize, onOpenChange, persistThroughChildOverlays, overlayGraceActive]);
 
   if (!shouldRender || !mounted || !position) return null;
 

@@ -83,7 +83,7 @@ describe("PortalVisibilityController", () => {
     });
 
     usePortalStore.getState().reset();
-    useUIStore.setState({ overlayCount: 0, notificationCenterOpen: false });
+    useUIStore.setState({ overlayClaims: new Set<string>(), notificationCenterOpen: false });
   });
 
   afterEach(() => {
@@ -241,13 +241,13 @@ describe("PortalVisibilityController", () => {
     render(<PortalVisibilityController />);
 
     act(() => {
-      useUIStore.setState({ overlayCount: 1 });
+      useUIStore.setState({ overlayClaims: new Set<string>(["test-overlay"]) });
     });
 
     expect(portal.hide).toHaveBeenCalledTimes(1);
 
     act(() => {
-      useUIStore.setState({ overlayCount: 0 });
+      useUIStore.setState({ overlayClaims: new Set<string>() });
     });
 
     await act(async () => {
