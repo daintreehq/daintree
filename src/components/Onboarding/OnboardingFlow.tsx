@@ -8,14 +8,6 @@ import type { CliAvailability } from "@shared/types";
 
 const SKIP_FIRST_RUN_DIALOGS = isDaintreeEnvEnabled("DAINTREE_E2E_SKIP_FIRST_RUN_DIALOGS");
 
-// TODO(0.9.0): Remove this temporary Canopy -> Daintree onboarding
-// localStorage import after the 0.8.x upgrade window closes.
-const LEGACY_KEYS = {
-  agentSelection: "canopy:agent-selection-dismissed",
-  agentSetup: "canopy:agent-setup-complete",
-  firstRunToast: "canopy:first-run-toast",
-} as const;
-
 type OnboardingStep = "agentSetup";
 const STEP_ORDER: OnboardingStep[] = ["agentSetup"];
 
@@ -48,44 +40,13 @@ export function OnboardingFlow({
   const completedRef = useRef(false);
   const currentStepRef = useRef<OnboardingStep | null>(null);
 
-  // Hydrate state from electron-store and run localStorage migration
+  // Hydrate state from electron-store
   useEffect(() => {
     if (SKIP_FIRST_RUN_DIALOGS) return;
     if (!window.electron?.onboarding) return;
 
     (async () => {
-      let onboardingState = await window.electron.onboarding.get();
-
-      // TODO(0.9.0): Remove this temporary Canopy -> Daintree onboarding
-      // localStorage migration after the 0.8.x upgrade window closes.
-      if (!onboardingState.migratedFromLocalStorage) {
-        let agentSelectionDismissed = false;
-        let agentSetupComplete = false;
-        let firstRunToastSeen = false;
-        try {
-          agentSelectionDismissed = !!localStorage.getItem(LEGACY_KEYS.agentSelection);
-          agentSetupComplete = !!localStorage.getItem(LEGACY_KEYS.agentSetup);
-          firstRunToastSeen = !!localStorage.getItem(LEGACY_KEYS.firstRunToast);
-        } catch {
-          // localStorage unavailable
-        }
-
-        onboardingState = await window.electron.onboarding.migrate({
-          agentSelectionDismissed,
-          agentSetupComplete,
-          firstRunToastSeen,
-        });
-
-        // Clean up legacy keys after successful migration
-        try {
-          localStorage.removeItem(LEGACY_KEYS.agentSelection);
-          localStorage.removeItem(LEGACY_KEYS.agentSetup);
-          localStorage.removeItem(LEGACY_KEYS.firstRunToast);
-        } catch {
-          // silently fail
-        }
-      }
-
+      const onboardingState = await window.electron.onboarding.get();
       setState(onboardingState);
     })().catch(console.error);
   }, []);

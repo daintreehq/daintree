@@ -161,7 +161,6 @@ export function createHeavyMigrationFixture(): StoreSchema {
       seenAgentIds: [],
       welcomeCardDismissed: false,
       setupBannerDismissed: false,
-      migratedFromLocalStorage: false,
     } as StoreSchema["onboarding"],
     activationFunnel: {},
     orchestrationMilestones: {},

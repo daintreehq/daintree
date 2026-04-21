@@ -1068,7 +1068,6 @@ const CHANNELS = {
 
   // Onboarding channels
   ONBOARDING_GET: "onboarding:get",
-  ONBOARDING_MIGRATE: "onboarding:migrate",
   ONBOARDING_SET_STEP: "onboarding:set-step",
   ONBOARDING_COMPLETE: "onboarding:complete",
   ONBOARDING_MARK_TOAST_SEEN: "onboarding:mark-toast-seen",
@@ -2848,13 +2847,6 @@ const api: ElectronAPI = {
 
   onboarding: {
     get: () => _unwrappingInvoke(CHANNELS.ONBOARDING_GET),
-    // TODO(0.9.0): Remove after deleting the temporary Canopy onboarding
-    // localStorage migration path.
-    migrate: (payload: {
-      agentSelectionDismissed: boolean;
-      agentSetupComplete: boolean;
-      firstRunToastSeen: boolean;
-    }) => _unwrappingInvoke(CHANNELS.ONBOARDING_MIGRATE, payload),
     setStep: (step: string | null | { step: string | null; agentSetupIds?: string[] }) =>
       _unwrappingInvoke(CHANNELS.ONBOARDING_SET_STEP, step),
     complete: () => _unwrappingInvoke(CHANNELS.ONBOARDING_COMPLETE),

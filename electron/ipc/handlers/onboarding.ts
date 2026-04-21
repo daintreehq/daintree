@@ -18,12 +18,6 @@ const DEFAULT_CHECKLIST: ChecklistState = {
   },
 };
 
-interface MigratePayload {
-  agentSelectionDismissed: boolean;
-  agentSetupComplete: boolean;
-  firstRunToastSeen: boolean;
-}
-
 const SKIP_E2E = process.env.DAINTREE_E2E_SKIP_FIRST_RUN_DIALOGS === "1";
 
 function getOnboardingState(): OnboardingState {
@@ -39,7 +33,6 @@ function getOnboardingState(): OnboardingState {
       seenAgentIds: [],
       welcomeCardDismissed: true,
       setupBannerDismissed: true,
-      migratedFromLocalStorage: true,
       checklist: {
         dismissed: true,
         celebrationShown: true,
@@ -65,7 +58,6 @@ function getOnboardingState(): OnboardingState {
       seenAgentIds: [],
       welcomeCardDismissed: false,
       setupBannerDismissed: false,
-      migratedFromLocalStorage: false,
       checklist: DEFAULT_CHECKLIST,
     };
   }
@@ -101,52 +93,6 @@ export function registerOnboardingHandlers(): () => void {
   const cleanups: Array<() => void> = [];
 
   cleanups.push(typedHandle(CHANNELS.ONBOARDING_GET, () => getOnboardingState()));
-
-  cleanups.push(
-    typedHandle(CHANNELS.ONBOARDING_MIGRATE, (payload: unknown) => {
-      // TODO(0.9.0): Remove this temporary Canopy -> Daintree onboarding
-      // localStorage migration after the 0.8.x upgrade window closes.
-      const state = getOnboardingState();
-      if (state.migratedFromLocalStorage) return state;
-
-      const p = (payload ?? {}) as Partial<MigratePayload>;
-      const telemetrySeen = store.get("privacy")?.hasSeenPrompt ?? false;
-      const agentSelectionDismissed = p.agentSelectionDismissed === true;
-      const agentSetupComplete = p.agentSetupComplete === true;
-      const firstRunToastSeen = p.firstRunToastSeen === true;
-
-      const allPreviouslyComplete = telemetrySeen && agentSelectionDismissed && agentSetupComplete;
-
-      const updated: OnboardingState = {
-        ...state,
-        completed: allPreviouslyComplete,
-        currentStep: allPreviouslyComplete ? null : state.currentStep,
-        firstRunToastSeen: firstRunToastSeen || state.firstRunToastSeen,
-        // If the legacy Canopy onboarding was fully completed, the #5131 setup
-        // banner should also be considered dismissed — these users have already
-        // made their agent/telemetry decisions.
-        setupBannerDismissed: allPreviouslyComplete || state.setupBannerDismissed,
-        migratedFromLocalStorage: true,
-        checklist: allPreviouslyComplete
-          ? {
-              dismissed: true,
-              celebrationShown: true,
-              items: {
-                openedProject: true,
-                launchedAgent: true,
-                createdWorktree: true,
-                ranSecondParallelAgent: true,
-              },
-            }
-          : state.checklist,
-      };
-      store.set("onboarding", updated);
-      if (allPreviouslyComplete) {
-        setOnboardingCompleteTag(true);
-      }
-      return updated;
-    })
-  );
 
   cleanups.push(
     typedHandle(CHANNELS.ONBOARDING_SET_STEP, (arg: unknown) => {

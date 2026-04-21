@@ -27,9 +27,6 @@ vi.mock("../../utils/hardenedGit.js", () => ({
 vi.mock("../../services/events.js", () => ({ events: { on: vi.fn(), off: vi.fn() } }));
 vi.mock("../../services/PullRequestService.js", () => ({ pullRequestService: {} }));
 vi.mock("../../services/github/GitHubAuth.js", () => ({ GitHubAuth: vi.fn() }));
-vi.mock("../../services/projectDirMigration.js", () => ({
-  ensureDaintreeDirMigrated: vi.fn(),
-}));
 vi.mock("../../services/issueExtractor.js", () => ({
   extractIssueNumber: vi.fn(),
   extractIssueNumberSync: vi.fn(),
