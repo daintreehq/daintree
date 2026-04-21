@@ -592,15 +592,30 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
       .catch(() => {});
     // Focus the primary (most-recently-armed) terminal so the user lands on
     // a known pane instead of whatever `focusedId` happened to be during
-    // fleet scope. Guarded by generation + location so a stale import can't
-    // stomp a newer scope entry or focus a trashed/background terminal.
-    if (primaryTerminalId) {
+    // fleet scope. Guarded by:
+    //   - generation: prevents a stale microtask from overwriting a newer
+    //     worktree switch.
+    //   - worktreeId match: the user's scope-exit intent is "restore the
+    //     pre-scope worktree". If the primary lives elsewhere, focusing it
+    //     would let `rendererStoreOrchestrator`'s focusedId subscription
+    //     call `selectWorktree(primary.worktreeId)` and undo the restore.
+    //   - location: skip trashed/backgrounded/docked primaries — a dock
+    //     focus would activate the dock rather than a grid pane, and
+    //     trashed/background terminals aren't valid focus targets.
+    if (primaryTerminalId && restoreId) {
       void loadTerminalStoreModule()
         .then(({ usePanelStore }) => {
           if (get()._policyGeneration !== generation) return;
           const terminal = usePanelStore.getState().panelsById[primaryTerminalId];
           if (!terminal) return;
-          if (terminal.location === "trash" || terminal.location === "background") return;
+          if (terminal.worktreeId !== restoreId) return;
+          if (
+            terminal.location === "trash" ||
+            terminal.location === "background" ||
+            terminal.location === "dock"
+          ) {
+            return;
+          }
           usePanelStore.getState().setFocused(primaryTerminalId);
         })
         .catch((error) => {
