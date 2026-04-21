@@ -28,7 +28,9 @@ export interface UseWorktreeActionsResult {
 
   handleDockAll: () => void;
   handleMaximizeAll: () => void;
-  handleBroadcastToAgents: () => void;
+  handleSelectAllAgents: () => void;
+  handleSelectWaitingAgents: () => void;
+  handleSelectWorkingAgents: () => void;
 }
 
 export function useWorktreeActions({
@@ -98,9 +100,19 @@ export function useWorktreeActions({
     );
   }, [worktree.id]);
 
-  const handleBroadcastToAgents = useCallback(() => {
+  const handleSelectAllAgents = useCallback(() => {
     useWorktreeSelectionStore.getState().setActiveWorktree(worktree.id);
     useFleetArmingStore.getState().armAll("current");
+  }, [worktree.id]);
+
+  const handleSelectWaitingAgents = useCallback(() => {
+    useWorktreeSelectionStore.getState().setActiveWorktree(worktree.id);
+    useFleetArmingStore.getState().armByState("waiting", "current", false);
+  }, [worktree.id]);
+
+  const handleSelectWorkingAgents = useCallback(() => {
+    useWorktreeSelectionStore.getState().setActiveWorktree(worktree.id);
+    useFleetArmingStore.getState().armByState("working", "current", false);
   }, [worktree.id]);
 
   const handleCopyTree = useCallback(async () => {
@@ -118,6 +130,8 @@ export function useWorktreeActions({
     handleRunRecipe,
     handleDockAll,
     handleMaximizeAll,
-    handleBroadcastToAgents,
+    handleSelectAllAgents,
+    handleSelectWaitingAgents,
+    handleSelectWorkingAgents,
   };
 }

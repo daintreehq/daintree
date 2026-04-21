@@ -327,6 +327,8 @@ export interface WorktreeHeaderProps {
       active: number;
       completed: number;
       all: number;
+      waiting: number;
+      working: number;
     };
     onCopyContextFull: () => void;
     onCopyContextModified: () => void;
@@ -346,7 +348,9 @@ export interface WorktreeHeaderProps {
     onDockAll: () => void;
     onMaximizeAll: () => void;
     onResetRenderers: () => void;
-    onBroadcastToAgents: () => void;
+    onSelectAllAgents: () => void;
+    onSelectWaitingAgents: () => void;
+    onSelectWorkingAgents: () => void;
     onAttachIssue?: () => void;
     onViewPlan?: () => void;
     onOpenReviewHub?: () => void;
@@ -731,7 +735,9 @@ export function WorktreeHeader({
                 onDockAll={menu.onDockAll}
                 onMaximizeAll={menu.onMaximizeAll}
                 onResetRenderers={menu.onResetRenderers}
-                onBroadcastToAgents={menu.onBroadcastToAgents}
+                onSelectAllAgents={menu.onSelectAllAgents}
+                onSelectWaitingAgents={menu.onSelectWaitingAgents}
+                onSelectWorkingAgents={menu.onSelectWorkingAgents}
                 onOpenPanelPalette={menu.onOpenPanelPalette}
                 onDeleteWorktree={menu.onDeleteWorktree}
                 onRevertAgentChanges={menu.onRevertAgentChanges}

@@ -59,7 +59,7 @@ const baseMenu: WorktreeHeaderProps["menu"] = {
   launchAgents: [],
   recipes: [],
   runningRecipeId: null,
-  counts: { grid: 0, dock: 0, active: 0, completed: 0, all: 0 },
+  counts: { grid: 0, dock: 0, active: 0, completed: 0, all: 0, waiting: 0, working: 0 },
   onCopyContextFull: noop,
   onCopyContextModified: noop,
   onCopyPath: noop,
@@ -69,7 +69,9 @@ const baseMenu: WorktreeHeaderProps["menu"] = {
   onDockAll: noop,
   onMaximizeAll: noop,
   onResetRenderers: noop,
-  onBroadcastToAgents: noop,
+  onSelectAllAgents: noop,
+  onSelectWaitingAgents: noop,
+  onSelectWorkingAgents: noop,
 };
 
 function renderHeader(overrides: Partial<WorktreeHeaderProps> = {}) {
