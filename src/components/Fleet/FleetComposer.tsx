@@ -492,9 +492,11 @@ export function FleetComposer(): ReactElement | null {
           useFleetComposerStore.getState().draft ||
           useFleetComposerStore.getState().lastBroadcastPrompt;
         setLastFailed(failedIds, currentDraft);
+      } else {
+        clearLastFailed();
       }
     },
-    [setLastFailed]
+    [clearLastFailed, setLastFailed]
   );
 
   const canaryTargetTitle = usePanelStore((s) =>

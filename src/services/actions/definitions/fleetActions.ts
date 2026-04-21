@@ -11,6 +11,7 @@ import { useFleetScopeFlagStore } from "@/store/fleetScopeFlagStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { terminalClient } from "@/clients";
 import { executeFleetBroadcast } from "@/components/Fleet/fleetExecution";
+import { useNotificationStore } from "@/store/notificationStore";
 import type { TerminalInstance } from "@shared/types";
 
 interface ArmedSnapshot {
@@ -330,11 +331,20 @@ export function registerFleetActions(actions: ActionRegistry): void {
       // Arm the specific terminals that failed, not the current armed set
       useFleetArmingStore.getState().armIds(lastFailedIds);
 
-      const result = await executeFleetBroadcast(prompt, lastFailedIds);
-      if (result.failureCount > 0) {
-        useFleetComposerStore.getState().setLastFailed(result.failedIds, prompt);
-      } else {
-        useFleetComposerStore.getState().clearLastFailed();
+      try {
+        const result = await executeFleetBroadcast(prompt, lastFailedIds);
+        if (result.failureCount > 0) {
+          useFleetComposerStore.getState().setLastFailed(result.failedIds, prompt);
+        } else {
+          useFleetComposerStore.getState().clearLastFailed();
+        }
+      } catch (e) {
+        useNotificationStore.getState().addNotification({
+          type: "error",
+          priority: "high",
+          message: "Retry failed unexpectedly",
+        });
+        throw e;
       }
     },
   }));

@@ -41,12 +41,11 @@ export function FleetDryRunDialog({
       const targetIds = currentPreviews.filter((p) => !p.excluded).map((p) => p.terminalId);
       const result = await executeFleetBroadcast(draft, targetIds, overrides);
 
-      const armedIds = Array.from(useFleetArmingStore.getState().armedIds);
-      const projectId = useProjectStore.getState().currentProject?.id;
-      const historyKey = getFleetBroadcastHistoryKey(projectId);
-      useCommandHistoryStore.getState().recordPrompt(historyKey, draft, null, { armedIds });
-
       if (result.successCount > 0) {
+        const armedIds = Array.from(useFleetArmingStore.getState().armedIds);
+        const projectId = useProjectStore.getState().currentProject?.id;
+        const historyKey = getFleetBroadcastHistoryKey(projectId);
+        useCommandHistoryStore.getState().recordPrompt(historyKey, draft, null, { armedIds });
         useFleetComposerStore.getState().clearDraft();
       }
 
