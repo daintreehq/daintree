@@ -68,9 +68,12 @@ export function setupPowerMonitor(deps: PowerMonitorDeps): void {
             const wc = getAppWebContents(win);
             if (!wc.isDestroyed()) {
               try {
-                wc.send(CHANNELS.SYSTEM_WAKE, {
-                  sleepDuration,
-                  timestamp: Date.now(),
+                wc.send(CHANNELS.EVENTS_PUSH, {
+                  name: "system:wake",
+                  payload: {
+                    sleepDuration,
+                    timestamp: Date.now(),
+                  },
                 });
               } catch {
                 // Silently ignore send failures during window disposal.

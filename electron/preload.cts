@@ -154,8 +154,9 @@ ipcRenderer.on("workspace-port", (event: Electron.IpcRendererEvent) => {
     const fakeEvent = {} as Electron.IpcRendererEvent;
     switch (data.type) {
       case "worktree-update":
-        ipcRenderer.emit(CHANNELS.WORKTREE_UPDATE, fakeEvent, {
-          worktree: data.worktree,
+        ipcRenderer.emit(CHANNELS.EVENTS_PUSH, fakeEvent, {
+          name: "worktree:update",
+          payload: { worktree: data.worktree },
         });
         break;
       case "worktree-removed":
@@ -486,13 +487,60 @@ function _typedOn<K extends Extract<keyof IpcEventMap, string>>(
   return () => ipcRenderer.removeListener(channel, handler);
 }
 
+// Shared multiplexer for the typed event bus. All `window.electron.events.on`
+// subscribers — plus the migrated per-domain helpers below (terminal.onExit,
+// window.onFullscreenChange, etc.) — dispatch through a single ipcRenderer
+// listener on CHANNELS.EVENTS_PUSH. Ref-counted per event name so Node's
+// MaxListenersExceededWarning (fires at 10 listeners per channel) can't trip
+// as more events migrate; the ipcRenderer listener stays at exactly 1.
+type EventBusSubscriber = (payload: unknown) => void;
+const _eventBusSubscribers = new Map<keyof IpcEventBusMap, Set<EventBusSubscriber>>();
+let _eventBusWired = false;
+
+function _ensureEventBusWired(): void {
+  if (_eventBusWired) return;
+  _eventBusWired = true;
+  ipcRenderer.on(CHANNELS.EVENTS_PUSH, (_event, envelope: EventBusEnvelope) => {
+    if (!envelope || typeof envelope !== "object") return;
+    if (typeof envelope.name !== "string") return;
+    const subs = _eventBusSubscribers.get(envelope.name);
+    if (!subs || subs.size === 0) return;
+    for (const cb of subs) {
+      try {
+        cb(envelope.payload);
+      } catch (err) {
+        console.error("[Preload] events:push subscriber threw for", envelope.name, err);
+      }
+    }
+  });
+}
+
+function _eventBusOn<K extends keyof IpcEventBusMap>(
+  name: K,
+  callback: (payload: IpcEventBusMap[K]) => void
+): () => void {
+  _ensureEventBusWired();
+  let set = _eventBusSubscribers.get(name);
+  if (!set) {
+    set = new Set();
+    _eventBusSubscribers.set(name, set);
+  }
+  const wrapped = callback as EventBusSubscriber;
+  set.add(wrapped);
+  return () => {
+    const current = _eventBusSubscribers.get(name);
+    if (!current) return;
+    current.delete(wrapped);
+    if (current.size === 0) _eventBusSubscribers.delete(name);
+  };
+}
+
 // Inlined to avoid runtime module resolution issues with CommonJS
 const CHANNELS = {
   // Worktree channels
   WORKTREE_GET_ALL: "worktree:get-all",
   WORKTREE_REFRESH: "worktree:refresh",
   WORKTREE_SET_ACTIVE: "worktree:set-active",
-  WORKTREE_UPDATE: "worktree:update",
   WORKTREE_REMOVE: "worktree:remove",
   WORKTREE_ACTIVATED: "worktree:activated",
   WORKTREE_CREATE: "worktree:create",
@@ -516,13 +564,11 @@ const CHANNELS = {
 
   // Terminal channels
   TERMINAL_SPAWN: "terminal:spawn",
-  TERMINAL_SPAWN_RESULT: "terminal:spawn-result",
   TERMINAL_DATA: "terminal:data",
   TERMINAL_INPUT: "terminal:input",
   TERMINAL_SUBMIT: "terminal:submit",
   TERMINAL_RESIZE: "terminal:resize",
   TERMINAL_KILL: "terminal:kill",
-  TERMINAL_EXIT: "terminal:exit",
   TERMINAL_ERROR: "terminal:error",
   TERMINAL_TRASH: "terminal:trash",
   TERMINAL_RESTORE: "terminal:restore",
@@ -545,8 +591,6 @@ const CHANNELS = {
   TERMINAL_FORCE_RESUME: "terminal:force-resume",
   TERMINAL_GRACEFUL_KILL: "terminal:graceful-kill",
   TERMINAL_STATUS: "terminal:status",
-  TERMINAL_BACKEND_CRASHED: "terminal:backend-crashed",
-  TERMINAL_BACKEND_READY: "terminal:backend-ready",
   TERMINAL_SEND_KEY: "terminal:send-key",
   TERMINAL_BATCH_DOUBLE_ESCAPE: "terminal:batch-double-escape",
   TERMINAL_AGENT_TITLE_STATE: "terminal:agent-title-state",
@@ -562,13 +606,6 @@ const CHANNELS = {
   // Files channels
   FILES_SEARCH: "files:search",
   FILES_READ: "files:read",
-
-  // Agent state channels
-  AGENT_STATE_CHANGED: "agent:state-changed",
-  AGENT_ALL_CLEAR: "agent:all-clear",
-  AGENT_DETECTED: "agent:detected",
-  AGENT_EXITED: "agent:exited",
-  AGENT_FALLBACK_TRIGGERED: "agent:fallback-triggered",
 
   // Terminal activity channels
   TERMINAL_ACTIVITY: "terminal:activity",
@@ -623,7 +660,6 @@ const CHANNELS = {
   DIAGNOSTICS_GET_PROCESS_METRICS: "diagnostics:get-process-metrics",
   DIAGNOSTICS_GET_HEAP_STATS: "diagnostics:get-heap-stats",
   DIAGNOSTICS_GET_INFO: "diagnostics:get-info",
-  SYSTEM_WAKE: "system:wake",
 
   // PR detection channels
   PR_DETECTED: "pr:detected",
@@ -896,7 +932,6 @@ const CHANNELS = {
   WORKTREE_CONFIG_SET_PATTERN: "worktree-config:set-pattern",
 
   // Window channels
-  WINDOW_FULLSCREEN_CHANGE: "window:fullscreen-change",
   WINDOW_TOGGLE_FULLSCREEN: "window:toggle-fullscreen",
   WINDOW_RELOAD: "window:reload",
   WINDOW_FORCE_RELOAD: "window:force-reload",
@@ -906,13 +941,9 @@ const CHANNELS = {
   WINDOW_ZOOM_RESET: "window:zoom-reset",
   WINDOW_CLOSE: "window:close",
   WINDOW_NEW: "window:new",
-  WINDOW_RECLAIM_MEMORY: "window:reclaim-memory",
-  WINDOW_DESTROY_HIDDEN_WEBVIEWS: "window:destroy-hidden-webviews",
-  WINDOW_DISK_SPACE_STATUS: "window:disk-space-status",
 
   // Notification channels
   SOUND_TRIGGER: "sound:trigger",
-  SOUND_CANCEL: "sound:cancel",
   SOUND_GET_DIR: "sound:get-dir",
 
   NOTIFICATION_UPDATE: "notification:update",
@@ -959,9 +990,7 @@ const CHANNELS = {
   APP_AGENT_HAS_API_KEY: "app-agent:has-api-key",
   APP_AGENT_TEST_API_KEY: "app-agent:test-api-key",
   APP_AGENT_TEST_MODEL: "app-agent:test-model",
-  APP_AGENT_DISPATCH_ACTION_REQUEST: "app-agent:dispatch-action-request",
   APP_AGENT_DISPATCH_ACTION_RESPONSE: "app-agent:dispatch-action-response",
-  APP_AGENT_CONFIRMATION_REQUEST: "app-agent:confirmation-request",
   APP_AGENT_CONFIRMATION_RESPONSE: "app-agent:confirmation-response",
 
   // Agent Capabilities channels
@@ -1144,9 +1173,6 @@ const CHANNELS = {
   PLUGIN_ACTIONS_GET: "plugin:actions-get",
   PLUGIN_ACTIONS_REGISTER: "plugin:actions-register",
   PLUGIN_ACTIONS_UNREGISTER: "plugin:actions-unregister",
-  PLUGIN_ACTIONS_CHANGED: "plugin:actions-changed",
-
-  RESOURCE_PROFILE_CHANGED: "resource:profile-changed",
 
   APP_RELOAD_CONFIG: "app:reload-config",
   APP_CONFIG_RELOADED: "app:config-reloaded",
@@ -1215,12 +1241,8 @@ const api: ElectronAPI = {
 
     restartService: (): Promise<void> => _unwrappingInvoke(CHANNELS.WORKTREE_RESTART_SERVICE),
 
-    onUpdate: (callback: (state: WorktreeState) => void) => {
-      const handler = (_event: Electron.IpcRendererEvent, payload: { worktree: WorktreeState }) =>
-        callback(payload.worktree);
-      ipcRenderer.on(CHANNELS.WORKTREE_UPDATE, handler);
-      return () => ipcRenderer.removeListener(CHANNELS.WORKTREE_UPDATE, handler);
-    },
+    onUpdate: (callback: (state: WorktreeState) => void) =>
+      _eventBusOn("worktree:update", (payload) => callback(payload.worktree)),
 
     onRemove: (callback: (data: { worktreeId: string }) => void) =>
       _typedOn(CHANNELS.WORKTREE_REMOVE, callback),
@@ -1279,31 +1301,29 @@ const api: ElectronAPI = {
       return () => ipcRenderer.removeListener(CHANNELS.TERMINAL_DATA, handler);
     },
 
-    // Tuple payload [id, exitCode] requires special handling
-    onExit: (callback: (id: string, exitCode: number) => void) => {
-      const handler = (_event: Electron.IpcRendererEvent, id: unknown, exitCode: unknown) => {
+    onExit: (callback: (id: string, exitCode: number) => void) =>
+      _eventBusOn("terminal:exit", (payload) => {
+        if (!Array.isArray(payload)) return;
+        const [id, exitCode] = payload;
         if (typeof id === "string" && typeof exitCode === "number") {
           callback(id, exitCode);
         }
-      };
-      ipcRenderer.on(CHANNELS.TERMINAL_EXIT, handler);
-      return () => ipcRenderer.removeListener(CHANNELS.TERMINAL_EXIT, handler);
-    },
+      }),
 
     onAgentStateChanged: (callback: (data: AgentStateChangePayload) => void) =>
-      _typedOn(CHANNELS.AGENT_STATE_CHANGED, callback),
+      _eventBusOn("agent:state-changed", callback),
 
     onAgentDetected: (callback: (data: AgentDetectedPayload) => void) =>
-      _typedOn(CHANNELS.AGENT_DETECTED, callback),
+      _eventBusOn("agent:detected", callback),
 
     onAgentExited: (callback: (data: AgentExitedPayload) => void) =>
-      _typedOn(CHANNELS.AGENT_EXITED, callback),
+      _eventBusOn("agent:exited", callback),
 
     onFallbackTriggered: (callback: (data: AgentFallbackTriggeredPayload) => void) =>
-      _typedOn(CHANNELS.AGENT_FALLBACK_TRIGGERED, callback),
+      _eventBusOn("agent:fallback-triggered", callback),
 
     onAllAgentsClear: (callback: (data: { timestamp: number }) => void) =>
-      _typedOn(CHANNELS.AGENT_ALL_CLEAR, callback),
+      _eventBusOn("agent:all-clear", callback),
 
     onActivity: (callback: (data: TerminalActivityPayload) => void) =>
       _typedOn(CHANNELS.TERMINAL_ACTIVITY, callback),
@@ -1375,20 +1395,10 @@ const api: ElectronAPI = {
         signal: string | null;
         timestamp: number;
       }) => void
-    ): (() => void) => {
-      const handler = (
-        _event: Electron.IpcRendererEvent,
-        data: { crashType: string; code: number | null; signal: string | null; timestamp: number }
-      ) => callback(data);
-      ipcRenderer.on(CHANNELS.TERMINAL_BACKEND_CRASHED, handler);
-      return () => ipcRenderer.removeListener(CHANNELS.TERMINAL_BACKEND_CRASHED, handler);
-    },
+    ): (() => void) => _eventBusOn("terminal:backend-crashed", callback),
 
-    onBackendReady: (callback: () => void): (() => void) => {
-      const handler = () => callback();
-      ipcRenderer.on(CHANNELS.TERMINAL_BACKEND_READY, handler);
-      return () => ipcRenderer.removeListener(CHANNELS.TERMINAL_BACKEND_READY, handler);
-    },
+    onBackendReady: (callback: () => void): (() => void) =>
+      _eventBusOn("terminal:backend-ready", () => callback()),
 
     sendKey: (id: string, key: string) => ipcRenderer.send(CHANNELS.TERMINAL_SEND_KEY, id, key),
 
@@ -1401,15 +1411,14 @@ const api: ElectronAPI = {
     updateObservedTitle: (id: string, title: string) =>
       ipcRenderer.send(CHANNELS.TERMINAL_UPDATE_OBSERVED_TITLE, { id, title }),
 
-    onSpawnResult: (callback: (id: string, result: SpawnResultPayload) => void): (() => void) => {
-      const handler = (_event: Electron.IpcRendererEvent, id: unknown, result: unknown) => {
+    onSpawnResult: (callback: (id: string, result: SpawnResultPayload) => void): (() => void) =>
+      _eventBusOn("terminal:spawn-result", (payload) => {
+        if (!Array.isArray(payload)) return;
+        const [id, result] = payload;
         if (typeof id === "string" && typeof result === "object" && result !== null) {
           callback(id, result as SpawnResultPayload);
         }
-      };
-      ipcRenderer.on(CHANNELS.TERMINAL_SPAWN_RESULT, handler);
-      return () => ipcRenderer.removeListener(CHANNELS.TERMINAL_SPAWN_RESULT, handler);
-    },
+      }),
 
     onReduceScrollback: (
       callback: (data: { terminalIds: string[]; targetLines: number }) => void
@@ -1420,11 +1429,8 @@ const api: ElectronAPI = {
 
     restartService: (): Promise<void> => _unwrappingInvoke(CHANNELS.TERMINAL_RESTART_SERVICE),
 
-    onReclaimMemory: (callback: () => void) => {
-      const handler = () => callback();
-      ipcRenderer.on(CHANNELS.WINDOW_RECLAIM_MEMORY, handler);
-      return () => ipcRenderer.removeListener(CHANNELS.WINDOW_RECLAIM_MEMORY, handler);
-    },
+    onReclaimMemory: (callback: () => void) =>
+      _eventBusOn("window:reclaim-memory", () => callback()),
   },
 
   // Files API
@@ -1570,12 +1576,7 @@ const api: ElectronAPI = {
     getDiagnosticsInfo: () => _unwrappingInvoke(CHANNELS.DIAGNOSTICS_GET_INFO),
 
     onWake: (callback: (data: { sleepDuration: number; timestamp: number }) => void) => {
-      const handler = (
-        _event: Electron.IpcRendererEvent,
-        data: { sleepDuration: number; timestamp: number }
-      ) => callback(data);
-      ipcRenderer.on(CHANNELS.SYSTEM_WAKE, handler);
-      return () => ipcRenderer.removeListener(CHANNELS.SYSTEM_WAKE, handler);
+      return _eventBusOn("system:wake", callback);
     },
 
     installAgent: (payload: { agentId: string; methodIndex?: number; jobId: string }) =>
@@ -1585,12 +1586,8 @@ const api: ElectronAPI = {
       callback: (event: { jobId: string; chunk: string; stream: "stdout" | "stderr" }) => void
     ) => _typedOn(CHANNELS.SETUP_AGENT_INSTALL_PROGRESS, callback),
 
-    onResourceProfileChanged: (callback: (payload: ResourceProfilePayload) => void) => {
-      const handler = (_event: Electron.IpcRendererEvent, payload: ResourceProfilePayload) =>
-        callback(payload);
-      ipcRenderer.on(CHANNELS.RESOURCE_PROFILE_CHANGED, handler);
-      return () => ipcRenderer.removeListener(CHANNELS.RESOURCE_PROFILE_CHANGED, handler);
-    },
+    onResourceProfileChanged: (callback: (payload: ResourceProfilePayload) => void) =>
+      _eventBusOn("resource:profile-changed", callback),
   },
 
   // App State API
@@ -1709,20 +1706,7 @@ const api: ElectronAPI = {
     on: <K extends keyof IpcEventBusMap>(
       name: K,
       callback: (payload: IpcEventBusMap[K]) => void
-    ): (() => void) => {
-      const handler = (_event: Electron.IpcRendererEvent, envelope: EventBusEnvelope) => {
-        if (
-          envelope &&
-          typeof envelope === "object" &&
-          envelope.name === name &&
-          "payload" in envelope
-        ) {
-          callback(envelope.payload as IpcEventBusMap[K]);
-        }
-      };
-      ipcRenderer.on(CHANNELS.EVENTS_PUSH, handler);
-      return () => ipcRenderer.removeListener(CHANNELS.EVENTS_PUSH, handler);
-    },
+    ): (() => void) => _eventBusOn(name, callback),
   },
 
   // Project API
@@ -2444,12 +2428,8 @@ const api: ElectronAPI = {
 
   // Window API
   window: {
-    onFullscreenChange: (callback: (isFullscreen: boolean) => void) => {
-      const handler = (_event: Electron.IpcRendererEvent, isFullscreen: boolean) =>
-        callback(isFullscreen);
-      ipcRenderer.on(CHANNELS.WINDOW_FULLSCREEN_CHANGE, handler);
-      return () => ipcRenderer.removeListener(CHANNELS.WINDOW_FULLSCREEN_CHANGE, handler);
-    },
+    onFullscreenChange: (callback: (isFullscreen: boolean) => void) =>
+      _eventBusOn("window:fullscreen-change", callback),
     toggleFullscreen: (): Promise<boolean> => _unwrappingInvoke(CHANNELS.WINDOW_TOGGLE_FULLSCREEN),
     reload: (): Promise<void> => _unwrappingInvoke(CHANNELS.WINDOW_RELOAD),
     forceReload: (): Promise<void> => _unwrappingInvoke(CHANNELS.WINDOW_FORCE_RELOAD),
@@ -2461,30 +2441,15 @@ const api: ElectronAPI = {
     close: (): Promise<void> => _unwrappingInvoke(CHANNELS.WINDOW_CLOSE),
     openNew: (projectPath?: string): Promise<void> =>
       _unwrappingInvoke(CHANNELS.WINDOW_NEW, projectPath),
-    onDestroyHiddenWebviews: (callback: (payload: { tier: 1 | 2 }) => void) => {
-      const handler = (_event: Electron.IpcRendererEvent, payload: { tier: 1 | 2 }) =>
-        callback(payload);
-      ipcRenderer.on(CHANNELS.WINDOW_DESTROY_HIDDEN_WEBVIEWS, handler);
-      return () => ipcRenderer.removeListener(CHANNELS.WINDOW_DESTROY_HIDDEN_WEBVIEWS, handler);
-    },
+    onDestroyHiddenWebviews: (callback: (payload: { tier: 1 | 2 }) => void) =>
+      _eventBusOn("window:destroy-hidden-webviews", callback),
     onDiskSpaceStatus: (
       callback: (payload: {
         status: "normal" | "warning" | "critical";
         availableMb: number;
         writesSuppressed: boolean;
       }) => void
-    ) => {
-      const handler = (
-        _event: Electron.IpcRendererEvent,
-        payload: {
-          status: "normal" | "warning" | "critical";
-          availableMb: number;
-          writesSuppressed: boolean;
-        }
-      ) => callback(payload);
-      ipcRenderer.on(CHANNELS.WINDOW_DISK_SPACE_STATUS, handler);
-      return () => ipcRenderer.removeListener(CHANNELS.WINDOW_DISK_SPACE_STATUS, handler);
-    },
+    ) => _eventBusOn("window:disk-space-status", callback),
   },
 
   // Recovery API (used by recovery.html)
@@ -2575,11 +2540,7 @@ const api: ElectronAPI = {
   sound: {
     onTrigger: (callback: (payload: { soundFile: string; detune?: number }) => void) =>
       _typedOn(CHANNELS.SOUND_TRIGGER, callback),
-    onCancel: (callback: () => void) => {
-      const handler = () => callback();
-      ipcRenderer.on(CHANNELS.SOUND_CANCEL, handler);
-      return () => ipcRenderer.removeListener(CHANNELS.SOUND_CANCEL, handler);
-    },
+    onCancel: (callback: () => void) => _eventBusOn("sound:cancel", () => callback()),
     getSoundDir: (): Promise<string> => _unwrappingInvoke(CHANNELS.SOUND_GET_DIR),
   },
 
@@ -2676,25 +2637,7 @@ const api: ElectronAPI = {
         };
         confirmed?: boolean;
       }) => void
-    ) => {
-      const handler = (
-        _event: Electron.IpcRendererEvent,
-        payload: {
-          requestId: string;
-          actionId: string;
-          args?: Record<string, unknown>;
-          context: {
-            projectId?: string;
-            activeWorktreeId?: string;
-            focusedWorktreeId?: string;
-            focusedTerminalId?: string;
-          };
-          confirmed?: boolean;
-        }
-      ) => callback(payload);
-      ipcRenderer.on(CHANNELS.APP_AGENT_DISPATCH_ACTION_REQUEST, handler);
-      return () => ipcRenderer.removeListener(CHANNELS.APP_AGENT_DISPATCH_ACTION_REQUEST, handler);
-    },
+    ) => _eventBusOn("app-agent:dispatch-action-request", callback),
 
     // Send action dispatch response back to main process
     sendDispatchActionResponse: (payload: {
@@ -2711,20 +2654,7 @@ const api: ElectronAPI = {
         args?: Record<string, unknown>;
         danger: "safe" | "confirm" | "restricted";
       }) => void
-    ) => {
-      const handler = (
-        _event: Electron.IpcRendererEvent,
-        payload: {
-          requestId: string;
-          actionId: string;
-          actionName?: string;
-          args?: Record<string, unknown>;
-          danger: "safe" | "confirm" | "restricted";
-        }
-      ) => callback(payload);
-      ipcRenderer.on(CHANNELS.APP_AGENT_CONFIRMATION_REQUEST, handler);
-      return () => ipcRenderer.removeListener(CHANNELS.APP_AGENT_CONFIRMATION_REQUEST, handler);
-    },
+    ) => _eventBusOn("app-agent:confirmation-request", callback),
 
     // Send confirmation response back to main process
     sendConfirmationResponse: (payload: { requestId: string; approved: boolean }) =>
@@ -3018,16 +2948,8 @@ const api: ElectronAPI = {
       _unwrappingInvoke(CHANNELS.PLUGIN_ACTIONS_REGISTER, pluginId, contribution),
     unregisterAction: (pluginId: string, actionId: string) =>
       _unwrappingInvoke(CHANNELS.PLUGIN_ACTIONS_UNREGISTER, pluginId, actionId),
-    onActionsChanged: (callback: (payload: { actions: PluginActionDescriptor[] }) => void) => {
-      const handler = (
-        _event: Electron.IpcRendererEvent,
-        payload: { actions: PluginActionDescriptor[] }
-      ) => callback(payload);
-      ipcRenderer.on(CHANNELS.PLUGIN_ACTIONS_CHANGED, handler);
-      return () => {
-        ipcRenderer.removeListener(CHANNELS.PLUGIN_ACTIONS_CHANGED, handler);
-      };
-    },
+    onActionsChanged: (callback: (payload: { actions: PluginActionDescriptor[] }) => void) =>
+      _eventBusOn("plugin:actions-changed", callback),
   },
 
   crashRecovery: {
@@ -3176,9 +3098,11 @@ if (window.top === window && isTrustedRendererUrl(window.location.href)) {
   }
 }
 
-// Private listener: reclaim renderer memory when notified by the main process.
+/// Private listener: reclaim renderer memory when notified by the main process.
 // Not exposed through window.electron — this is an internal optimization.
-ipcRenderer.on(CHANNELS.WINDOW_RECLAIM_MEMORY, () => {
+// Subscribed through the shared events:push dispatcher so the underlying
+// ipcRenderer listener is ref-counted alongside user-facing subscribers.
+_eventBusOn("window:reclaim-memory", () => {
   webFrame.clearCache();
   (globalThis as unknown as { gc?: () => void }).gc?.();
 });

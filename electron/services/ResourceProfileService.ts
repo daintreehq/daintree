@@ -234,7 +234,7 @@ export class ResourceProfileService {
     // Broadcast to renderer
     try {
       const payload: ResourceProfilePayload = { profile, config };
-      broadcastToRenderer(CHANNELS.RESOURCE_PROFILE_CHANGED, payload);
+      broadcastToRenderer(CHANNELS.EVENTS_PUSH, { name: "resource:profile-changed", payload });
     } catch {
       // non-critical — window may be closing
     }

@@ -220,8 +220,9 @@ export class WorkspaceClient extends EventEmitter {
             entry.projectPath
           );
         }
-        this.sendToEntryWindows(entry, CHANNELS.WORKTREE_UPDATE, {
-          worktree,
+        this.sendToEntryWindows(entry, CHANNELS.EVENTS_PUSH, {
+          name: "worktree:update",
+          payload: { worktree },
         });
         this.emit("worktree-update", { worktree, projectPath: entry.projectPath });
         events.emit("sys:worktree:update", {

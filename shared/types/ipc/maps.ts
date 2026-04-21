@@ -2363,18 +2363,80 @@ export interface IpcEventMap {
     actions: import("../plugin.js").PluginActionDescriptor[];
   };
 
+  // Resource profile change (main → renderer)
+  "resource:profile-changed": import("../resourceProfile.js").ResourceProfilePayload;
+
+  // App-agent action dispatch/confirmation request events (main → renderer)
+  "app-agent:dispatch-action-request": {
+    requestId: string;
+    actionId: string;
+    args?: Record<string, unknown>;
+    context: {
+      projectId?: string;
+      activeWorktreeId?: string;
+      focusedWorktreeId?: string;
+      focusedTerminalId?: string;
+    };
+    confirmed?: boolean;
+  };
+  "app-agent:confirmation-request": {
+    requestId: string;
+    actionId: string;
+    actionName?: string;
+    args?: Record<string, unknown>;
+    danger: "safe" | "confirm" | "restricted";
+  };
+
   // Typed event bus envelope (multiplexed main → renderer for IpcEventBusMap)
   "events:push": EventBusEnvelope;
 }
 
 /**
- * Typed event bus map — a curated subset of IpcEventMap exposed to the renderer
- * via `window.electron.events.on(name, cb)`. Coexists with per-event channels
- * (e.g. CHANNELS.AGENT_STATE_CHANGED); this provides a single multiplexed surface
- * for new consumers and future migration targets. Extend by adding keys here
- * and subscribing the main-side bridge in `registerEventsHandlers`.
+ * Typed event bus map — the subset of IpcEventMap bridged through the multiplexed
+ * `events:push` channel and exposed to the renderer via
+ * `window.electron.events.on(name, cb)`.
+ *
+ * The main-side bridge in `registerEventsHandlers` enforces that every key here
+ * has a corresponding entry in `EVENT_BUS_BRIDGED_MANIFEST` via
+ * `satisfies Record<keyof IpcEventBusMap, ...>`. Extend both when adding events.
+ *
+ * Excluded by design: binary / high-frequency channels (`terminal:data`,
+ * `terminal:resource-metrics`, `logs:batch`) stay on dedicated channels or the
+ * MessagePort path — envelope wrapping would force base64 encoding and add JS
+ * dispatch overhead unsuitable for hundreds-of-events-per-second streams.
  */
-export type IpcEventBusMap = Pick<IpcEventMap, "agent:state-changed">;
+export type IpcEventBusMap = Pick<
+  IpcEventMap,
+  // Agent lifecycle (global broadcast)
+  | "agent:state-changed"
+  | "agent:all-clear"
+  | "agent:detected"
+  | "agent:exited"
+  | "agent:fallback-triggered"
+  // Worktree updates (window-scoped — routed via EVENTS_PUSH directly by sender)
+  | "worktree:update"
+  // Window lifecycle (window-scoped)
+  | "window:fullscreen-change"
+  | "window:reclaim-memory"
+  | "window:destroy-hidden-webviews"
+  | "window:disk-space-status"
+  // System wake (per-webContents)
+  | "system:wake"
+  // Resource profile (global broadcast)
+  | "resource:profile-changed"
+  // Sound cancel (global broadcast)
+  | "sound:cancel"
+  // App-agent dispatch/confirmation (window-scoped)
+  | "app-agent:dispatch-action-request"
+  | "app-agent:confirmation-request"
+  // Plugin action registry (global broadcast)
+  | "plugin:actions-changed"
+  // Terminal lifecycle (non-data) — exit, spawn-result, backend crash/ready
+  | "terminal:exit"
+  | "terminal:backend-crashed"
+  | "terminal:backend-ready"
+  | "terminal:spawn-result"
+>;
 
 /**
  * Envelope carried on CHANNELS.EVENTS_PUSH. Discriminated by `name` so the

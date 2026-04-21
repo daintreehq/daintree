@@ -1249,8 +1249,9 @@ describe("Plugin action registry", () => {
       kind: "command",
       danger: "safe",
     });
-    expect(broadcastToRendererMock).toHaveBeenCalledWith(CHANNELS.PLUGIN_ACTIONS_CHANGED, {
-      actions,
+    expect(broadcastToRendererMock).toHaveBeenCalledWith(CHANNELS.EVENTS_PUSH, {
+      name: "plugin:actions-changed",
+      payload: { actions },
     });
   });
 
@@ -1321,8 +1322,9 @@ describe("Plugin action registry", () => {
     service.unregisterPluginAction("acme.my-plugin", "acme.my-plugin.doThing");
 
     expect(service.listPluginActions()).toEqual([]);
-    expect(broadcastToRendererMock).toHaveBeenCalledWith(CHANNELS.PLUGIN_ACTIONS_CHANGED, {
-      actions: [],
+    expect(broadcastToRendererMock).toHaveBeenCalledWith(CHANNELS.EVENTS_PUSH, {
+      name: "plugin:actions-changed",
+      payload: { actions: [] },
     });
   });
 
@@ -1356,7 +1358,11 @@ describe("Plugin action registry", () => {
     expect(service.listPluginActions()).toEqual([]);
     // Exactly one broadcast for the bulk removal (no per-action spam)
     const broadcasts = broadcastToRendererMock.mock.calls.filter(
-      (call: unknown[]) => call[0] === CHANNELS.PLUGIN_ACTIONS_CHANGED
+      (call: unknown[]) =>
+        call[0] === CHANNELS.EVENTS_PUSH &&
+        typeof call[1] === "object" &&
+        call[1] !== null &&
+        (call[1] as { name?: unknown }).name === "plugin:actions-changed"
     );
     expect(broadcasts).toHaveLength(1);
   });
