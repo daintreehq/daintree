@@ -45,7 +45,6 @@ const { useFleetArmingStore } = await import("@/store/fleetArmingStore");
 const { useFleetPendingActionStore } = await import("@/store/fleetPendingActionStore");
 const { usePanelStore } = await import("@/store/panelStore");
 const { useFleetComposerStore } = await import("@/store/fleetComposerStore");
-const { useNotificationStore } = await import("@/store/notificationStore");
 const { terminalClient } = await import("@/clients");
 const { registerFleetActions } = await import("../fleetActions");
 const { executeFleetBroadcast } = await import("@/components/Fleet/fleetExecution");
@@ -392,9 +391,14 @@ describe("fleet.retryFailed action", () => {
     });
 
     vi.mocked(executeFleetBroadcast).mockResolvedValue({
+      total: 2,
       successCount: 2,
       failureCount: 0,
       failedIds: [],
+      perTarget: [
+        { terminalId: "a", status: "fulfilled" },
+        { terminalId: "b", status: "fulfilled" },
+      ],
     });
 
     const registry = await buildRegistry();
@@ -421,9 +425,14 @@ describe("fleet.retryFailed action", () => {
     });
 
     vi.mocked(executeFleetBroadcast).mockResolvedValue({
+      total: 2,
       successCount: 1,
       failureCount: 1,
       failedIds: ["b"],
+      perTarget: [
+        { terminalId: "a", status: "fulfilled" },
+        { terminalId: "b", status: "rejected" },
+      ],
     });
 
     const registry = await buildRegistry();
@@ -453,9 +462,14 @@ describe("fleet.retryFailed action", () => {
     });
 
     vi.mocked(executeFleetBroadcast).mockResolvedValue({
+      total: 2,
       successCount: 2,
       failureCount: 0,
       failedIds: [],
+      perTarget: [
+        { terminalId: "a", status: "fulfilled" },
+        { terminalId: "b", status: "fulfilled" },
+      ],
     });
 
     const registry = await buildRegistry();
@@ -473,9 +487,11 @@ describe("fleet.retryFailed action", () => {
     });
 
     vi.mocked(executeFleetBroadcast).mockResolvedValue({
+      total: 0,
       successCount: 0,
       failureCount: 0,
       failedIds: [],
+      perTarget: [],
     });
 
     const registry = await buildRegistry();
@@ -493,9 +509,11 @@ describe("fleet.retryFailed action", () => {
     });
 
     vi.mocked(executeFleetBroadcast).mockResolvedValue({
+      total: 0,
       successCount: 0,
       failureCount: 0,
       failedIds: [],
+      perTarget: [],
     });
 
     const registry = await buildRegistry();

@@ -17,7 +17,6 @@ import { useProjectStore } from "@/store/projectStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { terminalClient } from "@/clients";
 import { executeFleetBroadcast } from "@/components/Fleet/fleetExecution";
-import { useNotificationStore } from "@/store/notificationStore";
 import type { TerminalInstance } from "@shared/types";
 
 interface ArmedSnapshot {
