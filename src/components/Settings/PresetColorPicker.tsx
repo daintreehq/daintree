@@ -108,9 +108,12 @@ export function PresetColorPicker({
         data-testid="preset-color-picker-popover"
         onFocusOutside={(e) => {
           // NSColorPanel opens an OS-level window that steals renderer focus
-          // with no pointerdown event. Suppress Radix's focus-outside close
-          // while the native picker session is active so the input stays mounted.
-          if (customColorOpenRef.current) e.preventDefault();
+          // without firing a pointerdown. Suppress Radix's focus-outside close
+          // only while the guard is set AND the document has actually lost focus.
+          // The hasFocus check is a self-recovery: if the guard is stuck true
+          // (e.g., the OS picker never opened), normal in-window dismissals
+          // still work because they fire with document.hasFocus() === true.
+          if (customColorOpenRef.current && !document.hasFocus()) e.preventDefault();
         }}
       >
         <div className="grid grid-cols-5 gap-1">

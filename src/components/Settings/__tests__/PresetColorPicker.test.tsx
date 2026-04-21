@@ -101,14 +101,34 @@ describe("PresetColorPicker", () => {
   });
 
   it("Custom… suppresses focus-outside dismissal while the native picker is open", () => {
-    const { getByTestId } = render(
-      <PresetColorPicker color={undefined} onChange={onChange} agentColor="#888" />
-    );
-    fireEvent.click(getByTestId("preset-color-custom"));
-    expect(capturedOnFocusOutside).toBeDefined();
-    const preventDefault = vi.fn();
-    capturedOnFocusOutside!({ preventDefault });
-    expect(preventDefault).toHaveBeenCalledTimes(1);
+    const hasFocusSpy = vi.spyOn(document, "hasFocus").mockReturnValue(false);
+    try {
+      const { getByTestId } = render(
+        <PresetColorPicker color={undefined} onChange={onChange} agentColor="#888" />
+      );
+      fireEvent.click(getByTestId("preset-color-custom"));
+      expect(capturedOnFocusOutside).toBeDefined();
+      const preventDefault = vi.fn();
+      capturedOnFocusOutside!({ preventDefault });
+      expect(preventDefault).toHaveBeenCalledTimes(1);
+    } finally {
+      hasFocusSpy.mockRestore();
+    }
+  });
+
+  it("focus-outside dismissal is allowed when document still has focus (stuck-guard recovery)", () => {
+    const hasFocusSpy = vi.spyOn(document, "hasFocus").mockReturnValue(true);
+    try {
+      const { getByTestId } = render(
+        <PresetColorPicker color={undefined} onChange={onChange} agentColor="#888" />
+      );
+      fireEvent.click(getByTestId("preset-color-custom"));
+      const preventDefault = vi.fn();
+      capturedOnFocusOutside!({ preventDefault });
+      expect(preventDefault).not.toHaveBeenCalled();
+    } finally {
+      hasFocusSpy.mockRestore();
+    }
   });
 
   it("focus-outside dismissal is allowed again after a color is picked", () => {
