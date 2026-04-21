@@ -320,13 +320,26 @@ export const WorktreeCard = React.memo(function WorktreeCard({
     (t) => t.location === "grid" || t.location === undefined
   ).length;
   const dockCount = worktreeTerminals.filter((t) => t.location === "dock").length;
-  // Agent counts for the Sessions submenu's Select * items. `armAll("current")`
-  // filters to `isFleetArmEligible` (agent kind, has PTY, not trash/background),
-  // so the displayed count matches the set that would be armed. `working`
-  // includes both "working" and "running" to match `matchesPreset("working")`.
-  const eligibleAgentCount = worktreeTerminals.filter(isFleetArmEligible).length;
-  const waitingAgentCount = terminalCounts.byState.waiting;
-  const workingAgentCount = terminalCounts.byState.working + terminalCounts.byState.running;
+  // Agent counts for the Sessions submenu's Select * items. All three are
+  // derived from the same `isFleetArmEligible` subset (agent kind, has PTY,
+  // not trash/background) that `armAll`/`armByState` actually arm — otherwise
+  // the menu could show an enabled item that silently no-ops (e.g. a
+  // background-located waiting terminal). `working` includes both "working"
+  // and "running" to match `matchesPreset("working")`.
+  const eligibleAgents = useMemo(
+    () => worktreeTerminals.filter(isFleetArmEligible),
+    [worktreeTerminals]
+  );
+  const eligibleAgentCount = eligibleAgents.length;
+  const waitingAgentCount = useMemo(
+    () => eligibleAgents.filter((t) => t.agentState === "waiting").length,
+    [eligibleAgents]
+  );
+  const workingAgentCount = useMemo(
+    () =>
+      eligibleAgents.filter((t) => t.agentState === "working" || t.agentState === "running").length,
+    [eligibleAgents]
+  );
 
   const worktreeErrors = useErrorStore(
     useShallow((state) =>
