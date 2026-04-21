@@ -53,7 +53,8 @@ export function PresetColorPicker({
 
   const isValidHex = (value: string): value is `#${string}` => /^#[0-9a-f]{6}$/i.test(value);
 
-  const pickerValue = isValidHex(color) ? color : isValidHex(agentColor) ? agentColor : "#e06c75";
+  const pickerValue =
+    color && isValidHex(color) ? color : isValidHex(agentColor) ? agentColor : "#e06c75";
 
   const handleSelect = (next: string | undefined) => {
     onChange(next);
