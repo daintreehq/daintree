@@ -2,7 +2,7 @@ import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { usePanelStore } from "@/store/panelStore";
 import { terminalClient } from "@/clients";
 import { replaceRecipeVariables, type RecipeContext } from "@/utils/recipeVariables";
-import { buildFleetBroadcastRecipeContext } from "./fleetBroadcast";
+import { buildFleetBroadcastRecipeContext, resolveFleetBroadcastTargetIds } from "./fleetBroadcast";
 
 export interface FleetTargetPreview {
   terminalId: string;
@@ -121,6 +121,61 @@ export async function executeFleetBroadcast(
   const results = await Promise.allSettled(submissions);
   const perTarget: FleetExecutionResult["perTarget"] = results.map((r, i) => ({
     terminalId: ids[i]!,
+    status: r.status,
+    reason: r.status === "rejected" ? String(r.reason) : undefined,
+  }));
+
+  const successCount = results.filter((r) => r.status === "fulfilled").length;
+  const failedIds = perTarget.filter((t) => t.status === "rejected").map((t) => t.terminalId);
+
+  return {
+    total: results.length,
+    successCount,
+    failureCount: results.length - successCount,
+    perTarget,
+    failedIds,
+  };
+}
+
+/**
+ * Fire-and-forget fan-out of a raw terminal byte sequence to each target via
+ * the MessagePort write path. Used by the live keystroke capture — keys like
+ * Enter (`\r`), Backspace (`\x7f`), or arrow-key CSI sequences go straight to
+ * the PTY without recipe-variable substitution or bracketed-paste wrapping.
+ *
+ * Targets are re-resolved fresh when omitted so trashed/exited terminals drop
+ * out silently between keystrokes.
+ */
+export function broadcastFleetKeySequence(sequence: string, targetIds?: string[]): void {
+  const ids = targetIds ?? resolveFleetBroadcastTargetIds();
+  for (const id of ids) {
+    terminalClient.write(id, sequence);
+  }
+}
+
+/**
+ * Literal broadcast for pasted text — routes each target through
+ * `terminalClient.submit` so the backend wraps the payload in bracketed paste
+ * (`\e[200~…\e[201~`) when the PTY supports it. Skips recipe-variable
+ * substitution because paste is a verbatim keyboard event, not a composed
+ * prompt template.
+ */
+export async function broadcastFleetLiteralPaste(
+  text: string,
+  targetIds?: string[]
+): Promise<FleetExecutionResult> {
+  const ids = targetIds ?? resolveFleetBroadcastTargetIds();
+  const submissions: Promise<void>[] = [];
+  const collected: string[] = [];
+
+  for (const id of ids) {
+    collected.push(id);
+    submissions.push(terminalClient.submit(id, text));
+  }
+
+  const results = await Promise.allSettled(submissions);
+  const perTarget: FleetExecutionResult["perTarget"] = results.map((r, i) => ({
+    terminalId: collected[i]!,
     status: r.status,
     reason: r.status === "rejected" ? String(r.reason) : undefined,
   }));

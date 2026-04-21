@@ -6,13 +6,12 @@ import { FleetComposer } from "../FleetComposer";
 import { useFleetComposerStore } from "@/store/fleetComposerStore";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { usePanelStore } from "@/store/panelStore";
-import { useCommandHistoryStore } from "@/store/commandHistoryStore";
 import { useNotificationStore } from "@/store/notificationStore";
 import { setCurrentViewStore } from "@/store/createWorktreeStore";
 import type { WorktreeViewState, WorktreeViewActions } from "@/store/createWorktreeStore";
-import { FLEET_BROADCAST_HISTORY_KEY } from "../fleetBroadcast";
 import type { TerminalInstance, WorktreeSnapshot } from "@shared/types";
 
+const writeMock = vi.fn<(id: string, data: string) => void>();
 const submitMock = vi.fn<(id: string, text: string) => Promise<void>>();
 
 vi.mock("@/clients", async (importOriginal) => {
@@ -21,6 +20,7 @@ vi.mock("@/clients", async (importOriginal) => {
     ...actual,
     terminalClient: {
       ...actual.terminalClient,
+      write: (id: string, data: string) => writeMock(id, data),
       submit: (id: string, text: string) => submitMock(id, text),
     },
   };
@@ -85,7 +85,6 @@ function resetAll(worktreeId = "wt-1") {
   });
   useFleetComposerStore.setState({ draft: "" });
   usePanelStore.setState({ panelsById: {}, panelIds: [] });
-  useCommandHistoryStore.setState({ history: {} });
   useNotificationStore.setState({ notifications: [] });
 
   const worktrees = new Map<string, WorktreeSnapshot>();
@@ -107,8 +106,33 @@ function armTwo() {
   useFleetArmingStore.getState().armIds(["t1", "t2"]);
 }
 
-describe("FleetComposer", () => {
+function dispatchKeyDown(
+  el: HTMLElement,
+  init: KeyboardEventInit & { keyCode?: number }
+): KeyboardEvent {
+  const event = new KeyboardEvent("keydown", {
+    bubbles: true,
+    cancelable: true,
+    ...init,
+  });
+  if (typeof init.keyCode === "number") {
+    Object.defineProperty(event, "keyCode", { value: init.keyCode });
+  }
+  el.dispatchEvent(event);
+  return event;
+}
+
+function writesByTarget(): Record<string, string[]> {
+  const out: Record<string, string[]> = {};
+  for (const [id, seq] of writeMock.mock.calls) {
+    (out[id] ??= []).push(seq);
+  }
+  return out;
+}
+
+describe("FleetComposer (live keystroke capture)", () => {
   beforeEach(() => {
+    writeMock.mockReset();
     submitMock.mockReset();
     submitMock.mockResolvedValue(undefined);
     resetAll();
@@ -130,280 +154,299 @@ describe("FleetComposer", () => {
     expect(document.activeElement).not.toBe(textarea);
   });
 
-  it("submits on plain Enter to all armed targets", async () => {
+  it("shows a Live indicator instead of a Send button", () => {
     armTwo();
     render(<FleetComposer />);
-    const textarea = screen.getByTestId("fleet-composer-textarea") as HTMLTextAreaElement;
-
-    fireEvent.change(textarea, { target: { value: "run tests" } });
-    fireEvent.keyDown(textarea, { key: "Enter" });
-
-    await waitFor(() => expect(submitMock).toHaveBeenCalledTimes(2));
-    expect(submitMock.mock.calls.map(([id]) => id).sort()).toEqual(["t1", "t2"]);
-    expect(submitMock.mock.calls[0]![1]).toBe("run tests");
+    expect(screen.getByTestId("fleet-composer-live-indicator")).toBeTruthy();
+    expect(screen.queryByTestId("fleet-composer-send")).toBeNull();
   });
 
-  it("does not submit while IME is composing", () => {
+  it("forwards a printable character to every armed target", () => {
     armTwo();
     render(<FleetComposer />);
     const textarea = screen.getByTestId("fleet-composer-textarea") as HTMLTextAreaElement;
 
-    fireEvent.change(textarea, { target: { value: "中文" } });
-    // React synthetic event exposes nativeEvent.isComposing.
-    fireEvent.keyDown(textarea, { key: "Enter", isComposing: true });
+    dispatchKeyDown(textarea, { key: "a" });
 
-    expect(submitMock).not.toHaveBeenCalled();
+    expect(writeMock).toHaveBeenCalledTimes(2);
+    expect(writesByTarget()).toEqual({ t1: ["a"], t2: ["a"] });
+    expect(useFleetComposerStore.getState().draft).toBe("a");
   });
 
-  it("Shift+Enter does not submit and does not prevent default (newline passes through)", () => {
+  it("forwards Enter as \\r without opening a submit/confirm flow", () => {
     armTwo();
     render(<FleetComposer />);
     const textarea = screen.getByTestId("fleet-composer-textarea") as HTMLTextAreaElement;
 
-    fireEvent.change(textarea, { target: { value: "line 1" } });
-    const e = fireEvent.keyDown(textarea, { key: "Enter", shiftKey: true });
+    dispatchKeyDown(textarea, { key: "Enter" });
 
+    expect(writesByTarget()).toEqual({ t1: ["\r"], t2: ["\r"] });
     expect(submitMock).not.toHaveBeenCalled();
-    expect(e).toBe(true); // default not prevented
+    // Newline reflected in visible draft for legibility.
+    expect(useFleetComposerStore.getState().draft).toBe("\n");
   });
 
-  it("opens confirmation strip for multi-line text and does not send", () => {
+  it("forwards Backspace as \\x7f and pops the last visible character", () => {
+    armTwo();
+    useFleetComposerStore.setState({ draft: "abc" });
+    render(<FleetComposer />);
+    const textarea = screen.getByTestId("fleet-composer-textarea") as HTMLTextAreaElement;
+
+    dispatchKeyDown(textarea, { key: "Backspace" });
+
+    expect(writesByTarget()).toEqual({ t1: ["\x7f"], t2: ["\x7f"] });
+    expect(useFleetComposerStore.getState().draft).toBe("ab");
+  });
+
+  it("forwards Tab as \\t and prevents focus movement", () => {
+    armTwo();
+    render(<FleetComposer />);
+    const textarea = screen.getByTestId("fleet-composer-textarea") as HTMLTextAreaElement;
+    textarea.focus();
+
+    const event = dispatchKeyDown(textarea, { key: "Tab" });
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(writesByTarget()).toEqual({ t1: ["\t"], t2: ["\t"] });
+  });
+
+  it("forwards Esc as \\x1b and does NOT clear the draft", () => {
+    armTwo();
+    useFleetComposerStore.setState({ draft: "typing" });
+    render(<FleetComposer />);
+    const textarea = screen.getByTestId("fleet-composer-textarea") as HTMLTextAreaElement;
+
+    dispatchKeyDown(textarea, { key: "Escape" });
+
+    expect(writesByTarget()).toEqual({ t1: ["\x1b"], t2: ["\x1b"] });
+    expect(useFleetComposerStore.getState().draft).toBe("typing");
+  });
+
+  it.each([
+    ["ArrowUp", "\x1b[A"],
+    ["ArrowDown", "\x1b[B"],
+    ["ArrowRight", "\x1b[C"],
+    ["ArrowLeft", "\x1b[D"],
+    ["Home", "\x1b[H"],
+    ["End", "\x1b[F"],
+    ["Delete", "\x1b[3~"],
+    ["PageUp", "\x1b[5~"],
+    ["PageDown", "\x1b[6~"],
+  ])("forwards %s as the expected CSI sequence", (key, expectedSeq) => {
     armTwo();
     render(<FleetComposer />);
     const textarea = screen.getByTestId("fleet-composer-textarea") as HTMLTextAreaElement;
 
-    fireEvent.change(textarea, { target: { value: "one\ntwo" } });
-    fireEvent.keyDown(textarea, { key: "Enter" });
+    dispatchKeyDown(textarea, { key });
 
-    expect(submitMock).not.toHaveBeenCalled();
+    expect(writesByTarget()).toEqual({ t1: [expectedSeq], t2: [expectedSeq] });
+  });
+
+  it("forwards Ctrl+C as 0x03 and other control chars correctly", () => {
+    armTwo();
+    render(<FleetComposer />);
+    const textarea = screen.getByTestId("fleet-composer-textarea") as HTMLTextAreaElement;
+
+    dispatchKeyDown(textarea, { key: "c", ctrlKey: true });
+    dispatchKeyDown(textarea, { key: "d", ctrlKey: true });
+
+    const byTarget = writesByTarget();
+    expect(byTarget.t1).toEqual(["\x03", "\x04"]);
+    expect(byTarget.t2).toEqual(["\x03", "\x04"]);
+  });
+
+  it("does NOT forward when IME composition is active", () => {
+    armTwo();
+    render(<FleetComposer />);
+    const textarea = screen.getByTestId("fleet-composer-textarea") as HTMLTextAreaElement;
+
+    dispatchKeyDown(textarea, { key: "Process", keyCode: 229 });
+    dispatchKeyDown(textarea, { key: "a", isComposing: true });
+
+    expect(writeMock).not.toHaveBeenCalled();
+  });
+
+  it("forwards finalized composed text on compositionend and appends to draft", () => {
+    armTwo();
+    render(<FleetComposer />);
+    const textarea = screen.getByTestId("fleet-composer-textarea") as HTMLTextAreaElement;
+
+    fireEvent.compositionStart(textarea);
+    // Keydown during composition — must be suppressed.
+    dispatchKeyDown(textarea, { key: "Enter", isComposing: true });
+    fireEvent.compositionEnd(textarea, { data: "中文" });
+
+    expect(writeMock).toHaveBeenCalledTimes(2);
+    expect(writesByTarget()).toEqual({ t1: ["中文"], t2: ["中文"] });
+    expect(useFleetComposerStore.getState().draft).toBe("中文");
+  });
+
+  it("ignores Cmd-modified keys so browser shortcuts (Cmd+C/V) are untouched", () => {
+    armTwo();
+    render(<FleetComposer />);
+    const textarea = screen.getByTestId("fleet-composer-textarea") as HTMLTextAreaElement;
+
+    dispatchKeyDown(textarea, { key: "c", metaKey: true });
+    dispatchKeyDown(textarea, { key: "v", metaKey: true });
+
+    expect(writeMock).not.toHaveBeenCalled();
+  });
+
+  it("skips modifier-only keydown presses", () => {
+    armTwo();
+    render(<FleetComposer />);
+    const textarea = screen.getByTestId("fleet-composer-textarea") as HTMLTextAreaElement;
+
+    dispatchKeyDown(textarea, { key: "Shift" });
+    dispatchKeyDown(textarea, { key: "Control" });
+    dispatchKeyDown(textarea, { key: "Alt" });
+    dispatchKeyDown(textarea, { key: "Meta" });
+
+    expect(writeMock).not.toHaveBeenCalled();
+  });
+
+  it("re-resolves targets per keystroke so trashed terminals drop out silently", () => {
+    armTwo();
+    render(<FleetComposer />);
+    const textarea = screen.getByTestId("fleet-composer-textarea") as HTMLTextAreaElement;
+
+    dispatchKeyDown(textarea, { key: "a" });
+    // Now trash t2 mid-stream.
+    usePanelStore.setState({
+      panelsById: {
+        t1: makeAgent("t1"),
+        t2: makeAgent("t2", { location: "trash" }),
+      },
+    });
+    dispatchKeyDown(textarea, { key: "b" });
+
+    expect(writeMock).toHaveBeenCalledTimes(3);
+    expect(writesByTarget()).toEqual({ t1: ["a", "b"], t2: ["a"] });
+  });
+
+  it("shows a passive destructive warning while streaming chars through", () => {
+    armTwo();
+    useFleetComposerStore.setState({ draft: "rm -rf node_modules" });
+    render(<FleetComposer />);
+
     const strip = screen.getByTestId("fleet-composer-confirm");
-    expect(strip).toBeTruthy();
+    expect(strip.getAttribute("data-mode")).toBe("passive");
     expect(strip.getAttribute("role")).toBe("status");
-    expect(strip.getAttribute("aria-live")).toBe("polite");
-    expect(strip.getAttribute("aria-atomic")).toBe("true");
+    expect(screen.queryByTestId("fleet-composer-confirm-send")).toBeNull();
   });
 
-  it("opens confirmation strip for destructive command", () => {
+  it("backspacing through the destructive pattern hides the warning", async () => {
+    armTwo();
+    useFleetComposerStore.setState({ draft: "rm -rf " });
+    render(<FleetComposer />);
+    expect(screen.getByTestId("fleet-composer-confirm")).toBeTruthy();
+
+    const textarea = screen.getByTestId("fleet-composer-textarea") as HTMLTextAreaElement;
+    // Four backspaces defuse "rm -rf " down to "rm ".
+    for (let i = 0; i < 4; i++) dispatchKeyDown(textarea, { key: "Backspace" });
+
+    await waitFor(() => expect(useFleetComposerStore.getState().draft).toBe("rm "));
+    await waitFor(() => expect(screen.queryByTestId("fleet-composer-confirm")).toBeNull());
+  });
+
+  it("benign paste submits atomically via bracketed-paste and appends to draft", () => {
     armTwo();
     render(<FleetComposer />);
     const textarea = screen.getByTestId("fleet-composer-textarea") as HTMLTextAreaElement;
 
-    fireEvent.change(textarea, { target: { value: "rm -rf node_modules" } });
-    fireEvent.keyDown(textarea, { key: "Enter" });
+    fireEvent.paste(textarea, {
+      clipboardData: {
+        getData: (type: string) => (type === "text/plain" ? "hello" : ""),
+      },
+    });
+
+    expect(submitMock).toHaveBeenCalledTimes(2);
+    expect(submitMock.mock.calls.map(([id]) => id).sort()).toEqual(["t1", "t2"]);
+    expect(submitMock.mock.calls[0]![1]).toBe("hello");
+    expect(writeMock).not.toHaveBeenCalled();
+    expect(useFleetComposerStore.getState().draft).toBe("hello");
+  });
+
+  it("destructive paste opens the confirm strip and does NOT submit until confirmed", async () => {
+    armTwo();
+    render(<FleetComposer />);
+    const textarea = screen.getByTestId("fleet-composer-textarea") as HTMLTextAreaElement;
+
+    fireEvent.paste(textarea, {
+      clipboardData: {
+        getData: (type: string) => (type === "text/plain" ? "rm -rf dist" : ""),
+      },
+    });
 
     expect(submitMock).not.toHaveBeenCalled();
-    expect(screen.getByTestId("fleet-composer-confirm")).toBeTruthy();
-  });
+    const strip = await screen.findByTestId("fleet-composer-confirm");
+    expect(strip.getAttribute("data-mode")).toBe("paste-confirm");
+    expect(strip.getAttribute("role")).toBe("alertdialog");
 
-  it("Cmd+Enter bypasses confirmation and force-sends", async () => {
-    armTwo();
-    render(<FleetComposer />);
-    const textarea = screen.getByTestId("fleet-composer-textarea") as HTMLTextAreaElement;
-
-    fireEvent.change(textarea, { target: { value: "rm -rf node_modules" } });
-    fireEvent.keyDown(textarea, { key: "Enter", metaKey: true });
+    const confirm = screen.getByTestId("fleet-composer-confirm-send");
+    fireEvent.click(confirm);
 
     await waitFor(() => expect(submitMock).toHaveBeenCalledTimes(2));
-    expect(submitMock.mock.calls[0]![1]).toBe("rm -rf node_modules");
+    expect(submitMock.mock.calls[0]![1]).toBe("rm -rf dist");
+    await waitFor(() => expect(useFleetComposerStore.getState().draft).toBe("rm -rf dist"));
+    // After confirming, the paste strip closes but the typed-draft warning stays passive
+    // because the draft now contains "rm -rf dist" — so the strip should flip to passive mode.
+    await waitFor(() => {
+      const strip = screen.queryByTestId("fleet-composer-confirm");
+      expect(strip?.getAttribute("data-mode")).toBe("passive");
+    });
   });
 
-  it("Ctrl+Enter also force-sends (Windows/Linux parity)", async () => {
+  it("cancelling a pending paste drops the payload and keeps the draft untouched", async () => {
+    armTwo();
+    useFleetComposerStore.setState({ draft: "before" });
+    render(<FleetComposer />);
+    const textarea = screen.getByTestId("fleet-composer-textarea") as HTMLTextAreaElement;
+
+    fireEvent.paste(textarea, {
+      clipboardData: {
+        getData: (type: string) => (type === "text/plain" ? "rm -rf /" : ""),
+      },
+    });
+
+    fireEvent.click(await screen.findByTestId("fleet-composer-confirm-cancel"));
+
+    expect(submitMock).not.toHaveBeenCalled();
+    expect(useFleetComposerStore.getState().draft).toBe("before");
+    expect(screen.queryByTestId("fleet-composer-confirm")).toBeNull();
+  });
+
+  it("Escape inside a pending paste strip cancels the paste", async () => {
     armTwo();
     render(<FleetComposer />);
     const textarea = screen.getByTestId("fleet-composer-textarea") as HTMLTextAreaElement;
 
-    fireEvent.change(textarea, { target: { value: "rm -rf node_modules" } });
-    fireEvent.keyDown(textarea, { key: "Enter", ctrlKey: true });
+    fireEvent.paste(textarea, {
+      clipboardData: {
+        getData: (type: string) => (type === "text/plain" ? "sudo shutdown now" : ""),
+      },
+    });
+    const strip = await screen.findByTestId("fleet-composer-confirm");
+    fireEvent.keyDown(strip, { key: "Escape" });
 
-    await waitFor(() => expect(submitMock).toHaveBeenCalledTimes(2));
-  });
-
-  it("Cancel in confirmation strip returns focus to textarea and does not send", async () => {
-    armTwo();
-    render(<FleetComposer />);
-    const textarea = screen.getByTestId("fleet-composer-textarea") as HTMLTextAreaElement;
-
-    fireEvent.change(textarea, { target: { value: "line1\nline2" } });
-    fireEvent.keyDown(textarea, { key: "Enter" });
-
-    const cancel = screen.getByTestId("fleet-composer-confirm-cancel");
-    expect(document.activeElement).toBe(cancel);
-
-    fireEvent.click(cancel);
     expect(screen.queryByTestId("fleet-composer-confirm")).toBeNull();
     expect(submitMock).not.toHaveBeenCalled();
-    expect(useFleetComposerStore.getState().draft).toBe("line1\nline2");
-    expect(document.activeElement).toBe(textarea);
   });
 
-  it("Send anyway in confirmation strip submits to all armed targets", async () => {
-    armTwo();
-    render(<FleetComposer />);
-    const textarea = screen.getByTestId("fleet-composer-textarea") as HTMLTextAreaElement;
-
-    fireEvent.change(textarea, { target: { value: "line1\nline2" } });
-    fireEvent.keyDown(textarea, { key: "Enter" });
-
-    fireEvent.click(screen.getByTestId("fleet-composer-confirm-send"));
-    await waitFor(() => expect(submitMock).toHaveBeenCalledTimes(2));
-  });
-
-  it("Escape with non-empty draft clears draft and stops propagation", () => {
-    armTwo();
-    render(<FleetComposer />);
-    const textarea = screen.getByTestId("fleet-composer-textarea") as HTMLTextAreaElement;
-
-    fireEvent.change(textarea, { target: { value: "typing" } });
-    const result = fireEvent.keyDown(textarea, { key: "Escape" });
-
-    expect(useFleetComposerStore.getState().draft).toBe("");
-    expect(result).toBe(false); // preventDefault was called
-  });
-
-  it("Escape with empty draft does NOT stop propagation (bubbles to arming)", () => {
-    armTwo();
-    render(<FleetComposer />);
-    const textarea = screen.getByTestId("fleet-composer-textarea") as HTMLTextAreaElement;
-
-    const result = fireEvent.keyDown(textarea, { key: "Escape" });
-    expect(result).toBe(true); // default not prevented — bubbles through
-  });
-
-  it("ArrowUp at caret 0 walks history backward", () => {
-    armTwo();
-    useCommandHistoryStore.setState({
-      history: {
-        [FLEET_BROADCAST_HISTORY_KEY]: [
-          { id: "1", prompt: "newer", agentId: null, addedAt: 2 },
-          { id: "2", prompt: "older", agentId: null, addedAt: 1 },
-        ],
-      },
-    });
-    render(<FleetComposer />);
-    const textarea = screen.getByTestId("fleet-composer-textarea") as HTMLTextAreaElement;
-    textarea.setSelectionRange(0, 0);
-
-    fireEvent.keyDown(textarea, { key: "ArrowUp" });
-    expect(useFleetComposerStore.getState().draft).toBe("newer");
-
-    fireEvent.keyDown(textarea, { key: "ArrowUp" });
-    expect(useFleetComposerStore.getState().draft).toBe("older");
-  });
-
-  it("ArrowDown restores the unsent snapshot when walking past the newest entry", () => {
-    armTwo();
-    useCommandHistoryStore.setState({
-      history: {
-        [FLEET_BROADCAST_HISTORY_KEY]: [{ id: "1", prompt: "earlier", agentId: null, addedAt: 1 }],
-      },
-    });
-    render(<FleetComposer />);
-    const textarea = screen.getByTestId("fleet-composer-textarea") as HTMLTextAreaElement;
-
-    fireEvent.change(textarea, { target: { value: "unsent draft" } });
-    textarea.setSelectionRange(0, 0);
-    fireEvent.keyDown(textarea, { key: "ArrowUp" });
-    expect(useFleetComposerStore.getState().draft).toBe("earlier");
-
-    textarea.setSelectionRange(textarea.value.length, textarea.value.length);
-    fireEvent.keyDown(textarea, { key: "ArrowDown" });
-    expect(useFleetComposerStore.getState().draft).toBe("unsent draft");
-  });
-
-  it("records history and clears draft after successful send", async () => {
-    armTwo();
-    render(<FleetComposer />);
-    const textarea = screen.getByTestId("fleet-composer-textarea") as HTMLTextAreaElement;
-
-    fireEvent.change(textarea, { target: { value: "run tests" } });
-    fireEvent.keyDown(textarea, { key: "Enter" });
-
-    await waitFor(() => expect(submitMock).toHaveBeenCalledTimes(2));
-    await waitFor(() => expect(useFleetComposerStore.getState().draft).toBe(""));
-
-    const history = useCommandHistoryStore
-      .getState()
-      .getProjectHistory(FLEET_BROADCAST_HISTORY_KEY);
-    expect(history.map((h) => h.prompt)).toContain("run tests");
-  });
-
-  it("resolves {{branch_name}} variable per-terminal before submit", async () => {
-    usePanelStore.setState({
-      panelsById: {
-        a: makeAgent("a", { worktreeId: "wt-1" }),
-        b: makeAgent("b", { worktreeId: "wt-2" }),
-      },
-      panelIds: ["a", "b"],
-    });
-    const worktrees = new Map<string, WorktreeSnapshot>();
-    worktrees.set("wt-1", makeWorktree("wt-1", { branch: "feature/x", path: "/w/1" }));
-    worktrees.set("wt-2", makeWorktree("wt-2", { branch: "feature/y", path: "/w/2" }));
-    installViewStore(worktrees);
-    useFleetArmingStore.getState().armIds(["a", "b"]);
-
-    render(<FleetComposer />);
-    const textarea = screen.getByTestId("fleet-composer-textarea") as HTMLTextAreaElement;
-    fireEvent.change(textarea, { target: { value: "checkout {{branch_name}}" } });
-    fireEvent.keyDown(textarea, { key: "Enter" });
-
-    await waitFor(() => expect(submitMock).toHaveBeenCalledTimes(2));
-    const byId = Object.fromEntries(submitMock.mock.calls.map(([id, text]) => [id, text]));
-    expect(byId.a).toBe("checkout feature/x");
-    expect(byId.b).toBe("checkout feature/y");
-  });
-
-  it("drops silently-exited targets at submit time and toasts the actual count", async () => {
-    usePanelStore.setState({
-      panelsById: {
-        a: makeAgent("a"),
-        dead: makeAgent("dead", { location: "trash" }),
-      },
-      panelIds: ["a", "dead"],
-    });
-    useFleetArmingStore.getState().armIds(["a", "dead"]);
-
-    render(<FleetComposer />);
-    const textarea = screen.getByTestId("fleet-composer-textarea") as HTMLTextAreaElement;
-    fireEvent.change(textarea, { target: { value: "hello" } });
-    fireEvent.keyDown(textarea, { key: "Enter" });
-
-    await waitFor(() => expect(submitMock).toHaveBeenCalledTimes(1));
-    expect(submitMock.mock.calls[0]![0]).toBe("a");
-    await waitFor(() => {
-      const last = useNotificationStore.getState().notifications.at(-1)?.message ?? "";
-      expect(last).toBe("Sent to 1 agent");
-    });
-  });
-
-  it("does NOT clear draft when no live targets remain at submit", async () => {
-    usePanelStore.setState({
-      panelsById: { dead: makeAgent("dead", { location: "trash" }) },
-      panelIds: ["dead"],
-    });
-    useFleetArmingStore.getState().armIds(["dead"]);
-
-    render(<FleetComposer />);
-    const textarea = screen.getByTestId("fleet-composer-textarea") as HTMLTextAreaElement;
-    fireEvent.change(textarea, { target: { value: "please keep" } });
-    fireEvent.keyDown(textarea, { key: "Enter" });
-
-    // allow microtasks to flush
-    await act(async () => {
-      await Promise.resolve();
-    });
-    expect(submitMock).not.toHaveBeenCalled();
-    expect(useFleetComposerStore.getState().draft).toBe("please keep");
-  });
-
-  it("partial failure surfaces the correct toast count", async () => {
+  it("partial paste failure surfaces the correct toast count", async () => {
     submitMock.mockReset();
     submitMock.mockImplementationOnce(() => Promise.resolve());
     submitMock.mockImplementationOnce(() => Promise.reject(new Error("boom")));
     armTwo();
     render(<FleetComposer />);
     const textarea = screen.getByTestId("fleet-composer-textarea") as HTMLTextAreaElement;
-    fireEvent.change(textarea, { target: { value: "x" } });
-    fireEvent.keyDown(textarea, { key: "Enter" });
+
+    fireEvent.paste(textarea, {
+      clipboardData: {
+        getData: (type: string) => (type === "text/plain" ? "rm -rf x" : ""),
+      },
+    });
+    fireEvent.click(await screen.findByTestId("fleet-composer-confirm-send"));
 
     await waitFor(() => {
       const last = useNotificationStore.getState().notifications.at(-1)?.message ?? "";
@@ -411,157 +454,81 @@ describe("FleetComposer", () => {
     });
   });
 
-  it("auto-clears draft when armedCount returns to zero", () => {
+  it("isComposingRef suppresses plain keydown between compositionstart and compositionend", () => {
     armTwo();
     render(<FleetComposer />);
     const textarea = screen.getByTestId("fleet-composer-textarea") as HTMLTextAreaElement;
-    fireEvent.change(textarea, { target: { value: "typing" } });
+
+    fireEvent.compositionStart(textarea);
+    // Plain keydown with NO isComposing flag and NO keyCode 229 — only the
+    // isComposingRef.current guard (set by compositionstart) should block it.
+    dispatchKeyDown(textarea, { key: "a" });
+    expect(writeMock).not.toHaveBeenCalled();
+
+    fireEvent.compositionEnd(textarea, { data: "あ" });
+    expect(writeMock).toHaveBeenCalledTimes(2);
+    expect(writesByTarget()).toEqual({ t1: ["あ"], t2: ["あ"] });
+  });
+
+  it("removes raw DOM listeners on unmount (no leak across remount)", () => {
+    armTwo();
+    const { unmount } = render(<FleetComposer />);
+    const firstTextarea = screen.getByTestId("fleet-composer-textarea") as HTMLTextAreaElement;
+    unmount();
+
+    // Fire at the detached node — should be a no-op now.
+    dispatchKeyDown(firstTextarea, { key: "a" });
+    expect(writeMock).not.toHaveBeenCalled();
+
+    render(<FleetComposer />);
+    const secondTextarea = screen.getByTestId("fleet-composer-textarea") as HTMLTextAreaElement;
+    dispatchKeyDown(secondTextarea, { key: "b" });
+
+    // Exactly one keystroke × two targets — not four (which would signal leaked listeners).
+    expect(writeMock).toHaveBeenCalledTimes(2);
+    expect(writesByTarget()).toEqual({ t1: ["b"], t2: ["b"] });
+  });
+
+  it("shows a toast when a benign paste fails for every target", async () => {
+    submitMock.mockReset();
+    submitMock.mockRejectedValue(new Error("port closed"));
+    armTwo();
+    render(<FleetComposer />);
+    const textarea = screen.getByTestId("fleet-composer-textarea") as HTMLTextAreaElement;
+
+    fireEvent.paste(textarea, {
+      clipboardData: {
+        getData: (type: string) => (type === "text/plain" ? "hello" : ""),
+      },
+    });
+
+    await waitFor(() => {
+      const last = useNotificationStore.getState().notifications.at(-1)?.message ?? "";
+      expect(last).toBe("Paste failed — no agents received the payload");
+    });
+  });
+
+  it("AltGr composed characters are forwarded (Ctrl+Alt+printable)", () => {
+    armTwo();
+    render(<FleetComposer />);
+    const textarea = screen.getByTestId("fleet-composer-textarea") as HTMLTextAreaElement;
+
+    // German layout: AltGr+Q produces "@" with ctrlKey=true AND altKey=true.
+    dispatchKeyDown(textarea, { key: "@", ctrlKey: true, altKey: true });
+
+    expect(writesByTarget()).toEqual({ t1: ["@"], t2: ["@"] });
+    expect(useFleetComposerStore.getState().draft).toBe("@");
+  });
+
+  it("auto-clears draft when armedCount returns to zero", () => {
+    armTwo();
+    useFleetComposerStore.setState({ draft: "typing" });
+    render(<FleetComposer />);
     expect(useFleetComposerStore.getState().draft).toBe("typing");
 
     act(() => {
       useFleetArmingStore.getState().clear();
     });
     expect(useFleetComposerStore.getState().draft).toBe("");
-  });
-
-  it("disables send button when draft is blank", () => {
-    armTwo();
-    render(<FleetComposer />);
-    const send = screen.getByTestId("fleet-composer-send") as HTMLButtonElement;
-    expect(send.disabled).toBe(true);
-
-    const textarea = screen.getByTestId("fleet-composer-textarea") as HTMLTextAreaElement;
-    fireEvent.change(textarea, { target: { value: "hi" } });
-    expect(send.disabled).toBe(false);
-  });
-
-  it("all submits reject — toasts 0 success / N failed, draft retained, history not recorded", async () => {
-    submitMock.mockReset();
-    submitMock.mockRejectedValue(new Error("boom"));
-    armTwo();
-    render(<FleetComposer />);
-    const textarea = screen.getByTestId("fleet-composer-textarea") as HTMLTextAreaElement;
-    fireEvent.change(textarea, { target: { value: "fail it" } });
-    fireEvent.keyDown(textarea, { key: "Enter" });
-
-    await waitFor(() => expect(submitMock).toHaveBeenCalledTimes(2));
-    await waitFor(() => {
-      const last = useNotificationStore.getState().notifications.at(-1)?.message ?? "";
-      expect(last).toBe("Sent to 0 agents (2 failed)");
-    });
-    expect(useFleetComposerStore.getState().draft).toBe("fail it");
-    const history = useCommandHistoryStore
-      .getState()
-      .getProjectHistory(FLEET_BROADCAST_HISTORY_KEY);
-    expect(history.map((h) => h.prompt)).not.toContain("fail it");
-
-    // Send button is usable again after failure.
-    const send = screen.getByTestId("fleet-composer-send") as HTMLButtonElement;
-    expect(send.disabled).toBe(false);
-  });
-
-  it("double-click 'Send anyway' only enqueues one batch (re-entrancy guard)", async () => {
-    const resolvers: Array<() => void> = [];
-    submitMock.mockReset();
-    submitMock.mockImplementation(
-      () =>
-        new Promise<void>((r) => {
-          resolvers.push(r);
-        })
-    );
-    armTwo();
-    render(<FleetComposer />);
-    const textarea = screen.getByTestId("fleet-composer-textarea") as HTMLTextAreaElement;
-    fireEvent.change(textarea, { target: { value: "multi\nline" } });
-    fireEvent.keyDown(textarea, { key: "Enter" });
-
-    const confirmSend = await screen.findByTestId("fleet-composer-confirm-send");
-    fireEvent.click(confirmSend);
-    fireEvent.click(confirmSend);
-    fireEvent.click(confirmSend);
-
-    // Exactly 2 submit calls — one per armed terminal — not 6.
-    expect(submitMock).toHaveBeenCalledTimes(2);
-    resolvers.forEach((r) => r());
-    await waitFor(() => expect(useFleetComposerStore.getState().draft).toBe(""));
-  });
-
-  it("delivers even when worktree context cannot be resolved (empty-ctx fallback)", async () => {
-    // Panel references a worktree that is not in the view store.
-    usePanelStore.setState({
-      panelsById: { lonely: makeAgent("lonely", { worktreeId: "wt-ghost" }) },
-      panelIds: ["lonely"],
-    });
-    installViewStore(new Map());
-    useFleetArmingStore.getState().armIds(["lonely"]);
-
-    render(<FleetComposer />);
-    const textarea = screen.getByTestId("fleet-composer-textarea") as HTMLTextAreaElement;
-    fireEvent.change(textarea, { target: { value: "still send me" } });
-    fireEvent.keyDown(textarea, { key: "Enter" });
-
-    await waitFor(() => expect(submitMock).toHaveBeenCalledTimes(1));
-    expect(submitMock.mock.calls[0]![1]).toBe("still send me");
-  });
-
-  it("leaves unresolved variables empty when worktree context is missing", async () => {
-    usePanelStore.setState({
-      panelsById: { lonely: makeAgent("lonely", { worktreeId: "wt-ghost" }) },
-      panelIds: ["lonely"],
-    });
-    installViewStore(new Map());
-    useFleetArmingStore.getState().armIds(["lonely"]);
-
-    render(<FleetComposer />);
-    const textarea = screen.getByTestId("fleet-composer-textarea") as HTMLTextAreaElement;
-    fireEvent.change(textarea, { target: { value: "branch is {{branch_name}}" } });
-    fireEvent.keyDown(textarea, { key: "Enter" });
-
-    await waitFor(() => expect(submitMock).toHaveBeenCalledTimes(1));
-    expect(submitMock.mock.calls[0]![1]).toBe("branch is ");
-  });
-
-  it("Escape inside the confirm strip closes it and keeps fleet armed", async () => {
-    armTwo();
-    render(<FleetComposer />);
-    const textarea = screen.getByTestId("fleet-composer-textarea") as HTMLTextAreaElement;
-
-    fireEvent.change(textarea, { target: { value: "rm -rf x" } });
-    fireEvent.keyDown(textarea, { key: "Enter" });
-    const strip = await screen.findByTestId("fleet-composer-confirm");
-    // The strip receives focus on Cancel by default — press Escape on it.
-    fireEvent.keyDown(strip, { key: "Escape" });
-
-    expect(screen.queryByTestId("fleet-composer-confirm")).toBeNull();
-    expect(useFleetArmingStore.getState().armedIds.size).toBe(2);
-  });
-
-  it("preserves in-flight new typing — does not clear a replacement draft", async () => {
-    const resolvers: Array<() => void> = [];
-    submitMock.mockReset();
-    submitMock.mockImplementation(
-      () =>
-        new Promise<void>((r) => {
-          resolvers.push(r);
-        })
-    );
-    armTwo();
-    render(<FleetComposer />);
-    const textarea = screen.getByTestId("fleet-composer-textarea") as HTMLTextAreaElement;
-
-    fireEvent.change(textarea, { target: { value: "first" } });
-    fireEvent.keyDown(textarea, { key: "Enter" });
-    await waitFor(() => expect(submitMock).toHaveBeenCalledTimes(2));
-
-    // User starts typing a new draft while the first batch is still in flight.
-    useFleetComposerStore.getState().setDraft("second");
-
-    resolvers.forEach((r) => r());
-    await waitFor(() =>
-      expect(
-        useCommandHistoryStore.getState().getProjectHistory(FLEET_BROADCAST_HISTORY_KEY).length
-      ).toBe(1)
-    );
-    expect(useFleetComposerStore.getState().draft).toBe("second");
   });
 });
