@@ -11,7 +11,6 @@ import { useFleetScopeFlagStore } from "@/store/fleetScopeFlagStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { terminalClient } from "@/clients";
 import { executeFleetBroadcast } from "@/components/Fleet/fleetExecution";
-import { useNotificationStore } from "@/store/notificationStore";
 import type { TerminalInstance } from "@shared/types";
 
 interface ArmedSnapshot {
@@ -337,14 +336,6 @@ export function registerFleetActions(actions: ActionRegistry): void {
       } else {
         useFleetComposerStore.getState().clearLastFailed();
       }
-      useNotificationStore.getState().addNotification({
-        type: result.failureCount > 0 ? "warning" : "success",
-        priority: "low",
-        message:
-          result.failureCount > 0
-            ? `Retry: ${result.successCount} succeeded, ${result.failureCount} still failing`
-            : `Retry: sent to ${result.successCount} agent${result.successCount === 1 ? "" : "s"}`,
-      });
     },
   }));
 }

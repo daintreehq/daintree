@@ -235,11 +235,6 @@ export function FleetComposer(): ReactElement | null {
             remainingIds: remainderIds,
             prompt: currentDraft,
           });
-          useNotificationStore.getState().addNotification({
-            type: "success",
-            priority: "low",
-            message: `Canary sent — review output, then apply to ${remainderIds.length} remaining`,
-          });
         } catch (e) {
           useNotificationStore.getState().addNotification({
             type: "error",
@@ -297,33 +292,6 @@ export function FleetComposer(): ReactElement | null {
         } else {
           clearLastFailed();
         }
-
-        useNotificationStore.getState().addNotification({
-          type: result.successCount > 0 ? "success" : "warning",
-          priority: "low",
-          message:
-            result.failureCount > 0
-              ? `Sent to ${result.successCount} agent${result.successCount === 1 ? "" : "s"} (${result.failureCount} failed)`
-              : `Sent to ${result.successCount} agent${result.successCount === 1 ? "" : "s"}`,
-          actions:
-            result.failureCount > 0
-              ? [
-                  {
-                    label: "Retry failed",
-                    onClick: () => {
-                      const failed = useFleetComposerStore.getState().lastFailedIds;
-                      if (failed.length === 0) return;
-                      useFleetArmingStore.getState().armIds(failed);
-                      if (useFleetComposerStore.getState().draft.trim() === "") {
-                        const lastPrompt = useFleetComposerStore.getState().lastBroadcastPrompt;
-                        useFleetComposerStore.getState().setDraft(lastPrompt);
-                      }
-                    },
-                    variant: "primary" as const,
-                  },
-                ]
-              : undefined,
-        });
 
         if (result.successCount > 0) {
           const armedIds = Array.from(useFleetArmingStore.getState().armedIds);
@@ -389,15 +357,6 @@ export function FleetComposer(): ReactElement | null {
       } else {
         clearLastFailed();
       }
-
-      useNotificationStore.getState().addNotification({
-        type: result.successCount > 0 ? "success" : "warning",
-        priority: "low",
-        message:
-          result.failureCount > 0
-            ? `Applied to ${result.successCount} agent${result.successCount === 1 ? "" : "s"} (${result.failureCount} failed)`
-            : `Applied to ${result.successCount} agent${result.successCount === 1 ? "" : "s"}`,
-      });
 
       if (result.successCount > 0) {
         // Record the full frozen cohort (canary + remainder) that actually

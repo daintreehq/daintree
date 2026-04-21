@@ -374,7 +374,7 @@ describe("FleetComposer", () => {
     expect(byId.b).toBe("checkout feature/y");
   });
 
-  it("drops silently-exited targets at submit time and toasts the actual count", async () => {
+  it("drops silently-exited targets at submit time without emitting a notification", async () => {
     usePanelStore.setState({
       panelsById: {
         a: makeAgent("a"),
@@ -391,10 +391,11 @@ describe("FleetComposer", () => {
 
     await waitFor(() => expect(submitMock).toHaveBeenCalledTimes(1));
     expect(submitMock.mock.calls[0]![0]).toBe("a");
-    await waitFor(() => {
-      const last = useNotificationStore.getState().notifications.at(-1)?.message ?? "";
-      expect(last).toBe("Sent to 1 agent");
+    await act(async () => {
+      await Promise.resolve();
     });
+    expect(useNotificationStore.getState().notifications).toHaveLength(0);
+    expect(useFleetComposerStore.getState().lastFailedIds).toEqual([]);
   });
 
   it("does NOT clear draft when no live targets remain at submit", async () => {
@@ -417,7 +418,7 @@ describe("FleetComposer", () => {
     expect(useFleetComposerStore.getState().draft).toBe("please keep");
   });
 
-  it("partial failure surfaces the correct toast count", async () => {
+  it("partial failure populates lastFailedIds without emitting a notification", async () => {
     submitMock.mockReset();
     submitMock.mockImplementationOnce(() => Promise.resolve());
     submitMock.mockImplementationOnce(() => Promise.reject(new Error("boom")));
@@ -427,10 +428,11 @@ describe("FleetComposer", () => {
     fireEvent.change(textarea, { target: { value: "x" } });
     fireEvent.keyDown(textarea, { key: "Enter" });
 
+    await waitFor(() => expect(submitMock).toHaveBeenCalledTimes(2));
     await waitFor(() => {
-      const last = useNotificationStore.getState().notifications.at(-1)?.message ?? "";
-      expect(last).toBe("Sent to 1 agent (1 failed)");
+      expect(useFleetComposerStore.getState().lastFailedIds).toEqual(["t2"]);
     });
+    expect(useNotificationStore.getState().notifications).toHaveLength(0);
   });
 
   it("auto-clears draft when armedCount returns to zero", () => {
@@ -457,7 +459,7 @@ describe("FleetComposer", () => {
     expect(send.disabled).toBe(false);
   });
 
-  it("all submits reject — toasts 0 success / N failed, draft retained, history not recorded", async () => {
+  it("all submits reject — lastFailedIds populated, draft retained, history not recorded", async () => {
     submitMock.mockReset();
     submitMock.mockRejectedValue(new Error("boom"));
     armTwo();
@@ -468,9 +470,9 @@ describe("FleetComposer", () => {
 
     await waitFor(() => expect(submitMock).toHaveBeenCalledTimes(2));
     await waitFor(() => {
-      const last = useNotificationStore.getState().notifications.at(-1)?.message ?? "";
-      expect(last).toBe("Sent to 0 agents (2 failed)");
+      expect(useFleetComposerStore.getState().lastFailedIds).toEqual(["t1", "t2"]);
     });
+    expect(useNotificationStore.getState().notifications).toHaveLength(0);
     expect(useFleetComposerStore.getState().draft).toBe("fail it");
     const history = useCommandHistoryStore
       .getState()

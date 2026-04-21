@@ -5,7 +5,6 @@ import {
   executeFleetBroadcast,
   type FleetTargetPreview,
 } from "./fleetExecution";
-import { useNotificationStore } from "@/store/notificationStore";
 import { useCommandHistoryStore } from "@/store/commandHistoryStore";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { useFleetComposerStore } from "@/store/fleetComposerStore";
@@ -41,25 +40,6 @@ export function FleetDryRunDialog({
       const currentPreviews = buildFleetTargetPreviews(draft);
       const targetIds = currentPreviews.filter((p) => !p.excluded).map((p) => p.terminalId);
       const result = await executeFleetBroadcast(draft, targetIds, overrides);
-
-      useNotificationStore.getState().addNotification({
-        type: result.failureCount > 0 ? "warning" : "success",
-        priority: "low",
-        message:
-          result.failureCount > 0
-            ? `Sent to ${result.successCount} agent${result.successCount === 1 ? "" : "s"} (${result.failureCount} failed)`
-            : `Sent to ${result.successCount} agent${result.successCount === 1 ? "" : "s"}`,
-        actions:
-          result.failureCount > 0
-            ? [
-                {
-                  label: "Retry failed",
-                  onClick: () => onSend(result.failedIds),
-                  variant: "primary" as const,
-                },
-              ]
-            : undefined,
-      });
 
       const armedIds = Array.from(useFleetArmingStore.getState().armedIds);
       const projectId = useProjectStore.getState().currentProject?.id;
