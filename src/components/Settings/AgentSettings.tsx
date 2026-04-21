@@ -685,7 +685,7 @@ export function AgentSettings({
                         onSettingsChange?.();
                       })();
                     }}
-                    agentColor={getAgentConfig(activeAgent.id)?.color ?? "#888888"}
+                    agentColor={getAgentConfig(activeAgent.id)?.color ?? "var(--theme-text-muted)"}
                   />
 
                   {/* Scope banner — mitigates context-hijack confusion when
@@ -741,7 +741,9 @@ export function AgentSettings({
                         {/* Color picker — preset palette with Clear + Custom escape hatch */}
                         <PresetColorPicker
                           color={selectedPreset.color}
-                          agentColor={getAgentConfig(activeAgent.id)?.color ?? "#888888"}
+                          agentColor={
+                            getAgentConfig(activeAgent.id)?.color ?? "var(--theme-text-muted)"
+                          }
                           onChange={(color) => handleUpdatePreset(selectedPreset.id, { color })}
                           ariaLabel="Preset color"
                         />
