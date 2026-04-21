@@ -14,6 +14,7 @@ export const FLEET_IDLE_MAX_RETRIES = 2;
 interface UseFleetIdleTimerOptions {
   isConfirmingRef: RefObject<boolean>;
   isSubmittingRef: RefObject<boolean>;
+  isDryRunOpenRef: RefObject<boolean>;
 }
 
 interface UseFleetIdleTimerResult {
@@ -36,7 +37,7 @@ interface UseFleetIdleTimerResult {
  * collisions. Store state (`phase`) only drives UI rendering.
  */
 export function useFleetIdleTimer(options: UseFleetIdleTimerOptions): UseFleetIdleTimerResult {
-  const { isConfirmingRef, isSubmittingRef } = options;
+  const { isConfirmingRef, isSubmittingRef, isDryRunOpenRef } = options;
 
   const idleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const graceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -55,10 +56,11 @@ export function useFleetIdleTimer(options: UseFleetIdleTimerOptions): UseFleetId
 
   const fireGrace = useCallback(() => {
     graceTimerRef.current = null;
-    // Defer auto-exit if the user is mid-confirmation or a send is in flight —
-    // those are explicit attention. Cap reschedules to avoid zombie deferrals.
+    // Defer auto-exit if the user is mid-confirmation, a send is in flight, or
+    // the dry-run preview dialog is open — those are explicit attention.
+    // Cap reschedules to avoid zombie deferrals.
     if (
-      (isConfirmingRef.current || isSubmittingRef.current) &&
+      (isConfirmingRef.current || isSubmittingRef.current || isDryRunOpenRef.current) &&
       retryCountRef.current < FLEET_IDLE_MAX_RETRIES
     ) {
       retryCountRef.current += 1;
@@ -67,12 +69,16 @@ export function useFleetIdleTimer(options: UseFleetIdleTimerOptions): UseFleetId
     }
     useFleetIdleStore.getState().reset();
     useFleetArmingStore.getState().clear();
-  }, [isConfirmingRef, isSubmittingRef]);
+  }, [isConfirmingRef, isSubmittingRef, isDryRunOpenRef]);
 
   const scheduleIdle = useCallback(() => {
     clearTimers();
     retryCountRef.current = 0;
     useFleetIdleStore.getState().reset();
+    // Defensive: never schedule a timer that could transition state while no
+    // agents are armed. Callers are expected to only call us while armed, but
+    // this guard prevents a stray warning if the component ever mounts empty.
+    if (useFleetArmingStore.getState().armedIds.size === 0) return;
     idleTimerRef.current = setTimeout(() => {
       idleTimerRef.current = null;
       useFleetIdleStore.getState().enterWarning(Date.now());

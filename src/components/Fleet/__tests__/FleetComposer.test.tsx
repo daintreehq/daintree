@@ -628,6 +628,33 @@ describe("FleetComposer", () => {
       expect(useFleetArmingStore.getState().armedIds.size).toBe(2);
     });
 
+    it("'Stay armed' schedules a full fresh idle cycle", () => {
+      armTwo();
+      render(<FleetComposer />);
+      act(() => {
+        vi.advanceTimersByTime(FLEET_IDLE_TIMEOUT_MS);
+      });
+      fireEvent.click(screen.getByTestId("fleet-idle-stay"));
+
+      // Just before the new idle deadline — still idle.
+      act(() => {
+        vi.advanceTimersByTime(FLEET_IDLE_TIMEOUT_MS - 1000);
+      });
+      expect(useFleetIdleStore.getState().phase).toBe("idle");
+
+      // Cross the deadline — warning reappears.
+      act(() => {
+        vi.advanceTimersByTime(1000);
+      });
+      expect(useFleetIdleStore.getState().phase).toBe("warning");
+
+      // Grace elapses without response — auto-exit.
+      act(() => {
+        vi.advanceTimersByTime(FLEET_IDLE_GRACE_MS);
+      });
+      expect(useFleetArmingStore.getState().armedIds.size).toBe(0);
+    });
+
     it("'Exit' button clears the armed set immediately", () => {
       armTwo();
       render(<FleetComposer />);
@@ -725,6 +752,40 @@ describe("FleetComposer", () => {
       expect(useFleetIdleStore.getState().phase).toBe("warning");
 
       // Grace fires but confirming is true → first reschedule.
+      act(() => {
+        vi.advanceTimersByTime(FLEET_IDLE_GRACE_MS);
+      });
+      expect(useFleetArmingStore.getState().armedIds.size).toBe(2);
+
+      // Second reschedule.
+      act(() => {
+        vi.advanceTimersByTime(FLEET_IDLE_RESCHEDULE_MS);
+      });
+      expect(useFleetArmingStore.getState().armedIds.size).toBe(2);
+
+      // Third fire — retry cap reached, exit regardless.
+      act(() => {
+        vi.advanceTimersByTime(FLEET_IDLE_RESCHEDULE_MS);
+      });
+      expect(useFleetArmingStore.getState().armedIds.size).toBe(0);
+    });
+
+    it("dry-run dialog open defers auto-exit but force-exits after the retry cap", () => {
+      armTwo();
+      render(<FleetComposer />);
+      const textarea = screen.getByTestId("fleet-composer-textarea") as HTMLTextAreaElement;
+
+      // Open the dry-run dialog via Cmd+Shift+Enter.
+      fireEvent.change(textarea, { target: { value: "preview me" } });
+      fireEvent.keyDown(textarea, { key: "Enter", metaKey: true, shiftKey: true });
+
+      // The submit-attempt branch calls resetIdleTimer(); advance past it.
+      act(() => {
+        vi.advanceTimersByTime(FLEET_IDLE_TIMEOUT_MS);
+      });
+      expect(useFleetIdleStore.getState().phase).toBe("warning");
+
+      // Grace fires but dry-run is open → first reschedule.
       act(() => {
         vi.advanceTimersByTime(FLEET_IDLE_GRACE_MS);
       });

@@ -81,6 +81,7 @@ export function FleetComposer(): ReactElement | null {
   const submittingRef = useRef<boolean>(false);
   const isConfirmingRef = useRef<boolean>(false);
   const isSubmittingRef = useRef<boolean>(false);
+  const isDryRunOpenRef = useRef<boolean>(false);
 
   const [isConfirming, setIsConfirming] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -95,9 +96,14 @@ export function FleetComposer(): ReactElement | null {
     isSubmittingRef.current = isSubmitting;
   }, [isSubmitting]);
 
+  useEffect(() => {
+    isDryRunOpenRef.current = isDryRunOpen;
+  }, [isDryRunOpen]);
+
   const { resetIdleTimer, exitNow } = useFleetIdleTimer({
     isConfirmingRef,
     isSubmittingRef,
+    isDryRunOpenRef,
   });
 
   const idlePhase = useFleetIdleStore((s) => s.phase);
