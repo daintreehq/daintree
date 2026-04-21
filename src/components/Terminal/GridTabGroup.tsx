@@ -18,6 +18,8 @@ export interface GridTabGroupProps {
   gridPanelCount?: number;
   gridCols?: number;
   isMaximized?: boolean;
+  // Fleet arming multi-select support: ordered list of eligible agent terminal IDs
+  orderedEligibleTerminalIds?: string[];
 }
 
 /**
@@ -39,6 +41,11 @@ export function gridTabGroupPropsAreEqual(
     prev.gridCols !== next.gridCols ||
     prev.isMaximized !== next.isMaximized
   ) {
+    return false;
+  }
+
+  // Array props: reference check (orderedEligibleTerminalIds is stable from parent)
+  if (prev.orderedEligibleTerminalIds !== next.orderedEligibleTerminalIds) {
     return false;
   }
 
@@ -108,6 +115,7 @@ export const GridTabGroup = React.memo(function GridTabGroup({
   gridPanelCount,
   gridCols,
   isMaximized = false,
+  orderedEligibleTerminalIds,
 }: GridTabGroupProps) {
   const setFocused = usePanelStore((state) => state.setFocused);
   const setActiveTab = usePanelStore((state) => state.setActiveTab);
@@ -320,6 +328,7 @@ export const GridTabGroup = React.memo(function GridTabGroup({
       gridPanelCount={gridPanelCount}
       gridCols={gridCols}
       ambientAgentState={groupAmbientState}
+      orderedEligibleTerminalIds={orderedEligibleTerminalIds}
       tabs={tabs}
       groupId={group.id}
       onTabClick={handleTabClick}

@@ -26,6 +26,9 @@ export interface GridPanelProps {
   // Drives the solid accent ring overlay variant in TerminalPane.
   isPrimary?: boolean;
   titleOverride?: string;
+  // Fleet arming multi-select support: ordered list of eligible agent terminal IDs
+  // visible in the current grid (shift-range uses visual order).
+  orderedEligibleTerminalIds?: string[];
   // Tab support
   tabs?: TabInfo[];
   groupId?: string;
@@ -57,6 +60,11 @@ export function gridPanelPropsAreEqual(prev: GridPanelProps, next: GridPanelProp
     prev.titleOverride !== next.titleOverride ||
     prev.groupId !== next.groupId
   ) {
+    return false;
+  }
+
+  // Array props: reference check (orderedEligibleTerminalIds is stable from parent)
+  if (prev.orderedEligibleTerminalIds !== next.orderedEligibleTerminalIds) {
     return false;
   }
 
@@ -131,6 +139,7 @@ export const GridPanel = React.memo(function GridPanel({
   isFleetScope = false,
   isPrimary = false,
   titleOverride,
+  orderedEligibleTerminalIds,
   tabs,
   groupId,
   onTabClick,
@@ -213,6 +222,7 @@ export const GridPanel = React.memo(function GridPanel({
           // which violates the tab-group invariant in shared/types/panel.ts.
           onAddTab: isFleetScope ? undefined : onAddTab,
           onTabReorder,
+          orderedEligibleTerminalIds,
           ...(isFleetScope ? { isInputLocked: true, isFleetScope: true } : undefined),
           ...(isFleetScope && isPrimary ? { isPrimary: true } : undefined),
           ...(titleOverride !== undefined ? { title: titleOverride } : undefined),
@@ -239,6 +249,7 @@ export const GridPanel = React.memo(function GridPanel({
       onTabReorder,
       isFleetScope,
       isPrimary,
+      orderedEligibleTerminalIds,
       titleOverride,
     ]
   );

@@ -18,6 +18,8 @@ interface TwoPaneSplitLayoutProps {
   isInTrash: (id: string) => boolean;
   onAddTabLeft?: () => void;
   onAddTabRight?: () => void;
+  // Fleet arming multi-select support: ordered list of eligible agent terminal IDs
+  orderedEligibleTerminalIds?: string[];
 }
 
 export function TwoPaneSplitLayout({
@@ -27,6 +29,7 @@ export function TwoPaneSplitLayout({
   isInTrash,
   onAddTabLeft,
   onAddTabRight,
+  orderedEligibleTerminalIds,
 }: TwoPaneSplitLayoutProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [containerWidth, setContainerWidth] = useState<number>(0);
@@ -254,6 +257,7 @@ export function TwoPaneSplitLayout({
                 isFocused={terminals[0].id === focusedId}
                 gridPanelCount={2}
                 gridCols={2}
+                orderedEligibleTerminalIds={orderedEligibleTerminalIds}
                 onAddTab={onAddTabLeft}
               />
             </SortableTerminal>
@@ -285,6 +289,7 @@ export function TwoPaneSplitLayout({
                 isFocused={terminals[1].id === focusedId}
                 gridPanelCount={2}
                 gridCols={2}
+                orderedEligibleTerminalIds={orderedEligibleTerminalIds}
                 onAddTab={onAddTabRight}
               />
             </SortableTerminal>
