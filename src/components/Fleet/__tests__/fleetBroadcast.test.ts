@@ -5,6 +5,8 @@ import {
   FLEET_BROADCAST_HISTORY_KEY,
   FLEET_CONFIRM_BYTE_THRESHOLD,
   FLEET_DESTRUCTIVE_RE,
+  FLEET_LARGE_PASTE_BATCH_SIZE,
+  FLEET_LARGE_PASTE_BYTE_THRESHOLD,
   buildFleetBroadcastRecipeContext,
   getFleetBroadcastByteLength,
   getFleetBroadcastWarnings,
@@ -93,6 +95,12 @@ describe("fleetBroadcast constants", () => {
   });
   it("confirmation threshold matches spec (512 bytes)", () => {
     expect(FLEET_CONFIRM_BYTE_THRESHOLD).toBe(512);
+  });
+  it("large-paste byte threshold matches spec (100 KB)", () => {
+    expect(FLEET_LARGE_PASTE_BYTE_THRESHOLD).toBe(102_400);
+  });
+  it("large-paste batch size is a conservative IPC fan-out", () => {
+    expect(FLEET_LARGE_PASTE_BATCH_SIZE).toBe(5);
   });
 });
 

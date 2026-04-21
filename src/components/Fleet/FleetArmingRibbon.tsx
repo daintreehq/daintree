@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState, type ReactElement } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactElement } from "react";
 import { MoreHorizontal, X } from "lucide-react";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { useShallow } from "zustand/react/shallow";
 import { cn } from "@/lib/utils";
+import { isMac } from "@/lib/platform";
 import { useEscapeStack } from "@/hooks";
 import { useFleetArmingStore, type FleetArmStatePreset } from "@/store/fleetArmingStore";
 import { useWorktreeFilterStore } from "@/store/worktreeFilterStore";
@@ -24,6 +25,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { FleetComposer } from "./FleetComposer";
+import { useFleetFocusPulse } from "./useFleetFocusPulse";
 
 const DOUBLE_ESC_WINDOW_MS = 350;
 
@@ -70,6 +72,7 @@ export function FleetArmingRibbon(): ReactElement | null {
 
   const [popoverOpen, setPopoverOpen] = useState(false);
   const reduceMotion = useReducedMotion();
+  const isPulsing = useFleetFocusPulse(armedCount);
 
   useEffect(() => {
     if (armedCount < 2 && popoverOpen) {
@@ -77,14 +80,22 @@ export function FleetArmingRibbon(): ReactElement | null {
     }
   }, [armedCount, popoverOpen]);
 
-  // Escape stack: confirmation cancel sits above the fleet-disarm entry, so
-  // the first Escape while confirming clears the pending action and a
-  // second Escape disarms the fleet. The armed-list popover, when open,
-  // sits on top so the first Escape closes the list and a subsequent
-  // Escape disarms.
+  // Escape stack: confirmation cancel is owned here so a pending confirm
+  // absorbs bare Escape before it reaches the targets. The armed-list
+  // popover gets its own entry so bare Escape closes the list without
+  // disarming the fleet. Plain Escape never disarms — the targets own it
+  // (see issue #5750: agents use Esc for menus/prompts). Exit requires
+  // the ⌘Esc chord or the visible ✕ chip.
   useEscapeStack(pending !== null, clearPending);
-  useEscapeStack(armedCount > 0 && pending === null, clear);
   useEscapeStack(popoverOpen, () => setPopoverOpen(false));
+
+  const exitFleet = useCallback(() => {
+    const target = useFleetArmingStore.getState().lastArmedId;
+    clear();
+    if (target && usePanelStore.getState().panelsById[target]) {
+      usePanelStore.getState().setFocused(target);
+    }
+  }, [clear]);
 
   // If the armed set drains while a confirmation is pending (e.g., all
   // armed agents exit), collapse the confirmation so it can't execute
@@ -146,48 +157,85 @@ export function FleetArmingRibbon(): ReactElement | null {
     return () => window.removeEventListener("keydown", handler, true);
   }, [pending]);
 
-  // Cmd+Esc Esc double-tap → fleet.interrupt. The Cmd modifier is what
-  // separates this from the plain-Escape escape-stack LIFO used elsewhere
-  // in the app: bare Escape continues to dismiss confirmations / disarm
-  // the fleet without poisoning the double-tap timer. (An earlier
-  // bare-Escape version had a race where cancelling a confirmation with
-  // Escape then pressing Escape again to disarm fired fleet.interrupt.)
+  // ⌘Esc chord. Single press (released; 350ms timeout) → exit broadcast
+  // (clear selection, restore focus to lastArmedId). Rapid second press
+  // within 350ms → cancel the pending exit and dispatch fleet.interrupt
+  // instead. Bare Escape is intentionally ignored: targets own it for
+  // menus/prompts under live echo (#5750). Listener is capture-phase so
+  // the chord fires before Radix popover dismissal and the composer's
+  // textarea keydown handler.
   const lastEscapeMsRef = useRef<number>(0);
+  const pendingExitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const exitFleetRef = useRef(exitFleet);
   useEffect(() => {
+    exitFleetRef.current = exitFleet;
+  }, [exitFleet]);
+
+  useEffect(() => {
+    const clearPendingExit = () => {
+      if (pendingExitTimerRef.current !== null) {
+        clearTimeout(pendingExitTimerRef.current);
+        pendingExitTimerRef.current = null;
+      }
+    };
+
     if (armedCount === 0) {
       lastEscapeMsRef.current = 0;
+      clearPendingExit();
       return;
     }
+
     const handler = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
       // Cmd on macOS, Ctrl on other platforms — keybindingService
       // normalizes the two, but for a raw listener we accept either.
+      // The modifier is the discriminator: we accept the chord from any
+      // focus target (including the composer textarea and xterm panes) so
+      // the user can exit broadcast from wherever their cursor landed.
+      // Bare Escape is filtered above and continues to reach targets.
       if (!e.metaKey && !e.ctrlKey) return;
-      const rawTarget = e.target;
-      const target =
-        rawTarget && typeof (rawTarget as HTMLElement).closest === "function"
-          ? (rawTarget as HTMLElement)
-          : null;
-      if (
-        target &&
-        (target.tagName === "INPUT" ||
-          target.tagName === "TEXTAREA" ||
-          target.isContentEditable ||
-          target.closest(".xterm") !== null)
-      ) {
-        return;
-      }
       const now = Date.now();
       const prev = lastEscapeMsRef.current;
+
+      if (prev !== 0 && now - prev <= DOUBLE_ESC_WINDOW_MS) {
+        // Second press inside the chord window — cancel the pending exit
+        // and fire the interrupt.
+        lastEscapeMsRef.current = 0;
+        clearPendingExit();
+        e.stopPropagation();
+        e.preventDefault();
+        void actionService.dispatch("fleet.interrupt", undefined, { source: "keybinding" });
+        return;
+      }
+
+      // First press — arm the chord and schedule the exit for when the
+      // double-tap window closes without a second press.
       lastEscapeMsRef.current = now;
-      if (prev === 0 || now - prev > DOUBLE_ESC_WINDOW_MS) return;
-      lastEscapeMsRef.current = 0;
       e.stopPropagation();
       e.preventDefault();
-      void actionService.dispatch("fleet.interrupt", undefined, { source: "keybinding" });
+      clearPendingExit();
+      pendingExitTimerRef.current = setTimeout(() => {
+        pendingExitTimerRef.current = null;
+        lastEscapeMsRef.current = 0;
+        exitFleetRef.current();
+      }, DOUBLE_ESC_WINDOW_MS);
     };
+
+    // Cmd-held + OS focus loss can leave the chord "half-armed" after
+    // Cmd+Tab away-and-back. Reset so the first Esc on return doesn't
+    // look like a stale second press.
+    const handleBlur = () => {
+      lastEscapeMsRef.current = 0;
+      clearPendingExit();
+    };
+
     window.addEventListener("keydown", handler, true);
-    return () => window.removeEventListener("keydown", handler, true);
+    window.addEventListener("blur", handleBlur);
+    return () => {
+      window.removeEventListener("keydown", handler, true);
+      window.removeEventListener("blur", handleBlur);
+      clearPendingExit();
+    };
   }, [armedCount]);
 
   // "Match active filter" maps the sidebar's quick-state filter (which is
@@ -337,6 +385,8 @@ export function FleetArmingRibbon(): ReactElement | null {
         transition: { type: "spring" as const, duration: 0.2, bounce: 0.15 },
       };
 
+  const exitChordLabel = isMac() ? "⌘Esc" : "Ctrl+Esc";
+
   return (
     <div data-testid="fleet-arming-ribbon-group">
       <AnimatePresence initial={false}>
@@ -346,9 +396,12 @@ export function FleetArmingRibbon(): ReactElement | null {
           aria-live="off"
           className={cn(
             "surface-toolbar relative flex items-center gap-3 overflow-hidden border-b border-daintree-border px-3 py-1 text-[12px] text-daintree-text",
-            "before:absolute before:inset-x-0 before:top-0 before:h-0.5 before:bg-[var(--color-accent-primary)] before:content-['']"
+            "before:absolute before:inset-x-0 before:top-0 before:h-0.5 before:bg-[var(--color-accent-primary)] before:content-['']",
+            "transition-shadow duration-300",
+            isPulsing && "shadow-[0_0_0_2px_var(--color-accent-primary)]"
           )}
           data-testid="fleet-arming-ribbon"
+          data-pulsing={isPulsing ? "true" : undefined}
           {...ribbonMotionProps}
         >
           <ArmedCountChip
@@ -374,8 +427,8 @@ export function FleetArmingRibbon(): ReactElement | null {
           <div className="ml-auto flex items-center gap-1.5">
             <button
               type="button"
-              onClick={clear}
-              aria-label="Exit fleet mode (Esc)"
+              onClick={exitFleet}
+              aria-label={`Exit fleet mode (${exitChordLabel})`}
               data-testid="fleet-exit"
               className={cn(
                 "inline-flex items-center gap-1.5 rounded px-2 py-0.5 text-[11px] transition-colors",
@@ -384,7 +437,7 @@ export function FleetArmingRibbon(): ReactElement | null {
             >
               <span>Exit</span>
               <kbd className="rounded border border-daintree-text/20 bg-tint/[0.06] px-1 font-mono text-[10px] leading-tight text-daintree-accent">
-                Esc
+                {exitChordLabel}
               </kbd>
             </button>
           </div>

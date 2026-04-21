@@ -72,7 +72,7 @@ function resetStores() {
   });
   useFleetPendingActionStore.setState({ pending: null });
   useFleetScopeFlagStore.setState({ mode: "legacy", isHydrated: true });
-  usePanelStore.setState({ panelsById: {}, panelIds: [] });
+  usePanelStore.setState({ panelsById: {}, panelIds: [], focusedId: null });
   useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-1", isFleetScopeActive: false });
   useWorktreeFilterStore.setState({ quickStateFilter: "all" });
   useAnnouncerStore.setState({ polite: null, assertive: null });
@@ -142,12 +142,23 @@ describe("FleetArmingRibbon", () => {
     expect(useFleetArmingStore.getState().armedIds.size).toBe(0);
   });
 
-  it("renders 'Exit' label and 'Esc' kbd on the exit chip", () => {
+  it("renders 'Exit' label and ⌘Esc/Ctrl+Esc kbd on the exit chip", () => {
     useFleetArmingStore.getState().armIds(["a", "b"]);
     render(<FleetArmingRibbon />);
     const exit = screen.getByTestId("fleet-exit");
     expect(exit.textContent).toContain("Exit");
-    expect(exit.textContent).toContain("Esc");
+    // jsdom reports no platform so isMac() is false → "Ctrl+Esc".
+    expect(exit.textContent).toMatch(/Ctrl\+Esc|⌘Esc/);
+    expect(exit.getAttribute("aria-label")).toMatch(/Exit fleet mode \((?:⌘Esc|Ctrl\+Esc)\)/);
+  });
+
+  it("exit chip click restores focus to lastArmedId via panelStore.setFocused", () => {
+    seed([makeAgent("t1"), makeAgent("t2")]);
+    useFleetArmingStore.getState().armIds(["t1", "t2"]);
+    render(<FleetArmingRibbon />);
+    fireEvent.click(screen.getByTestId("fleet-exit"));
+    expect(useFleetArmingStore.getState().armedIds.size).toBe(0);
+    expect(usePanelStore.getState().focusedId).toBe("t2");
   });
 
   it("count chip opens a popover listing armed terminal titles", () => {
@@ -177,7 +188,10 @@ describe("FleetArmingRibbon", () => {
     expect(armed.has("t2")).toBe(true);
   });
 
-  it("Escape with the popover open closes the list first, then disarms", () => {
+  it("bare Escape with the popover open closes the list but does NOT disarm", () => {
+    // Under the live-echo exit model (#5750) bare Escape belongs to the
+    // targets: it closes the armed-list popover when open, but never
+    // disarms the fleet. Exit requires ⌘Esc or the visible ✕ chip.
     seed([
       { ...makeAgent("t1"), title: "frontend·main" } as TerminalInstance,
       { ...makeAgent("t2"), title: "backend·main" } as TerminalInstance,
@@ -190,11 +204,11 @@ describe("FleetArmingRibbon", () => {
       dispatchEscape();
     });
     expect(useFleetArmingStore.getState().armedIds.size).toBe(2);
-    // Second dispatched Escape: fleet disarms.
+    // Second dispatched Escape: still armed — bare Esc no longer disarms.
     act(() => {
       dispatchEscape();
     });
-    expect(useFleetArmingStore.getState().armedIds.size).toBe(0);
+    expect(useFleetArmingStore.getState().armedIds.size).toBe(2);
   });
 
   it("announces armed count via the announcer store", () => {
@@ -275,13 +289,70 @@ describe("FleetArmingRibbon", () => {
     const actionServiceModule = await import("@/services/ActionService");
     const dispatchSpy = vi.spyOn(actionServiceModule.actionService, "dispatch");
     render(<FleetArmingRibbon />);
-    // First Cmd+Esc — stamps the ref, no dispatch
+    // First Cmd+Esc — stamps the ref, no dispatch yet (exit is pending).
     fireEvent.keyDown(window, { key: "Escape", metaKey: true });
     expect(dispatchSpy.mock.calls.some((c) => c[0] === "fleet.interrupt")).toBe(false);
-    // Second Cmd+Esc within the window → dispatch
+    // Second Cmd+Esc within the window → interrupt wins, pending exit
+    // timer is cancelled.
     fireEvent.keyDown(window, { key: "Escape", metaKey: true });
     expect(dispatchSpy.mock.calls.some((c) => c[0] === "fleet.interrupt")).toBe(true);
+    // Fleet remains armed — interrupt dispatch doesn't clear selection.
+    expect(useFleetArmingStore.getState().armedIds.size).toBe(2);
     dispatchSpy.mockRestore();
+  });
+
+  it("single Cmd+Esc exits broadcast after the double-tap window closes", () => {
+    vi.useFakeTimers();
+    try {
+      seed([makeAgent("t1"), makeAgent("t2")]);
+      useFleetArmingStore.getState().armIds(["t1", "t2"]);
+      render(<FleetArmingRibbon />);
+      fireEvent.keyDown(window, { key: "Escape", metaKey: true });
+      // Exit is pending — still armed.
+      expect(useFleetArmingStore.getState().armedIds.size).toBe(2);
+      // Advance past the 350ms double-tap window.
+      act(() => {
+        vi.advanceTimersByTime(400);
+      });
+      expect(useFleetArmingStore.getState().armedIds.size).toBe(0);
+      expect(usePanelStore.getState().focusedId).toBe("t2");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("Ctrl+Esc single-tap also exits (Ctrl is the non-macOS modifier)", () => {
+    vi.useFakeTimers();
+    try {
+      seed([makeAgent("t1"), makeAgent("t2")]);
+      useFleetArmingStore.getState().armIds(["t1", "t2"]);
+      render(<FleetArmingRibbon />);
+      fireEvent.keyDown(window, { key: "Escape", ctrlKey: true });
+      act(() => {
+        vi.advanceTimersByTime(400);
+      });
+      expect(useFleetArmingStore.getState().armedIds.size).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("window blur cancels a pending single-tap exit and clears the chord timer", () => {
+    vi.useFakeTimers();
+    try {
+      seed([makeAgent("t1"), makeAgent("t2")]);
+      useFleetArmingStore.getState().armIds(["t1", "t2"]);
+      render(<FleetArmingRibbon />);
+      fireEvent.keyDown(window, { key: "Escape", metaKey: true });
+      // User Cmd+Tabs away — blur should cancel the pending exit.
+      fireEvent.blur(window);
+      act(() => {
+        vi.advanceTimersByTime(600);
+      });
+      expect(useFleetArmingStore.getState().armedIds.size).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("bare Escape Escape does NOT dispatch fleet.interrupt (no Cmd modifier)", async () => {
@@ -293,7 +364,66 @@ describe("FleetArmingRibbon", () => {
     fireEvent.keyDown(window, { key: "Escape" });
     fireEvent.keyDown(window, { key: "Escape" });
     expect(dispatchSpy.mock.calls.some((c) => c[0] === "fleet.interrupt")).toBe(false);
+    // Fleet must remain armed — bare Esc belongs to the targets.
+    expect(useFleetArmingStore.getState().armedIds.size).toBe(2);
     dispatchSpy.mockRestore();
+  });
+
+  it("⌘Esc from a textarea still triggers the exit chord", () => {
+    // The composer textarea is the primary input surface when armed —
+    // the chord must fire from it, not be swallowed by focus heuristics.
+    vi.useFakeTimers();
+    try {
+      seed([makeAgent("t1"), makeAgent("t2")]);
+      useFleetArmingStore.getState().armIds(["t1", "t2"]);
+      render(<FleetArmingRibbon />);
+      const textarea = document.createElement("textarea");
+      document.body.appendChild(textarea);
+      textarea.focus();
+      try {
+        fireEvent.keyDown(textarea, { key: "Escape", metaKey: true });
+        act(() => {
+          vi.advanceTimersByTime(400);
+        });
+        expect(useFleetArmingStore.getState().armedIds.size).toBe(0);
+      } finally {
+        textarea.remove();
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("focus event without a prior blur does NOT pulse the ribbon", () => {
+    seed([makeAgent("t1"), makeAgent("t2")]);
+    useFleetArmingStore.getState().armIds(["t1", "t2"]);
+    render(<FleetArmingRibbon />);
+    vi.spyOn(document, "hasFocus").mockReturnValue(true);
+    fireEvent.focus(window);
+    const ribbon = screen.getByTestId("fleet-arming-ribbon");
+    expect(ribbon.getAttribute("data-pulsing")).toBeNull();
+  });
+
+  it("window focus-return while armed pulses the ribbon border", () => {
+    vi.useFakeTimers();
+    try {
+      seed([makeAgent("t1"), makeAgent("t2")]);
+      useFleetArmingStore.getState().armIds(["t1", "t2"]);
+      render(<FleetArmingRibbon />);
+      // Simulate losing then regaining OS focus while still armed.
+      fireEvent.blur(window);
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      fireEvent.focus(window);
+      const ribbon = screen.getByTestId("fleet-arming-ribbon");
+      expect(ribbon.getAttribute("data-pulsing")).toBe("true");
+      // Pulse auto-clears after ~800ms.
+      act(() => {
+        vi.advanceTimersByTime(900);
+      });
+      expect(ribbon.getAttribute("data-pulsing")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("Enter while a pending action is open re-dispatches the action with confirmed:true", async () => {
