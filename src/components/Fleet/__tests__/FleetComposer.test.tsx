@@ -454,6 +454,72 @@ describe("FleetComposer (live keystroke capture)", () => {
     });
   });
 
+  it("isComposingRef suppresses plain keydown between compositionstart and compositionend", () => {
+    armTwo();
+    render(<FleetComposer />);
+    const textarea = screen.getByTestId("fleet-composer-textarea") as HTMLTextAreaElement;
+
+    fireEvent.compositionStart(textarea);
+    // Plain keydown with NO isComposing flag and NO keyCode 229 — only the
+    // isComposingRef.current guard (set by compositionstart) should block it.
+    dispatchKeyDown(textarea, { key: "a" });
+    expect(writeMock).not.toHaveBeenCalled();
+
+    fireEvent.compositionEnd(textarea, { data: "あ" });
+    expect(writeMock).toHaveBeenCalledTimes(2);
+    expect(writesByTarget()).toEqual({ t1: ["あ"], t2: ["あ"] });
+  });
+
+  it("removes raw DOM listeners on unmount (no leak across remount)", () => {
+    armTwo();
+    const { unmount } = render(<FleetComposer />);
+    const firstTextarea = screen.getByTestId("fleet-composer-textarea") as HTMLTextAreaElement;
+    unmount();
+
+    // Fire at the detached node — should be a no-op now.
+    dispatchKeyDown(firstTextarea, { key: "a" });
+    expect(writeMock).not.toHaveBeenCalled();
+
+    render(<FleetComposer />);
+    const secondTextarea = screen.getByTestId("fleet-composer-textarea") as HTMLTextAreaElement;
+    dispatchKeyDown(secondTextarea, { key: "b" });
+
+    // Exactly one keystroke × two targets — not four (which would signal leaked listeners).
+    expect(writeMock).toHaveBeenCalledTimes(2);
+    expect(writesByTarget()).toEqual({ t1: ["b"], t2: ["b"] });
+  });
+
+  it("shows a toast when a benign paste fails for every target", async () => {
+    submitMock.mockReset();
+    submitMock.mockRejectedValue(new Error("port closed"));
+    armTwo();
+    render(<FleetComposer />);
+    const textarea = screen.getByTestId("fleet-composer-textarea") as HTMLTextAreaElement;
+
+    fireEvent.paste(textarea, {
+      clipboardData: {
+        getData: (type: string) => (type === "text/plain" ? "hello" : ""),
+      },
+    });
+
+    await waitFor(() => {
+      const last = useNotificationStore.getState().notifications.at(-1)?.message ?? "";
+      expect(last).toBe("Paste failed — no agents received the payload");
+    });
+  });
+
+  it("AltGr composed characters are forwarded (Ctrl+Alt+printable)", () => {
+    armTwo();
+    render(<FleetComposer />);
+    const textarea = screen.getByTestId("fleet-composer-textarea") as HTMLTextAreaElement;
+
+    // German layout: AltGr+Q produces "@" with ctrlKey=true AND altKey=true.
+    dispatchKeyDown(textarea, { key: "@", ctrlKey: true, altKey: true });
+
+    expect(writesByTarget()).toEqual({ t1: ["@"], t2: ["@"] });
+    expect(useFleetComposerStore.getState().draft).toBe("@");
+  });
+
   it("auto-clears draft when armedCount returns to zero", () => {
     armTwo();
     useFleetComposerStore.setState({ draft: "typing" });

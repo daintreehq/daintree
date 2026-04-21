@@ -1,5 +1,7 @@
 import { useEffect, useRef, type RefObject } from "react";
 import { useFleetComposerStore } from "@/store/fleetComposerStore";
+import { useNotificationStore } from "@/store/notificationStore";
+import { logWarn } from "@/utils/logger";
 import {
   needsFleetBroadcastConfirmation,
   resolveFleetBroadcastTargetIds,
@@ -74,6 +76,14 @@ export function mapKeyToSequence(event: KeyboardEvent): string | null {
 
   if (!event.ctrlKey && !event.altKey && event.key.length === 1) {
     return event.key;
+  }
+
+  // AltGr on Windows/Linux layouts synthesizes ctrlKey=true AND altKey=true;
+  // the resulting event.key is the composed printable char (e.g. "@" on DE,
+  // "{" on PL). Forward it as a literal keystroke.
+  if (event.ctrlKey && event.altKey && event.key.length === 1) {
+    const code = event.key.charCodeAt(0);
+    if (code >= 0x20 && code !== 0x7f) return event.key;
   }
 
   return null;
@@ -170,7 +180,22 @@ export function useFleetLiveKeyCapture({
       setDraft(draft + text);
 
       const targets = resolveFleetBroadcastTargetIds();
-      void broadcastFleetLiteralPaste(text, targets);
+      void (async () => {
+        const result = await broadcastFleetLiteralPaste(text, targets);
+        if (result.failureCount === 0) return;
+        logWarn("[FleetComposer] benign paste broadcast had rejections", {
+          failureCount: result.failureCount,
+          failedIds: result.failedIds,
+        });
+        useNotificationStore.getState().addNotification({
+          type: result.successCount > 0 ? "warning" : "error",
+          priority: "low",
+          message:
+            result.successCount > 0
+              ? `Sent to ${result.successCount} agent${result.successCount === 1 ? "" : "s"} (${result.failureCount} failed)`
+              : `Paste failed — no agents received the payload`,
+        });
+      })();
     };
 
     el.addEventListener("keydown", handleKeyDown);
