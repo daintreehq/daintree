@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Check, X } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
@@ -48,6 +48,18 @@ export function PresetColorPicker({
 }: PresetColorPickerProps) {
   const [open, setOpen] = useState(false);
   const nativeInputRef = useRef<HTMLInputElement>(null);
+  // True while the native `<input type="color">` has opened NSColorPanel and the
+  // renderer has lost focus. Used to suppress Radix's focus-outside dismissal so
+  // the hidden input stays mounted for the duration of the OS picker session.
+  const customColorOpenRef = useRef(false);
+
+  useEffect(() => {
+    const clearGuard = () => {
+      customColorOpenRef.current = false;
+    };
+    window.addEventListener("focus", clearGuard);
+    return () => window.removeEventListener("focus", clearGuard);
+  }, []);
 
   const effectiveColor = color ?? agentColor;
 
@@ -62,11 +74,19 @@ export function PresetColorPicker({
   };
 
   const handleCustomClick = () => {
-    nativeInputRef.current?.click();
+    if (!nativeInputRef.current) return;
+    customColorOpenRef.current = true;
+    nativeInputRef.current.click();
   };
 
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    <Popover
+      open={open}
+      onOpenChange={(next) => {
+        if (!next) customColorOpenRef.current = false;
+        setOpen(next);
+      }}
+    >
       <PopoverTrigger asChild>
         <button
           type="button"
@@ -86,6 +106,12 @@ export function PresetColorPicker({
         sideOffset={6}
         className="w-auto p-2 space-y-2"
         data-testid="preset-color-picker-popover"
+        onFocusOutside={(e) => {
+          // NSColorPanel opens an OS-level window that steals renderer focus
+          // with no pointerdown event. Suppress Radix's focus-outside close
+          // while the native picker session is active so the input stays mounted.
+          if (customColorOpenRef.current) e.preventDefault();
+        }}
       >
         <div className="grid grid-cols-5 gap-1">
           {PALETTE.map((c) => {
@@ -138,7 +164,10 @@ export function PresetColorPicker({
             type="color"
             className="sr-only"
             value={pickerValue}
-            onChange={(e) => handleSelect(e.target.value)}
+            onChange={(e) => {
+              customColorOpenRef.current = false;
+              handleSelect(e.target.value);
+            }}
             aria-hidden="true"
             tabIndex={-1}
           />
