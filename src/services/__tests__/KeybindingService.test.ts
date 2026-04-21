@@ -1,5 +1,6 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  DEFAULT_KEYBINDINGS,
   KeybindingService,
   normalizeKey,
   normalizeKeyForBinding,
@@ -81,7 +82,7 @@ describe("KeybindingService", () => {
     const service = new KeybindingService();
     service.registerBinding({
       actionId: "test.chord",
-      combo: "Cmd+K Cmd+R",
+      combo: "Cmd+K Cmd+Z",
       scope: "global",
       priority: 99,
     });
@@ -92,8 +93,8 @@ describe("KeybindingService", () => {
       metaKey: true,
     });
     const second = createKeyboardEvent({
-      key: "r",
-      code: "KeyR",
+      key: "z",
+      code: "KeyZ",
       metaKey: true,
     });
 
@@ -293,7 +294,7 @@ describe("KeybindingService", () => {
       const service = new KeybindingService();
       service.registerBinding({
         actionId: "test.noCategory",
-        combo: "Cmd+K Cmd+X",
+        combo: "Cmd+K Cmd+Y",
         scope: "global",
         priority: 0,
         description: "Test no category",
@@ -333,6 +334,95 @@ describe("KeybindingService", () => {
 
       const completions = service.getChordCompletions("Cmd+Z");
       expect(completions).toEqual([]);
+    });
+  });
+
+  describe("agent launch defaults", () => {
+    it("only registers Claude, Gemini, and Codex as default agent launch shortcuts", () => {
+      const agentLaunchDefaults = DEFAULT_KEYBINDINGS.filter(
+        (b) =>
+          b.actionId.startsWith("agent.") &&
+          b.category === "Agents" &&
+          /^Cmd\+Alt\+[A-Z]$/.test(b.combo)
+      ).map((b) => b.actionId);
+
+      expect(agentLaunchDefaults).toContain("agent.claude");
+      expect(agentLaunchDefaults).toContain("agent.gemini");
+      expect(agentLaunchDefaults).toContain("agent.codex");
+      expect(agentLaunchDefaults).not.toContain("agent.opencode");
+      expect(agentLaunchDefaults).not.toContain("agent.cursor");
+      expect(agentLaunchDefaults).not.toContain("agent.kiro");
+      expect(agentLaunchDefaults).not.toContain("agent.copilot");
+    });
+
+    it("resolves Cmd+Alt+K to agent.focusNextAgent (no collision with agent.kiro)", () => {
+      setPlatform("MacIntel");
+
+      const service = new KeybindingService();
+      const event = createKeyboardEvent({
+        key: "k",
+        code: "KeyK",
+        metaKey: true,
+        altKey: true,
+      });
+
+      const match = service.findMatchingAction(event);
+      expect(match?.actionId).toBe("agent.focusNextAgent");
+    });
+  });
+
+  describe("registerBinding collision detection", () => {
+    it("warns and keeps incumbent when a different actionId tries to claim an existing combo", () => {
+      const service = new KeybindingService();
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      service.registerBinding({
+        actionId: "test.stealsClaude",
+        combo: "Cmd+Alt+C",
+        scope: "global",
+        priority: 0,
+      });
+
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      expect(service.getBinding("test.stealsClaude")).toBeUndefined();
+      expect(service.getBinding("agent.claude")?.combo).toBe("Cmd+Alt+C");
+
+      warnSpy.mockRestore();
+    });
+
+    it("allows re-registering the same actionId (self-update passes through)", () => {
+      const service = new KeybindingService();
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      service.registerBinding({
+        actionId: "agent.claude",
+        combo: "Cmd+Alt+C",
+        scope: "global",
+        priority: 5,
+        description: "Updated description",
+      });
+
+      expect(warnSpy).not.toHaveBeenCalled();
+      expect(service.getBinding("agent.claude")?.priority).toBe(5);
+
+      warnSpy.mockRestore();
+    });
+
+    it("skips collision check when combo is empty (no-op binding)", () => {
+      const service = new KeybindingService();
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      service.registerBinding({
+        actionId: "test.noop",
+        combo: "",
+        scope: "global",
+        priority: 0,
+      });
+
+      expect(warnSpy).not.toHaveBeenCalled();
+      expect(service.getBinding("test.noop")).toBeDefined();
+
+      warnSpy.mockRestore();
     });
   });
 });

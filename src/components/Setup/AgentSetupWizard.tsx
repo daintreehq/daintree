@@ -22,6 +22,7 @@ import { useAppThemeStore } from "@/store/appThemeStore";
 import { appThemeClient } from "@/clients/appThemeClient";
 import type { AppColorScheme } from "@shared/types/appTheme";
 import { actionService } from "@/services/ActionService";
+import { keybindingService } from "@/services/KeybindingService";
 
 const AGENT_ORDER = BUILT_IN_AGENT_IDS;
 const POLL_INTERVAL = 3000;
@@ -890,6 +891,7 @@ function CompleteStep({ installedAgents }: { installedAgents: string[] }) {
             if (!agent) return null;
             const Icon = agent.icon;
             const presetCount = agent.presets?.length ?? 0;
+            const shortcut = keybindingService.getDisplayCombo(`agent.${id}`);
 
             return (
               <div
@@ -907,10 +909,8 @@ function CompleteStep({ installedAgents }: { installedAgents: string[] }) {
                     {presetCount} presets
                   </span>
                 )}
-                {agent.shortcut && (
-                  <span className="text-[11px] text-daintree-text/40 ml-auto">
-                    {agent.shortcut}
-                  </span>
+                {shortcut && (
+                  <span className="text-[11px] text-daintree-text/40 ml-auto">{shortcut}</span>
                 )}
               </div>
             );

@@ -621,7 +621,6 @@ export const WorktreeCard = React.memo(function WorktreeCard({
           id: agentId,
           name: config?.name ?? agentId,
           icon: config?.icon,
-          shortcut: config?.shortcut ?? null,
           isEnabled: available,
         };
       });

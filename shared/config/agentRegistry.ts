@@ -896,7 +896,6 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
     color: "#10b981",
     iconId: "opencode",
     supportsContextInjection: true,
-    shortcut: "Cmd/Ctrl+Alt+O",
     tooltip: "provider-agnostic, open source",
     usageUrl: "https://opencode.ai/",
     version: {
@@ -1079,7 +1078,6 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
     color: "#3ee6eb",
     iconId: "cursor",
     supportsContextInjection: true,
-    shortcut: "Cmd/Ctrl+Alt+U",
     tooltip: "Cursor's agentic CLI",
     version: {
       args: ["-v"],
@@ -1185,7 +1183,6 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
     color: "#7C3AED",
     iconId: "kiro",
     supportsContextInjection: true,
-    shortcut: "Cmd/Ctrl+Alt+K",
     tooltip: "Amazon's AI coding agent",
     usageUrl: "https://kiro.dev/",
     version: {
@@ -1327,7 +1324,6 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
     color: "#8957e5",
     iconId: "copilot",
     supportsContextInjection: true,
-    shortcut: "Cmd/Ctrl+Alt+H",
     tooltip: "GitHub's AI coding agent",
     usageUrl: "https://github.com/features/copilot",
     contextWindow: 160_000,

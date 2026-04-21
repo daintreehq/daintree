@@ -72,7 +72,6 @@ export interface WorktreeLaunchAgentItem {
   name: string;
   isEnabled: boolean;
   icon?: LaunchAgentIcon;
-  shortcut?: string | null;
 }
 
 export interface WorktreeMenuItemsProps {

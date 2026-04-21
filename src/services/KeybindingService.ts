@@ -323,6 +323,19 @@ class KeybindingService {
   }
 
   registerBinding(config: KeybindingConfig): void {
+    if (config.combo) {
+      const normalized = config.combo.trim().toLowerCase();
+      for (const existing of this.bindings.values()) {
+        if (existing.actionId === config.actionId) continue;
+        if (!existing.combo) continue;
+        if (existing.combo.trim().toLowerCase() === normalized) {
+          console.warn(
+            `[KeybindingService] Skipping binding for "${config.actionId}" (${config.combo}) — combo already registered to "${existing.actionId}". Use setOverride() to rebind.`
+          );
+          return;
+        }
+      }
+    }
     this.bindings.set(config.actionId, config);
   }
 

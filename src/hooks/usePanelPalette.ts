@@ -114,7 +114,7 @@ export function usePanelPalette(): UsePanelPaletteReturn {
           name: agentConfig.name,
           iconId: agentConfig.iconId,
           color: agentConfig.color,
-          description: displayCombo || agentConfig.shortcut || agentConfig.tooltip,
+          description: displayCombo || agentConfig.tooltip,
           category: "agent" as const,
           installed: isAvailabilityInitialized
             ? isAgentInstalled(availability[agentId])
