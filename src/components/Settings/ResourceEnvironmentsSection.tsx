@@ -476,7 +476,7 @@ export function ResourceEnvironmentsSection({
           <CommandList
             commands={env.provision ?? []}
             onChange={(provision) => updateEnv({ provision })}
-            placeholder="docker compose -p {worktree_name} up -d"
+            placeholder=""
             label="Provision Commands"
             helpText="Commands to run when provisioning a remote environment"
           />
@@ -485,7 +485,7 @@ export function ResourceEnvironmentsSection({
           <CommandList
             commands={env.teardown ?? []}
             onChange={(teardown) => updateEnv({ teardown })}
-            placeholder="docker compose -p {worktree_name} down -v"
+            placeholder=""
             label="Teardown Commands"
             helpText="Commands to run when destroying the environment"
           />
@@ -494,7 +494,7 @@ export function ResourceEnvironmentsSection({
           <CommandList
             commands={env.resume ?? []}
             onChange={(resume) => updateEnv({ resume })}
-            placeholder="docker compose -p {worktree_name} start"
+            placeholder=""
             label="Resume Commands"
             helpText="Commands to resume a paused environment without destroying"
           />
@@ -503,7 +503,7 @@ export function ResourceEnvironmentsSection({
           <CommandList
             commands={env.pause ?? []}
             onChange={(pause) => updateEnv({ pause })}
-            placeholder="docker compose -p {worktree_name} stop"
+            placeholder=""
             label="Pause Commands"
             helpText="Commands to pause the environment while preserving state"
           />
@@ -515,7 +515,7 @@ export function ResourceEnvironmentsSection({
               type="text"
               value={env.status ?? ""}
               onChange={(e) => updateEnv({ status: e.target.value || undefined })}
-              placeholder={"docker compose -p {worktree_name} ps --format json"}
+              placeholder=""
               spellCheck={false}
               className="w-full px-3 py-1.5 text-sm bg-surface-inset border border-border-default rounded-[var(--radius-md)] text-daintree-text font-mono focus:outline-none focus:border-daintree-accent focus:ring-1 focus:ring-daintree-accent/30"
             />
@@ -531,7 +531,7 @@ export function ResourceEnvironmentsSection({
               type="text"
               value={env.connect ?? ""}
               onChange={(e) => updateEnv({ connect: e.target.value || undefined })}
-              placeholder="docker compose -p {worktree_name} exec app bash"
+              placeholder=""
               spellCheck={false}
               className="w-full px-3 py-1.5 text-sm bg-surface-inset border border-border-default rounded-[var(--radius-md)] text-daintree-text font-mono focus:outline-none focus:border-daintree-accent focus:ring-1 focus:ring-daintree-accent/30"
             />
