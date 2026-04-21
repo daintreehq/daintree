@@ -12,9 +12,7 @@ describe("AppLayout theme browser mount gate — issue #5738", () => {
   });
 
   it("imports useThemeBrowserStore for the mount gate", () => {
-    expect(source).toContain(
-      'import { useThemeBrowserStore } from "@/store/themeBrowserStore"'
-    );
+    expect(source).toContain('import { useThemeBrowserStore } from "@/store/themeBrowserStore"');
   });
 
   it("reads the mount gate from the store, not from the overlay claim", () => {
