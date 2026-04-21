@@ -388,7 +388,11 @@ export function AppLayout({
                 </ErrorBoundary>
               )}
               {themeBrowserOpen && (
-                <ErrorBoundary variant="section" componentName="ThemeBrowser">
+                <ErrorBoundary
+                  variant="section"
+                  componentName="ThemeBrowser"
+                  onError={() => useThemeBrowserStore.getState().close()}
+                >
                   <div
                     className="absolute top-0 bottom-0 z-40 pointer-events-auto"
                     style={{
