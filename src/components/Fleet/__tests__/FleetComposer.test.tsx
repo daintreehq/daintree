@@ -89,7 +89,14 @@ function resetAll(worktreeId = "wt-1") {
     armOrderById: {},
     lastArmedId: null,
   });
-  useFleetComposerStore.setState({ draft: "" });
+  useFleetComposerStore.setState({
+    draft: "",
+    alwaysPreview: false,
+    isCanaryPending: false,
+    canarySentId: null,
+    canaryPendingIds: [],
+    canaryPrompt: null,
+  });
   useFleetIdleStore.setState({ phase: "idle", warningStartedAt: null });
   usePanelStore.setState({ panelsById: {}, panelIds: [] });
   useCommandHistoryStore.setState({ history: {} });
@@ -788,6 +795,121 @@ describe("FleetComposer", () => {
       });
       expect(useFleetComposerStore.getState().isCanaryPending).toBe(false);
       expect(useFleetComposerStore.getState().draft).toBe("");
+    });
+
+    it("alwaysPreview is suppressed during canary pending (strip is sole forward path)", async () => {
+      armN(8);
+      render(<FleetComposer />);
+      const textarea = screen.getByTestId("fleet-composer-textarea") as HTMLTextAreaElement;
+      fireEvent.change(textarea, { target: { value: "initial" } });
+      fireEvent.keyDown(textarea, { key: "Enter" });
+      await waitFor(() => expect(submitMock).toHaveBeenCalledTimes(1));
+      await screen.findByTestId("fleet-composer-canary");
+
+      // Turn on alwaysPreview AFTER canary has staged.
+      act(() => {
+        useFleetComposerStore.setState({ alwaysPreview: true });
+      });
+
+      // Plain Enter should still be a no-op — not open the dry-run dialog.
+      fireEvent.keyDown(textarea, { key: "Enter" });
+      expect(screen.queryByRole("dialog")).toBeNull();
+      expect(submitMock).toHaveBeenCalledTimes(1);
+      // Strip remains visible.
+      expect(screen.getByTestId("fleet-composer-canary")).toBeTruthy();
+    });
+
+    it("canary send failure does NOT stage remainder", async () => {
+      submitMock.mockReset();
+      submitMock.mockRejectedValueOnce(new Error("canary failed"));
+      armN(8);
+      render(<FleetComposer />);
+      const textarea = screen.getByTestId("fleet-composer-textarea") as HTMLTextAreaElement;
+      fireEvent.change(textarea, { target: { value: "broken" } });
+      fireEvent.keyDown(textarea, { key: "Enter" });
+
+      await waitFor(() => expect(submitMock).toHaveBeenCalledTimes(1));
+      await waitFor(() => {
+        const last = useNotificationStore.getState().notifications.at(-1)?.message ?? "";
+        expect(last).toBe("Canary send failed — remainder not staged");
+      });
+      expect(useFleetComposerStore.getState().isCanaryPending).toBe(false);
+      expect(useFleetComposerStore.getState().canaryPendingIds).toEqual([]);
+      expect(useFleetComposerStore.getState().canaryPrompt).toBeNull();
+      expect(screen.queryByTestId("fleet-composer-canary")).toBeNull();
+      // The canary target is recorded as a failure for retry.
+      expect(useFleetComposerStore.getState().lastFailedIds).toEqual(["t1"]);
+    });
+
+    it("Cmd+Enter during canary pending uses live draft (documented design)", async () => {
+      armN(8);
+      render(<FleetComposer />);
+      const textarea = screen.getByTestId("fleet-composer-textarea") as HTMLTextAreaElement;
+      fireEvent.change(textarea, { target: { value: "original" } });
+      fireEvent.keyDown(textarea, { key: "Enter" });
+      await waitFor(() => expect(submitMock).toHaveBeenCalledTimes(1));
+      await screen.findByTestId("fleet-composer-canary");
+
+      // User edits draft, then force-sends. Force-send is an explicit
+      // override, so it uses the live draft — Promote is what uses the
+      // frozen prompt. This test pins that distinction.
+      act(() => {
+        useFleetComposerStore.getState().setDraft("edited override");
+      });
+      fireEvent.keyDown(textarea, { key: "Enter", metaKey: true });
+
+      await waitFor(() => expect(submitMock).toHaveBeenCalledTimes(8));
+      const forcedPayloads = submitMock.mock.calls.slice(1).map(([, text]) => text);
+      expect(forcedPayloads.every((p) => p === "edited override")).toBe(true);
+      // canary target (t1) was NOT re-sent.
+      const forcedIds = submitMock.mock.calls.slice(1).map(([id]) => id);
+      expect(forcedIds).not.toContain("t1");
+    });
+
+    it("full disarm clears all four canary fields", async () => {
+      armN(8);
+      render(<FleetComposer />);
+      const textarea = screen.getByTestId("fleet-composer-textarea") as HTMLTextAreaElement;
+      fireEvent.change(textarea, { target: { value: "staged" } });
+      fireEvent.keyDown(textarea, { key: "Enter" });
+      await waitFor(() => expect(submitMock).toHaveBeenCalledTimes(1));
+      await screen.findByTestId("fleet-composer-canary");
+
+      act(() => {
+        useFleetArmingStore.getState().clear();
+      });
+
+      const s = useFleetComposerStore.getState();
+      expect(s.isCanaryPending).toBe(false);
+      expect(s.canarySentId).toBeNull();
+      expect(s.canaryPendingIds).toEqual([]);
+      expect(s.canaryPrompt).toBeNull();
+    });
+
+    it("promote history records the frozen canary cohort, not the live armed set", async () => {
+      armN(8);
+      render(<FleetComposer />);
+      const textarea = screen.getByTestId("fleet-composer-textarea") as HTMLTextAreaElement;
+      fireEvent.change(textarea, { target: { value: "historic" } });
+      fireEvent.keyDown(textarea, { key: "Enter" });
+      await waitFor(() => expect(submitMock).toHaveBeenCalledTimes(1));
+      await screen.findByTestId("fleet-composer-canary");
+
+      // User disarms t5 mid-review — but the promotion still sends to all 8
+      // frozen targets, and history should record that cohort.
+      act(() => {
+        useFleetArmingStore.getState().disarmId("t5");
+      });
+
+      fireEvent.click(screen.getByTestId("fleet-composer-canary-promote"));
+      await waitFor(() => expect(submitMock).toHaveBeenCalledTimes(8));
+
+      const history = useCommandHistoryStore
+        .getState()
+        .getProjectHistory(FLEET_BROADCAST_HISTORY_KEY);
+      const entry = history.find((h) => h.prompt === "historic");
+      expect(entry).toBeDefined();
+      expect(entry!.armedIds).toEqual(["t1", "t2", "t3", "t4", "t5", "t6", "t7", "t8"]);
     });
 
     it("double-click Promote only enqueues one batch (reentrancy guard)", async () => {

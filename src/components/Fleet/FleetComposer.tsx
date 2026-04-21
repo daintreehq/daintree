@@ -176,18 +176,19 @@ export function FleetComposer(): ReactElement | null {
       // activity; reset the idle timer so the warning doesn't appear mid-flow.
       resetIdleTimer();
 
-      // alwaysPreview: when enabled, Enter opens the dry-run dialog instead of sending directly.
-      if (!force && !isConfirming && useFleetComposerStore.getState().alwaysPreview) {
-        setIsDryRunOpen(true);
+      // When a canary is pending, only explicit strip actions (Promote/Stop) or
+      // a force-send should proceed. A plain Enter / Send click would otherwise
+      // fall through — including into the alwaysPreview dry-run path below —
+      // and either double-send the canary target or re-prompt mid-review. The
+      // strip is the user's only forward path until they act on it.
+      const canaryPendingNow = useFleetComposerStore.getState().isCanaryPending;
+      if (canaryPendingNow && !force && targetIds === undefined) {
         return;
       }
 
-      // When a canary is pending, only explicit strip actions (Promote/Stop) or
-      // a force-send should proceed. A plain Enter / Send click would otherwise
-      // fall through to the live-armed resolution and double-send the canary
-      // target. The strip is the user's path forward until they act on it.
-      const canaryPendingNow = useFleetComposerStore.getState().isCanaryPending;
-      if (canaryPendingNow && !force && targetIds === undefined) {
+      // alwaysPreview: when enabled, Enter opens the dry-run dialog instead of sending directly.
+      if (!force && !isConfirming && useFleetComposerStore.getState().alwaysPreview) {
+        setIsDryRunOpen(true);
         return;
       }
 
@@ -368,6 +369,7 @@ export function FleetComposer(): ReactElement | null {
     const state = useFleetComposerStore.getState();
     const remainingIds = state.canaryPendingIds;
     const promptSnapshot = state.canaryPrompt;
+    const canarySent = state.canarySentId;
     if (remainingIds.length === 0 || promptSnapshot === null) {
       clearCanary();
       return;
@@ -398,10 +400,13 @@ export function FleetComposer(): ReactElement | null {
       });
 
       if (result.successCount > 0) {
-        const armedIds = Array.from(useFleetArmingStore.getState().armedIds);
+        // Record the full frozen cohort (canary + remainder) that actually
+        // received this prompt — not the live armed set, which may have
+        // shifted during the user's review window.
+        const cohort = canarySent !== null ? [canarySent, ...remainingIds] : remainingIds;
         useCommandHistoryStore
           .getState()
-          .recordPrompt(historyKey, promptSnapshot, null, { armedIds });
+          .recordPrompt(historyKey, promptSnapshot, null, { armedIds: cohort });
         if (useFleetComposerStore.getState().draft === promptSnapshot) {
           clearDraft();
         }
