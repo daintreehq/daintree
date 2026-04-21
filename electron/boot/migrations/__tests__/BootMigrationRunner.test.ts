@@ -187,6 +187,8 @@ describe("BootMigrationRunner", () => {
       },
     ];
     const state = createFakeState();
+    const loadSpy = vi.spyOn(state, "load");
+    const saveSpy = vi.spyOn(state, "save");
 
     const result = await new BootMigrationRunner({
       migrations,
@@ -198,6 +200,41 @@ describe("BootMigrationRunner", () => {
     expect(result.skippedForSafeMode).toBe(true);
     expect(result.applied).toEqual([]);
     expect(state.saved).toEqual([]);
+    expect(loadSpy).not.toHaveBeenCalled();
+    expect(saveSpy).not.toHaveBeenCalled();
+  });
+
+  it("re-runs a migration on the next boot when save fails after up succeeded", async () => {
+    let saveShouldThrow = true;
+    const runCount: string[] = [];
+    const migrations: BootMigration[] = [
+      {
+        id: "one",
+        description: "first",
+        up: () => {
+          runCount.push("one");
+        },
+      },
+    ];
+    const state = createFakeState();
+    const originalSave = state.save.bind(state);
+    state.save = ((ids: readonly string[]) => {
+      if (saveShouldThrow) {
+        throw new Error("disk full");
+      }
+      originalSave(ids);
+    }) as typeof state.save;
+
+    await expect(new BootMigrationRunner({ migrations, state }).run()).rejects.toThrow(/disk full/);
+    expect(runCount).toEqual(["one"]);
+    expect(state.current.completed).toEqual([]);
+
+    saveShouldThrow = false;
+
+    const result = await new BootMigrationRunner({ migrations, state }).run();
+    expect(runCount).toEqual(["one", "one"]);
+    expect(result.applied).toEqual(["one"]);
+    expect(state.current.completed).toEqual(["one"]);
   });
 
   it("throws at construction when two migrations share an id", () => {

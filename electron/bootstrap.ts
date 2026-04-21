@@ -16,6 +16,10 @@ try {
 // Failures are logged but non-fatal — forward-only idempotency means the
 // failing migration retries on the next boot, and the app should still be
 // usable as long as existing state is intact.
+//
+// TODO: wire `isSafeMode` from CrashLoopGuardService once it initializes
+// here rather than inside main.ts — today the guard boots after bootstrap,
+// so safe-mode detection isn't available at this point.
 try {
   await runBootMigrations();
 } catch (err) {

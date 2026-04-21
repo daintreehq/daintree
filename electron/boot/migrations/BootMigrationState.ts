@@ -28,7 +28,11 @@ export class BootMigrationState {
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code;
       if (code !== "ENOENT") {
-        console.warn(`[BootMigrations] Failed to read marker at ${this.markerPath}:`, err);
+        console.warn(
+          `[BootMigrations] Failed to read marker at ${this.markerPath} — ` +
+            `treating as fresh state, all migrations will re-run:`,
+          err
+        );
       }
       return { completed: [] };
     }
@@ -36,13 +40,20 @@ export class BootMigrationState {
     try {
       const parsed = JSON.parse(raw) as Partial<BootMigrationsMarker> | null;
       if (!parsed || !Array.isArray(parsed.completed)) {
-        console.warn(`[BootMigrations] Malformed marker at ${this.markerPath}, ignoring`);
+        console.warn(
+          `[BootMigrations] Malformed marker at ${this.markerPath} — ` +
+            `treating as fresh state, all migrations will re-run`
+        );
         return { completed: [] };
       }
       const completed = parsed.completed.filter((id): id is string => typeof id === "string");
       return { completed: Array.from(new Set(completed)) };
     } catch (err) {
-      console.warn(`[BootMigrations] Failed to parse marker at ${this.markerPath}:`, err);
+      console.warn(
+        `[BootMigrations] Failed to parse marker at ${this.markerPath} — ` +
+          `treating as fresh state, all migrations will re-run:`,
+        err
+      );
       return { completed: [] };
     }
   }
