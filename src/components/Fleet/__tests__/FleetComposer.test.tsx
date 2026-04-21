@@ -628,6 +628,29 @@ describe("FleetComposer (live keystroke capture)", () => {
       expect(animate).not.toHaveBeenCalled();
     });
 
+    it("does NOT fire a flash when a benign paste fails for every target", async () => {
+      submitMock.mockReset();
+      submitMock.mockRejectedValue(new Error("port closed"));
+      const { animate } = installAnimateShim();
+      armTwo();
+      render(<FleetComposer />);
+      const textarea = screen.getByTestId("fleet-composer-textarea") as HTMLTextAreaElement;
+
+      fireEvent.paste(textarea, {
+        clipboardData: {
+          getData: (type: string) => (type === "text/plain" ? "hello" : ""),
+        },
+      });
+
+      await waitFor(() => {
+        const last = useNotificationStore.getState().notifications.at(-1)?.message ?? "";
+        expect(last).toBe("Paste failed — no agents received the payload");
+      });
+      // Flash must not fire when every target rejects — a confirming glow on a
+      // failed send would mislead the user.
+      expect(animate).not.toHaveBeenCalled();
+    });
+
     it("fires a flash after a confirmed destructive paste reaches targets", async () => {
       const { animate } = installAnimateShim();
       armTwo();

@@ -488,7 +488,15 @@ export function FleetArmingRibbon(): ReactElement | null {
             open={popoverOpen}
             onOpenChange={setPopoverOpen}
           />
-          <DropdownMenu>
+          <DropdownMenu
+            onOpenChange={(open) => {
+              // Safety net: clear the hover preview whenever the menu closes.
+              // onBlur on the focused item already covers the normal path, but
+              // unusual Radix dismiss paths (programmatic close, upgrade-time
+              // focus-transfer changes) could otherwise leak stale previewIds.
+              if (!open) clearPreview();
+            }}
+          >
             <DropdownMenuTrigger asChild>
               <button
                 type="button"

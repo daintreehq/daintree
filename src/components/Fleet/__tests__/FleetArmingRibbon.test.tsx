@@ -639,6 +639,27 @@ describe("FleetArmingRibbon", () => {
       expect([...preview].sort()).toEqual(["t2", "t3"]);
     });
 
+    it("focus transfer from one menu item to another replaces the preview (no accumulation)", () => {
+      // When the user moves focus from item A to item B without an explicit
+      // blur in between, setPreviewIds must REPLACE the prior set. The blur
+      // + focus pair from React's synthetic focus model fires in a safe
+      // order, but even if it didn't, setPreviewIds's replace-not-merge
+      // semantics hold the invariant.
+      seed([makeAgent("t1", "waiting"), makeAgent("t2", "working")]);
+      useFleetArmingStore.getState().armIds(["t1", "t2"]);
+      render(<FleetArmingRibbon />);
+      const waiting = findMenuItem(/All waiting — this worktree/);
+      const working = findMenuItem(/All working — this worktree/);
+      act(() => {
+        waiting.focus();
+      });
+      expect([...useFleetArmingStore.getState().previewIds]).toEqual(["t1"]);
+      act(() => {
+        working.focus();
+      });
+      expect([...useFleetArmingStore.getState().previewIds]).toEqual(["t2"]);
+    });
+
     it("blurring a menu item clears previewIds instantly", () => {
       seed([makeAgent("t1", "waiting"), makeAgent("t2", "waiting")]);
       useFleetArmingStore.getState().armIds(["t1", "t2"]);
