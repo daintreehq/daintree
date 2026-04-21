@@ -147,11 +147,6 @@ export function FleetComposer(): ReactElement | null {
       try {
         const actualTargetIds = targetIds ?? resolveFleetBroadcastTargetIds();
         if (actualTargetIds.length === 0) {
-          useNotificationStore.getState().addNotification({
-            type: "warning",
-            priority: "low",
-            message: "No armed agents available to send to",
-          });
           return;
         }
 
@@ -293,9 +288,11 @@ export function FleetComposer(): ReactElement | null {
           useFleetComposerStore.getState().draft ||
           useFleetComposerStore.getState().lastBroadcastPrompt;
         setLastFailed(failedIds, currentDraft);
+      } else {
+        clearLastFailed();
       }
     },
-    [setLastFailed]
+    [setLastFailed, clearLastFailed]
   );
 
   if (armedCount === 0) return null;
