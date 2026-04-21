@@ -1,19 +1,13 @@
 import { z } from "zod";
 import type { ActionRegistry } from "../actionTypes";
 import { usePanelStore } from "@/store/panelStore";
-import {
-  useFleetArmingStore,
-  isFleetArmEligible,
-  collectEligibleIds,
-} from "@/store/fleetArmingStore";
+import { useFleetArmingStore, isFleetArmEligible } from "@/store/fleetArmingStore";
 import {
   useFleetPendingActionStore,
   type FleetPendingActionKind,
 } from "@/store/fleetPendingActionStore";
-import { useFleetSavedScopesStore } from "@/store/fleetSavedScopesStore";
 import { useFleetComposerStore } from "@/store/fleetComposerStore";
 import { useFleetScopeFlagStore } from "@/store/fleetScopeFlagStore";
-import { useProjectStore } from "@/store/projectStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { terminalClient } from "@/clients";
 import { executeFleetBroadcast } from "@/components/Fleet/fleetExecution";
@@ -257,60 +251,6 @@ export function registerFleetActions(actions: ActionRegistry): void {
     },
   }));
 
-  actions.set("fleet.scope.save", () => ({
-    id: "fleet.scope.save",
-    title: "Fleet: Save Scope",
-    description: "Save the current armed set as a named scope for quick recall",
-    category: "terminal",
-    kind: "command",
-    danger: "safe",
-    scope: "renderer",
-    argsSchema: z.object({ name: z.string().min(1) }).optional(),
-    run: async (args: unknown) => {
-      const projectId = useProjectStore.getState().currentProject?.id;
-      if (!projectId) return;
-      const armedIds = Array.from(useFleetArmingStore.getState().armedIds);
-      if (armedIds.length === 0) return;
-      const name = (args as { name?: string } | undefined)?.name ?? prompt("Save scope as:");
-      if (!name?.trim()) return;
-      await useFleetSavedScopesStore.getState().saveScope(projectId, {
-        name: name.trim(),
-        terminalIds: armedIds,
-      });
-    },
-  }));
-
-  actions.set("fleet.scope.recall", () => ({
-    id: "fleet.scope.recall",
-    title: "Fleet: Recall Scope",
-    description: "Arm the terminals from a saved scope by name or index",
-    category: "terminal",
-    kind: "command",
-    danger: "safe",
-    scope: "renderer",
-    argsSchema: z
-      .object({ scopeId: z.string().optional(), index: z.number().optional() })
-      .optional(),
-    run: async (args: unknown) => {
-      const a = args as { scopeId?: string; index?: number } | undefined;
-      const scopes = useFleetSavedScopesStore.getState().scopes;
-      let scope = a?.scopeId ? scopes.find((s) => s.id === a.scopeId) : undefined;
-      if (!scope && a?.index != null && a.index >= 0 && a.index < scopes.length) {
-        scope = scopes[a.index];
-      }
-      if (!scope) return;
-      if (scope.terminalIds && scope.terminalIds.length > 0) {
-        useFleetArmingStore.getState().armIds(scope.terminalIds);
-        return;
-      }
-      if (scope.filter) {
-        const activeWorktreeId = useWorktreeSelectionStore.getState().activeWorktreeId ?? null;
-        const ids = collectEligibleIds(scope.filter.scope as "current" | "all", activeWorktreeId);
-        useFleetArmingStore.getState().armIds(ids);
-      }
-    },
-  }));
-
   actions.set("fleet.scope.enter", () => ({
     id: "fleet.scope.enter",
     title: "Fleet: Enter Scope Mode",
@@ -340,24 +280,6 @@ export function registerFleetActions(actions: ActionRegistry): void {
       const flag = useFleetScopeFlagStore.getState();
       if (!flag.isHydrated || flag.mode !== "scoped") return;
       useWorktreeSelectionStore.getState().exitFleetScope();
-    },
-  }));
-
-  actions.set("fleet.scope.delete", () => ({
-    id: "fleet.scope.delete",
-    title: "Fleet: Delete Scope",
-    description: "Remove a saved scope",
-    category: "terminal",
-    kind: "command",
-    danger: "safe",
-    scope: "renderer",
-    argsSchema: z.object({ scopeId: z.string() }).optional(),
-    run: async (args: unknown) => {
-      const projectId = useProjectStore.getState().currentProject?.id;
-      if (!projectId) return;
-      const scopeId = (args as { scopeId?: string } | undefined)?.scopeId;
-      if (!scopeId) return;
-      await useFleetSavedScopesStore.getState().deleteScope(projectId, scopeId);
     },
   }));
 

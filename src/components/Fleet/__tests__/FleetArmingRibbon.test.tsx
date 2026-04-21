@@ -210,39 +210,9 @@ describe("FleetArmingRibbon", () => {
     dispatchSpy.mockRestore();
   });
 
-  describe("Fleet scope composer placement", () => {
-    it("renders the embedded FleetComposer when scope is not active", () => {
+  describe("Embedded FleetComposer", () => {
+    it("renders the embedded FleetComposer whenever the ribbon is mounted", () => {
       useFleetArmingStore.getState().armIds(["a"]);
-      render(<FleetArmingRibbon />);
-      expect(screen.queryByTestId("fleet-composer")).toBeTruthy();
-    });
-
-    it("suppresses the embedded FleetComposer when Fleet scope is active", () => {
-      useFleetArmingStore.getState().armIds(["a"]);
-      useFleetScopeFlagStore.setState({ mode: "scoped", isHydrated: true });
-      useWorktreeSelectionStore.setState({
-        activeWorktreeId: "wt-1",
-        isFleetScopeActive: true,
-      });
-      render(<FleetArmingRibbon />);
-      // Composer moves to the pinned grid header when scope is active.
-      expect(screen.queryByTestId("fleet-composer")).toBeNull();
-      // The ribbon itself — including quick-action buttons — still renders.
-      expect(screen.queryByTestId("fleet-arming-ribbon")).toBeTruthy();
-      expect(screen.queryByTestId("fleet-quick-accept")).toBeTruthy();
-      expect(screen.queryByTestId("fleet-quick-kill")).toBeTruthy();
-    });
-
-    it("keeps the embedded FleetComposer when flag is 'scoped' but scope not entered", () => {
-      // Feature flag on, but user has not dispatched fleet.scope.enter yet —
-      // ContentGrid wouldn't render its pinned header in this state, so the
-      // ribbon must keep the composer to avoid leaving the user without one.
-      useFleetArmingStore.getState().armIds(["a"]);
-      useFleetScopeFlagStore.setState({ mode: "scoped", isHydrated: true });
-      useWorktreeSelectionStore.setState({
-        activeWorktreeId: "wt-1",
-        isFleetScopeActive: false,
-      });
       render(<FleetArmingRibbon />);
       expect(screen.queryByTestId("fleet-composer")).toBeTruthy();
     });
