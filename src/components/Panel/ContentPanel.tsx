@@ -74,6 +74,13 @@ export interface ContentPanelProps extends BasePanelProps {
   // surface their state on the group container without changing the header chip.
   ambientAgentState?: AgentState;
 
+  // Fleet broadcast scope indicators. When the pane participates in a fleet-scope
+  // broadcast grid, the outer container gets an accent border and the title bar
+  // gets an elevated surface. `isPrimary` marks the most-recently-armed pane
+  // (the one that receives focus on scope exit).
+  isFleetScope?: boolean;
+  isPrimary?: boolean;
+
   // Tab support
   tabs?: TabInfo[];
   groupId?: string;
@@ -129,6 +136,8 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
     isPinged,
     wasJustSelected,
     ambientAgentState,
+    isFleetScope = false,
+    isPrimary = false,
     tabs,
     groupId,
     onTabClick,
@@ -267,6 +276,8 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
         ref={ref}
         data-panel-id={id}
         data-panel-location={location}
+        data-fleet-scope={isFleetScope || undefined}
+        data-fleet-primary={(isFleetScope && isPrimary) || undefined}
         style={{
           contain: "content",
           ...(worktreeAccentColor
@@ -291,6 +302,13 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
                   : "border-overlay hover:border-tint/[0.08]"),
           location === "grid" && isMaximized && "border-0 rounded-none z-[var(--z-maximized)]",
           worktreeAccentColor && location === "grid" && !isMaximized && "panel-worktree-identity",
+          // Fleet border classes come after the focus/agent-state border classes
+          // so their CSS rules (declared later in index.css) take visual priority
+          // when a pane is both focused and in fleet scope.
+          location === "grid" &&
+            !isMaximized &&
+            isFleetScope &&
+            (isPrimary ? "panel-fleet-primary" : "panel-fleet-member"),
           isTrashing && "terminal-trashing",
           className
         )}
@@ -332,6 +350,8 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
           onRestart={onRestart}
           isPinged={isPinged}
           wasJustSelected={wasJustSelected}
+          isFleetScope={isFleetScope}
+          isPrimary={isPrimary}
           headerContent={resolvedHeaderContent}
           headerActions={headerActions}
           selectionControl={selectionControl}

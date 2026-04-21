@@ -1479,40 +1479,22 @@ body[data-reduce-animations="true"] :is(.terminal-restoring, .terminal-trashing)
   pointer-events: none;
 }
 
-/* Fleet scope broadcast overlay — diagonal stripes signal read-only/armed
-   state on every panel rendered inside the fleet-scope grid. Rendered as a
-   pseudo-element so it never steals pointer events from selection, scroll,
-   or link-clicks inside the underlying xterm instance. */
-.fleet-broadcast-overlay {
-  position: relative;
-  contain: layout style;
+/* Fleet scope broadcast chrome — accent-primary border on the outer pane
+   container. No pseudo-element overlay, so the xterm content area is never
+   tinted or covered. The title-bar treatment is applied separately inside
+   PanelHeader via isFleetScope / isPrimary props. */
+.panel-fleet-member {
+  border-color: color-mix(in oklab, var(--color-accent-primary) 40%, transparent);
+  box-shadow:
+    inset 0 0 0 1px color-mix(in oklab, var(--color-accent-primary) 15%, transparent),
+    0 0 0 1px color-mix(in oklab, var(--color-accent-primary) 10%, transparent);
 }
 
-.fleet-broadcast-overlay::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  z-index: 2;
-  background-image: repeating-linear-gradient(
-    45deg,
-    color-mix(in oklab, var(--theme-tint) 10%, transparent) 0,
-    color-mix(in oklab, var(--theme-tint) 10%, transparent) 2px,
-    transparent 2px,
-    transparent 10px
-  );
-  mix-blend-mode: normal;
-  border-radius: inherit;
-}
-
-/* Primary (most-recently-armed) pane in fleet scope — swaps the diagonal
-   stripes for a solid inset accent ring so the user can see which terminal
-   receives keyboard focus on scope exit. The base `.fleet-broadcast-overlay`
-   class MUST still be applied alongside this one; the `::after` override
-   suppresses the stripes via `background-image: none`. */
-.fleet-broadcast-overlay-primary::after {
-  background-image: none;
-  box-shadow: inset 0 0 0 2px var(--theme-tint);
+.panel-fleet-primary {
+  border-color: var(--color-accent-primary);
+  box-shadow:
+    inset 0 0 0 1px color-mix(in oklab, var(--color-accent-primary) 30%, transparent),
+    0 0 0 1px color-mix(in oklab, var(--color-accent-primary) 20%, transparent);
 }
 
 /* Backwards compatibility for older selection class */
@@ -2132,6 +2114,18 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
     animation: none;
   }
 
+  .panel-fleet-member {
+    border-color: Highlight;
+    outline: 2px dashed Highlight;
+    outline-offset: -2px;
+  }
+
+  .panel-fleet-primary {
+    border-color: Highlight;
+    outline: 3px solid Highlight;
+    outline-offset: -3px;
+  }
+
   .terminal-pane {
     border-color: ButtonText;
   }
@@ -2160,6 +2154,11 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
 
   .panel-state-waiting,
   .panel-state-working {
+    border-width: 2px;
+  }
+
+  .panel-fleet-member,
+  .panel-fleet-primary {
     border-width: 2px;
   }
 

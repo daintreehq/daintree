@@ -518,6 +518,79 @@ describe("PanelHeader", () => {
     });
   });
 
+  describe("fleet broadcast chrome", () => {
+    it("does not mark the header when isFleetScope is false", () => {
+      const { container } = render(<PanelHeader {...makeProps({ isFocused: false })} />);
+      const header = container.firstElementChild as HTMLElement;
+      expect(header.getAttribute("data-fleet-scope")).toBeNull();
+      expect(header.getAttribute("data-fleet-primary")).toBeNull();
+      expect(header.className).not.toContain("bg-surface-panel-elevated");
+    });
+
+    it("tags member panes with data-fleet-scope and lifts the header bg", () => {
+      const { container } = render(
+        <PanelHeader {...makeProps({ isFocused: false, isFleetScope: true, isPrimary: false })} />
+      );
+      const header = container.firstElementChild as HTMLElement;
+      expect(header.getAttribute("data-fleet-scope")).toBe("true");
+      expect(header.getAttribute("data-fleet-primary")).toBeNull();
+      // Member header swaps the transparent unfocused bg for the overlay tint.
+      expect(header.className).toContain("bg-overlay-subtle");
+      expect(header.className).not.toContain("bg-transparent");
+    });
+
+    it("tags the primary pane with both attributes and an elevated header bg", () => {
+      const { container } = render(
+        <PanelHeader {...makeProps({ isFocused: false, isFleetScope: true, isPrimary: true })} />
+      );
+      const header = container.firstElementChild as HTMLElement;
+      expect(header.getAttribute("data-fleet-scope")).toBe("true");
+      expect(header.getAttribute("data-fleet-primary")).toBe("true");
+      expect(header.className).toContain("bg-surface-panel-elevated");
+    });
+
+    it("colors the title with text-accent-primary on the primary pane", () => {
+      render(<PanelHeader {...makeProps({ isFleetScope: true, isPrimary: true })} />);
+      // Two nodes render "Test Panel" (the title + the mocked tooltip content);
+      // the title span carries the font-medium class.
+      const title = screen
+        .getAllByText("Test Panel")
+        .find((el) => el.className.includes("font-medium"));
+      expect(title?.className).toContain("text-accent-primary");
+    });
+
+    it("leaves the title default-colored on a non-primary fleet member", () => {
+      render(<PanelHeader {...makeProps({ isFleetScope: true, isPrimary: false })} />);
+      const title = screen
+        .getAllByText("Test Panel")
+        .find((el) => el.className.includes("font-medium"));
+      expect(title?.className).not.toContain("text-accent-primary");
+    });
+
+    it("does not apply fleet bg when the pane is maximized", () => {
+      const { container } = render(
+        <PanelHeader {...makeProps({ isFleetScope: true, isPrimary: true, isMaximized: true })} />
+      );
+      const header = container.firstElementChild as HTMLElement;
+      expect(header.className).not.toContain("bg-surface-panel-elevated");
+      expect(header.className).not.toContain("bg-overlay-subtle");
+    });
+
+    it("does not leak isPrimary styling when isFleetScope is false", () => {
+      const { container } = render(
+        <PanelHeader {...makeProps({ isFleetScope: false, isPrimary: true })} />
+      );
+      const header = container.firstElementChild as HTMLElement;
+      expect(header.getAttribute("data-fleet-scope")).toBeNull();
+      expect(header.getAttribute("data-fleet-primary")).toBeNull();
+      expect(header.className).not.toContain("bg-surface-panel-elevated");
+      const title = screen
+        .getAllByText("Test Panel")
+        .find((el) => el.className.includes("font-medium"));
+      expect(title?.className).not.toContain("text-accent-primary");
+    });
+  });
+
   describe("dangerous flags indicator", () => {
     it("shows red dot indicator when agentLaunchFlags contain dangerous flag", () => {
       render(

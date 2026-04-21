@@ -788,6 +788,8 @@ function TerminalPaneComponent({
       isPinged={isPinged}
       wasJustSelected={wasJustSelected}
       ambientAgentState={ambientAgentState}
+      isFleetScope={isFleetScope}
+      isPrimary={isPrimary}
       tabs={tabs}
       onTabClick={onTabClick}
       onTabClose={onTabClose}
@@ -796,8 +798,6 @@ function TerminalPaneComponent({
       className={cn(
         "terminal-pane",
         isExited && "opacity-75 grayscale",
-        isFleetScope && "fleet-broadcast-overlay",
-        isFleetScope && isPrimary && "fleet-broadcast-overlay-primary",
         isPinged &&
           allowPing &&
           (wasJustSelected ? "animate-terminal-ping-select" : "animate-terminal-ping")
