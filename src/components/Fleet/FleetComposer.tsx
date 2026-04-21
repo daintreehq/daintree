@@ -12,6 +12,7 @@ import { cn } from "@/lib/utils";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { useFleetComposerStore } from "@/store/fleetComposerStore";
 import { useFleetIdleStore } from "@/store/fleetIdleStore";
+import { usePanelStore } from "@/store/panelStore";
 import { useCommandHistoryStore } from "@/store/commandHistoryStore";
 import { useNotificationStore } from "@/store/notificationStore";
 import { useProjectStore } from "@/store/projectStore";
@@ -35,12 +36,22 @@ interface WarningReason {
 
 /** Default threshold for quorum confirmation (number of targets). */
 const DEFAULT_QUORUM_THRESHOLD = 5;
+/** Default threshold for canary staged-broadcast (number of targets). */
+const DEFAULT_CANARY_THRESHOLD = 8;
 
 function getQuorumThreshold(): number {
   try {
     return useFleetComposerStore.getState().quorumThreshold;
   } catch {
     return DEFAULT_QUORUM_THRESHOLD;
+  }
+}
+
+function getCanaryThreshold(): number {
+  try {
+    return useFleetComposerStore.getState().canaryThreshold;
+  } catch {
+    return DEFAULT_CANARY_THRESHOLD;
   }
 }
 
@@ -62,6 +73,17 @@ export function FleetComposer(): ReactElement | null {
       clearDraft: s.clearDraft,
     }))
   );
+
+  const { isCanaryPending, canarySentId, canaryPendingIds, clearCanary, startCanary } =
+    useFleetComposerStore(
+      useShallow((s) => ({
+        isCanaryPending: s.isCanaryPending,
+        canarySentId: s.canarySentId,
+        canaryPendingIds: s.canaryPendingIds,
+        clearCanary: s.clearCanary,
+        startCanary: s.startCanary,
+      }))
+    );
 
   const dryRunRequested = useFleetComposerStore((s) => s.dryRunRequested);
   const clearDryRunRequest = useFleetComposerStore((s) => s.clearDryRunRequest);
@@ -154,15 +176,86 @@ export function FleetComposer(): ReactElement | null {
       // activity; reset the idle timer so the warning doesn't appear mid-flow.
       resetIdleTimer();
 
+      // When a canary is pending, only explicit strip actions (Promote/Stop) or
+      // a force-send should proceed. A plain Enter / Send click would otherwise
+      // fall through — including into the alwaysPreview dry-run path below —
+      // and either double-send the canary target or re-prompt mid-review. The
+      // strip is the user's only forward path until they act on it.
+      const canaryPendingNow = useFleetComposerStore.getState().isCanaryPending;
+      if (canaryPendingNow && !force && targetIds === undefined) {
+        return;
+      }
+
       // alwaysPreview: when enabled, Enter opens the dry-run dialog instead of sending directly.
       if (!force && !isConfirming && useFleetComposerStore.getState().alwaysPreview) {
         setIsDryRunOpen(true);
         return;
       }
 
+      // If a canary is pending and this is a force-send bypass, deliver only
+      // to the frozen remainder — the canary target already received it.
+      const canaryRemainderSnapshot = useFleetComposerStore.getState().canaryPendingIds;
+      const resolvedTargetIds =
+        targetIds ??
+        (force && canaryPendingNow ? canaryRemainderSnapshot : resolveFleetBroadcastTargetIds());
+
+      // Canary gate: when targets >= canaryThreshold and no force bypass, send
+      // to the first target only, then stage the remainder. Supersedes quorum.
+      if (
+        !force &&
+        !isConfirming &&
+        !canaryPendingNow &&
+        resolvedTargetIds.length >= getCanaryThreshold() &&
+        !needsFleetBroadcastConfirmation(currentDraft)
+      ) {
+        const canaryId = resolvedTargetIds[0];
+        if (canaryId === undefined) return;
+        const remainderIds = resolvedTargetIds.slice(1);
+
+        submittingRef.current = true;
+        setIsSubmitting(true);
+        try {
+          const result = await executeFleetBroadcast(currentDraft, [canaryId]);
+          if (result.failureCount > 0) {
+            logWarn("[FleetComposer] canary submit had rejection", {
+              failureCount: result.failureCount,
+              failedIds: result.failedIds,
+            });
+            setLastFailed(result.failedIds, currentDraft);
+            useNotificationStore.getState().addNotification({
+              type: "warning",
+              priority: "low",
+              message: "Canary send failed — remainder not staged",
+            });
+            return;
+          }
+          clearLastFailed();
+          startCanary({
+            canarySentId: canaryId,
+            remainingIds: remainderIds,
+            prompt: currentDraft,
+          });
+          useNotificationStore.getState().addNotification({
+            type: "success",
+            priority: "low",
+            message: `Canary sent — review output, then apply to ${remainderIds.length} remaining`,
+          });
+        } catch (e) {
+          useNotificationStore.getState().addNotification({
+            type: "error",
+            priority: "high",
+            message: "Canary broadcast failed unexpectedly",
+          });
+          throw e;
+        } finally {
+          submittingRef.current = false;
+          setIsSubmitting(false);
+        }
+        return;
+      }
+
       // Quorum confirmation: when >=N targets, require explicit confirmation
       // even if the payload itself isn't flagged as dangerous.
-      const resolvedTargetIds = targetIds ?? resolveFleetBroadcastTargetIds();
       if (
         !force &&
         !isConfirming &&
@@ -183,7 +276,7 @@ export function FleetComposer(): ReactElement | null {
       setIsSubmitting(true);
 
       try {
-        const actualTargetIds = targetIds ?? resolveFleetBroadcastTargetIds();
+        const actualTargetIds = resolvedTargetIds;
         if (actualTargetIds.length === 0) {
           useNotificationStore.getState().addNotification({
             type: "warning",
@@ -243,6 +336,10 @@ export function FleetComposer(): ReactElement | null {
           setHistoryIndex(-1);
           historySnapshotRef.current = "";
         }
+
+        // A force-send completed while a canary was pending — staged state is
+        // now spent, clear it so the strip doesn't linger.
+        if (canaryPendingNow) clearCanary();
       } catch (e) {
         useNotificationStore.getState().addNotification({
           type: "error",
@@ -255,8 +352,86 @@ export function FleetComposer(): ReactElement | null {
         setIsSubmitting(false);
       }
     },
-    [clearDraft, clearLastFailed, historyKey, isConfirming, resetIdleTimer, setLastFailed]
+    [
+      clearCanary,
+      clearDraft,
+      clearLastFailed,
+      historyKey,
+      isConfirming,
+      resetIdleTimer,
+      setLastFailed,
+      startCanary,
+    ]
   );
+
+  const handlePromoteToRemaining = useCallback(async () => {
+    if (submittingRef.current) return;
+    const state = useFleetComposerStore.getState();
+    const remainingIds = state.canaryPendingIds;
+    const promptSnapshot = state.canaryPrompt;
+    const canarySent = state.canarySentId;
+    if (remainingIds.length === 0 || promptSnapshot === null) {
+      clearCanary();
+      return;
+    }
+
+    submittingRef.current = true;
+    setIsSubmitting(true);
+    try {
+      const result = await executeFleetBroadcast(promptSnapshot, remainingIds);
+
+      if (result.failureCount > 0) {
+        logWarn("[FleetComposer] canary promotion had rejections", {
+          failureCount: result.failureCount,
+          failedIds: result.failedIds,
+        });
+        setLastFailed(result.failedIds, promptSnapshot);
+      } else {
+        clearLastFailed();
+      }
+
+      useNotificationStore.getState().addNotification({
+        type: result.successCount > 0 ? "success" : "warning",
+        priority: "low",
+        message:
+          result.failureCount > 0
+            ? `Applied to ${result.successCount} agent${result.successCount === 1 ? "" : "s"} (${result.failureCount} failed)`
+            : `Applied to ${result.successCount} agent${result.successCount === 1 ? "" : "s"}`,
+      });
+
+      if (result.successCount > 0) {
+        // Record the full frozen cohort (canary + remainder) that actually
+        // received this prompt — not the live armed set, which may have
+        // shifted during the user's review window.
+        const cohort = canarySent !== null ? [canarySent, ...remainingIds] : remainingIds;
+        useCommandHistoryStore
+          .getState()
+          .recordPrompt(historyKey, promptSnapshot, null, { armedIds: cohort });
+        if (useFleetComposerStore.getState().draft === promptSnapshot) {
+          clearDraft();
+        }
+        setHistoryIndex(-1);
+        historySnapshotRef.current = "";
+      }
+      clearCanary();
+    } catch (e) {
+      clearCanary();
+      useNotificationStore.getState().addNotification({
+        type: "error",
+        priority: "high",
+        message: "Canary promotion failed unexpectedly",
+      });
+      throw e;
+    } finally {
+      submittingRef.current = false;
+      setIsSubmitting(false);
+    }
+  }, [clearCanary, clearDraft, clearLastFailed, historyKey, setLastFailed]);
+
+  const handleStopCanary = useCallback(() => {
+    clearCanary();
+    textareaRef.current?.focus();
+  }, [clearCanary]);
 
   const handleRetryFailed = useCallback(() => {
     const failed = useFleetComposerStore.getState().lastFailedIds;
@@ -363,6 +538,10 @@ export function FleetComposer(): ReactElement | null {
     [setLastFailed]
   );
 
+  const canaryTargetTitle = usePanelStore((s) =>
+    canarySentId !== null ? (s.panelsById[canarySentId]?.title ?? canarySentId) : null
+  );
+
   if (armedCount === 0) return null;
 
   const sendLabel = isSubmitting ? "Sending…" : "Send";
@@ -370,6 +549,8 @@ export function FleetComposer(): ReactElement | null {
     armedCount === 1
       ? "Broadcast to 1 armed agent (Enter to send)"
       : `Broadcast to ${armedCount} armed agents (Enter to send)`;
+
+  const canaryRemainingCount = canaryPendingIds.length;
 
   return (
     <>
@@ -436,7 +617,7 @@ export function FleetComposer(): ReactElement | null {
             <button
               type="button"
               onClick={() => void handleSubmit({ force: false })}
-              disabled={draft.trim().length === 0 || isSubmitting}
+              disabled={draft.trim().length === 0 || isSubmitting || isCanaryPending}
               data-testid="fleet-composer-send"
               className="rounded-[var(--radius-md)] bg-daintree-accent px-2.5 py-1 text-[11px] text-text-inverse transition-colors hover:bg-daintree-accent/90 disabled:cursor-not-allowed disabled:opacity-40"
               aria-label="Send broadcast"
@@ -488,6 +669,38 @@ export function FleetComposer(): ReactElement | null {
               className="rounded-[var(--radius-md)] bg-amber-500/20 px-2 py-0.5 text-amber-100 transition-colors hover:bg-amber-500/30 disabled:cursor-not-allowed disabled:opacity-40"
             >
               Send anyway
+            </button>
+          </div>
+        )}
+        {isCanaryPending && (
+          <div
+            role="status"
+            aria-live="polite"
+            aria-atomic="true"
+            data-testid="fleet-composer-canary"
+            className="flex items-center gap-2 rounded-[var(--radius-md)] border border-sky-500/40 bg-sky-500/10 px-2 py-1 text-[11px] text-sky-100"
+          >
+            <span className="flex-1">
+              Sent to {canaryTargetTitle ?? "canary"} — review output, then apply to{" "}
+              {canaryRemainingCount} remaining agent
+              {canaryRemainingCount === 1 ? "" : "s"}.
+            </span>
+            <button
+              type="button"
+              onClick={handleStopCanary}
+              data-testid="fleet-composer-canary-stop"
+              className="rounded-[var(--radius-md)] px-2 py-0.5 text-daintree-text/70 transition-colors hover:bg-tint/[0.08] hover:text-daintree-text"
+            >
+              Stop
+            </button>
+            <button
+              type="button"
+              disabled={isSubmitting || canaryRemainingCount === 0}
+              onClick={() => void handlePromoteToRemaining()}
+              data-testid="fleet-composer-canary-promote"
+              className="rounded-[var(--radius-md)] bg-sky-500/20 px-2 py-0.5 text-sky-100 transition-colors hover:bg-sky-500/30 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              Apply to {canaryRemainingCount}
             </button>
           </div>
         )}

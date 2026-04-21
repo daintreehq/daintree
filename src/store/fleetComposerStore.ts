@@ -13,12 +13,28 @@ interface FleetComposerState {
   alwaysPreview: boolean;
   /** Broadcast target count that triggers quorum confirmation */
   quorumThreshold: number;
+  /** Broadcast target count that triggers canary staged-send (supersedes quorum) */
+  canaryThreshold: number;
+  /** True while a canary has been sent and the remainder is staged pending user action */
+  isCanaryPending: boolean;
+  /** Terminal ID that received the canary send */
+  canarySentId: string | null;
+  /**
+   * Remaining target IDs frozen at canary-send time. Used as the source of truth
+   * for the subsequent "Apply to remaining" promotion so the set can't drift if
+   * the user disarms targets during review.
+   */
+  canaryPendingIds: string[];
+  /** Prompt text frozen at canary-send time so edits during review don't corrupt promotion */
+  canaryPrompt: string | null;
   setDraft: (draft: string) => void;
   clearDraft: () => void;
   requestDryRun: () => void;
   clearDryRunRequest: () => void;
   setLastFailed: (ids: string[], prompt: string) => void;
   clearLastFailed: () => void;
+  startCanary: (args: { canarySentId: string; remainingIds: string[]; prompt: string }) => void;
+  clearCanary: () => void;
 }
 
 export const useFleetComposerStore = create<FleetComposerState>()((set) => ({
@@ -28,12 +44,31 @@ export const useFleetComposerStore = create<FleetComposerState>()((set) => ({
   lastBroadcastPrompt: "",
   alwaysPreview: false,
   quorumThreshold: 5,
+  canaryThreshold: 8,
+  isCanaryPending: false,
+  canarySentId: null,
+  canaryPendingIds: [],
+  canaryPrompt: null,
   setDraft: (draft) => set({ draft }),
   clearDraft: () => set({ draft: "" }),
   requestDryRun: () => set({ dryRunRequested: true }),
   clearDryRunRequest: () => set({ dryRunRequested: false }),
   setLastFailed: (ids, prompt) => set({ lastFailedIds: ids, lastBroadcastPrompt: prompt }),
   clearLastFailed: () => set({ lastFailedIds: [], lastBroadcastPrompt: "" }),
+  startCanary: ({ canarySentId, remainingIds, prompt }) =>
+    set({
+      isCanaryPending: true,
+      canarySentId,
+      canaryPendingIds: remainingIds,
+      canaryPrompt: prompt,
+    }),
+  clearCanary: () =>
+    set({
+      isCanaryPending: false,
+      canarySentId: null,
+      canaryPendingIds: [],
+      canaryPrompt: null,
+    }),
 }));
 
 /**
@@ -78,6 +113,7 @@ if (typeof useFleetArmingStore.subscribe === "function") {
       subState.lastCount = nextCount;
       if (prevCount > 0 && nextCount === 0) {
         useFleetComposerStore.getState().clearDraft();
+        useFleetComposerStore.getState().clearCanary();
       }
     });
   }
