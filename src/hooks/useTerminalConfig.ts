@@ -95,6 +95,7 @@ export function useTerminalConfig() {
 
   const colorVisionMode = useAppThemeStore((state) => state.colorVisionMode);
   const appThemeId = useAppThemeStore((state) => state.selectedSchemeId);
+  const appPreviewSchemeId = useAppThemeStore((state) => state.previewSchemeId);
 
   useEffect(() => {
     const theme = useTerminalColorSchemeStore.getState().getEffectiveTheme();
@@ -107,6 +108,7 @@ export function useTerminalConfig() {
     // customSchemes in deps ensures re-run when a custom scheme is added/changed
     // colorVisionMode in deps ensures terminal ANSI colors update when CVD mode changes
     // appThemeId in deps ensures terminal updates when app theme changes while "daintree" is selected
+    // appPreviewSchemeId in deps ensures terminal updates when app theme preview changes
     // screenReaderEnabled in deps ensures terminals update when screen reader mode changes
   }, [
     selectedSchemeId,
@@ -116,6 +118,7 @@ export function useTerminalConfig() {
     fontFamily,
     colorVisionMode,
     appThemeId,
+    appPreviewSchemeId,
     screenReaderEnabled,
   ]);
 }
