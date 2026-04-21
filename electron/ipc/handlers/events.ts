@@ -7,17 +7,56 @@ import { broadcastToRenderer, typedHandle } from "../utils.js";
 const ALLOWED_RENDERER_EVENTS: ReadonlySet<keyof DaintreeEventMap> = new Set(["action:dispatched"]);
 
 /**
- * Manifest of bridged events. The `satisfies Record<keyof IpcEventBusMap, true>`
- * clause makes tsc fail if `IpcEventBusMap` grows and a key is not added here —
- * forcing the main-side bridge to stay in lockstep with the renderer-facing type.
+ * Manifest classifying how each bus event reaches the renderer.
+ *
+ * - `"bus"`: relayed here from the main-side `TypedEventBus` (services emit on
+ *   `events.emit(name, payload)` and the bridge loop below forwards to every
+ *   renderer on `CHANNELS.EVENTS_PUSH`). Must also be a key of `DaintreeEventMap`.
+ * - `"external"`: the producer wraps the payload itself and sends on
+ *   `CHANNELS.EVENTS_PUSH` via `sendToRenderer`/`webContents.send` (window-scoped)
+ *   or `broadcastToRenderer` (global). The bridge loop here does NOT relay these
+ *   — double-emission would duplicate renderer delivery.
+ *
+ * The `satisfies Record<keyof IpcEventBusMap, ...>` clause makes tsc fail if
+ * `IpcEventBusMap` grows and a key is not classified here, keeping the main-side
+ * bridge in lockstep with the renderer-facing type.
  */
 const EVENT_BUS_BRIDGED_MANIFEST = {
-  "agent:state-changed": true,
-} as const satisfies Record<keyof IpcEventBusMap, true>;
+  // Agent lifecycle: emitted on TypedEventBus; relayed here.
+  "agent:state-changed": "bus",
+  "agent:all-clear": "bus",
+  "agent:detected": "bus",
+  "agent:exited": "bus",
+  "agent:fallback-triggered": "bus",
 
-const EVENT_BUS_BRIDGED_EVENTS = Object.keys(EVENT_BUS_BRIDGED_MANIFEST) as Array<
-  keyof IpcEventBusMap
->;
+  // Window-scoped events: producers send envelopes directly to the target
+  // window's webContents to preserve per-window routing.
+  "worktree:update": "external",
+  "window:fullscreen-change": "external",
+  "window:reclaim-memory": "external",
+  "window:destroy-hidden-webviews": "external",
+  "window:disk-space-status": "external",
+  "system:wake": "external",
+  "app-agent:dispatch-action-request": "external",
+  "app-agent:confirmation-request": "external",
+  "terminal:backend-crashed": "external",
+  "terminal:backend-ready": "external",
+
+  // Global broadcasts emitted externally (no TypedEventBus counterpart).
+  "resource:profile-changed": "external",
+  "sound:cancel": "external",
+  "plugin:actions-changed": "external",
+  "terminal:exit": "external",
+  "terminal:spawn-result": "external",
+} as const satisfies Record<keyof IpcEventBusMap, "bus" | "external">;
+
+const EVENT_BUS_RELAYED_EVENTS = (
+  Object.entries(EVENT_BUS_BRIDGED_MANIFEST) as Array<
+    [keyof IpcEventBusMap, (typeof EVENT_BUS_BRIDGED_MANIFEST)[keyof IpcEventBusMap]]
+  >
+)
+  .filter(([, mode]) => mode === "bus")
+  .map(([name]) => name) as Array<Extract<keyof IpcEventBusMap, keyof DaintreeEventMap>>;
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
@@ -164,11 +203,16 @@ export function registerEventsHandlers(deps: HandlerDependencies): () => void {
   };
   handlers.push(typedHandle(CHANNELS.EVENTS_EMIT, handleEventsEmit));
 
-  // Bridge selected TypedEventBus events to the renderer via the multiplexed
-  // `events:push` channel. The renderer subscribes via
+  // Bridge events emitted on the main-side `TypedEventBus` to every renderer
+  // via the multiplexed `events:push` channel. The renderer subscribes via
   // `window.electron.events.on(name, callback)`.
+  //
+  // Events marked `"external"` in `EVENT_BUS_BRIDGED_MANIFEST` are NOT relayed
+  // here — their producers emit the envelope directly on `CHANNELS.EVENTS_PUSH`
+  // via `sendToRenderer` or `broadcastToRenderer`, to preserve window-scoped
+  // routing or avoid a `TypedEventBus` hop for channels without a counterpart.
   if (events) {
-    for (const name of EVENT_BUS_BRIDGED_EVENTS) {
+    for (const name of EVENT_BUS_RELAYED_EVENTS) {
       const unsubscribe = events.on(name, (payload) => {
         broadcastToRenderer(CHANNELS.EVENTS_PUSH, {
           name,

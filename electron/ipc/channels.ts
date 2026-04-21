@@ -2,7 +2,6 @@ export const CHANNELS = {
   WORKTREE_GET_ALL: "worktree:get-all",
   WORKTREE_REFRESH: "worktree:refresh",
   WORKTREE_SET_ACTIVE: "worktree:set-active",
-  WORKTREE_UPDATE: "worktree:update",
   WORKTREE_REMOVE: "worktree:remove",
   WORKTREE_ACTIVATED: "worktree:activated",
   WORKTREE_CREATE: "worktree:create",
@@ -25,13 +24,11 @@ export const CHANNELS = {
   WORKTREE_RESTART_SERVICE: "worktree:restart-service",
 
   TERMINAL_SPAWN: "terminal:spawn",
-  TERMINAL_SPAWN_RESULT: "terminal:spawn-result",
   TERMINAL_DATA: "terminal:data",
   TERMINAL_INPUT: "terminal:input",
   TERMINAL_SUBMIT: "terminal:submit",
   TERMINAL_RESIZE: "terminal:resize",
   TERMINAL_KILL: "terminal:kill",
-  TERMINAL_EXIT: "terminal:exit",
   TERMINAL_ERROR: "terminal:error",
   TERMINAL_TRASH: "terminal:trash",
   TERMINAL_RESTORE: "terminal:restore",
@@ -54,8 +51,6 @@ export const CHANNELS = {
   TERMINAL_FORCE_RESUME: "terminal:force-resume",
   TERMINAL_GRACEFUL_KILL: "terminal:graceful-kill",
   TERMINAL_STATUS: "terminal:status",
-  TERMINAL_BACKEND_CRASHED: "terminal:backend-crashed",
-  TERMINAL_BACKEND_READY: "terminal:backend-ready",
   TERMINAL_SEND_KEY: "terminal:send-key",
   TERMINAL_BATCH_DOUBLE_ESCAPE: "terminal:batch-double-escape",
   TERMINAL_AGENT_TITLE_STATE: "terminal:agent-title-state",
@@ -70,12 +65,6 @@ export const CHANNELS = {
 
   FILES_SEARCH: "files:search",
   FILES_READ: "files:read",
-
-  AGENT_STATE_CHANGED: "agent:state-changed",
-  AGENT_ALL_CLEAR: "agent:all-clear",
-  AGENT_DETECTED: "agent:detected",
-  AGENT_EXITED: "agent:exited",
-  AGENT_FALLBACK_TRIGGERED: "agent:fallback-triggered",
 
   TERMINAL_ACTIVITY: "terminal:activity",
 
@@ -106,7 +95,6 @@ export const CHANNELS = {
   SYSTEM_GET_CLI_AVAILABILITY: "system:get-cli-availability",
   SYSTEM_REFRESH_CLI_AVAILABILITY: "system:refresh-cli-availability",
   SYSTEM_GET_AGENT_CLI_DETAILS: "system:get-agent-cli-details",
-  SYSTEM_WAKE: "system:wake",
   SYSTEM_GET_AGENT_VERSIONS: "system:get-agent-versions",
   SYSTEM_REFRESH_AGENT_VERSIONS: "system:refresh-agent-versions",
   SYSTEM_GET_AGENT_UPDATE_SETTINGS: "system:get-agent-update-settings",
@@ -371,7 +359,6 @@ export const CHANNELS = {
   WORKTREE_CONFIG_GET: "worktree-config:get",
   WORKTREE_CONFIG_SET_PATTERN: "worktree-config:set-pattern",
 
-  WINDOW_FULLSCREEN_CHANGE: "window:fullscreen-change",
   WINDOW_TOGGLE_FULLSCREEN: "window:toggle-fullscreen",
   WINDOW_RELOAD: "window:reload",
   WINDOW_FORCE_RELOAD: "window:force-reload",
@@ -381,12 +368,8 @@ export const CHANNELS = {
   WINDOW_ZOOM_RESET: "window:zoom-reset",
   WINDOW_CLOSE: "window:close",
   WINDOW_NEW: "window:new",
-  WINDOW_RECLAIM_MEMORY: "window:reclaim-memory",
-  WINDOW_DESTROY_HIDDEN_WEBVIEWS: "window:destroy-hidden-webviews",
-  WINDOW_DISK_SPACE_STATUS: "window:disk-space-status",
 
   SOUND_TRIGGER: "sound:trigger",
-  SOUND_CANCEL: "sound:cancel",
   SOUND_GET_DIR: "sound:get-dir",
 
   NOTIFICATION_UPDATE: "notification:update",
@@ -437,9 +420,7 @@ export const CHANNELS = {
   APP_AGENT_HAS_API_KEY: "app-agent:has-api-key",
   APP_AGENT_TEST_API_KEY: "app-agent:test-api-key",
   APP_AGENT_TEST_MODEL: "app-agent:test-model",
-  APP_AGENT_DISPATCH_ACTION_REQUEST: "app-agent:dispatch-action-request",
   APP_AGENT_DISPATCH_ACTION_RESPONSE: "app-agent:dispatch-action-response",
-  APP_AGENT_CONFIRMATION_REQUEST: "app-agent:confirmation-request",
   APP_AGENT_CONFIRMATION_RESPONSE: "app-agent:confirmation-response",
 
   // Agent Capabilities channels
@@ -622,9 +603,6 @@ export const CHANNELS = {
   PLUGIN_ACTIONS_GET: "plugin:actions-get",
   PLUGIN_ACTIONS_REGISTER: "plugin:actions-register",
   PLUGIN_ACTIONS_UNREGISTER: "plugin:actions-unregister",
-  PLUGIN_ACTIONS_CHANGED: "plugin:actions-changed",
-
-  RESOURCE_PROFILE_CHANGED: "resource:profile-changed",
 
   // Config reload channels
   APP_RELOAD_CONFIG: "app:reload-config",

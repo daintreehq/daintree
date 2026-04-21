@@ -678,8 +678,9 @@ export class PluginService {
   }
 
   private broadcastPluginActions(): void {
-    broadcastToRenderer(CHANNELS.PLUGIN_ACTIONS_CHANGED, {
-      actions: this.listPluginActions(),
+    broadcastToRenderer(CHANNELS.EVENTS_PUSH, {
+      name: "plugin:actions-changed",
+      payload: { actions: this.listPluginActions() },
     });
   }
 }

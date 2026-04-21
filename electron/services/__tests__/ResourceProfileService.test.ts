@@ -214,10 +214,13 @@ describe("ResourceProfileService", () => {
     vi.advanceTimersByTime(60_000 + 30_000 + 30_000);
 
     expect(broadcastToRenderer).toHaveBeenCalledWith(
-      "resource:profile-changed",
+      "events:push",
       expect.objectContaining({
-        profile: "efficiency",
-        config: RESOURCE_PROFILE_CONFIGS.efficiency,
+        name: "resource:profile-changed",
+        payload: expect.objectContaining({
+          profile: "efficiency",
+          config: RESOURCE_PROFILE_CONFIGS.efficiency,
+        }),
       })
     );
 

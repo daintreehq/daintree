@@ -15,15 +15,12 @@ import {
 import { addAndSwitchToProject, selectExistingProjectAndRefresh } from "../helpers/workflows";
 import { rmSync } from "fs";
 
-const MONITORED_CHANNELS = [
-  "worktree:update",
-  "agent:state-changed",
-  "terminal:activity",
-  "terminal:exit",
-  "terminal:data",
-];
+// Migrated events (worktree:update, agent:state-changed, terminal:exit, ...)
+// now travel over the multiplexed `events:push` channel so their listener
+// counts are observed there, not on the per-event channel.
+const MONITORED_CHANNELS = ["events:push", "terminal:activity", "terminal:data"];
 
-const RENDERER_CHANNELS = ["worktree:update", "agent:state-changed", "terminal:activity"];
+const RENDERER_CHANNELS = ["events:push", "terminal:activity"];
 
 test.describe.serial("Core: IPC Cleanup Verification", () => {
   let ctx: AppContext;

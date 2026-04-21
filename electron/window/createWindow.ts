@@ -474,18 +474,16 @@ export function setupBrowserWindow(
   });
 
   // Fullscreen events
-  win.on("enter-full-screen", () => {
-    sendToRenderer(win, CHANNELS.WINDOW_FULLSCREEN_CHANGE, true);
-  });
-  win.on("leave-full-screen", () => {
-    sendToRenderer(win, CHANNELS.WINDOW_FULLSCREEN_CHANGE, false);
-  });
-  win.on("enter-html-full-screen", () => {
-    sendToRenderer(win, CHANNELS.WINDOW_FULLSCREEN_CHANGE, true);
-  });
-  win.on("leave-html-full-screen", () => {
-    sendToRenderer(win, CHANNELS.WINDOW_FULLSCREEN_CHANGE, false);
-  });
+  const sendFullscreen = (isFullscreen: boolean) => {
+    sendToRenderer(win, CHANNELS.EVENTS_PUSH, {
+      name: "window:fullscreen-change",
+      payload: isFullscreen,
+    });
+  };
+  win.on("enter-full-screen", () => sendFullscreen(true));
+  win.on("leave-full-screen", () => sendFullscreen(false));
+  win.on("enter-html-full-screen", () => sendFullscreen(true));
+  win.on("leave-html-full-screen", () => sendFullscreen(false));
 
   // Memory reclamation: clear renderer caches after sustained minimize
   const RECLAIM_DELAY_MS = 5_000;
@@ -496,7 +494,10 @@ export function setupBrowserWindow(
     reclaimTimer = setTimeout(() => {
       reclaimTimer = null;
       if (!win.isDestroyed() && win.isMinimized()) {
-        sendToRenderer(win, CHANNELS.WINDOW_RECLAIM_MEMORY, { reason: "minimize" });
+        sendToRenderer(win, CHANNELS.EVENTS_PUSH, {
+          name: "window:reclaim-memory",
+          payload: { reason: "minimize" },
+        });
       }
     }, RECLAIM_DELAY_MS);
   });

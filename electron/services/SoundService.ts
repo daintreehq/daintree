@@ -119,7 +119,7 @@ class SoundService {
   }
 
   cancel(): void {
-    broadcastToRenderer(CHANNELS.SOUND_CANCEL);
+    broadcastToRenderer(CHANNELS.EVENTS_PUSH, { name: "sound:cancel", payload: undefined });
     for (const voice of this.activeVoices) {
       voice.handle.cancel();
     }

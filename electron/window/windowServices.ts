@@ -390,7 +390,10 @@ export async function setupWindowServices(
             if (windowRegistry) {
               for (const wCtx of windowRegistry.all()) {
                 if (!wCtx.browserWindow.isDestroyed()) {
-                  sendToRenderer(wCtx.browserWindow, CHANNELS.WINDOW_DISK_SPACE_STATUS, payload);
+                  sendToRenderer(wCtx.browserWindow, CHANNELS.EVENTS_PUSH, {
+                    name: "window:disk-space-status",
+                    payload,
+                  });
                 }
               }
             }
@@ -451,8 +454,9 @@ export async function setupWindowServices(
               for (const wCtx of windowRegistry.all()) {
                 if (!wCtx.browserWindow.isDestroyed()) {
                   try {
-                    sendToRenderer(wCtx.browserWindow, CHANNELS.WINDOW_RECLAIM_MEMORY, {
-                      reason: "memory-pressure",
+                    sendToRenderer(wCtx.browserWindow, CHANNELS.EVENTS_PUSH, {
+                      name: "window:reclaim-memory",
+                      payload: { reason: "memory-pressure" },
                     });
                   } catch {
                     /* non-critical */
@@ -478,8 +482,9 @@ export async function setupWindowServices(
                   /* non-critical */
                 }
                 try {
-                  sendToRenderer(wCtx.browserWindow, CHANNELS.WINDOW_DESTROY_HIDDEN_WEBVIEWS, {
-                    tier,
+                  sendToRenderer(wCtx.browserWindow, CHANNELS.EVENTS_PUSH, {
+                    name: "window:destroy-hidden-webviews",
+                    payload: { tier },
                   });
                 } catch {
                   /* non-critical */
@@ -601,11 +606,14 @@ export async function setupWindowServices(
             const wc = getAppWebContents(w);
             if (!wc.isDestroyed()) {
               try {
-                wc.send(CHANNELS.TERMINAL_BACKEND_CRASHED, {
-                  crashType: details.crashType,
-                  code: details.code,
-                  signal: details.signal,
-                  timestamp: details.timestamp,
+                wc.send(CHANNELS.EVENTS_PUSH, {
+                  name: "terminal:backend-crashed",
+                  payload: {
+                    crashType: details.crashType,
+                    code: details.code,
+                    signal: details.signal,
+                    timestamp: details.timestamp,
+                  },
                 });
               } catch {
                 // Silently ignore send failures during window disposal.
@@ -635,7 +643,10 @@ export async function setupWindowServices(
           const w = wCtx.browserWindow;
           if (!w.isDestroyed()) {
             try {
-              sendToRenderer(w, CHANNELS.WINDOW_RECLAIM_MEMORY, { reason: "pty-host-pressure" });
+              sendToRenderer(w, CHANNELS.EVENTS_PUSH, {
+                name: "window:reclaim-memory",
+                payload: { reason: "pty-host-pressure" },
+              });
             } catch {
               /* non-critical */
             }
@@ -658,7 +669,10 @@ export async function setupWindowServices(
             if (!wc.isDestroyed()) {
               distributePortsToView(wCtx.browserWindow, wCtx, wc, ptyClient);
               try {
-                wc.send(CHANNELS.TERMINAL_BACKEND_READY);
+                wc.send(CHANNELS.EVENTS_PUSH, {
+                  name: "terminal:backend-ready",
+                  payload: undefined,
+                });
               } catch {
                 // Silently ignore send failures during window disposal.
               }
@@ -796,7 +810,10 @@ export async function setupWindowServices(
       flushPendingErrors();
       const diskStatus = getCurrentDiskSpaceStatus();
       if (diskStatus.status !== "normal") {
-        sendToRenderer(win, CHANNELS.WINDOW_DISK_SPACE_STATUS, diskStatus);
+        sendToRenderer(win, CHANNELS.EVENTS_PUSH, {
+          name: "window:disk-space-status",
+          payload: diskStatus,
+        });
       }
     });
 

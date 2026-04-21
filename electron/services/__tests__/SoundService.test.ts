@@ -154,7 +154,10 @@ describe("SoundService", () => {
   it("cancel sends sound:cancel IPC via broadcast", () => {
     soundService.cancel();
 
-    expect(mockBroadcastToRenderer).toHaveBeenCalledWith("sound:cancel");
+    expect(mockBroadcastToRenderer).toHaveBeenCalledWith("events:push", {
+      name: "sound:cancel",
+      payload: undefined,
+    });
   });
 
   it("preview sends the base file without variant selection via IPC", () => {

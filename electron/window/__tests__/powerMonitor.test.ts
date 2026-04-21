@@ -68,7 +68,7 @@ describe("setupPowerMonitor", () => {
     }));
 
     vi.doMock("../../ipc/channels.js", () => ({
-      CHANNELS: { SYSTEM_WAKE: "system:wake" },
+      CHANNELS: { EVENTS_PUSH: "events:push" },
     }));
 
     mockGetAppWebContents = vi.fn((win: { webContents: unknown }) => win.webContents);
@@ -165,10 +165,13 @@ describe("setupPowerMonitor", () => {
     expect(ptyClient.resumeAll).toHaveBeenCalledTimes(1);
     expect(ptyClient.resumeHealthCheck).toHaveBeenCalledTimes(1);
     expect(wc.send).toHaveBeenCalledWith(
-      "system:wake",
+      "events:push",
       expect.objectContaining({
-        sleepDuration: expect.any(Number),
-        timestamp: expect.any(Number),
+        name: "system:wake",
+        payload: expect.objectContaining({
+          sleepDuration: expect.any(Number),
+          timestamp: expect.any(Number),
+        }),
       })
     );
   });
@@ -224,7 +227,10 @@ describe("setupPowerMonitor", () => {
 
     expect(ptyClient.resumeAll).toHaveBeenCalledTimes(1);
     expect(ptyClient.resumeHealthCheck).toHaveBeenCalledTimes(1);
-    expect(wc.send).toHaveBeenCalledWith("system:wake", expect.any(Object));
+    expect(wc.send).toHaveBeenCalledWith(
+      "events:push",
+      expect.objectContaining({ name: "system:wake", payload: expect.any(Object) })
+    );
   });
 
   it("catches and logs errors from workspaceClient.refresh", async () => {
@@ -259,7 +265,10 @@ describe("setupPowerMonitor", () => {
     powerHandlers.get("resume")!();
     await vi.advanceTimersByTimeAsync(2000);
 
-    expect(live.wc.send).toHaveBeenCalledWith("system:wake", expect.any(Object));
+    expect(live.wc.send).toHaveBeenCalledWith(
+      "events:push",
+      expect.objectContaining({ name: "system:wake", payload: expect.any(Object) })
+    );
     expect(dead.wc.send).not.toHaveBeenCalled();
   });
 
@@ -294,7 +303,10 @@ describe("setupPowerMonitor", () => {
     expect(workspaceClient.setPollingEnabled).toHaveBeenCalledWith(true);
     expect(workspaceClient.resumeHealthCheck).toHaveBeenCalledTimes(1);
     expect(workspaceClient.refresh).toHaveBeenCalledTimes(1);
-    expect(wc.send).toHaveBeenCalledWith("system:wake", expect.any(Object));
+    expect(wc.send).toHaveBeenCalledWith(
+      "events:push",
+      expect.objectContaining({ name: "system:wake", payload: expect.any(Object) })
+    );
   });
 
   it("skips SYSTEM_WAKE for a window whose webContents is destroyed", async () => {
