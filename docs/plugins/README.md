@@ -1,5 +1,7 @@
 # Daintree Plugins
 
+> **Status: design spec, not yet built.** This documentation describes the target plugin system. The `@daintreehq/plugin-sdk`, `@daintreehq/plugin-vite`, and `@daintreehq/plugin-testing` packages are not published yet, and the `daintree-plugin` CLI does not exist. The underlying runtime (`PluginService`, manifest validation, panel/toolbar/menu registration, IPC host API, worktree observation) is partially implemented — see [Contribution points](./contribution-points.md) for per-point status. Everything described here is the plan we're building toward, not something you can use today.
+
 Plugins extend Daintree with new panels, actions, keybindings, MCP servers, skills, and more. You can write a plugin for your own workflow and sideload it, share a plugin with your team by distributing a single file or URL, or publish one for others to install.
 
 This section documents the plugin system for plugin authors. If you're looking for information on Daintree's internals, see [`../development.md`](../development.md).
