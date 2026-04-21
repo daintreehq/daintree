@@ -97,13 +97,30 @@ export function defineIpcNamespace<const Ops extends OpMap>(input: {
     ops,
     register(): Cleanup {
       const cleanups: Cleanup[] = [];
-      for (const method of Object.keys(ops)) {
-        const spec = ops[method]!;
-        if (spec.withContext) {
-          cleanups.push(typedHandleWithContext(spec.channel, spec.handler));
-        } else {
-          cleanups.push(typedHandle(spec.channel, spec.handler));
+      try {
+        for (const method of Object.keys(ops)) {
+          const spec = ops[method]!;
+          if (spec.withContext) {
+            cleanups.push(typedHandleWithContext(spec.channel, spec.handler));
+          } else {
+            cleanups.push(typedHandle(spec.channel, spec.handler));
+          }
         }
+      } catch (error) {
+        // Partial-unwind: if any registration throws (e.g. duplicate channel),
+        // tear down the handlers we already installed so they don't outlive
+        // the failed register() call.
+        for (const cleanup of cleanups.reverse()) {
+          try {
+            cleanup();
+          } catch (cleanupError) {
+            console.error(
+              `[ipc] Cleanup during failed register() for namespace "${name}":`,
+              cleanupError
+            );
+          }
+        }
+        throw error;
       }
       return () => {
         for (const cleanup of cleanups.reverse()) {
