@@ -189,21 +189,11 @@ export function FleetArmingRibbon(): ReactElement | null {
       if (e.key !== "Escape") return;
       // Cmd on macOS, Ctrl on other platforms — keybindingService
       // normalizes the two, but for a raw listener we accept either.
+      // The modifier is the discriminator: we accept the chord from any
+      // focus target (including the composer textarea and xterm panes) so
+      // the user can exit broadcast from wherever their cursor landed.
+      // Bare Escape is filtered above and continues to reach targets.
       if (!e.metaKey && !e.ctrlKey) return;
-      const rawTarget = e.target;
-      const target =
-        rawTarget && typeof (rawTarget as HTMLElement).closest === "function"
-          ? (rawTarget as HTMLElement)
-          : null;
-      if (
-        target &&
-        (target.tagName === "INPUT" ||
-          target.tagName === "TEXTAREA" ||
-          target.isContentEditable ||
-          target.closest(".xterm") !== null)
-      ) {
-        return;
-      }
       const now = Date.now();
       const prev = lastEscapeMsRef.current;
 

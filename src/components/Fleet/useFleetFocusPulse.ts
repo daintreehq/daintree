@@ -12,6 +12,7 @@ const PULSE_DURATION_MS = 800;
  * Electron's WebContentsView — only `window.focus` fires on Cmd+Tab return.
  */
 export function useFleetFocusPulse(armedCount: number): boolean {
+  const [pulseEpoch, setPulseEpoch] = useState(0);
   const [pulsing, setPulsing] = useState(false);
   const wasAwayRef = useRef(false);
   const armedCountRef = useRef(armedCount);
@@ -26,7 +27,10 @@ export function useFleetFocusPulse(armedCount: number): boolean {
       if (!wasAwayRef.current) return;
       wasAwayRef.current = false;
       if (armedCountRef.current === 0) return;
-      setPulsing(true);
+      // Epoch bump restarts the pulse-duration timeout via the effect
+      // below, so a second focus-return within 800ms gets a fresh pulse
+      // instead of inheriting the remaining time from the first.
+      setPulseEpoch((n) => n + 1);
     };
 
     const handleBlur = () => {
@@ -43,10 +47,11 @@ export function useFleetFocusPulse(armedCount: number): boolean {
   }, []);
 
   useEffect(() => {
-    if (!pulsing) return;
+    if (pulseEpoch === 0) return;
+    setPulsing(true);
     const id = setTimeout(() => setPulsing(false), PULSE_DURATION_MS);
     return () => clearTimeout(id);
-  }, [pulsing]);
+  }, [pulseEpoch]);
 
   return pulsing;
 }

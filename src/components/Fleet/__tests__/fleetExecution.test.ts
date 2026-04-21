@@ -231,4 +231,38 @@ describe("executeFleetBroadcast", () => {
     expect(submitMock).toHaveBeenCalledWith("a", "default");
     expect(submitMock).toHaveBeenCalledWith("b", "custom-for-b");
   });
+
+  it("does NOT batch when target count is within the batch size (even at threshold)", async () => {
+    let inFlight = 0;
+    let maxInFlight = 0;
+    vi.spyOn(terminalClient, "submit").mockImplementation(async () => {
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      await Promise.resolve();
+      inFlight -= 1;
+    });
+    const ids = Array.from({ length: FLEET_LARGE_PASTE_BATCH_SIZE }, (_, i) => `t${i}`);
+    seedPanels(ids.map((id) => makeAgent(id)));
+    await executeFleetBroadcast("x".repeat(200_000), ids);
+    // With exactly batch-size targets, there is no fan-out benefit — all
+    // fire in parallel via a single allSettled.
+    expect(maxInFlight).toBe(FLEET_LARGE_PASTE_BATCH_SIZE);
+  });
+
+  it("batches when a perTargetOverride pushes just one target over the threshold", async () => {
+    let inFlight = 0;
+    let maxInFlight = 0;
+    vi.spyOn(terminalClient, "submit").mockImplementation(async () => {
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      await Promise.resolve();
+      inFlight -= 1;
+    });
+    const ids = Array.from({ length: 12 }, (_, i) => `t${i}`);
+    seedPanels(ids.map((id) => makeAgent(id)));
+    // Small base draft, one target overridden with a 150KB payload —
+    // batching should still engage because the gate reads resolved bytes.
+    await executeFleetBroadcast("small", ids, { t3: "x".repeat(150_000) });
+    expect(maxInFlight).toBeLessThanOrEqual(FLEET_LARGE_PASTE_BATCH_SIZE);
+  });
 });

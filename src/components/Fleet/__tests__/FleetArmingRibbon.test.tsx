@@ -369,6 +369,41 @@ describe("FleetArmingRibbon", () => {
     dispatchSpy.mockRestore();
   });
 
+  it("⌘Esc from a textarea still triggers the exit chord", () => {
+    // The composer textarea is the primary input surface when armed —
+    // the chord must fire from it, not be swallowed by focus heuristics.
+    vi.useFakeTimers();
+    try {
+      seed([makeAgent("t1"), makeAgent("t2")]);
+      useFleetArmingStore.getState().armIds(["t1", "t2"]);
+      render(<FleetArmingRibbon />);
+      const textarea = document.createElement("textarea");
+      document.body.appendChild(textarea);
+      textarea.focus();
+      try {
+        fireEvent.keyDown(textarea, { key: "Escape", metaKey: true });
+        act(() => {
+          vi.advanceTimersByTime(400);
+        });
+        expect(useFleetArmingStore.getState().armedIds.size).toBe(0);
+      } finally {
+        textarea.remove();
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("focus event without a prior blur does NOT pulse the ribbon", () => {
+    seed([makeAgent("t1"), makeAgent("t2")]);
+    useFleetArmingStore.getState().armIds(["t1", "t2"]);
+    render(<FleetArmingRibbon />);
+    vi.spyOn(document, "hasFocus").mockReturnValue(true);
+    fireEvent.focus(window);
+    const ribbon = screen.getByTestId("fleet-arming-ribbon");
+    expect(ribbon.getAttribute("data-pulsing")).toBeNull();
+  });
+
   it("window focus-return while armed pulses the ribbon border", () => {
     vi.useFakeTimers();
     try {
