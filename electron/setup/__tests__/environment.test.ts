@@ -657,4 +657,3 @@ describe("fixPath packaging guard", () => {
     expect(fixPathMock.default).toHaveBeenCalledOnce();
   });
 });
-

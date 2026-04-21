@@ -234,5 +234,4 @@ describe("registerOnboardingHandlers — discovery IPC", () => {
     complete(null);
     expect(setOnboardingCompleteTagMock).toHaveBeenCalledWith(true);
   });
-
 });
