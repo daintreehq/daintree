@@ -572,6 +572,14 @@ export class ProjectPulseService {
 
   private async getFirstCommitDate(git: SimpleGit): Promise<Date | null> {
     try {
+      // Shallow clones graft the boundary commit as a parent-less root, which would
+      // make rev-list --max-parents=0 return the boundary SHA (often only days old)
+      // instead of the historical root. Bail so the caller skips isBeforeProject culling.
+      const shallowOut = await git.raw(["rev-parse", "--is-shallow-repository"]);
+      if (shallowOut.trim() === "true") {
+        return null;
+      }
+
       // Get the root commit(s) - commits with no parents
       const rootSha = await git.raw(["rev-list", "--max-parents=0", "HEAD"]);
       const firstRootSha = rootSha.trim().split("\n")[0];
