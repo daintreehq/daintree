@@ -302,7 +302,7 @@
   "src/components/Fleet/FleetComposer.tsx": {
     "success": 0,
     "skip": 0,
-    "error": 1,
+    "error": 3,
     "pipeline": 0
   },
   "src/components/Fleet/FleetDryRunDialog.tsx": {
