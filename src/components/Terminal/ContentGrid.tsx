@@ -61,7 +61,6 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import { RecipeRunner } from "./RecipeRunner/RecipeRunner";
-import { FleetScopeComposerHeader } from "@/components/Fleet/FleetScopeComposerHeader";
 import { buildPanelDuplicateOptions } from "@/services/terminal/panelDuplicationService";
 import { getEffectiveAgentIds, getEffectiveAgentConfig } from "@shared/config/agentRegistry";
 import type { BuiltInAgentId } from "@shared/config/agentIds";
@@ -738,15 +737,6 @@ export function ContentGrid({
     return fleetPanels.some((t) => (t.worktreeId ?? null) !== firstWorktreeId);
   }, [fleetPanels]);
 
-  const fleetWorktreeCount = useMemo(() => {
-    if (fleetPanels.length === 0) return 0;
-    const ids = new Set<string>();
-    for (const t of fleetPanels) {
-      if (t.worktreeId) ids.add(t.worktreeId);
-    }
-    return ids.size;
-  }, [fleetPanels]);
-
   const fleetGridCols = useMemo(() => {
     if (!isFleetScopeRender) return 1;
     const { strategy, value } = layoutConfig;
@@ -1006,10 +996,6 @@ export function ContentGrid({
       >
         <GridNotificationBar className="mx-1 mt-1 shrink-0" />
         <TerminalCountWarning className="mx-1 mt-1 shrink-0" />
-        <FleetScopeComposerHeader
-          agentCount={fleetPanels.length}
-          worktreeCount={fleetWorktreeCount}
-        />
         <div className="relative flex-1 min-h-0">
           <ContextMenu>
             <ContextMenuTrigger asChild>
