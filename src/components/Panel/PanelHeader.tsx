@@ -106,16 +106,14 @@ export interface PanelHeaderProps {
   isPinged?: boolean;
   wasJustSelected?: boolean;
 
-  // Fleet broadcast scope indicators. When the host panel participates in a
-  // fleet-scope grid the header surface lifts; the primary pane (the one that
-  // receives focus on scope exit) additionally gets an accent-colored title.
-  isFleetScope?: boolean;
-  isPrimary?: boolean;
+  // Multi-select indicator. When the host pane is part of an armed set of
+  // 2+ terminals the header surface lifts to the same bg as a focused pane.
+  // No accent border, no accent title — just a highlighted title bar.
+  isSelected?: boolean;
 
   // Slots for kind-specific content
   headerContent?: ReactNode;
   headerActions?: ReactNode;
-  selectionControl?: ReactNode;
 
   // Tab support
   tabs?: TabInfo[];
@@ -159,11 +157,9 @@ function PanelHeaderComponent({
   onRestart,
   isPinged,
   wasJustSelected = false,
-  isFleetScope = false,
-  isPrimary = false,
+  isSelected = false,
   headerContent,
   headerActions,
-  selectionControl,
   tabs,
   groupId,
   onTabClick,
@@ -461,8 +457,7 @@ function PanelHeaderComponent({
   return (
     <div
       {...dragListeners}
-      data-fleet-scope={isFleetScope || undefined}
-      data-fleet-primary={(isFleetScope && isPrimary) || undefined}
+      data-selected={isSelected || undefined}
       className={cn(
         "flex items-center justify-between px-3 shrink-0 text-xs transition-colors relative overflow-hidden group",
         "h-8 border-b border-divider",
@@ -470,15 +465,9 @@ function PanelHeaderComponent({
           ? "h-10 bg-daintree-sidebar border-daintree-border"
           : location === "dock"
             ? "bg-surface"
-            : isFocused
+            : isFocused || isSelected
               ? "bg-overlay-subtle"
               : "bg-transparent",
-        // Fleet header surface: primary pane lifts to elevated surface,
-        // other fleet members match the focused overlay bg. Listed after
-        // the focus/location bg so twMerge picks the fleet variant.
-        !isMaximized &&
-          isFleetScope &&
-          (isPrimary ? "bg-surface-panel-elevated" : "bg-overlay-subtle"),
         dragListeners && "cursor-grab active:cursor-grabbing",
         isPinged && !isMaximized && "animate-terminal-header-ping",
         isDragging && "pointer-events-none"
@@ -727,11 +716,8 @@ function PanelHeaderComponent({
                     <span
                       className={cn(
                         "text-xs font-medium font-sans select-none transition-colors",
-                        isFocused ? "text-daintree-text" : "text-daintree-text/70",
+                        isFocused || isSelected ? "text-daintree-text" : "text-daintree-text/70",
                         onTitleChange && "cursor-text hover:text-daintree-text",
-                        isFleetScope &&
-                          isPrimary &&
-                          "text-accent-primary hover:text-accent-primary",
                         isPinged &&
                           !isMaximized &&
                           (wasJustSelected ? "animate-eco-title-select" : "animate-eco-title")
@@ -850,9 +836,6 @@ function PanelHeaderComponent({
       )}
 
       <div className="flex items-center gap-1">
-        {/* Multi-select handle — hover-revealed on eligible panels */}
-        {selectionControl}
-
         {/* Overflow menu — panel management actions */}
         {hasOverflowItems && (
           <TooltipProvider>

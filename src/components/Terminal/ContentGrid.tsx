@@ -432,11 +432,6 @@ export function ContentGrid({
   const { armedIds, armOrder } = useFleetArmingStore(
     useShallow((state) => ({ armedIds: state.armedIds, armOrder: state.armOrder }))
   );
-  // Primitive selector for the primary (most-recently-armed) id — re-renders
-  // only when the primary changes, and we compute each panel's boolean
-  // isPrimary at render time rather than pulling a derived collection through
-  // the store (see lesson #3683 on useShallow + filter anti-patterns).
-  const fleetPrimaryId = useFleetArmingStore((state) => state.lastArmedId);
   const isFleetScopeEnabled = fleetScopeMode === "scoped" && isFleetScopeActive;
 
   // Grid terminals filtered by location and active worktree
@@ -1078,7 +1073,6 @@ export function ContentGrid({
                         gridPanelCount={fleetPanels.length}
                         gridCols={fleetGridCols}
                         isFleetScope
-                        isPrimary={terminal.id === fleetPrimaryId}
                         orderedEligibleTerminalIds={fleetEligibleTerminalIds}
                         titleOverride={titleOverride}
                       />

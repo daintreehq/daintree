@@ -17,14 +17,12 @@ export interface GridPanelProps {
   gridCols?: number;
   // Group-level ambient agent state (highest urgency across all tabs in a tab group)
   ambientAgentState?: AgentState;
-  // Fleet scope render overrides: force input lock, surface broadcast overlay,
-  // and let the caller disambiguate titles when the armed set spans multiple
-  // worktrees. These are transient render-only flags; the store is untouched.
+  // Fleet scope render overrides: force input lock, disable per-panel
+  // maximize/minimize/add-tab, and let the caller disambiguate titles when
+  // the armed set spans multiple worktrees. These are transient render-only
+  // flags; the store is untouched. Title-bar selection chrome is derived
+  // inside TerminalPane from `fleetArmingStore`, not from this prop.
   isFleetScope?: boolean;
-  // Marks the "primary" armed terminal in fleet scope (the most-recently-armed
-  // one — `fleetArmingStore.lastArmedId`). Only meaningful when `isFleetScope`.
-  // Drives the solid accent ring overlay variant in TerminalPane.
-  isPrimary?: boolean;
   titleOverride?: string;
   // Fleet arming multi-select support: ordered list of eligible agent terminal IDs
   // visible in the current grid (shift-range uses visual order).
@@ -56,7 +54,6 @@ export function gridPanelPropsAreEqual(prev: GridPanelProps, next: GridPanelProp
     prev.gridCols !== next.gridCols ||
     prev.ambientAgentState !== next.ambientAgentState ||
     prev.isFleetScope !== next.isFleetScope ||
-    prev.isPrimary !== next.isPrimary ||
     prev.titleOverride !== next.titleOverride ||
     prev.groupId !== next.groupId
   ) {
@@ -137,7 +134,6 @@ export const GridPanel = React.memo(function GridPanel({
   gridCols,
   ambientAgentState,
   isFleetScope = false,
-  isPrimary = false,
   titleOverride,
   orderedEligibleTerminalIds,
   tabs,
@@ -223,8 +219,7 @@ export const GridPanel = React.memo(function GridPanel({
           onAddTab: isFleetScope ? undefined : onAddTab,
           onTabReorder,
           orderedEligibleTerminalIds,
-          ...(isFleetScope ? { isInputLocked: true, isFleetScope: true } : undefined),
-          ...(isFleetScope && isPrimary ? { isPrimary: true } : undefined),
+          ...(isFleetScope ? { isInputLocked: true } : undefined),
           ...(titleOverride !== undefined ? { title: titleOverride } : undefined),
         },
       }),
@@ -248,7 +243,6 @@ export const GridPanel = React.memo(function GridPanel({
       onAddTab,
       onTabReorder,
       isFleetScope,
-      isPrimary,
       orderedEligibleTerminalIds,
       titleOverride,
     ]

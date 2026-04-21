@@ -11,49 +11,34 @@ export interface GestureModifiers {
   ctrlKey: boolean;
 }
 
-export type SelectHandleAction = { type: "toggle" } | { type: "extend" };
-
-export type ChromeAction = { type: "toggle" } | { type: "bump-primary" } | { type: "none" };
-
-/**
- * Resolve a click on the dedicated selection handle button.
- *
- * - Shift-click (with a non-empty `orderedEligibleIds` list) extends the
- *   current selection to the target using grid visual order.
- * - All other clicks toggle the target.
- *
- * The handle is only rendered for eligible panels, so there's no eligibility
- * gate here — the caller has already decided.
- */
-export function decideSelectHandleAction(
-  modifiers: GestureModifiers,
-  orderedEligibleIds: string[] | undefined
-): SelectHandleAction {
-  if (modifiers.shiftKey && orderedEligibleIds && orderedEligibleIds.length > 0) {
-    return { type: "extend" };
-  }
-  return { type: "toggle" };
-}
+export type ChromeAction =
+  | { type: "toggle" }
+  | { type: "extend" }
+  | { type: "bump-primary" }
+  | { type: "none" };
 
 /**
- * Resolve a click on the pane chrome (the container surface handled by
- * `ContentPanel.onClick`, which flows through `TerminalPane.handleClick`).
+ * Resolve a click on the pane chrome (title bar + surrounding container
+ * surface, everything outside the xterm render area). The xterm region has
+ * its own pointer-down-capture path and handles native text selection; by
+ * the time this runs, `hasSelection()` has already been consulted upstream.
  *
- * - Cmd/Ctrl-click on an eligible pane toggles fleet selection (power-user
- *   shortcut retained after the rework).
- * - Plain click on an already-armed eligible pane bumps the primary-selection
- *   anchor so subsequent shift-clicks on handles range-extend from here.
- * - Everything else is a normal focus click (caller handles it).
- *
- * Shift-click on chrome is deliberately NOT a fleet gesture — that slot is
- * reserved for xterm's native selection-extend. See issue #5748.
+ * - Shift-click on an eligible pane with an ordered ID list extends the
+ *   selection across grid visual order.
+ * - Cmd/Ctrl-click on an eligible pane toggles selection.
+ * - Plain click on an already-armed pane bumps the primary-selection anchor.
+ * - Plain click on an unarmed pane is a normal focus click.
  */
 export function decideChromeAction(
   modifiers: GestureModifiers,
-  options: { isEligible: boolean; isArmed: boolean }
+  options: { isEligible: boolean; isArmed: boolean; orderedEligibleIds?: string[] }
 ): ChromeAction {
   if (!options.isEligible) return { type: "none" };
+  if (modifiers.shiftKey && options.orderedEligibleIds && options.orderedEligibleIds.length > 0) {
+    return { type: "extend" };
+  }
   if (modifiers.metaKey || modifiers.ctrlKey) return { type: "toggle" };
+  if (modifiers.shiftKey) return { type: "toggle" };
   if (options.isArmed) return { type: "bump-primary" };
   return { type: "none" };
 }
