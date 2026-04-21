@@ -408,7 +408,7 @@ export function GeneralTab({
             className="settings-card flex items-start gap-4 p-4 rounded-[var(--radius-md)] border border-daintree-border"
           >
             <div className="h-12 w-12 rounded-xl flex items-center justify-center shrink-0 bg-surface-panel-elevated">
-              <DaintreeIcon size={28} className="shrink-0 text-daintree-accent" />
+              <DaintreeIcon size={28} className="shrink-0" style={{ color: "#36CE94" }} />
             </div>
             <div className="flex-1 min-w-0 space-y-1">
               <div className="flex items-center gap-2">

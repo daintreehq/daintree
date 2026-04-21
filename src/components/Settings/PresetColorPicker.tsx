@@ -51,6 +51,10 @@ export function PresetColorPicker({
 
   const effectiveColor = color ?? agentColor;
 
+  const isValidHex = (value: string): value is `#${string}` => /^#[0-9a-f]{6}$/i.test(value);
+
+  const pickerValue = isValidHex(color) ? color : isValidHex(agentColor) ? agentColor : "#e06c75";
+
   const handleSelect = (next: string | undefined) => {
     onChange(next);
     setOpen(false);
@@ -132,7 +136,7 @@ export function PresetColorPicker({
             ref={nativeInputRef}
             type="color"
             className="sr-only"
-            value={effectiveColor}
+            value={pickerValue}
             onChange={(e) => handleSelect(e.target.value)}
             aria-hidden="true"
             tabIndex={-1}

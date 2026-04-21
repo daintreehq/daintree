@@ -330,7 +330,7 @@ export function AppThemePicker({ onClose }: AppThemePickerProps = {}) {
               <PaletteStrip scheme={selectedScheme} />
             </div>
           )}
-          <div className="absolute bottom-0 inset-x-0 bg-scrim-medium backdrop-blur-sm px-3 py-1.5 flex items-center justify-between">
+          <div className="absolute bottom-0 inset-x-0 bg-black/40 backdrop-blur-sm px-3 py-1.5 flex items-center justify-between">
             <span className="text-sm font-medium text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.5)]">
               {selectedScheme.name}
             </span>
