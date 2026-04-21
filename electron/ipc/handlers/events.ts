@@ -7,11 +7,17 @@ import { broadcastToRenderer, typedHandle } from "../utils.js";
 const ALLOWED_RENDERER_EVENTS: ReadonlySet<keyof DaintreeEventMap> = new Set(["action:dispatched"]);
 
 /**
- * Curated list of DaintreeEventMap keys bridged to the renderer via the
- * multiplexed `events:push` channel. Must stay in sync with `IpcEventBusMap`.
- * Adding a key here exposes it to `window.electron.events.on(name, cb)`.
+ * Manifest of bridged events. The `satisfies Record<keyof IpcEventBusMap, true>`
+ * clause makes tsc fail if `IpcEventBusMap` grows and a key is not added here —
+ * forcing the main-side bridge to stay in lockstep with the renderer-facing type.
  */
-const EVENT_BUS_BRIDGED_EVENTS: ReadonlyArray<keyof IpcEventBusMap> = ["agent:state-changed"];
+const EVENT_BUS_BRIDGED_MANIFEST = {
+  "agent:state-changed": true,
+} as const satisfies Record<keyof IpcEventBusMap, true>;
+
+const EVENT_BUS_BRIDGED_EVENTS = Object.keys(EVENT_BUS_BRIDGED_MANIFEST) as Array<
+  keyof IpcEventBusMap
+>;
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);

@@ -1711,7 +1711,12 @@ const api: ElectronAPI = {
       callback: (payload: IpcEventBusMap[K]) => void
     ): (() => void) => {
       const handler = (_event: Electron.IpcRendererEvent, envelope: EventBusEnvelope) => {
-        if (envelope && envelope.name === name) {
+        if (
+          envelope &&
+          typeof envelope === "object" &&
+          envelope.name === name &&
+          "payload" in envelope
+        ) {
           callback(envelope.payload as IpcEventBusMap[K]);
         }
       };
