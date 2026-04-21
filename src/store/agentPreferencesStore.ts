@@ -35,6 +35,8 @@ export const useAgentPreferencesStore = create<AgentPreferencesState>()(
     {
       name: "daintree-agent-preferences",
       storage: createSafeJSONStorage(),
+      version: 0,
+      migrate: (persistedState) => persistedState as AgentPreferencesState,
       merge: (persistedState, currentState) => {
         const persisted = persistedState as Partial<AgentPreferencesState> | null;
 

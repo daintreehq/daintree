@@ -1,4 +1,5 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
+// @vitest-environment jsdom
+import { afterEach, describe, it, expect, beforeEach, vi } from "vitest";
 import { useUrlHistoryStore, frecencyScore, getFrecencySuggestions } from "../urlHistoryStore";
 import type { UrlHistoryEntry } from "@shared/types/browser";
 
@@ -245,6 +246,96 @@ describe("getFrecencySuggestions", () => {
   it("limits results to specified count", () => {
     const results = getFrecencySuggestions(entries, "localhost", 2);
     expect(results).toHaveLength(2);
+  });
+});
+
+describe("urlHistoryStore persistence migration", () => {
+  const STORAGE_KEY = "daintree-url-history";
+  const originalLocalStorageDescriptor = Object.getOwnPropertyDescriptor(
+    globalThis,
+    "localStorage"
+  );
+
+  function installLocalStorage(initial: Record<string, string>): Map<string, string> {
+    const backing = new Map<string, string>(Object.entries(initial));
+    Object.defineProperty(globalThis, "localStorage", {
+      value: {
+        getItem: (key: string) => backing.get(key) ?? null,
+        setItem: (key: string, value: string) => {
+          backing.set(key, value);
+        },
+        removeItem: (key: string) => {
+          backing.delete(key);
+        },
+      },
+      configurable: true,
+      writable: true,
+    });
+    return backing;
+  }
+
+  function restoreLocalStorage(): void {
+    if (originalLocalStorageDescriptor) {
+      Object.defineProperty(globalThis, "localStorage", originalLocalStorageDescriptor);
+      return;
+    }
+    delete (globalThis as Partial<typeof globalThis>).localStorage;
+  }
+
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    restoreLocalStorage();
+    vi.resetModules();
+    vi.restoreAllMocks();
+  });
+
+  it("rehydrates a legacy unversioned blob without discarding entries", async () => {
+    const legacyBlob = JSON.stringify({
+      state: {
+        entries: {
+          proj1: [
+            {
+              url: "http://localhost:3000/",
+              title: "Legacy",
+              visitCount: 3,
+              lastVisitAt: 1_700_000_000_000,
+            },
+          ],
+        },
+      },
+    });
+    installLocalStorage({ [STORAGE_KEY]: legacyBlob });
+
+    const { useUrlHistoryStore: store } = await import("../urlHistoryStore");
+
+    const entries = store.getState().entries["proj1"];
+    expect(entries).toHaveLength(1);
+    expect(entries![0]!.url).toBe("http://localhost:3000/");
+    expect(entries![0]!.visitCount).toBe(3);
+  });
+
+  it("writes version: 0 on the next persist after rehydration", async () => {
+    const legacyBlob = JSON.stringify({
+      state: {
+        entries: {
+          proj1: [
+            { url: "http://a.test/", title: "A", visitCount: 1, lastVisitAt: 1_700_000_000_000 },
+          ],
+        },
+      },
+    });
+    const backing = installLocalStorage({ [STORAGE_KEY]: legacyBlob });
+
+    const { useUrlHistoryStore: store } = await import("../urlHistoryStore");
+    store.getState().recordVisit("proj1", "http://b.test/", "B");
+
+    const written = backing.get(STORAGE_KEY);
+    expect(written).toBeDefined();
+    const parsed = JSON.parse(written!) as { version: number };
+    expect(parsed.version).toBe(0);
   });
 });
 

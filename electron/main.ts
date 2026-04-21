@@ -65,7 +65,7 @@ import {
   setupWindowFocusThrottle,
   registerWindowForFocusThrottle,
 } from "./window/powerMonitor.js";
-import { getProjectStatsService } from "./ipc/handlers/projectCrud.js";
+import { getProjectStatsService } from "./ipc/handlers/projectCrud/index.js";
 import { isSmokeTest } from "./setup/environment.js";
 import { store } from "./store.js";
 import {

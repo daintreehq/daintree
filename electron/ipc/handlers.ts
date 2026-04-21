@@ -1,12 +1,12 @@
 import type { HandlerDependencies } from "./types.js";
-import { registerWorktreeHandlers } from "./handlers/worktree.js";
-import { registerTerminalHandlers } from "./handlers/terminal.js";
+import { registerWorktreeHandlers } from "./handlers/worktree/index.js";
+import { registerTerminalHandlers } from "./handlers/terminal/index.js";
 import { registerCopyTreeHandlers } from "./handlers/copyTree.js";
 import { registerAiHandlers } from "./handlers/ai.js";
 import { registerSystemShellHandlers } from "./handlers/systemShell.js";
 import { registerEditorConfigHandlers } from "./handlers/editorConfig.js";
 import { registerAgentCliHandlers } from "./handlers/agentCli.js";
-import { registerProjectCrudHandlers } from "./handlers/projectCrud.js";
+import { registerProjectCrudHandlers } from "./handlers/projectCrud/index.js";
 import { registerProjectRecipesHandlers } from "./handlers/projectRecipes.js";
 import { registerProjectPresetsHandlers } from "./handlers/projectPresets.js";
 import { registerGlobalRecipesHandlers } from "./handlers/globalRecipes.js";

@@ -90,6 +90,8 @@ export const useCommandHistoryStore = create<CommandHistoryState>()(
     {
       name: "daintree-command-history",
       storage: createSafeJSONStorage(),
+      version: 0,
+      migrate: (persistedState) => persistedState as CommandHistoryState,
       partialize: (state) => ({ history: state.history }),
     }
   )
