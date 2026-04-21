@@ -45,6 +45,7 @@ const { useFleetArmingStore } = await import("@/store/fleetArmingStore");
 const { useFleetPendingActionStore } = await import("@/store/fleetPendingActionStore");
 const { usePanelStore } = await import("@/store/panelStore");
 const { useFleetComposerStore } = await import("@/store/fleetComposerStore");
+const { useNotificationStore } = await import("@/store/notificationStore");
 const { terminalClient } = await import("@/clients");
 const { registerFleetActions } = await import("../fleetActions");
 const { executeFleetBroadcast } = await import("@/components/Fleet/fleetExecution");
