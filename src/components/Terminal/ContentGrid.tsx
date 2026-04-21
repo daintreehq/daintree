@@ -12,7 +12,7 @@ import {
   useTwoPaneSplitStore,
   type TerminalInstance,
 } from "@/store";
-import { useFleetArmingStore } from "@/store/fleetArmingStore";
+import { useFleetArmingStore, isFleetArmEligible } from "@/store/fleetArmingStore";
 import { useFleetScopeFlagStore } from "@/store/fleetScopeFlagStore";
 import { useProjectStore } from "@/store/projectStore";
 import { isAgentReady } from "../../../shared/utils/agentAvailability";
@@ -455,6 +455,18 @@ export function ContentGrid({
     return result;
   }, [panelsById, storeTerminalIds, activeWorktreeId]);
 
+  // Ordered list of fleet-arm-eligible agent terminals in the current grid
+  // Used for shift-range selection (must use visual order, not project-wide order)
+  const gridEligibleTerminalIds = useMemo(() => {
+    const result: string[] = [];
+    for (const t of gridTerminals) {
+      if (isFleetArmEligible(t)) {
+        result.push(t.id);
+      }
+    }
+    return result;
+  }, [gridTerminals]);
+
   // Get tab groups for the grid
   const getTabGroups = usePanelStore((state) => state.getTabGroups);
   const getTabGroupPanels = usePanelStore((state) => state.getTabGroupPanels);
@@ -746,7 +758,18 @@ export function ContentGrid({
     if (!isFleetScopeRender) return 1;
     const { strategy, value } = layoutConfig;
     return computeGridColumns(Math.max(fleetPanels.length, 1), gridWidth, strategy, value);
-  }, [isFleetScopeRender, fleetPanels.length, layoutConfig, gridWidth]);
+  }, [isFleetScopeRender, fleetPanels, layoutConfig, gridWidth]);
+
+  // For fleet scope, ordered list of eligible panels (cross-worktree armed terminals)
+  const fleetEligibleTerminalIds = useMemo(() => {
+    const result: string[] = [];
+    for (const t of fleetPanels) {
+      if (isFleetArmEligible(t)) {
+        result.push(t.id);
+      }
+    }
+    return result;
+  }, [fleetPanels]);
 
   // Dedicated fleet batch-fit: the main startBatchFit closure reads
   // `gridTerminals` and can't be redirected at the current armed set, which
@@ -1056,6 +1079,7 @@ export function ContentGrid({
                         gridCols={fleetGridCols}
                         isFleetScope
                         isPrimary={terminal.id === fleetPrimaryId}
+                        orderedEligibleTerminalIds={fleetEligibleTerminalIds}
                         titleOverride={titleOverride}
                       />
                     );
@@ -1102,6 +1126,7 @@ export function ContentGrid({
                 gridPanelCount={1}
                 gridCols={1}
                 isMaximized={true}
+                orderedEligibleTerminalIds={groupPanels.map((t) => t.id)}
               />
             </div>
           </div>
@@ -1133,6 +1158,7 @@ export function ContentGrid({
                 isFocused={true}
                 isMaximized={true}
                 gridPanelCount={gridItemCount}
+                orderedEligibleTerminalIds={isFleetArmEligible(terminal) ? [terminal.id] : []}
               />
             </div>
           </div>
@@ -1176,6 +1202,7 @@ export function ContentGrid({
                 focusedId={focusedId}
                 activeWorktreeId={activeWorktreeId}
                 isInTrash={isInTrash}
+                orderedEligibleTerminalIds={gridEligibleTerminalIds}
                 onAddTabLeft={() => handleAddTabForPanel(twoPaneTerminals[0])}
                 onAddTabRight={() => handleAddTabForPanel(twoPaneTerminals[1])}
               />
@@ -1271,6 +1298,7 @@ export function ContentGrid({
                               isFocused={terminal.id === focusedId}
                               gridPanelCount={gridItemCount}
                               gridCols={gridCols}
+                              orderedEligibleTerminalIds={gridEligibleTerminalIds}
                               onAddTab={() => handleAddTabForPanel(terminal)}
                             />
                           </SortableTerminal>
@@ -1293,6 +1321,7 @@ export function ContentGrid({
                               focusedId={focusedId}
                               gridPanelCount={gridItemCount}
                               gridCols={gridCols}
+                              orderedEligibleTerminalIds={gridEligibleTerminalIds}
                             />
                           </SortableTerminal>
                         );

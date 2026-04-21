@@ -38,6 +38,7 @@ import {
   getTerminalRefreshTier,
   useTerminalInputStore,
 } from "@/store";
+import { useFleetArmingStore, isFleetArmEligible } from "@/store/fleetArmingStore";
 import { useTerminalLogic } from "@/hooks/useTerminalLogic";
 import { errorsClient } from "@/clients";
 import type { AgentState } from "@/types";
@@ -107,6 +108,9 @@ export interface TerminalPaneProps {
   // pane, which becomes the focus target on scope exit). Only meaningful when
   // `isFleetScope` is true; swaps the broadcast overlay for a solid accent ring.
   isPrimary?: boolean;
+  // Fleet arming multi-select support: ordered list of eligible agent terminal IDs
+  // visible in the current grid (shift-range uses visual order).
+  orderedEligibleTerminalIds?: string[];
   // Tab support
   tabs?: import("@/components/Panel/TabButton").TabInfo[];
   onTabClick?: (tabId: string) => void;
@@ -148,6 +152,7 @@ function TerminalPaneComponent({
   isInputLocked: isInputLockedOverride,
   isFleetScope = false,
   isPrimary = false,
+  orderedEligibleTerminalIds,
   tabs,
   onTabClick,
   onTabClose,
@@ -202,6 +207,9 @@ function TerminalPaneComponent({
   const backendStatus = usePanelStore((state) => state.backendStatus);
   const lastCrashType = usePanelStore((state) => state.lastCrashType);
   const clearReconnectError = usePanelStore((state) => state.clearReconnectError);
+
+  // Fleet arming store for multi-select gestures
+  const armedIds = useFleetArmingStore((state) => state.armedIds);
 
   // Consolidate terminal state selectors to avoid multiple scans and ensure consistent snapshots
   const terminalState = usePanelStore(
@@ -510,10 +518,44 @@ function TerminalPaneComponent({
         e?.preventDefault();
         return;
       }
+
+      // Multi-select gestures for fleet-eligible agent terminals
+      const terminal = getTerminal(id);
+      const isEligible = terminal && isFleetArmEligible(terminal);
+      const isArmed = armedIds.has(id);
+
+      if (isEligible && e) {
+        const isShiftClick = e.shiftKey;
+        const isToggleClick = e.ctrlKey || e.metaKey;
+
+        if (isShiftClick && orderedEligibleTerminalIds) {
+          // Shift-click: extend selection to clicked terminal
+          const store = useFleetArmingStore.getState();
+          store.extendTo(id, orderedEligibleTerminalIds);
+          e.preventDefault();
+          return;
+        }
+
+        if (isToggleClick) {
+          // Cmd/Ctrl-click: toggle selection
+          const store = useFleetArmingStore.getState();
+          store.toggleId(id);
+          e.preventDefault();
+          return;
+        }
+
+        // Plain click on eligible pane
+        if (isArmed) {
+          // Make this the primary selection (update lastArmedId)
+          const store = useFleetArmingStore.getState();
+          store.armId(id);
+        }
+      }
+
       setFocused(id);
       terminalInstanceService.boostRefreshRate(id);
     },
-    [id, setFocused]
+    [id, setFocused, armedIds, orderedEligibleTerminalIds, getTerminal]
   );
 
   const handleXtermPointerDownCapture = useCallback(
