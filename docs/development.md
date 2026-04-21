@@ -135,3 +135,7 @@ Windows requires `GYP_MSVS_VERSION=2022` for node-pty compilation.
 **Multi-project**: Services filter by `projectId`. Stores reset on project switch. Check `projectStore.currentProject` before operations.
 
 **Error handling**: Services throw typed errors. IPC handlers catch and return error objects. UI displays via `errorStore`.
+
+## Plugins
+
+Plugin authoring is documented separately in [`./plugins/README.md`](./plugins/README.md).

@@ -177,3 +177,4 @@ Custom Daintree-specific icons live in `src/components/icons/custom/`. Lucide-st
 - `docs/release.md` — Release process
 - `docs/sound-design.md` — Sound design guidelines
 - `docs/architecture/` — Action system and terminal lifecycle docs
+- `docs/plugins/` — Plugin system reference for plugin authors
