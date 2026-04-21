@@ -498,7 +498,12 @@ export class WorkspaceService {
           }
         }
       }
-      if (!resourceConfig || !monitor.isRunning) return;
+      if (!resourceConfig) return;
+
+      // Cache resource config metadata regardless of monitor.isRunning state.
+      // This ensures the UI shows the Resource submenu even during cold start
+      // before the monitor begins polling. Runtime behavior (emits, polling)
+      // is still guarded by isRunning below.
       const vars = this.lifecycleService.buildVariables(
         worktreePath,
         this.projectRootPath,
@@ -519,11 +524,18 @@ export class WorkspaceService {
       if (resourceConfig.statusInterval) {
         monitor.setResourcePollInterval(resourceConfig.statusInterval * 1000);
       }
+
+      // Runtime behavior (emits, polling) requires monitor.isRunning
+      if (!monitor.isRunning) return;
+
       if (monitor.hasInitialStatus) {
         this.emitUpdate(monitor);
       }
-    } catch {
-      // Silently ignore — resource config is optional
+    } catch (error) {
+      console.warn(
+        "[WorkspaceHost] Resource config initialization failed (continuing without resources):",
+        error instanceof Error ? error.message : String(error)
+      );
     }
   }
 
