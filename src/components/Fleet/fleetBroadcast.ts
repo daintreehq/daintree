@@ -21,6 +21,21 @@ export function getFleetBroadcastHistoryKey(projectId: string | undefined): stri
 export const FLEET_CONFIRM_BYTE_THRESHOLD = 512;
 
 /**
+ * Payloads at or above this size trigger cross-target batching so the IPC
+ * fan-out doesn't block the renderer for multi-hundred-ms stretches when a
+ * large paste hits N armed terminals at once. 100 KB matches documented
+ * V8 string-allocation pressure points for synchronous broadcast paths.
+ */
+export const FLEET_LARGE_PASTE_BYTE_THRESHOLD = 102_400;
+
+/**
+ * Maximum targets serviced in a single batch. The remaining targets wait on
+ * the next event-loop turn via `setTimeout(0)` so the main thread can render
+ * and drain IPC between groups.
+ */
+export const FLEET_LARGE_PASTE_BATCH_SIZE = 5;
+
+/**
  * Conservative — flags commands that are usually destructive outside a sandbox.
  * Intentionally does NOT try to be a shell parser. False positives are fine
  * (an extra confirm). False negatives are the real cost.

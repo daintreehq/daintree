@@ -2,7 +2,13 @@ import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { usePanelStore } from "@/store/panelStore";
 import { terminalClient } from "@/clients";
 import { replaceRecipeVariables, type RecipeContext } from "@/utils/recipeVariables";
-import { buildFleetBroadcastRecipeContext, resolveFleetBroadcastTargetIds } from "./fleetBroadcast";
+import {
+  buildFleetBroadcastRecipeContext,
+  FLEET_LARGE_PASTE_BATCH_SIZE,
+  FLEET_LARGE_PASTE_BYTE_THRESHOLD,
+  getFleetBroadcastByteLength,
+  resolveFleetBroadcastTargetIds,
+} from "./fleetBroadcast";
 
 export interface FleetTargetPreview {
   terminalId: string;
@@ -97,30 +103,85 @@ function resolveVariable(name: string, ctx: RecipeContext): string {
   }
 }
 
+interface ResolvedSubmission {
+  terminalId: string;
+  payload: string;
+}
+
+function resolveSubmissions(
+  draft: string,
+  targetIds: string[],
+  perTargetOverrides?: Record<string, string>
+): ResolvedSubmission[] {
+  return targetIds.map((terminalId) => {
+    const ctx = buildFleetBroadcastRecipeContext(terminalId) ?? {};
+    const baseResolved = replaceRecipeVariables(draft, ctx);
+    return {
+      terminalId,
+      payload: perTargetOverrides?.[terminalId] ?? baseResolved,
+    };
+  });
+}
+
+function shouldBatchAcrossTargets(resolved: ResolvedSubmission[]): boolean {
+  if (resolved.length <= FLEET_LARGE_PASTE_BATCH_SIZE) return false;
+  for (const r of resolved) {
+    if (getFleetBroadcastByteLength(r.payload) >= FLEET_LARGE_PASTE_BYTE_THRESHOLD) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function yieldToEventLoop(): Promise<void> {
+  // setTimeout(0) yields to the browser/renderer event loop so the main
+  // thread can render and drain IPC between batches. setImmediate is not
+  // reliably exposed in Electron's sandboxed renderer.
+  return new Promise<void>((resolve) => setTimeout(resolve, 0));
+}
+
 /**
  * Execute a fleet broadcast to the given target IDs with per-target payload
  * overrides. Returns structured results including which targets failed for
  * retry-failed functionality.
+ *
+ * Targets with payloads at or above `FLEET_LARGE_PASTE_BYTE_THRESHOLD`
+ * (100 KB) are fanned out in batches of `FLEET_LARGE_PASTE_BATCH_SIZE` with a
+ * `setTimeout(0)` yield between batches. Keeps the renderer responsive when a
+ * large paste would otherwise block the main thread for hundreds of ms.
+ *
+ * Per-target rejections (EPIPE/EBADF from a PTY that died mid-write) are
+ * absorbed by `Promise.allSettled` and reported as rejected entries in
+ * `perTarget` / `failedIds`. The caller decides whether to surface them.
  */
 export async function executeFleetBroadcast(
   draft: string,
   targetIds: string[],
   perTargetOverrides?: Record<string, string>
 ): Promise<FleetExecutionResult> {
-  const submissions: Promise<void>[] = [];
-  const ids: string[] = [];
+  const resolved = resolveSubmissions(draft, targetIds, perTargetOverrides);
+  const results: PromiseSettledResult<void>[] = [];
 
-  for (const terminalId of targetIds) {
-    const ctx = buildFleetBroadcastRecipeContext(terminalId) ?? {};
-    const baseResolved = replaceRecipeVariables(draft, ctx);
-    const payload = perTargetOverrides?.[terminalId] ?? baseResolved;
-    ids.push(terminalId);
-    submissions.push(terminalClient.submit(terminalId, payload));
+  if (shouldBatchAcrossTargets(resolved)) {
+    for (let i = 0; i < resolved.length; i += FLEET_LARGE_PASTE_BATCH_SIZE) {
+      const batch = resolved.slice(i, i + FLEET_LARGE_PASTE_BATCH_SIZE);
+      const batchResults = await Promise.allSettled(
+        batch.map((r) => terminalClient.submit(r.terminalId, r.payload))
+      );
+      for (const r of batchResults) results.push(r);
+      if (i + FLEET_LARGE_PASTE_BATCH_SIZE < resolved.length) {
+        await yieldToEventLoop();
+      }
+    }
+  } else {
+    const all = await Promise.allSettled(
+      resolved.map((r) => terminalClient.submit(r.terminalId, r.payload))
+    );
+    for (const r of all) results.push(r);
   }
 
-  const results = await Promise.allSettled(submissions);
   const perTarget: FleetExecutionResult["perTarget"] = results.map((r, i) => ({
-    terminalId: ids[i]!,
+    terminalId: resolved[i]!.terminalId,
     status: r.status,
     reason: r.status === "rejected" ? String(r.reason) : undefined,
   }));
