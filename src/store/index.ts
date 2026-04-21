@@ -58,6 +58,8 @@ export {
 
 export { useThemeBrowserStore } from "./themeBrowserStore";
 
+export { useSettingsStore } from "./settingsStore";
+
 export { useUIStore } from "./uiStore";
 
 export { usePaletteStore } from "./paletteStore";

@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { useThemeBrowserStore } from "@/store";
+import { useThemeBrowserStore, useSettingsStore } from "@/store";
 
 /**
  * Coordinates Settings <-> theme browser transitions.
@@ -17,8 +17,11 @@ export function useThemeBrowserSettingsBridge(
   setIsSettingsOpen: (open: boolean) => void
 ) {
   const isThemeBrowserOpen = useThemeBrowserStore((s) => s.isOpen);
+  const activeTab = useSettingsStore((s) => s.activeTab);
+  const activeSubtab = useSettingsStore((s) => s.activeSubtab);
   const prevIsOpenRef = useRef(false);
   const openedFromSettingsRef = useRef(false);
+  const originTargetRef = useRef<Parameters<typeof dispatchOriginTarget>[0] | null>(null);
 
   useEffect(() => {
     const wasOpen = prevIsOpenRef.current;
@@ -26,16 +29,25 @@ export function useThemeBrowserSettingsBridge(
 
     if (!wasOpen && isThemeBrowserOpen) {
       openedFromSettingsRef.current = isSettingsOpen;
+      originTargetRef.current = { tab: activeTab, subtab: activeSubtab, sectionId: null };
       setIsSettingsOpen(false);
     } else if (wasOpen && !isThemeBrowserOpen) {
       if (openedFromSettingsRef.current) {
-        window.dispatchEvent(
-          new CustomEvent("daintree:open-settings-tab", {
-            detail: { tab: "general", sectionId: "appearance-theme" },
-          })
-        );
+        dispatchOriginTarget(originTargetRef.current);
       }
       openedFromSettingsRef.current = false;
+      originTargetRef.current = null;
     }
-  }, [isThemeBrowserOpen, isSettingsOpen, setIsSettingsOpen]);
+  }, [isThemeBrowserOpen, isSettingsOpen, setIsSettingsOpen, activeTab, activeSubtab]);
+}
+
+type OriginTarget = { tab: string | null; subtab: string | null; sectionId: string | null };
+
+function dispatchOriginTarget(origin: OriginTarget | null) {
+  const tab = origin?.tab ?? "general";
+  window.dispatchEvent(
+    new CustomEvent("daintree:open-settings-tab", {
+      detail: { tab, subtab: origin?.subtab, sectionId: "appearance-theme" },
+    })
+  );
 }

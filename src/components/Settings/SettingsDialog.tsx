@@ -20,6 +20,7 @@ import {
   useTerminalInputStore,
   useTwoPaneSplitStore,
   usePreferencesStore,
+  useSettingsStore,
 } from "@/store";
 import {
   X,
@@ -274,6 +275,8 @@ function SettingsDialogInner({
   const deferredQuery = useDeferredValue(searchQuery);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const setPortalOpen = usePortalStore((state) => state.setOpen);
+  const setTab = useSettingsStore((s) => s.setTab);
+  const setSubtab = useSettingsStore((s) => s.setSubtab);
 
   useEffect(() => {
     if (isOpen) {
@@ -336,6 +339,12 @@ function SettingsDialogInner({
       setSearchQuery("");
     }
   }, [isOpen]);
+
+  // Sync active tab to store for theme browser bridge
+  useEffect(() => {
+    setTab(activeTab);
+    setSubtab(activeSubtabs[activeTab] ?? null);
+  }, [activeTab, activeSubtabs, setTab, setSubtab]);
 
   // Keyboard shortcut: "/" or Cmd+F focuses search
   useEffect(() => {
