@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useRef, type ReactElement } from "react";
+import { useEffect, useRef, useState, type ReactElement } from "react";
 import { X } from "lucide-react";
+import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { useShallow } from "zustand/react/shallow";
 import { cn } from "@/lib/utils";
 import { useEscapeStack } from "@/hooks";
@@ -12,6 +13,7 @@ import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { usePanelStore } from "@/store/panelStore";
 import { actionService } from "@/services/ActionService";
 import { keybindingService } from "@/services/KeybindingService";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { FleetComposer } from "./FleetComposer";
 
 interface PresetOption {
@@ -113,11 +115,23 @@ export function FleetArmingRibbon(): ReactElement | null {
   const pending = useFleetPendingActionStore((s) => s.pending);
   const clearPending = useFleetPendingActionStore((s) => s.clear);
 
+  const [popoverOpen, setPopoverOpen] = useState(false);
+  const reduceMotion = useReducedMotion();
+
+  useEffect(() => {
+    if (armedCount === 0 && popoverOpen) {
+      setPopoverOpen(false);
+    }
+  }, [armedCount, popoverOpen]);
+
   // Escape stack: confirmation cancel sits above the fleet-disarm entry, so
   // the first Escape while confirming clears the pending action and a
-  // second Escape disarms the fleet.
+  // second Escape disarms the fleet. The armed-list popover, when open,
+  // sits on top so the first Escape closes the list and a subsequent
+  // Escape disarms.
   useEscapeStack(pending !== null, clearPending);
   useEscapeStack(armedCount > 0 && pending === null, clear);
+  useEscapeStack(popoverOpen, () => setPopoverOpen(false));
 
   // If the armed set drains while a confirmation is pending (e.g., all
   // armed agents exit), collapse the confirmation so it can't execute
@@ -223,10 +237,6 @@ export function FleetArmingRibbon(): ReactElement | null {
     return () => window.removeEventListener("keydown", handler, true);
   }, [armedCount]);
 
-  const hint = useMemo(() => {
-    return "Esc to disarm · ⌘Esc Esc to interrupt · Shift-click to extend";
-  }, []);
-
   if (armedCount === 0) return null;
 
   if (pending !== null) {
@@ -239,7 +249,10 @@ export function FleetArmingRibbon(): ReactElement | null {
       <div
         role="status"
         aria-live="polite"
-        className="flex items-center gap-3 border-b border-daintree-accent/40 bg-daintree-accent/10 px-3 py-1.5 text-[12px] text-daintree-text"
+        className={cn(
+          "surface-toolbar relative flex items-center gap-3 border-b border-daintree-border px-3 py-1 text-[12px] text-daintree-text",
+          "before:absolute before:inset-x-0 before:top-0 before:h-0.5 before:bg-[var(--color-accent-primary)] before:content-['']"
+        )}
         data-testid="fleet-arming-ribbon"
         data-pending-action={pending.kind}
       >
@@ -276,78 +289,190 @@ export function FleetArmingRibbon(): ReactElement | null {
     }
   };
 
+  const ribbonMotionProps = reduceMotion
+    ? {
+        initial: { opacity: 0 },
+        animate: { opacity: 1 },
+        exit: { opacity: 0 },
+        transition: { duration: 0.12 },
+      }
+    : {
+        initial: { y: "-100%", opacity: 0 },
+        animate: { y: 0, opacity: 1 },
+        exit: { y: "-100%", opacity: 0 },
+        transition: { type: "spring" as const, duration: 0.2, bounce: 0.15 },
+      };
+
   return (
     <div data-testid="fleet-arming-ribbon-group">
-      <div
-        role="status"
-        aria-live="off"
-        className="flex items-center gap-3 border-b border-daintree-accent/40 bg-daintree-accent/10 px-3 py-1.5 text-[12px] text-daintree-text"
-        data-testid="fleet-arming-ribbon"
-      >
-        <span className="font-medium text-daintree-accent">
-          {armedCount} {armedCount === 1 ? "agent" : "agents"} armed
-        </span>
-        <div className="flex items-center gap-1" role="toolbar" aria-label="Arm by state">
-          {PRESETS.map((preset) => (
-            <button
-              key={preset.value}
-              type="button"
-              onClick={(e) => {
-                armByState(preset.value, "current", e.shiftKey);
-              }}
-              className={cn(
-                "inline-flex items-center rounded-full px-2 py-0.5 text-[11px] transition-colors",
-                "bg-tint/[0.08] text-daintree-text/80 hover:bg-tint/[0.14] hover:text-daintree-text"
-              )}
-              aria-label={`Arm ${preset.label.toLowerCase()} agents (shift to extend)`}
-            >
-              {preset.label}
-            </button>
-          ))}
-        </div>
-        <div className="flex items-center gap-1" role="toolbar" aria-label="Fleet quick actions">
-          {QUICK_ACTIONS.map((action) => {
-            const eligible = isEligible(action.id);
-            const chord =
-              action.chordOverride ?? keybindingService.getDisplayCombo(action.id) ?? "";
-            return (
+      <AnimatePresence initial={false}>
+        <motion.div
+          key="fleet-arming-ribbon"
+          role="status"
+          aria-live="off"
+          className={cn(
+            "surface-toolbar relative flex items-center gap-3 overflow-hidden border-b border-daintree-border px-3 py-1 text-[12px] text-daintree-text",
+            "before:absolute before:inset-x-0 before:top-0 before:h-0.5 before:bg-[var(--color-accent-primary)] before:content-['']"
+          )}
+          data-testid="fleet-arming-ribbon"
+          {...ribbonMotionProps}
+        >
+          <ArmedCountChip
+            armedCount={armedCount}
+            open={popoverOpen}
+            onOpenChange={setPopoverOpen}
+          />
+          <div className="flex items-center gap-1" role="toolbar" aria-label="Arm by state">
+            {PRESETS.map((preset) => (
               <button
-                key={action.id}
+                key={preset.value}
                 type="button"
-                disabled={!eligible}
-                onClick={() => {
-                  void actionService.dispatch(action.id, undefined, { source: "user" });
+                onClick={(e) => {
+                  armByState(preset.value, "current", e.shiftKey);
                 }}
                 className={cn(
-                  "inline-flex items-center gap-1 rounded px-2 py-0.5 text-[11px] transition-colors",
-                  eligible
-                    ? "bg-tint/[0.08] text-daintree-text/80 hover:bg-tint/[0.14] hover:text-daintree-text"
-                    : "cursor-not-allowed bg-tint/[0.04] text-daintree-text/30"
+                  "inline-flex items-center rounded-full px-2 py-0.5 text-[11px] transition-colors",
+                  "bg-tint/[0.08] text-daintree-text/80 hover:bg-tint/[0.14] hover:text-daintree-text"
                 )}
-                aria-label={`${action.label} armed agents (${chord})`}
-                data-testid={`fleet-quick-${action.id.replace("fleet.", "")}`}
+                aria-label={`Arm ${preset.label.toLowerCase()} agents (shift to extend)`}
               >
-                <span>{action.label}</span>
-                {chord ? (
-                  <kbd className="rounded border border-daintree-text/20 bg-tint/[0.06] px-1 font-mono text-[10px] leading-tight">
-                    {chord}
-                  </kbd>
-                ) : null}
+                {preset.label}
               </button>
-            );
-          })}
-        </div>
-        <span className="ml-auto text-[11px] text-daintree-text/50">{hint}</span>
-        <button
-          type="button"
-          onClick={clear}
-          aria-label="Disarm all"
-          className="rounded p-1 text-daintree-text/60 transition-colors hover:bg-tint/[0.08] hover:text-daintree-text"
-        >
-          <X className="h-3.5 w-3.5" />
-        </button>
-      </div>
+            ))}
+          </div>
+          <div className="flex items-center gap-1" role="toolbar" aria-label="Fleet quick actions">
+            {QUICK_ACTIONS.map((action) => {
+              const eligible = isEligible(action.id);
+              const chord =
+                action.chordOverride ?? keybindingService.getDisplayCombo(action.id) ?? "";
+              return (
+                <button
+                  key={action.id}
+                  type="button"
+                  disabled={!eligible}
+                  onClick={() => {
+                    void actionService.dispatch(action.id, undefined, { source: "user" });
+                  }}
+                  className={cn(
+                    "inline-flex items-center gap-1 rounded px-2 py-0.5 text-[11px] transition-colors",
+                    eligible
+                      ? "bg-tint/[0.08] text-daintree-text/80 hover:bg-tint/[0.14] hover:text-daintree-text"
+                      : "cursor-not-allowed bg-tint/[0.04] text-daintree-text/30"
+                  )}
+                  aria-label={`${action.label} armed agents (${chord})`}
+                  data-testid={`fleet-quick-${action.id.replace("fleet.", "")}`}
+                >
+                  <span>{action.label}</span>
+                  {chord ? (
+                    <kbd className="rounded border border-daintree-text/20 bg-tint/[0.06] px-1 font-mono text-[10px] leading-tight">
+                      {chord}
+                    </kbd>
+                  ) : null}
+                </button>
+              );
+            })}
+          </div>
+          <div className="ml-auto flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={clear}
+              aria-label="Exit fleet mode (Esc)"
+              data-testid="fleet-exit"
+              className={cn(
+                "inline-flex items-center gap-1.5 rounded px-2 py-0.5 text-[11px] transition-colors",
+                "bg-tint/[0.08] text-daintree-text/80 hover:bg-tint/[0.14] hover:text-daintree-text"
+              )}
+            >
+              <span>Exit</span>
+              <kbd className="rounded border border-daintree-text/20 bg-tint/[0.06] px-1 font-mono text-[10px] leading-tight text-daintree-accent">
+                Esc
+              </kbd>
+            </button>
+          </div>
+        </motion.div>
+      </AnimatePresence>
       <FleetComposer />
     </div>
+  );
+}
+
+interface ArmedCountChipProps {
+  armedCount: number;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}
+
+function ArmedCountChip({ armedCount, open, onOpenChange }: ArmedCountChipProps): ReactElement {
+  const armOrder = useFleetArmingStore((s) => s.armOrder);
+  const disarmId = useFleetArmingStore((s) => s.disarmId);
+  const panelsById = usePanelStore(
+    useShallow((state) => {
+      const out: Record<string, string> = {};
+      for (const id of armOrder) {
+        const t = state.panelsById[id];
+        if (t) out[id] = t.title;
+      }
+      return out;
+    })
+  );
+
+  const label = `${armedCount} ${armedCount === 1 ? "agent" : "agents"} armed`;
+
+  return (
+    <Popover open={open} onOpenChange={onOpenChange}>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          aria-label={`${label} — show list`}
+          aria-haspopup="dialog"
+          aria-expanded={open}
+          data-testid="fleet-armed-count-chip"
+          className={cn(
+            "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[12px] transition-colors",
+            "bg-tint/[0.08] hover:bg-tint/[0.14]"
+          )}
+        >
+          <span className="font-semibold text-daintree-accent tabular-nums">{armedCount}</span>
+          <span className="text-daintree-text/80">
+            {armedCount === 1 ? "agent armed" : "agents armed"}
+          </span>
+        </button>
+      </PopoverTrigger>
+      <PopoverContent
+        side="bottom"
+        align="start"
+        sideOffset={6}
+        data-testid="fleet-armed-list"
+        className="max-h-[320px] w-[260px] overflow-y-auto p-1"
+      >
+        <div className="px-2 py-1 text-[10px] font-medium uppercase tracking-wide text-daintree-text/50">
+          Armed terminals
+        </div>
+        <ul className="flex flex-col">
+          {armOrder.length === 0 ? (
+            <li className="px-2 py-1 text-[12px] text-daintree-text/60">None</li>
+          ) : (
+            armOrder.map((id) => (
+              <li
+                key={id}
+                className="flex items-center gap-2 rounded px-2 py-1 hover:bg-tint/[0.08]"
+              >
+                <span className="flex-1 truncate text-[12px] text-daintree-text">
+                  {panelsById[id] ?? id}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => disarmId(id)}
+                  aria-label={`Unarm ${panelsById[id] ?? id}`}
+                  className="inline-flex shrink-0 items-center rounded p-0.5 text-daintree-text/50 transition-colors hover:bg-tint/[0.08] hover:text-daintree-text"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </li>
+            ))
+          )}
+        </ul>
+      </PopoverContent>
+    </Popover>
   );
 }

@@ -336,7 +336,7 @@ export function FleetComposer(): ReactElement | null {
   return (
     <>
       <div
-        className="flex flex-col gap-1 border-b border-daintree-accent/40 bg-daintree-accent/5 px-3 py-1.5"
+        className="flex flex-col gap-1 border-b border-daintree-border px-3 py-1.5"
         data-testid="fleet-composer"
       >
         <div className="flex items-start gap-2">
