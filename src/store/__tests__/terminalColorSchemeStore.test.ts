@@ -4,7 +4,6 @@ import {
   getTerminalThemeFromAppScheme,
   resolveAppTheme,
 } from "@shared/theme";
-import { DAINTREE_TERMINAL_THEME } from "@/utils/terminalTheme";
 import {
   DEFAULT_SCHEME_ID,
   getSchemeById,
