@@ -15,6 +15,7 @@ import { usePanelStore } from "@/store/panelStore";
 import { actionService } from "@/services/ActionService";
 import { keybindingService } from "@/services/KeybindingService";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { AnimatedLabel } from "@/components/ui/AnimatedLabel";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -564,7 +565,10 @@ function ArmedCountChip({ armedCount, open, onOpenChange }: ArmedCountChipProps)
             "bg-tint/[0.08] hover:bg-tint/[0.14]"
           )}
         >
-          <span className="font-semibold text-daintree-accent tabular-nums">{armedCount}</span>
+          <AnimatedLabel
+            label={String(armedCount)}
+            textClassName="font-semibold text-daintree-accent tabular-nums"
+          />
           <span className="text-daintree-text/80">
             {armedCount === 1 ? "agent armed" : "agents armed"}
           </span>

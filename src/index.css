@@ -1202,6 +1202,68 @@ body,
   will-change: opacity;
 }
 
+/* Label crossfade — used by AnimatedLabel for text/number swaps. Outgoing
+ * label fades out & lifts up + slight blur; incoming rises in from below.
+ * Container holds both spans in a CSS grid cell so width is the natural max
+ * of both labels and no layout shift occurs during the swap.
+ */
+@keyframes label-swap-out {
+  0% {
+    opacity: 1;
+    transform: translateY(0);
+    filter: blur(0);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-4px);
+    filter: blur(2px);
+  }
+}
+
+@keyframes label-swap-in {
+  0% {
+    opacity: 0;
+    transform: translateY(4px);
+    filter: blur(2px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+    filter: blur(0);
+  }
+}
+
+.animate-label-swap-out {
+  animation: label-swap-out var(--duration-150) var(--ease-out-expo) both;
+  will-change: opacity, transform, filter;
+}
+
+.animate-label-swap-in {
+  animation: label-swap-in var(--duration-150) var(--ease-out-expo) both;
+  will-change: opacity, transform, filter;
+}
+
+/* Card border accent flash — opacity-only sibling overlay so we never animate
+ * border-color (paint-bound). Compositor-friendly. Used to briefly highlight
+ * the card edge when an agent transitions between meaningful states.
+ */
+@keyframes border-flash {
+  0% {
+    opacity: 0;
+  }
+  35% {
+    opacity: 0.55;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+.animate-border-flash {
+  animation: border-flash var(--duration-200) var(--ease-out-expo) 1 both;
+  will-change: opacity;
+}
+
 /* Respect user's motion preferences — OS prefers-reduced-motion and the
  * Daintree-level "Reduce UI animations" toggle (body[data-reduce-animations])
  * both remove spatial motion while leaving opacity changes intact.
@@ -1219,11 +1281,31 @@ body,
   .animate-activity-blip,
   .animate-trash-pulse,
   .animate-all-clear-flash,
-  .animate-diagnostics-flash {
+  .animate-diagnostics-flash,
+  .animate-border-flash {
     animation: none;
     opacity: 1;
     transform: none;
     will-change: auto;
+  }
+
+  /* Label swap retains opacity-only crossfade — no transform, no blur. */
+  .animate-label-swap-out,
+  .animate-label-swap-in {
+    animation-name: none;
+    transform: none !important;
+    filter: none !important;
+    will-change: auto;
+  }
+
+  .animate-label-swap-out {
+    opacity: 0;
+    transition: opacity var(--duration-150) linear;
+  }
+
+  .animate-label-swap-in {
+    opacity: 1;
+    transition: opacity var(--duration-150) linear;
   }
 
   *:focus-visible {
@@ -1261,12 +1343,30 @@ body[data-reduce-animations="true"]
     .animate-activity-blip,
     .animate-trash-pulse,
     .animate-all-clear-flash,
-    .animate-diagnostics-flash
+    .animate-diagnostics-flash,
+    .animate-border-flash
   ) {
   animation: none;
   opacity: 1;
   transform: none;
   will-change: auto;
+}
+
+body[data-reduce-animations="true"] :is(.animate-label-swap-out, .animate-label-swap-in) {
+  animation-name: none;
+  transform: none !important;
+  filter: none !important;
+  will-change: auto;
+}
+
+body[data-reduce-animations="true"] .animate-label-swap-out {
+  opacity: 0;
+  transition: opacity var(--duration-150) linear;
+}
+
+body[data-reduce-animations="true"] .animate-label-swap-in {
+  opacity: 1;
+  transition: opacity var(--duration-150) linear;
 }
 
 body[data-reduce-animations="true"] *:focus-visible {

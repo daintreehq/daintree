@@ -1,4 +1,5 @@
 import type React from "react";
+import { useEffect, useRef, useState } from "react";
 import type { WorktreeState } from "@/types";
 import type { RetryAction } from "@/store";
 import type { AppError } from "@/store/errorStore";
@@ -83,6 +84,27 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
   } = props;
   const detailsId = `worktree-${worktree.id}-details`;
   const detailsPanelId = `worktree-${worktree.id}-details-panel`;
+
+  // One-shot bump on file-count change. Pattern mirrors AgentStatusIndicator:
+  // prevRef seeded to current value (no bump on mount), onAnimationEnd clears
+  // the latch normally, and a 250ms safety timeout covers reduced-motion
+  // environments where animationend never fires.
+  const changedFileCount = worktree.worktreeChanges?.changedFileCount ?? 0;
+  const prevCountRef = useRef(changedFileCount);
+  const [isCountBumping, setIsCountBumping] = useState(false);
+
+  useEffect(() => {
+    if (prevCountRef.current !== changedFileCount) {
+      prevCountRef.current = changedFileCount;
+      setIsCountBumping(true);
+    }
+  }, [changedFileCount]);
+
+  useEffect(() => {
+    if (!isCountBumping) return;
+    const timer = setTimeout(() => setIsCountBumping(false), 250);
+    return () => clearTimeout(timer);
+  }, [isCountBumping]);
 
   const rsLower = resourceStatus?.toLowerCase();
   const showResourceResume =
@@ -173,7 +195,10 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                 <span className="text-status-error">{lifecycleLabel}</span>
               ) : hasChanges && worktree.worktreeChanges ? (
                 <span className="flex items-center gap-1.5 text-text-secondary">
-                  <span>
+                  <span
+                    className={cn("inline-block", isCountBumping && "animate-badge-bump")}
+                    onAnimationEnd={() => setIsCountBumping(false)}
+                  >
                     {worktree.worktreeChanges.changedFileCount} file
                     {worktree.worktreeChanges.changedFileCount !== 1 ? "s" : ""}
                   </span>

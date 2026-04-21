@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import type { WorktreeState } from "../../types";
 import type { GitHubIssue } from "@shared/types/github";
@@ -281,9 +281,33 @@ export const WorktreeCard = React.memo(function WorktreeCard({
     }
   }, [worktree.id]);
 
-  const { counts: terminalCounts, terminals: worktreeTerminals } = useWorktreeTerminals(
-    worktree.id
-  );
+  const {
+    counts: terminalCounts,
+    terminals: worktreeTerminals,
+    dominantAgentState,
+  } = useWorktreeTerminals(worktree.id);
+
+  // Border accent flash — fires once when the dominant agent state for this
+  // card transitions to a meaningful value. Mirrors the AgentStatusIndicator
+  // pattern: prevRef seeded to current (no flash on mount), animationend
+  // clears the latch, and a 250ms safety timeout covers reduced-motion.
+  const prevAgentStateRef = useRef(dominantAgentState);
+  const [isBorderFlashing, setIsBorderFlashing] = useState(false);
+
+  useEffect(() => {
+    if (prevAgentStateRef.current !== dominantAgentState) {
+      prevAgentStateRef.current = dominantAgentState;
+      if (dominantAgentState !== null) {
+        setIsBorderFlashing(true);
+      }
+    }
+  }, [dominantAgentState]);
+
+  useEffect(() => {
+    if (!isBorderFlashing) return;
+    const timer = setTimeout(() => setIsBorderFlashing(false), 300);
+    return () => clearTimeout(timer);
+  }, [isBorderFlashing]);
   const setFocused = usePanelStore((state) => state.setFocused);
   const pingTerminal = usePanelStore((state) => state.pingTerminal);
   const openDockTerminal = usePanelStore((state) => state.openDockTerminal);
@@ -684,6 +708,16 @@ export const WorktreeCard = React.memo(function WorktreeCard({
                 "absolute inset-0 z-50 bg-accent-primary/10 border-2 border-accent-primary pointer-events-none animate-in fade-in duration-150",
                 variant === "grid" && "rounded-lg"
               )}
+            />
+          )}
+          {isBorderFlashing && (
+            <div
+              className={cn(
+                "absolute inset-0 z-20 pointer-events-none border border-accent-primary animate-border-flash",
+                variant === "grid" && "rounded-lg"
+              )}
+              aria-hidden="true"
+              onAnimationEnd={() => setIsBorderFlashing(false)}
             />
           )}
           {chipState !== null && (
