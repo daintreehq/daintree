@@ -10,7 +10,7 @@ import type {
   TerminalRecipe,
   TerminalSnapshot,
 } from "../project.js";
-import type { OnboardingState, ChecklistState, ChecklistItemId } from "./maps.js";
+import type { OnboardingState, ChecklistState, ChecklistItemId, IpcEventBusMap } from "./maps.js";
 import type { AgentSettings, AgentSettingsEntry } from "../agentSettings.js";
 import type { AgentPreset } from "../../config/agentRegistry.js";
 import type { VoiceInputStatus } from "../voice.js";
@@ -420,6 +420,10 @@ export interface ElectronAPI {
   };
   events: {
     emit(eventType: string, payload: unknown): Promise<void>;
+    on<K extends keyof IpcEventBusMap>(
+      name: K,
+      callback: (payload: IpcEventBusMap[K]) => void
+    ): () => void;
   };
   project: {
     getAll(): Promise<Project[]>;

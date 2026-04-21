@@ -32,10 +32,11 @@ import { registerEventsHandlers } from "../events.js";
 
 function setup() {
   const emit = vi.fn();
-  const events = { emit } as unknown as Parameters<typeof registerEventsHandlers>[0]["events"];
+  const on = vi.fn(() => () => {});
+  const events = { emit, on } as unknown as Parameters<typeof registerEventsHandlers>[0]["events"];
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const cleanup = registerEventsHandlers({ events } as any);
-  return { emit, cleanup };
+  return { emit, on, cleanup };
 }
 
 const base = {

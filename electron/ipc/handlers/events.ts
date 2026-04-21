@@ -1,9 +1,17 @@
 import { CHANNELS } from "../channels.js";
 import type { HandlerDependencies } from "../types.js";
 import type { DaintreeEventMap } from "../../services/events.js";
-import { typedHandle } from "../utils.js";
+import type { IpcEventBusMap } from "../../../shared/types/ipc/maps.js";
+import { broadcastToRenderer, typedHandle } from "../utils.js";
 
 const ALLOWED_RENDERER_EVENTS: ReadonlySet<keyof DaintreeEventMap> = new Set(["action:dispatched"]);
+
+/**
+ * Curated list of DaintreeEventMap keys bridged to the renderer via the
+ * multiplexed `events:push` channel. Must stay in sync with `IpcEventBusMap`.
+ * Adding a key here exposes it to `window.electron.events.on(name, cb)`.
+ */
+const EVENT_BUS_BRIDGED_EVENTS: ReadonlyArray<keyof IpcEventBusMap> = ["agent:state-changed"];
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
@@ -149,6 +157,21 @@ export function registerEventsHandlers(deps: HandlerDependencies): () => void {
     );
   };
   handlers.push(typedHandle(CHANNELS.EVENTS_EMIT, handleEventsEmit));
+
+  // Bridge selected TypedEventBus events to the renderer via the multiplexed
+  // `events:push` channel. The renderer subscribes via
+  // `window.electron.events.on(name, callback)`.
+  if (events) {
+    for (const name of EVENT_BUS_BRIDGED_EVENTS) {
+      const unsubscribe = events.on(name, (payload) => {
+        broadcastToRenderer(CHANNELS.EVENTS_PUSH, {
+          name,
+          payload,
+        } as { name: typeof name; payload: IpcEventBusMap[typeof name] });
+      });
+      handlers.push(unsubscribe);
+    }
+  }
 
   return () => handlers.forEach((cleanup) => cleanup());
 }

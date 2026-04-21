@@ -232,6 +232,8 @@ export type {
   // IPC Contract Maps
   IpcInvokeMap,
   IpcEventMap,
+  IpcEventBusMap,
+  EventBusEnvelope,
   IpcInvokeArgs,
   IpcInvokeResult,
   IpcEventPayload,

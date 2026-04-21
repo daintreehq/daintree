@@ -27,6 +27,8 @@ import type {
   CreateWorktreeOptions,
   IpcInvokeMap,
   IpcEventMap,
+  IpcEventBusMap,
+  EventBusEnvelope,
   AgentSettingsEntry,
   PRDetectedPayload,
   PRClearedPayload,
@@ -707,6 +709,7 @@ const CHANNELS = {
   EVENT_INSPECTOR_SUBSCRIBE: "event-inspector:subscribe",
   EVENT_INSPECTOR_UNSUBSCRIBE: "event-inspector:unsubscribe",
   EVENTS_EMIT: "events:emit",
+  EVENTS_PUSH: "events:push",
 
   // Project channels
   PROJECT_GET_ALL: "project:get-all",
@@ -1702,6 +1705,19 @@ const api: ElectronAPI = {
   events: {
     emit: (eventType: string, payload: unknown) =>
       _unwrappingInvoke(CHANNELS.EVENTS_EMIT, eventType, payload),
+
+    on: <K extends keyof IpcEventBusMap>(
+      name: K,
+      callback: (payload: IpcEventBusMap[K]) => void
+    ): (() => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, envelope: EventBusEnvelope) => {
+        if (envelope && envelope.name === name) {
+          callback(envelope.payload as IpcEventBusMap[K]);
+        }
+      };
+      ipcRenderer.on(CHANNELS.EVENTS_PUSH, handler);
+      return () => ipcRenderer.removeListener(CHANNELS.EVENTS_PUSH, handler);
+    },
   },
 
   // Project API

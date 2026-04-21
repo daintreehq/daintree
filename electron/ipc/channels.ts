@@ -197,6 +197,7 @@ export const CHANNELS = {
   EVENT_INSPECTOR_UNSUBSCRIBE: "event-inspector:unsubscribe",
 
   EVENTS_EMIT: "events:emit",
+  EVENTS_PUSH: "events:push",
 
   PROJECT_GET_ALL: "project:get-all",
   PROJECT_GET_CURRENT: "project:get-current",

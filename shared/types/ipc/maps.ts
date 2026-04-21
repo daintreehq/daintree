@@ -2362,7 +2362,27 @@ export interface IpcEventMap {
   "plugin:actions-changed": {
     actions: import("../plugin.js").PluginActionDescriptor[];
   };
+
+  // Typed event bus envelope (multiplexed main → renderer for IpcEventBusMap)
+  "events:push": EventBusEnvelope;
 }
+
+/**
+ * Typed event bus map — a curated subset of IpcEventMap exposed to the renderer
+ * via `window.electron.events.on(name, cb)`. Coexists with per-event channels
+ * (e.g. CHANNELS.AGENT_STATE_CHANGED); this provides a single multiplexed surface
+ * for new consumers and future migration targets. Extend by adding keys here
+ * and subscribing the main-side bridge in `registerEventsHandlers`.
+ */
+export type IpcEventBusMap = Pick<IpcEventMap, "agent:state-changed">;
+
+/**
+ * Envelope carried on CHANNELS.EVENTS_PUSH. Discriminated by `name` so the
+ * renderer-side `events.on(name, cb)` can filter and narrow the payload type.
+ */
+export type EventBusEnvelope = {
+  [K in keyof IpcEventBusMap]: { name: K; payload: IpcEventBusMap[K] };
+}[keyof IpcEventBusMap];
 
 export type IpcInvokeArgs<K extends keyof IpcInvokeMap> = IpcInvokeMap[K]["args"];
 export type IpcInvokeResult<K extends keyof IpcInvokeMap> = IpcInvokeMap[K]["result"];
