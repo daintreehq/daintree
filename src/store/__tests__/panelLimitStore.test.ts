@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect } from "vitest";
+import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
 import {
   evaluatePanelLimit,
   shouldShowSoftWarning,
@@ -8,6 +8,7 @@ import {
   DEFAULT_CONFIRMATION_LIMIT,
   DEFAULT_HARD_LIMIT,
 } from "../panelLimitStore";
+import { _resetPersistedStoreRegistryForTests } from "../persistence/persistedStoreRegistry";
 
 const DEFAULT_LIMITS = {
   softWarningLimit: DEFAULT_SOFT_WARNING_LIMIT,
@@ -114,5 +115,111 @@ describe("computeHardwareDefaults", () => {
     expect(computeHardwareDefaults(16 * GB + 1)).toEqual({ soft: 24, confirm: 48, hard: 72 });
     // Just over 32GB -> 64GB+ tier
     expect(computeHardwareDefaults(32 * GB + 1)).toEqual({ soft: 32, confirm: 64, hard: 100 });
+  });
+});
+
+describe("panelLimitStore persist migration", () => {
+  const STORAGE_KEY = "daintree-panel-limits";
+  let storage: Record<string, string> = {};
+
+  const storageMock = {
+    getItem: (key: string) => storage[key] ?? null,
+    setItem: (key: string, value: string) => {
+      storage[key] = value;
+    },
+    removeItem: (key: string) => {
+      delete storage[key];
+    },
+    clear: () => {
+      storage = {};
+    },
+    get length() {
+      return Object.keys(storage).length;
+    },
+    key: (index: number) => Object.keys(storage)[index] ?? null,
+  };
+
+  function installStorageMock() {
+    Object.defineProperty(globalThis, "localStorage", {
+      value: storageMock,
+      configurable: true,
+      writable: true,
+    });
+  }
+
+  function setStoredState(state: Record<string, unknown>, version: number) {
+    storageMock.setItem(STORAGE_KEY, JSON.stringify({ state, version }));
+  }
+
+  async function loadStore() {
+    const mod = await import("../panelLimitStore");
+    const store = mod.usePanelLimitStore;
+    await vi.waitFor(() => {
+      expect(store.getState().softWarningLimit).toBeDefined();
+    });
+    return store;
+  }
+
+  beforeEach(() => {
+    vi.resetModules();
+    storage = {};
+    installStorageMock();
+    _resetPersistedStoreRegistryForTests();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("adds warningsDisabled, hardwareDefaultsApplied, lastSoftWarningDismissedAt during v0 migration", async () => {
+    setStoredState(
+      {
+        softWarningLimit: 10,
+        confirmationLimit: 18,
+        hardLimit: 28,
+      },
+      0
+    );
+    const store = await loadStore();
+    const state = store.getState();
+    expect(state.softWarningLimit).toBe(10);
+    expect(state.confirmationLimit).toBe(18);
+    expect(state.hardLimit).toBe(28);
+    expect(state.warningsDisabled).toBe(false);
+    expect(state.hardwareDefaultsApplied).toBe(true);
+    expect(state.lastSoftWarningDismissedAt).toBeNull();
+  });
+
+  it("leaves v1 state unchanged", async () => {
+    setStoredState(
+      {
+        softWarningLimit: 20,
+        confirmationLimit: 40,
+        hardLimit: 60,
+        warningsDisabled: true,
+        hardwareDefaultsApplied: true,
+        lastSoftWarningDismissedAt: 16,
+      },
+      1
+    );
+    const store = await loadStore();
+    const state = store.getState();
+    expect(state.softWarningLimit).toBe(20);
+    expect(state.confirmationLimit).toBe(40);
+    expect(state.hardLimit).toBe(60);
+    expect(state.warningsDisabled).toBe(true);
+    expect(state.hardwareDefaultsApplied).toBe(true);
+    expect(state.lastSoftWarningDismissedAt).toBe(16);
+  });
+
+  it("uses defaults when storage is empty", async () => {
+    const store = await loadStore();
+    const state = store.getState();
+    expect(state.softWarningLimit).toBe(DEFAULT_SOFT_WARNING_LIMIT);
+    expect(state.confirmationLimit).toBe(DEFAULT_CONFIRMATION_LIMIT);
+    expect(state.hardLimit).toBe(DEFAULT_HARD_LIMIT);
+    expect(state.warningsDisabled).toBe(false);
+    expect(state.hardwareDefaultsApplied).toBe(false);
+    expect(state.lastSoftWarningDismissedAt).toBeNull();
   });
 });

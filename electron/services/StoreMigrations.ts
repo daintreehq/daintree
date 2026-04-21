@@ -10,8 +10,22 @@ export interface Migration {
   up: (store: Store<StoreSchema>) => void | Promise<void>;
 }
 
+export interface MigrationRunnerOptions {
+  /**
+   * Minimum supported schema version. When set, any stored version below this
+   * floor is treated as too old to migrate — the store is cleared and
+   * `_schemaVersion` is set to `floorVersion`, skipping all migration functions
+   * for this run. Intended as an emergency escape hatch for corrupt or
+   * unsupported legacy data; not activated in production.
+   */
+  floorVersion?: number;
+}
+
 export class MigrationRunner {
-  constructor(private store: Store<StoreSchema>) {}
+  constructor(
+    private store: Store<StoreSchema>,
+    private options: MigrationRunnerOptions = {}
+  ) {}
 
   private backupStore(): string | null {
     try {
@@ -50,6 +64,26 @@ export class MigrationRunner {
         `Store schema version (${current}) is newer than application supports (${maxKnownVersion}). ` +
           `Please upgrade the application or reset your data directory.`
       );
+    }
+
+    const { floorVersion } = this.options;
+    if (floorVersion !== undefined) {
+      if (!Number.isInteger(floorVersion) || floorVersion < 0) {
+        throw new Error(`floorVersion must be a non-negative integer, got ${String(floorVersion)}`);
+      }
+      if (current < floorVersion) {
+        console.warn(
+          `[Migrations] Stored schema version (${current}) is below floor (${floorVersion}); ` +
+            "resetting store to defaults."
+        );
+        const backupPath = this.backupStore();
+        if (backupPath) {
+          console.log(`[Migrations] Store backed up before reset: ${backupPath}`);
+        }
+        this.store.clear();
+        this.store.set("_schemaVersion", floorVersion);
+        return;
+      }
     }
 
     const pending = migrations.filter((m) => m.version > current);
