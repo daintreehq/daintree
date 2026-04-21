@@ -980,6 +980,34 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
         {/* Inline search bar — only when there are non-main worktrees */}
         {hasNonMainWorktrees && <WorktreeSidebarSearchBar inputRef={searchInputRef} />}
 
+        {/* Arm all agents matching the active filter — only when a filter narrows the list */}
+        {hasNonMainWorktrees && hasFilters && filteredWorktrees.length > 0 && (
+          <div className="shrink-0 px-4 py-1.5 border-b border-divider">
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  onClick={() =>
+                    actionService.dispatch(
+                      "fleet.armMatchingFilter",
+                      { worktreeIds: filteredWorktrees.map((w) => w.id) },
+                      { source: "user" }
+                    )
+                  }
+                  className="w-full flex items-center justify-center gap-1.5 text-xs px-2 py-1 text-daintree-accent hover:bg-daintree-accent/10 rounded transition-colors"
+                  aria-label={`Arm ${filteredWorktrees.length} matching worktrees`}
+                >
+                  <BroadcastTerminalIcon className="w-3 h-3" />
+                  Arm {filteredWorktrees.length} matching
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">
+                Arm all eligible agents in the {filteredWorktrees.length} worktrees visible below
+              </TooltipContent>
+            </Tooltip>
+          </div>
+        )}
+
         {/* Main worktree — visible unless excluded by text search */}
         {mainMatchesQuery && (
           <div

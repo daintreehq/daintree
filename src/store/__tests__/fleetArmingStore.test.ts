@@ -255,6 +255,109 @@ describe("fleetArmingStore", () => {
     });
   });
 
+  describe("armMatchingFilter", () => {
+    it("arms eligible agents only in the matching worktree set", () => {
+      seedPanels([
+        makeAgentTerminal("a1", { worktreeId: "wt-1" }),
+        makeAgentTerminal("a2", { worktreeId: "wt-2" }),
+        makeAgentTerminal("a3", { worktreeId: "wt-3" }),
+      ]);
+      useFleetArmingStore.getState().armMatchingFilter(["wt-1", "wt-3"]);
+      expect([...useFleetArmingStore.getState().armedIds].sort()).toEqual(["a1", "a3"]);
+    });
+
+    it("skips ineligible panels even when worktree matches", () => {
+      seedPanels([
+        makeAgentTerminal("a1", { worktreeId: "wt-1" }),
+        makeAgentTerminal("a2", { worktreeId: "wt-1", location: "trash" }),
+        makeAgentTerminal("a3", { worktreeId: "wt-1", location: "background" }),
+        makeAgentTerminal("a4", { worktreeId: "wt-1", hasPty: false }),
+        makeAgentTerminal("a5", {
+          worktreeId: "wt-1",
+          kind: "terminal",
+          agentId: undefined,
+        }),
+      ]);
+      useFleetArmingStore.getState().armMatchingFilter(["wt-1"]);
+      expect([...useFleetArmingStore.getState().armedIds]).toEqual(["a1"]);
+    });
+
+    it("empty worktreeIds is a no-op and preserves any prior armed set", () => {
+      seedPanels([makeAgentTerminal("a1"), makeAgentTerminal("a2")]);
+      useFleetArmingStore.getState().armIds(["a1", "a2"]);
+      useFleetArmingStore.getState().armMatchingFilter([]);
+      expect([...useFleetArmingStore.getState().armedIds].sort()).toEqual(["a1", "a2"]);
+    });
+
+    it("no eligible agents in matching worktrees preserves any prior armed set", () => {
+      seedPanels([
+        makeAgentTerminal("a1", { worktreeId: "wt-1" }),
+        makeAgentTerminal("a2", { worktreeId: "wt-2" }),
+      ]);
+      useFleetArmingStore.getState().armIds(["a1", "a2"]);
+      // wt-9 has no panels — the button must not clobber the user's selection
+      useFleetArmingStore.getState().armMatchingFilter(["wt-9"]);
+      expect([...useFleetArmingStore.getState().armedIds].sort()).toEqual(["a1", "a2"]);
+    });
+
+    it("no eligible agents and no prior selection leaves armed set empty", () => {
+      seedPanels([makeAgentTerminal("a1", { worktreeId: "wt-1" })]);
+      useFleetArmingStore.getState().armMatchingFilter(["wt-9"]);
+      expect(useFleetArmingStore.getState().armedIds.size).toBe(0);
+    });
+
+    it("replaces the existing armed set rather than merging", () => {
+      seedPanels([
+        makeAgentTerminal("a1", { worktreeId: "wt-1" }),
+        makeAgentTerminal("a2", { worktreeId: "wt-2" }),
+      ]);
+      useFleetArmingStore.getState().armIds(["a2"]);
+      useFleetArmingStore.getState().armMatchingFilter(["wt-1"]);
+      expect([...useFleetArmingStore.getState().armedIds]).toEqual(["a1"]);
+    });
+
+    it("preserves panel iteration order, not worktreeIds input order", () => {
+      seedPanels([
+        makeAgentTerminal("a1", { worktreeId: "wt-1" }),
+        makeAgentTerminal("a2", { worktreeId: "wt-2" }),
+        makeAgentTerminal("a3", { worktreeId: "wt-1" }),
+      ]);
+      // Input worktree order is wt-2 then wt-1, but panel order is a1,a2,a3.
+      // The armed list should follow panel order so badge numbers match
+      // the sidebar's rendered sequence.
+      useFleetArmingStore.getState().armMatchingFilter(["wt-2", "wt-1"]);
+      const s = useFleetArmingStore.getState();
+      expect(s.armOrder).toEqual(["a1", "a2", "a3"]);
+      expect(s.lastArmedId).toBe("a3");
+    });
+
+    it("duplicate worktreeIds do not duplicate armed terminals", () => {
+      seedPanels([
+        makeAgentTerminal("a1", { worktreeId: "wt-1" }),
+        makeAgentTerminal("a2", { worktreeId: "wt-1" }),
+      ]);
+      useFleetArmingStore.getState().armMatchingFilter(["wt-1", "wt-1", "wt-1"]);
+      expect(useFleetArmingStore.getState().armOrder).toEqual(["a1", "a2"]);
+    });
+
+    it("is fully idempotent — repeated calls preserve armOrder, armOrderById, and lastArmedId", () => {
+      seedPanels([
+        makeAgentTerminal("a1", { worktreeId: "wt-1" }),
+        makeAgentTerminal("a2", { worktreeId: "wt-1" }),
+      ]);
+      useFleetArmingStore.getState().armMatchingFilter(["wt-1"]);
+      const first = useFleetArmingStore.getState();
+      const firstOrder = [...first.armOrder];
+      const firstById = { ...first.armOrderById };
+      const firstLast = first.lastArmedId;
+      useFleetArmingStore.getState().armMatchingFilter(["wt-1"]);
+      const second = useFleetArmingStore.getState();
+      expect(second.armOrder).toEqual(firstOrder);
+      expect(second.armOrderById).toEqual(firstById);
+      expect(second.lastArmedId).toBe(firstLast);
+    });
+  });
+
   describe("clear", () => {
     it("resets to empty state", () => {
       useFleetArmingStore.getState().armId("a");

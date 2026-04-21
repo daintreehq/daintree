@@ -298,6 +298,22 @@ export function registerFleetActions(actions: ActionRegistry): void {
     },
   }));
 
+  actions.set("fleet.armMatchingFilter", () => ({
+    id: "fleet.armMatchingFilter",
+    title: "Fleet: Arm Agents Matching Filter",
+    description:
+      "Arm all eligible agent terminals whose worktree is in the provided set — drives the sidebar 'Arm N matching' affordance",
+    category: "terminal",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    argsSchema: z.object({ worktreeIds: z.array(z.string()) }),
+    run: async (args: unknown) => {
+      const worktreeIds = (args as { worktreeIds?: string[] } | undefined)?.worktreeIds ?? [];
+      useFleetArmingStore.getState().armMatchingFilter(worktreeIds);
+    },
+  }));
+
   actions.set("fleet.retryFailed", () => ({
     id: "fleet.retryFailed",
     title: "Fleet: Retry Failed",

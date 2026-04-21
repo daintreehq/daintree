@@ -301,6 +301,7 @@ export type BuiltInActionId =
   | "fleet.scope.exit"
   | "fleet.dryRun"
   | "fleet.retryFailed"
+  | "fleet.armMatchingFilter"
   | "terminal.focusFleetComposer";
 
 export type ActionId = BuiltInActionId | (string & {});
