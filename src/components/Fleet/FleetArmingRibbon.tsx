@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState, type ReactElement } from "react";
-import { X } from "lucide-react";
+import { MoreHorizontal, X } from "lucide-react";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { useShallow } from "zustand/react/shallow";
 import { cn } from "@/lib/utils";
 import { useEscapeStack } from "@/hooks";
 import { useFleetArmingStore, type FleetArmStatePreset } from "@/store/fleetArmingStore";
+import { useWorktreeFilterStore } from "@/store/worktreeFilterStore";
 import {
   useFleetPendingActionStore,
   type FleetPendingActionKind,
@@ -14,6 +15,14 @@ import { usePanelStore } from "@/store/panelStore";
 import { actionService } from "@/services/ActionService";
 import { keybindingService } from "@/services/KeybindingService";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { FleetComposer } from "./FleetComposer";
 
 interface PresetOption {
@@ -111,7 +120,9 @@ export function FleetArmingRibbon(): ReactElement | null {
   const armedCount = useFleetArmingStore((s) => s.armedIds.size);
   const clear = useFleetArmingStore((s) => s.clear);
   const armByState = useFleetArmingStore((s) => s.armByState);
+  const armAll = useFleetArmingStore((s) => s.armAll);
   const counts = useArmedCounts();
+  const quickStateFilter = useWorktreeFilterStore((s) => s.quickStateFilter);
   const pending = useFleetPendingActionStore((s) => s.pending);
   const clearPending = useFleetPendingActionStore((s) => s.clear);
 
@@ -237,7 +248,113 @@ export function FleetArmingRibbon(): ReactElement | null {
     return () => window.removeEventListener("keydown", handler, true);
   }, [armedCount]);
 
-  if (armedCount === 0) return null;
+  // "Match active filter" maps the sidebar's quick-state filter (which is
+  // worktree-chip-state driven) to an agent-state preset 1:1 by name. In
+  // edge cases a worktree's chip state can differ from an individual
+  // agent's state (e.g. a worktree in "cleanup" with a still-waiting
+  // agent), so "finished" here arms agents in terminal states, not every
+  // agent under a "finished"-chip worktree. Acceptable — the menu arms
+  // by agent state throughout.
+  const filterPreset: FleetArmStatePreset | null =
+    quickStateFilter === "all" ? null : (quickStateFilter as FleetArmStatePreset);
+  const filterLabel = filterPreset
+    ? filterPreset === "working"
+      ? "Working"
+      : filterPreset === "waiting"
+        ? "Waiting"
+        : "Finished"
+    : null;
+
+  const selectionMenuItems = (
+    <>
+      <DropdownMenuLabel>Select by state</DropdownMenuLabel>
+      <DropdownMenuItem
+        onSelect={() => {
+          armByState("waiting", "current", false);
+        }}
+      >
+        All waiting — this worktree
+      </DropdownMenuItem>
+      <DropdownMenuItem
+        onSelect={() => {
+          armByState("waiting", "all", false);
+        }}
+      >
+        All waiting — all worktrees
+      </DropdownMenuItem>
+      <DropdownMenuItem
+        onSelect={() => {
+          armByState("working", "current", false);
+        }}
+      >
+        All working — this worktree
+      </DropdownMenuItem>
+      <DropdownMenuItem
+        onSelect={() => {
+          armByState("working", "all", false);
+        }}
+      >
+        All working — all worktrees
+      </DropdownMenuItem>
+      <DropdownMenuSeparator />
+      <DropdownMenuItem
+        onSelect={() => {
+          armAll("current");
+        }}
+      >
+        All in this worktree
+      </DropdownMenuItem>
+      <DropdownMenuSeparator />
+      <DropdownMenuItem
+        disabled={filterPreset === null}
+        onSelect={() => {
+          if (filterPreset === null) return;
+          armByState(filterPreset, "current", false);
+        }}
+      >
+        {filterLabel ? `Match active filter (${filterLabel})` : "Match active filter"}
+      </DropdownMenuItem>
+      {armedCount > 0 ? (
+        <>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem
+            destructive
+            onSelect={() => {
+              clear();
+            }}
+          >
+            Clear selection
+          </DropdownMenuItem>
+        </>
+      ) : null}
+    </>
+  );
+
+  if (armedCount === 0) {
+    return (
+      <div
+        className="flex items-center gap-1.5 border-b border-transparent px-3 py-1 text-[11px] text-daintree-text/40"
+        data-testid="fleet-arming-ribbon-discovery"
+      >
+        <span>Broadcast</span>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button
+              type="button"
+              aria-label="Open broadcast selection menu"
+              className="rounded p-0.5 text-daintree-text/60 transition-colors hover:bg-tint/[0.08] hover:text-daintree-text"
+              data-testid="fleet-selection-menu-trigger"
+            >
+              <MoreHorizontal className="h-3.5 w-3.5" />
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" sideOffset={4}>
+            {selectionMenuItems}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
+    );
+  }
 
   if (pending !== null) {
     const message = buildConfirmMessage(
@@ -322,6 +439,21 @@ export function FleetArmingRibbon(): ReactElement | null {
             open={popoverOpen}
             onOpenChange={setPopoverOpen}
           />
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button
+                type="button"
+                aria-label="Open selection menu"
+                className="rounded p-1 text-daintree-text/60 transition-colors hover:bg-tint/[0.08] hover:text-daintree-text"
+                data-testid="fleet-selection-menu-trigger"
+              >
+                <MoreHorizontal className="h-3.5 w-3.5" />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" sideOffset={4}>
+              {selectionMenuItems}
+            </DropdownMenuContent>
+          </DropdownMenu>
           <div className="flex items-center gap-1" role="toolbar" aria-label="Arm by state">
             {PRESETS.map((preset) => (
               <button

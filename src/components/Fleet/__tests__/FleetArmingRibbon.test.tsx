@@ -17,12 +17,48 @@ vi.mock("framer-motion", () => ({
   useReducedMotion: () => false,
 }));
 
+vi.mock("@/components/ui/dropdown-menu", () => ({
+  DropdownMenu: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  DropdownMenuTrigger: ({ children }: { children: React.ReactNode; asChild?: boolean }) => (
+    <>{children}</>
+  ),
+  DropdownMenuContent: ({ children }: { children: React.ReactNode }) => (
+    <div data-testid="fleet-selection-menu">{children}</div>
+  ),
+  DropdownMenuItem: ({
+    children,
+    onSelect,
+    disabled,
+    destructive,
+  }: {
+    children: React.ReactNode;
+    onSelect?: (e: Event) => void;
+    disabled?: boolean;
+    destructive?: boolean;
+  }) => (
+    <div
+      role="menuitem"
+      data-disabled={disabled ? "true" : undefined}
+      data-destructive={destructive ? "true" : undefined}
+      onClick={(e) => {
+        if (disabled) return;
+        onSelect?.(e as unknown as Event);
+      }}
+    >
+      {children}
+    </div>
+  ),
+  DropdownMenuLabel: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  DropdownMenuSeparator: () => <hr />,
+}));
+
 import { FleetArmingRibbon } from "../FleetArmingRibbon";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { useFleetPendingActionStore } from "@/store/fleetPendingActionStore";
 import { useFleetScopeFlagStore } from "@/store/fleetScopeFlagStore";
 import { usePanelStore } from "@/store/panelStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
+import { useWorktreeFilterStore } from "@/store/worktreeFilterStore";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { dispatchEscape, _resetForTests as resetEscapeStack } from "@/lib/escapeStack";
 import type { TerminalInstance } from "@shared/types";
@@ -38,6 +74,7 @@ function resetStores() {
   useFleetScopeFlagStore.setState({ mode: "legacy", isHydrated: true });
   usePanelStore.setState({ panelsById: {}, panelIds: [] });
   useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-1", isFleetScopeActive: false });
+  useWorktreeFilterStore.setState({ quickStateFilter: "all" });
   useAnnouncerStore.setState({ polite: null, assertive: null });
   resetEscapeStack();
 }
@@ -75,9 +112,18 @@ describe("FleetArmingRibbon", () => {
     resetStores();
   });
 
-  it("renders nothing when nothing is armed", () => {
-    const { container } = render(<FleetArmingRibbon />);
-    expect(container.firstChild).toBeNull();
+  it("does not render the armed ribbon when nothing is armed", () => {
+    render(<FleetArmingRibbon />);
+    expect(screen.queryByTestId("fleet-arming-ribbon")).toBeNull();
+  });
+
+  it("renders a discovery affordance with the selection menu when nothing is armed", () => {
+    render(<FleetArmingRibbon />);
+    expect(screen.getByTestId("fleet-arming-ribbon-discovery")).toBeTruthy();
+    expect(screen.getByTestId("fleet-selection-menu-trigger")).toBeTruthy();
+    // Menu content is rendered by the mocked DropdownMenuContent — reachable
+    // even without clicking the trigger, which is the expected mock behavior.
+    expect(screen.getByTestId("fleet-selection-menu")).toBeTruthy();
   });
 
   it("renders armed count when armed", () => {
@@ -306,6 +352,137 @@ describe("FleetArmingRibbon", () => {
       render(<FleetArmingRibbon />);
       expect(screen.queryAllByTestId("fleet-composer")).toHaveLength(1);
       expect(screen.queryByTestId("fleet-arming-ribbon")).toBeTruthy();
+    });
+  });
+
+  describe("Selection menu", () => {
+    function findMenuItem(label: RegExp | string): HTMLElement {
+      const items = screen.getAllByRole("menuitem");
+      for (const el of items) {
+        const text = el.textContent ?? "";
+        if (typeof label === "string" ? text.includes(label) : label.test(text)) {
+          return el;
+        }
+      }
+      throw new Error(`menu item not found for ${label.toString()}`);
+    }
+
+    it("renders the trigger on the armed ribbon", () => {
+      seed([makeAgent("t1", "working")]);
+      useFleetArmingStore.getState().armIds(["t1"]);
+      render(<FleetArmingRibbon />);
+      expect(screen.getByTestId("fleet-selection-menu-trigger")).toBeTruthy();
+    });
+
+    it("'All waiting — this worktree' arms waiting agents in the current worktree", () => {
+      seed([
+        makeAgent("t1", "working"),
+        makeAgent("t2", "waiting"),
+        { ...makeAgent("t3", "waiting"), worktreeId: "wt-2" } as TerminalInstance,
+      ]);
+      useFleetArmingStore.getState().armIds(["t1"]);
+      render(<FleetArmingRibbon />);
+      fireEvent.click(findMenuItem(/All waiting — this worktree/));
+      const armed = useFleetArmingStore.getState().armedIds;
+      expect([...armed]).toEqual(["t2"]);
+    });
+
+    it("'All waiting — all worktrees' arms waiting agents across every worktree", () => {
+      seed([
+        makeAgent("t1", "working"),
+        makeAgent("t2", "waiting"),
+        { ...makeAgent("t3", "waiting"), worktreeId: "wt-2" } as TerminalInstance,
+      ]);
+      useFleetArmingStore.getState().armIds(["t1"]);
+      render(<FleetArmingRibbon />);
+      fireEvent.click(findMenuItem(/All waiting — all worktrees/));
+      const armed = useFleetArmingStore.getState().armedIds;
+      expect([...armed].sort()).toEqual(["t2", "t3"]);
+    });
+
+    it("'All working — this worktree' arms working agents in the current worktree", () => {
+      seed([makeAgent("t1", "working"), makeAgent("t2", "waiting")]);
+      useFleetArmingStore.getState().armIds(["t2"]);
+      render(<FleetArmingRibbon />);
+      fireEvent.click(findMenuItem(/All working — this worktree/));
+      const armed = useFleetArmingStore.getState().armedIds;
+      expect([...armed]).toEqual(["t1"]);
+    });
+
+    it("'All in this worktree' arms every eligible agent in the current worktree", () => {
+      seed([
+        makeAgent("t1", "working"),
+        makeAgent("t2", "waiting"),
+        makeAgent("t3", "completed"),
+        { ...makeAgent("t4", "waiting"), worktreeId: "wt-2" } as TerminalInstance,
+      ]);
+      useFleetArmingStore.getState().armIds(["t1"]);
+      render(<FleetArmingRibbon />);
+      fireEvent.click(findMenuItem(/All in this worktree/));
+      const armed = useFleetArmingStore.getState().armedIds;
+      expect([...armed].sort()).toEqual(["t1", "t2", "t3"]);
+    });
+
+    it("disables 'Match active filter' when quickStateFilter is 'all'", () => {
+      useFleetArmingStore.getState().armIds(["t1"]);
+      useWorktreeFilterStore.setState({ quickStateFilter: "all" });
+      render(<FleetArmingRibbon />);
+      const item = findMenuItem(/Match active filter/);
+      expect(item.getAttribute("data-disabled")).toBe("true");
+      // Disabled item should not mutate the armed set.
+      fireEvent.click(item);
+      expect([...useFleetArmingStore.getState().armedIds]).toEqual(["t1"]);
+    });
+
+    it("'Match active filter' uses the current filter preset at current scope", () => {
+      seed([
+        makeAgent("t1", "working"),
+        makeAgent("t2", "waiting"),
+        { ...makeAgent("t3", "waiting"), worktreeId: "wt-2" } as TerminalInstance,
+      ]);
+      useFleetArmingStore.getState().armIds(["t1"]);
+      useWorktreeFilterStore.setState({ quickStateFilter: "waiting" });
+      render(<FleetArmingRibbon />);
+      const item = findMenuItem(/Match active filter \(Waiting\)/);
+      expect(item.getAttribute("data-disabled")).toBeNull();
+      fireEvent.click(item);
+      const armed = useFleetArmingStore.getState().armedIds;
+      // Scope is 'current' — cross-worktree waiting agents are not armed.
+      expect([...armed]).toEqual(["t2"]);
+    });
+
+    it("'Clear selection' clears the armed set", () => {
+      useFleetArmingStore.getState().armIds(["a", "b", "c"]);
+      render(<FleetArmingRibbon />);
+      fireEvent.click(findMenuItem(/Clear selection/));
+      expect(useFleetArmingStore.getState().armedIds.size).toBe(0);
+    });
+
+    it("omits 'Clear selection' from the discovery menu when nothing is armed", () => {
+      render(<FleetArmingRibbon />);
+      const items = screen.getAllByRole("menuitem");
+      const labels = items.map((el) => el.textContent ?? "");
+      expect(labels.every((label) => !/Clear selection/.test(label))).toBe(true);
+    });
+
+    it("selecting from the discovery menu swaps into the armed ribbon", () => {
+      seed([makeAgent("t1", "waiting")]);
+      render(<FleetArmingRibbon />);
+      expect(screen.getByTestId("fleet-arming-ribbon-discovery")).toBeTruthy();
+      act(() => {
+        fireEvent.click(findMenuItem(/All waiting — this worktree/));
+      });
+      expect(screen.queryByTestId("fleet-arming-ribbon-discovery")).toBeNull();
+      expect(screen.getByTestId("fleet-arming-ribbon")).toBeTruthy();
+    });
+
+    it("'All working' arms agents in 'running' state alongside 'working'", () => {
+      seed([makeAgent("t1", "working"), makeAgent("t2", "running")]);
+      useFleetArmingStore.getState().armIds(["t1"]);
+      render(<FleetArmingRibbon />);
+      fireEvent.click(findMenuItem(/All working — this worktree/));
+      const armed = useFleetArmingStore.getState().armedIds;
+      expect([...armed].sort()).toEqual(["t1", "t2"]);
     });
   });
 });
