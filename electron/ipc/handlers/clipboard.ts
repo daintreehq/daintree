@@ -5,6 +5,7 @@ import * as fs from "node:fs/promises";
 import * as crypto from "node:crypto";
 import * as os from "node:os";
 import { defineIpcNamespace, op } from "../define.js";
+import { CLIPBOARD_METHOD_CHANNELS } from "./clipboard.preload.js";
 
 const CLIPBOARD_DIR_NAME = "daintree-clipboard";
 const MAX_AGE_MS = 24 * 60 * 60 * 1000;
@@ -172,12 +173,12 @@ function handleReadSelection(): { ok: true; text: string } | { ok: false; error:
 export const clipboardNamespace = defineIpcNamespace({
   name: "clipboard",
   ops: {
-    saveImage: op("clipboard:save-image", handleSaveImage),
-    thumbnailFromPath: op("clipboard:thumbnail-from-path", handleThumbnailFromPath),
-    writeImage: op("clipboard:write-image", handleWriteImage),
-    writeText: op("clipboard:write-text", handleWriteText),
-    writeSelection: op("clipboard:write-selection", handleWriteSelection),
-    readSelection: op("clipboard:read-selection", handleReadSelection),
+    saveImage: op(CLIPBOARD_METHOD_CHANNELS.saveImage, handleSaveImage),
+    thumbnailFromPath: op(CLIPBOARD_METHOD_CHANNELS.thumbnailFromPath, handleThumbnailFromPath),
+    writeImage: op(CLIPBOARD_METHOD_CHANNELS.writeImage, handleWriteImage),
+    writeText: op(CLIPBOARD_METHOD_CHANNELS.writeText, handleWriteText),
+    writeSelection: op(CLIPBOARD_METHOD_CHANNELS.writeSelection, handleWriteSelection),
+    readSelection: op(CLIPBOARD_METHOD_CHANNELS.readSelection, handleReadSelection),
   },
 });
 

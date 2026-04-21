@@ -1,4 +1,4 @@
-import { useEffect, useRef, type RefObject } from "react";
+import { useEffect, useLayoutEffect, useRef, type RefObject } from "react";
 import { useFleetComposerStore } from "@/store/fleetComposerStore";
 import { useNotificationStore } from "@/store/notificationStore";
 import { logWarn } from "@/utils/logger";
@@ -125,7 +125,9 @@ export function useFleetLiveKeyCapture({
 }: FleetLiveKeyCaptureOptions): void {
   const isComposingRef = useRef(false);
   const onPasteConfirmRef = useRef(onPasteConfirm);
-  onPasteConfirmRef.current = onPasteConfirm;
+  useLayoutEffect(() => {
+    onPasteConfirmRef.current = onPasteConfirm;
+  }, [onPasteConfirm]);
 
   useEffect(() => {
     if (!enabled) return;

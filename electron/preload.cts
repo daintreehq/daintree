@@ -14,7 +14,7 @@ import { isTrustedRendererUrl } from "../shared/utils/trustedRenderer.js";
 import { isIpcEnvelope } from "../shared/types/ipc/errors.js";
 import { deserializeError } from "../shared/utils/ipcErrorSerialization.js";
 import { CHANNELS } from "./ipc/channels.js";
-import { clipboardNamespace } from "./ipc/handlers/clipboard.js";
+import { buildClipboardPreloadBindings } from "./ipc/handlers/clipboard.preload.js";
 
 import type {
   WorktreeState,
@@ -2057,9 +2057,11 @@ const api: ElectronAPI = {
     clear: (worktreeId?: string) => _unwrappingInvoke(CHANNELS.AGENT_SESSION_CLEAR, { worktreeId }),
   },
 
-  // Clipboard API — bindings derived from the declare-once namespace
-  // definition in `./ipc/handlers/clipboard.ts`. See #5691.
-  clipboard: clipboardNamespace.preloadBindings(_unwrappingInvoke),
+  // Clipboard API — bindings built from the preload-safe channel map in
+  // `./ipc/handlers/clipboard.preload.ts`. The handler module is main-only
+  // because it imports `node:*` built-ins that aren't available in sandboxed
+  // preloads. See #5691.
+  clipboard: buildClipboardPreloadBindings(_unwrappingInvoke),
 
   // Web Utils API
   webUtils: {
