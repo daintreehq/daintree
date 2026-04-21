@@ -673,6 +673,17 @@ describe("MigrationRunner", () => {
       await expect(migration003.up(store as never)).resolves.toBeUndefined();
       expect((store.data.appState as Record<string, unknown>).recipes).toEqual(recipes);
     });
+
+    it("swallows errors from getRecipes and preserves legacy recipes without saving", async () => {
+      const recipes = [{ id: "r1", name: "Recipe", terminals: [] }];
+      const store = createMockStore(storePath, { appState: { recipes } });
+      mockProjectStore.getCurrentProjectId.mockReturnValue("proj-1");
+      mockProjectStore.getProjectById.mockReturnValue({ id: "proj-1" });
+      mockProjectStore.getRecipes.mockRejectedValue(new Error("sqlite locked"));
+      await expect(migration003.up(store as never)).resolves.toBeUndefined();
+      expect(mockProjectStore.saveRecipes).not.toHaveBeenCalled();
+      expect((store.data.appState as Record<string, unknown>).recipes).toEqual(recipes);
+    });
   });
 
   describe("migration 005 — getting-started checklist", () => {
@@ -754,6 +765,21 @@ describe("MigrationRunner", () => {
       const settings = store.data.notificationSettings as Record<string, unknown>;
       expect(settings.workingPulseEnabled).toBe(true);
       expect(settings.workingPulseSoundFile).toBe("custom.wav");
+    });
+
+    // Documents the intentional guard-only-on-flag behavior: a partial write
+    // where workingPulseEnabled is present but workingPulseSoundFile is not
+    // is treated as already-migrated. If this becomes a user-visible issue,
+    // the guard in the migration source should extend to also check the
+    // sound file key.
+    it("treats a partially-migrated record (flag set, sound file missing) as already migrated", () => {
+      const store = createMockStore(storePath, {
+        notificationSettings: { workingPulseEnabled: true },
+      });
+      migration010.up(store as never);
+      const settings = store.data.notificationSettings as Record<string, unknown>;
+      expect(settings.workingPulseEnabled).toBe(true);
+      expect(settings.workingPulseSoundFile).toBeUndefined();
     });
 
     it("skips when notificationSettings is absent", () => {
@@ -914,14 +940,45 @@ describe("MigrationRunner", () => {
       ).rejects.toThrow(/newer than application supports/);
     });
 
-    it("writes a backup before resetting a below-floor store", async () => {
+    it("writes a backup containing the pre-reset store bytes before clearing", async () => {
+      const originalBytes = JSON.stringify({ _schemaVersion: 1, sentinel: "pre-reset-value" });
+      fs.writeFileSync(storePath, originalBytes, "utf8");
       const store = createMockStore(storePath, { _schemaVersion: 1 });
       const runner = new MigrationRunner(store as never, { floorVersion: 5 });
       await runner.runMigrations([{ version: 5, description: "v5", up: () => {} }]);
-      const backupFiles = fs
+      const backupFile = fs
         .readdirSync(tempDir)
-        .filter((file) => file.startsWith("config.json.backup-"));
-      expect(backupFiles).toHaveLength(1);
+        .find((file) => file.startsWith("config.json.backup-"));
+      expect(backupFile).toBeDefined();
+      const backupContents = fs.readFileSync(path.join(tempDir, backupFile!), "utf8");
+      expect(backupContents).toBe(originalBytes);
+    });
+
+    it("rejects a non-integer floorVersion", async () => {
+      const store = createMockStore(storePath, { _schemaVersion: 1 });
+      const runner = new MigrationRunner(store as never, { floorVersion: 5.5 });
+      await expect(
+        runner.runMigrations([{ version: 5, description: "v5", up: () => {} }])
+      ).rejects.toThrow(/floorVersion must be a non-negative integer/);
+      // Store should be untouched when validation fails
+      expect(store.data._schemaVersion).toBe(1);
+    });
+
+    it("rejects a negative floorVersion", async () => {
+      const store = createMockStore(storePath, { _schemaVersion: 0 });
+      const runner = new MigrationRunner(store as never, { floorVersion: -1 });
+      await expect(
+        runner.runMigrations([{ version: 5, description: "v5", up: () => {} }])
+      ).rejects.toThrow(/floorVersion must be a non-negative integer/);
+    });
+
+    it("accepts floorVersion === 0 as a no-op floor", async () => {
+      const upSpy = vi.fn();
+      const store = createMockStore(storePath, { _schemaVersion: 0 });
+      const runner = new MigrationRunner(store as never, { floorVersion: 0 });
+      await runner.runMigrations([{ version: 1, description: "v1", up: upSpy }]);
+      expect(upSpy).toHaveBeenCalledTimes(1);
+      expect(store.data._schemaVersion).toBe(1);
     });
   });
 

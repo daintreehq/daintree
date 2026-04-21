@@ -67,18 +67,23 @@ export class MigrationRunner {
     }
 
     const { floorVersion } = this.options;
-    if (floorVersion !== undefined && current < floorVersion) {
-      console.warn(
-        `[Migrations] Stored schema version (${current}) is below floor (${floorVersion}); ` +
-          "resetting store to defaults."
-      );
-      const backupPath = this.backupStore();
-      if (backupPath) {
-        console.log(`[Migrations] Store backed up before reset: ${backupPath}`);
+    if (floorVersion !== undefined) {
+      if (!Number.isInteger(floorVersion) || floorVersion < 0) {
+        throw new Error(`floorVersion must be a non-negative integer, got ${String(floorVersion)}`);
       }
-      this.store.clear();
-      this.store.set("_schemaVersion", floorVersion);
-      return;
+      if (current < floorVersion) {
+        console.warn(
+          `[Migrations] Stored schema version (${current}) is below floor (${floorVersion}); ` +
+            "resetting store to defaults."
+        );
+        const backupPath = this.backupStore();
+        if (backupPath) {
+          console.log(`[Migrations] Store backed up before reset: ${backupPath}`);
+        }
+        this.store.clear();
+        this.store.set("_schemaVersion", floorVersion);
+        return;
+      }
     }
 
     const pending = migrations.filter((m) => m.version > current);
