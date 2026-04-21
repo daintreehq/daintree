@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect, useRef, type ReactNode } from "react";
+import { cn } from "@/lib/utils";
 import { Toolbar } from "./Toolbar";
 import { Sidebar } from "./Sidebar";
 import { TerminalDockRegion } from "./TerminalDockRegion";
@@ -17,7 +18,7 @@ import {
   useDiagnosticsStore,
   useDockStore,
   usePreferencesStore,
-  useThemeBrowserStore,
+  useUIStore,
   type PanelState,
 } from "@/store";
 import { useFleetScopeFlagStore } from "@/store/fleetScopeFlagStore";
@@ -67,7 +68,8 @@ export function AppLayout({
   const [sidebarWidth, setSidebarWidth] = useState(DEFAULT_SIDEBAR_WIDTH);
   const currentProject = useProjectStore((state) => state.currentProject);
   const layout = useLayoutState();
-  const themeBrowserOpen = useThemeBrowserStore((s) => s.isOpen);
+  const overlayClaims = useUIStore((s) => s.overlayClaims);
+  const isThemeBrowserOpen = overlayClaims.has("theme-browser");
   const reduceAnimations = usePreferencesStore((s) => s.reduceAnimations);
   const showSidebar = !layout.isFocusMode && currentProject != null;
 
@@ -227,6 +229,7 @@ export function AppLayout({
 
   useEffect(() => {
     const handleFocusModeToggle = () => {
+      if (useUIStore.getState().hasOpenOverlays()) return;
       void handleToggleFocusModeRef.current();
     };
 
@@ -238,6 +241,7 @@ export function AppLayout({
 
   useEffect(() => {
     const handlePortalToggle = () => {
+      if (useUIStore.getState().hasOpenOverlays()) return;
       layout.togglePortal();
     };
 
@@ -246,7 +250,10 @@ export function AppLayout({
   }, [layout.togglePortal]);
 
   useEffect(() => {
-    const handleResetSidebarWidth = () => setSidebarWidth(DEFAULT_SIDEBAR_WIDTH);
+    const handleResetSidebarWidth = () => {
+      if (useUIStore.getState().hasOpenOverlays()) return;
+      setSidebarWidth(DEFAULT_SIDEBAR_WIDTH);
+    };
     window.addEventListener("daintree:reset-sidebar-width", handleResetSidebarWidth);
     return () =>
       window.removeEventListener("daintree:reset-sidebar-width", handleResetSidebarWidth);
@@ -314,21 +321,28 @@ export function AppLayout({
       }}
     >
       <PortalVisibilityController />
-      <Toolbar
-        onLaunchAgent={handleLaunchAgent}
-        onSettings={handleSettings}
-        onPreloadSettings={onPreloadSettings}
-        errorCount={layout.errorCount}
-        onToggleProblems={handleToggleProblems}
-        isFocusMode={layout.isFocusMode}
-        onToggleFocusMode={handleToggleFocusMode}
-        agentAvailability={agentAvailability}
-        agentSettings={agentSettings}
-        projectSwitcherPalette={projectSwitcherPalette}
-      />
-      <FleetArmingRibbon />
+      <div {...(isThemeBrowserOpen ? { inert: true } : {})}>
+        <Toolbar
+          onLaunchAgent={handleLaunchAgent}
+          onSettings={handleSettings}
+          onPreloadSettings={onPreloadSettings}
+          errorCount={layout.errorCount}
+          onToggleProblems={handleToggleProblems}
+          isFocusMode={layout.isFocusMode}
+          onToggleFocusMode={handleToggleFocusMode}
+          agentAvailability={agentAvailability}
+          agentSettings={agentSettings}
+          projectSwitcherPalette={projectSwitcherPalette}
+        />
+        <FleetArmingRibbon />
+      </div>
       <div
-        className="flex-1 flex flex-col overflow-hidden"
+        {...(isThemeBrowserOpen ? { inert: true } : {})}
+        className={cn(
+          "flex-1 flex flex-col overflow-hidden",
+          "transition-[filter,opacity] duration-300",
+          isThemeBrowserOpen && "bg-scrim-soft/30 backdrop-blur-[2px]"
+        )}
         style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}
       >
         <div
@@ -369,10 +383,10 @@ export function AppLayout({
                   </div>
                 </ErrorBoundary>
               )}
-              {themeBrowserOpen && (
+              {isThemeBrowserOpen && (
                 <ErrorBoundary variant="section" componentName="ThemeBrowser">
                   <div
-                    className="absolute top-0 bottom-0 z-40"
+                    className="absolute top-0 bottom-0 z-40 pointer-events-auto"
                     style={{
                       right: layout.portalOpen ? `${layout.portalWidth}px` : "0px",
                     }}

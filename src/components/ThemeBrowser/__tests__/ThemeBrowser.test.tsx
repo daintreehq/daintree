@@ -210,6 +210,11 @@ describe("ThemeBrowser", () => {
     expect(useUIStore.getState().overlayClaims.has("theme-browser")).toBe(false);
   });
 
+  it("renders with aria-modal='true' for native focus management", () => {
+    render(<Harness />);
+    expect(screen.getByRole("dialog").getAttribute("aria-modal")).toBe("true");
+  });
+
   it("portal toggle is a no-op while the browser is mounted", () => {
     render(<Harness />);
     expect(usePortalStore.getState().isOpen).toBe(false);

@@ -323,7 +323,7 @@ export function ThemeBrowser() {
       className="flex flex-col h-full bg-daintree-bg border-l border-daintree-border shadow-2xl"
       style={{ width: PANEL_WIDTH }}
       role="dialog"
-      aria-modal="false"
+      aria-modal="true"
       aria-label="Theme browser"
     >
       {/* Sticky hero */}
