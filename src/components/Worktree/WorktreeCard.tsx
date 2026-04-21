@@ -34,6 +34,7 @@ import { useWorktreeActions } from "./WorktreeCard/hooks/useWorktreeActions";
 import { copyContextWithFeedback } from "@/hooks/useWorktreeActions";
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { CONTEXT_COMPONENTS, WorktreeMenuItems } from "./WorktreeMenuItems";
+import { isFleetArmEligible } from "@/store/fleetArmingStore";
 import { useWorktreeStatus } from "./WorktreeCard/hooks/useWorktreeStatus";
 import { computeChipState, type ChipState } from "./utils/computeChipState";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
@@ -313,14 +314,19 @@ export const WorktreeCard = React.memo(function WorktreeCard({
   const setFocused = usePanelStore((state) => state.setFocused);
   const pingTerminal = usePanelStore((state) => state.pingTerminal);
   const openDockTerminal = usePanelStore((state) => state.openDockTerminal);
-  const getCountByWorktree = usePanelStore((state) => state.getCountByWorktree);
   const completedCount = terminalCounts.byState.completed + terminalCounts.byState.exited;
   const totalTerminalCount = terminalCounts.total;
-  const allTerminalCount = getCountByWorktree(worktree.id);
   const gridCount = worktreeTerminals.filter(
     (t) => t.location === "grid" || t.location === undefined
   ).length;
   const dockCount = worktreeTerminals.filter((t) => t.location === "dock").length;
+  // Agent counts for the Sessions submenu's Select * items. `armAll("current")`
+  // filters to `isFleetArmEligible` (agent kind, has PTY, not trash/background),
+  // so the displayed count matches the set that would be armed. `working`
+  // includes both "working" and "running" to match `matchesPreset("working")`.
+  const eligibleAgentCount = worktreeTerminals.filter(isFleetArmEligible).length;
+  const waitingAgentCount = terminalCounts.byState.waiting;
+  const workingAgentCount = terminalCounts.byState.working + terminalCounts.byState.running;
 
   const worktreeErrors = useErrorStore(
     useShallow((state) =>
@@ -376,7 +382,9 @@ export const WorktreeCard = React.memo(function WorktreeCard({
     handleRunRecipe,
     handleDockAll,
     handleMaximizeAll,
-    handleBroadcastToAgents,
+    handleSelectAllAgents,
+    handleSelectWaitingAgents,
+    handleSelectWorkingAgents,
   } = useWorktreeActions({
     worktree,
     onCopyTree,
@@ -817,7 +825,9 @@ export const WorktreeCard = React.memo(function WorktreeCard({
                     dock: dockCount,
                     active: totalTerminalCount,
                     completed: completedCount,
-                    all: allTerminalCount,
+                    all: eligibleAgentCount,
+                    waiting: waitingAgentCount,
+                    working: workingAgentCount,
                   },
                   onCopyContextFull: handleCopyContextFull,
                   onCopyContextModified: handleCopyContextModified,
@@ -850,7 +860,9 @@ export const WorktreeCard = React.memo(function WorktreeCard({
                   onDockAll: handleDockAll,
                   onMaximizeAll: handleMaximizeAll,
                   onResetRenderers: handleResetRenderers,
-                  onBroadcastToAgents: handleBroadcastToAgents,
+                  onSelectAllAgents: handleSelectAllAgents,
+                  onSelectWaitingAgents: handleSelectWaitingAgents,
+                  onSelectWorkingAgents: handleSelectWorkingAgents,
                   onDeleteWorktree: !isMainWorktree ? () => setShowDeleteDialog(true) : undefined,
                   onRevertAgentChanges: handleRevertAgentChanges,
                   hasSnapshot,
@@ -951,7 +963,9 @@ export const WorktreeCard = React.memo(function WorktreeCard({
             dock: dockCount,
             active: totalTerminalCount,
             completed: completedCount,
-            all: allTerminalCount,
+            all: eligibleAgentCount,
+            waiting: waitingAgentCount,
+            working: workingAgentCount,
           }}
           onLaunchAgent={onLaunchAgent}
           onCopyContextFull={handleCopyContextFull}
@@ -977,7 +991,9 @@ export const WorktreeCard = React.memo(function WorktreeCard({
           onDockAll={handleDockAll}
           onMaximizeAll={handleMaximizeAll}
           onResetRenderers={handleResetRenderers}
-          onBroadcastToAgents={handleBroadcastToAgents}
+          onSelectAllAgents={handleSelectAllAgents}
+          onSelectWaitingAgents={handleSelectWaitingAgents}
+          onSelectWorkingAgents={handleSelectWorkingAgents}
           onOpenPanelPalette={handleOpenPanelPalette}
           onDeleteWorktree={!isMainWorktree ? () => setShowDeleteDialog(true) : undefined}
           hasResourceConfig={hasResourceConfig}

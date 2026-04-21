@@ -12,6 +12,7 @@ import {
 import {
   Activity,
   CircleDot,
+  Clock,
   Code,
   Copy,
   FileText,
@@ -24,6 +25,7 @@ import {
   Layers,
   Link,
   Monitor,
+  CheckSquare,
   Maximize2,
   PanelTopClose,
   PanelTopOpen,
@@ -38,13 +40,9 @@ import {
   SquareTerminal,
   Trash2,
   Undo2,
+  Zap,
 } from "lucide-react";
-import {
-  MoveToDockIcon,
-  CopyTreeIcon,
-  TerminalRecipeIcon,
-  BroadcastTerminalIcon,
-} from "@/components/icons";
+import { MoveToDockIcon, CopyTreeIcon, TerminalRecipeIcon } from "@/components/icons";
 
 type MenuComponent = React.ElementType;
 type LaunchAgentIcon = React.ComponentType<{ className?: string }>;
@@ -90,6 +88,8 @@ export interface WorktreeMenuItemsProps {
     active: number;
     completed: number;
     all: number;
+    waiting: number;
+    working: number;
   };
   onLaunchAgent?: (agentId: string) => void;
   onCopyContextFull: () => void;
@@ -113,7 +113,9 @@ export interface WorktreeMenuItemsProps {
   onDockAll: () => void;
   onMaximizeAll: () => void;
   onResetRenderers: () => void;
-  onBroadcastToAgents: () => void;
+  onSelectAllAgents: () => void;
+  onSelectWaitingAgents: () => void;
+  onSelectWorkingAgents: () => void;
   onOpenPanelPalette?: () => void;
   onDeleteWorktree?: () => void;
   onRevertAgentChanges?: () => void;
@@ -161,7 +163,9 @@ export function WorktreeMenuItems({
   onDockAll,
   onMaximizeAll,
   onResetRenderers,
-  onBroadcastToAgents,
+  onSelectAllAgents,
+  onSelectWaitingAgents,
+  onSelectWorkingAgents,
   onOpenPanelPalette,
   onDeleteWorktree,
   onRevertAgentChanges,
@@ -258,10 +262,20 @@ export function WorktreeMenuItems({
 
           <C.Separator />
 
-          <C.Item onSelect={onBroadcastToAgents} disabled={counts.active === 0}>
-            <BroadcastTerminalIcon className="w-3.5 h-3.5 mr-2" />
-            Broadcast to agents…
-            <C.Shortcut>({counts.active})</C.Shortcut>
+          <C.Item onSelect={onSelectAllAgents} disabled={counts.all === 0}>
+            <CheckSquare className="w-3.5 h-3.5 mr-2" />
+            Select All Agents
+            <C.Shortcut>({counts.all})</C.Shortcut>
+          </C.Item>
+          <C.Item onSelect={onSelectWaitingAgents} disabled={counts.waiting === 0}>
+            <Clock className="w-3.5 h-3.5 mr-2" />
+            Select Waiting Agents
+            <C.Shortcut>({counts.waiting})</C.Shortcut>
+          </C.Item>
+          <C.Item onSelect={onSelectWorkingAgents} disabled={counts.working === 0}>
+            <Zap className="w-3.5 h-3.5 mr-2" />
+            Select Working Agents
+            <C.Shortcut>({counts.working})</C.Shortcut>
           </C.Item>
         </C.SubContent>
       </C.Sub>
