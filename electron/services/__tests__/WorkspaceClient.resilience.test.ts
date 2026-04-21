@@ -570,8 +570,11 @@ describe("WorkspaceClient multi-process manager", () => {
         worktree: { id: "wt-1", path: "/a/wt", name: "wt", branch: "main" },
       });
 
-      expect(wc.send).toHaveBeenCalledWith("worktree:update", {
-        worktree: expect.objectContaining({ id: "wt-1" }),
+      expect(wc.send).toHaveBeenCalledWith("events:push", {
+        name: "worktree:update",
+        payload: {
+          worktree: expect.objectContaining({ id: "wt-1" }),
+        },
       });
     });
 
