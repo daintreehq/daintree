@@ -351,6 +351,34 @@ describe("PanelHeader", () => {
     });
   });
 
+  describe("selectionControl slot", () => {
+    it("renders the selectionControl before the overflow button", () => {
+      render(
+        <PanelHeader
+          {...makeProps({
+            selectionControl: (
+              <button data-testid="fake-select-handle" type="button">
+                select
+              </button>
+            ),
+          })}
+        />
+      );
+      const handle = screen.getByTestId("fake-select-handle");
+      const overflow = screen.getByLabelText("More panel actions");
+      expect(handle).toBeDefined();
+      // DOCUMENT_POSITION_FOLLOWING === 4: overflow follows handle in document order.
+      expect(handle.compareDocumentPosition(overflow) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(
+        Node.DOCUMENT_POSITION_FOLLOWING
+      );
+    });
+
+    it("renders nothing extra when no selectionControl is provided", () => {
+      render(<PanelHeader {...makeProps()} />);
+      expect(screen.queryByTestId("fake-select-handle")).toBeNull();
+    });
+  });
+
   describe("Collapse to Dock button", () => {
     it("renders when location is dock and onMinimize is provided", () => {
       const onMinimize = vi.fn();

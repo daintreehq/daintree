@@ -41,6 +41,7 @@ export interface ContentPanelProps extends BasePanelProps {
   // Slots
   headerContent?: ReactNode;
   headerActions?: ReactNode;
+  selectionControl?: ReactNode;
   toolbar?: ReactNode;
 
   // Container customization
@@ -103,6 +104,7 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
     children,
     headerContent,
     headerActions,
+    selectionControl,
     toolbar,
     className,
     onClick,
@@ -272,7 +274,7 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
             : undefined),
         }}
         className={cn(
-          "flex flex-col h-full overflow-hidden group",
+          "flex flex-col h-full overflow-hidden group/panel",
           location === "grid" && !isMaximized && "bg-surface",
           (location === "dock" || isMaximized) && "bg-daintree-bg",
           location === "grid" &&
@@ -332,6 +334,7 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
           wasJustSelected={wasJustSelected}
           headerContent={resolvedHeaderContent}
           headerActions={headerActions}
+          selectionControl={selectionControl}
           tabs={tabs}
           groupId={groupId}
           onTabClick={onTabClick}

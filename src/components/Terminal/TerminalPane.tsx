@@ -9,7 +9,7 @@ import React, {
   useState,
 } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { AlertTriangle, RefreshCw, Settings } from "lucide-react";
+import { AlertTriangle, CheckSquare, RefreshCw, Settings, Square } from "lucide-react";
 import { Spinner } from "@/components/ui/Spinner";
 import type {
   TerminalType,
@@ -56,6 +56,7 @@ const LazyHybridInputBar = lazy(() =>
   import("./HybridInputBar").then((m) => ({ default: m.HybridInputBar }))
 );
 import { getTerminalFocusTarget, shouldSuppressUnfocusedClick } from "./terminalFocus";
+import { decideChromeAction, decideSelectHandleAction } from "./multiSelectGestures";
 import { registerPanelFocusHandler } from "./terminalFocusRegistry";
 
 import { DropdownMenuItem } from "@/components/ui/dropdown-menu";
@@ -519,43 +520,31 @@ function TerminalPaneComponent({
         return;
       }
 
-      // Multi-select gestures for fleet-eligible agent terminals
-      const terminal = getTerminal(id);
-      const isEligible = terminal && isFleetArmEligible(terminal);
-      const isArmed = armedIds.has(id);
+      // Power-user chrome gestures live alongside focus. Shift-click is
+      // reserved for xterm's native selection-extend; multi-select now lives
+      // on the dedicated handle in the pane header.
+      if (e) {
+        const terminal = getTerminal(id);
+        const isEligible = !!(terminal && isFleetArmEligible(terminal));
+        const action = decideChromeAction(
+          { shiftKey: e.shiftKey, metaKey: e.metaKey, ctrlKey: e.ctrlKey },
+          { isEligible, isArmed: armedIds.has(id) }
+        );
 
-      if (isEligible && e) {
-        const isShiftClick = e.shiftKey;
-        const isToggleClick = e.ctrlKey || e.metaKey;
-
-        if (isShiftClick && orderedEligibleTerminalIds) {
-          // Shift-click: extend selection to clicked terminal
-          const store = useFleetArmingStore.getState();
-          store.extendTo(id, orderedEligibleTerminalIds);
+        if (action.type === "toggle") {
+          useFleetArmingStore.getState().toggleId(id);
           e.preventDefault();
           return;
         }
-
-        if (isToggleClick) {
-          // Cmd/Ctrl-click: toggle selection
-          const store = useFleetArmingStore.getState();
-          store.toggleId(id);
-          e.preventDefault();
-          return;
-        }
-
-        // Plain click on eligible pane
-        if (isArmed) {
-          // Make this the primary selection (update lastArmedId)
-          const store = useFleetArmingStore.getState();
-          store.armId(id);
+        if (action.type === "bump-primary") {
+          useFleetArmingStore.getState().armId(id);
         }
       }
 
       setFocused(id);
       terminalInstanceService.boostRefreshRate(id);
     },
-    [id, setFocused, armedIds, orderedEligibleTerminalIds, getTerminal]
+    [id, setFocused, armedIds, getTerminal]
   );
 
   const handleXtermPointerDownCapture = useCallback(
@@ -697,6 +686,53 @@ function TerminalPaneComponent({
   // Determine panel kind based on agent
   const kind = effectiveAgentId ? "agent" : "terminal";
 
+  // Multi-select handle — hover-revealed button in the pane header chrome.
+  // Plain click toggles; shift-click range-extends using grid visual order.
+  // Only eligible agent terminals in the grid (not dock) show the handle.
+  const terminalForHandle = getTerminal(id);
+  const isFleetEligible = terminalForHandle ? isFleetArmEligible(terminalForHandle) : false;
+  const isArmed = armedIds.has(id);
+  const selectionHandle = useMemo(() => {
+    if (!isFleetEligible || location === "dock") return undefined;
+    const handleSelect = (e: React.MouseEvent) => {
+      e.stopPropagation();
+      e.preventDefault();
+      const action = decideSelectHandleAction(
+        { shiftKey: e.shiftKey, metaKey: e.metaKey, ctrlKey: e.ctrlKey },
+        orderedEligibleTerminalIds
+      );
+      if (action.type === "extend" && orderedEligibleTerminalIds) {
+        useFleetArmingStore.getState().extendTo(id, orderedEligibleTerminalIds);
+      } else {
+        useFleetArmingStore.getState().toggleId(id);
+      }
+    };
+    return (
+      <button
+        type="button"
+        aria-pressed={isArmed}
+        aria-label={isArmed ? `Remove ${title} from selection` : `Add ${title} to selection`}
+        data-testid="panel-select-handle"
+        onPointerDown={(e) => e.stopPropagation()}
+        onClick={handleSelect}
+        className={cn(
+          "shrink-0 p-1.5 text-daintree-text/60 hover:text-daintree-text hover:bg-daintree-text/10",
+          "transition-opacity duration-150",
+          "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-1",
+          isArmed
+            ? "opacity-100 text-daintree-accent pointer-events-auto"
+            : "opacity-0 pointer-events-none group-hover/panel:opacity-100 group-hover/panel:pointer-events-auto focus-visible:opacity-100 focus-visible:pointer-events-auto"
+        )}
+      >
+        {isArmed ? (
+          <CheckSquare className="w-3 h-3" aria-hidden="true" />
+        ) : (
+          <Square className="w-3 h-3" aria-hidden="true" />
+        )}
+      </button>
+    );
+  }, [id, title, isFleetEligible, isArmed, location, orderedEligibleTerminalIds]);
+
   const agentHeaderActions = useMemo(() => {
     if (!effectiveAgentId) return undefined;
     const agentConfig = getAgentConfig(effectiveAgentId);
@@ -738,6 +774,7 @@ function TerminalPaneComponent({
       onMinimize={onMinimize}
       onRestore={onRestore}
       headerActions={agentHeaderActions}
+      selectionControl={selectionHandle}
       onRestart={handleRestart}
       isExited={isExited}
       exitCode={exitCode}

@@ -1126,7 +1126,7 @@ export function ContentGrid({
                 gridPanelCount={1}
                 gridCols={1}
                 isMaximized={true}
-                orderedEligibleTerminalIds={groupPanels.map((t) => t.id)}
+                orderedEligibleTerminalIds={groupPanels.filter(isFleetArmEligible).map((t) => t.id)}
               />
             </div>
           </div>

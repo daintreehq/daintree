@@ -109,6 +109,7 @@ export interface PanelHeaderProps {
   // Slots for kind-specific content
   headerContent?: ReactNode;
   headerActions?: ReactNode;
+  selectionControl?: ReactNode;
 
   // Tab support
   tabs?: TabInfo[];
@@ -154,6 +155,7 @@ function PanelHeaderComponent({
   wasJustSelected = false,
   headerContent,
   headerActions,
+  selectionControl,
   tabs,
   groupId,
   onTabClick,
@@ -829,6 +831,9 @@ function PanelHeaderComponent({
       )}
 
       <div className="flex items-center gap-1">
+        {/* Multi-select handle — hover-revealed on eligible panels */}
+        {selectionControl}
+
         {/* Overflow menu — panel management actions */}
         {hasOverflowItems && (
           <TooltipProvider>
