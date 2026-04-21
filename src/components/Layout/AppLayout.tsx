@@ -24,6 +24,7 @@ import {
 import { useFleetScopeFlagStore } from "@/store/fleetScopeFlagStore";
 import { useProjectStore } from "@/store/projectStore";
 import { useMacroFocusStore } from "@/store/macroFocusStore";
+import { useThemeBrowserStore } from "@/store/themeBrowserStore";
 import { useCcrPresetsSubscription } from "@/hooks/useCcrPresetsSubscription";
 import { useProjectPresetsSubscription } from "@/hooks/useProjectPresetsSubscription";
 import type { RetryAction } from "@/store";
@@ -71,6 +72,7 @@ export function AppLayout({
   const layout = useLayoutState();
   const overlayClaims = useUIStore((s) => s.overlayClaims);
   const isThemeBrowserOpen = overlayClaims.has("theme-browser");
+  const themeBrowserOpen = useThemeBrowserStore((s) => s.isOpen);
   const reduceAnimations = usePreferencesStore((s) => s.reduceAnimations);
   const showSidebar = !layout.isFocusMode && currentProject != null;
 
@@ -385,8 +387,12 @@ export function AppLayout({
                   </div>
                 </ErrorBoundary>
               )}
-              {isThemeBrowserOpen && (
-                <ErrorBoundary variant="section" componentName="ThemeBrowser">
+              {themeBrowserOpen && (
+                <ErrorBoundary
+                  variant="section"
+                  componentName="ThemeBrowser"
+                  onError={() => useThemeBrowserStore.getState().close()}
+                >
                   <div
                     className="absolute top-0 bottom-0 z-40 pointer-events-auto"
                     style={{
