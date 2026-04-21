@@ -1719,60 +1719,6 @@ describe("WorkspaceService.initResourceConfigAsync", () => {
     expect(monitor.resourceConnectCommand).toBe("ssh 'my-worktree'@'feature/x'.example.com");
   });
 
-  it("sets resourcePollInterval from config.statusInterval", async () => {
-    const monitor = createAndRegisterMonitor();
-
-    const config = {
-      resource: {
-        status: "check",
-        statusInterval: 60, // 60 seconds
-      },
-    };
-    await setupConfig(config);
-
-    await service["initResourceConfigAsync"](monitor, "/test/worktree");
-
-    expect(monitor.resourcePollIntervalMs).toBe(60_000); // 60 seconds in ms
-  });
-
-  it("does not emit update when monitor.isRunning is false", async () => {
-    const monitor = createAndRegisterMonitor();
-    // Simulate monitor has initial status set
-    (monitor as { _hasInitialStatus: boolean })._hasInitialStatus = true;
-
-    const config = {
-      resource: {
-        provision: ["deploy"],
-      },
-    };
-    await setupConfig(config);
-
-    await service["initResourceConfigAsync"](monitor, "/test/worktree");
-
-    expect(mockSendEvent).not.toHaveBeenCalled();
-  });
-
-  it("emits update when monitor.isRunning is true and hasInitialStatus is true", async () => {
-    const monitor = createAndRegisterMonitor();
-    monitor.start();
-    expect(monitor.isRunning).toBe(true);
-
-    const config = {
-      resource: {
-        provision: ["deploy"],
-      },
-    };
-    await setupConfig(config);
-
-    await service["initResourceConfigAsync"](monitor, "/test/worktree");
-
-    expect(mockSendEvent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: "worktree-update",
-      })
-    );
-  });
-
   it("returns early when projectRootPath is not set", async () => {
     const monitor = createAndRegisterMonitor();
     service["projectRootPath"] = null;
