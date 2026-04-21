@@ -1153,13 +1153,6 @@ export interface ElectronAPI {
   };
   onboarding: {
     get(): Promise<OnboardingState>;
-    // TODO(0.9.0): Remove after deleting the temporary Canopy onboarding
-    // localStorage migration path.
-    migrate(payload: {
-      agentSelectionDismissed: boolean;
-      agentSetupComplete: boolean;
-      firstRunToastSeen: boolean;
-    }): Promise<OnboardingState>;
     setStep(step: string | null | { step: string | null; agentSetupIds?: string[] }): Promise<void>;
     complete(): Promise<void>;
     markToastSeen(): Promise<void>;

@@ -6,7 +6,6 @@ import fs from "fs/promises";
 import { resilientAtomicWriteFile } from "../utils/fs.js";
 import { UTF8_BOM } from "./projectStorePaths.js";
 import { safeRecipeFilename } from "../utils/recipeFilename.js";
-import { ensureDaintreeDirMigrated } from "./projectDirMigration.js";
 
 const MAX_PROJECT_NAME_LENGTH = 100;
 const DAINTREE_DIR = ".daintree";
@@ -24,7 +23,6 @@ export class ProjectIdentityFiles {
   async readInRepoProjectIdentity(
     projectPath: string
   ): Promise<{ name?: string; emoji?: string; color?: string; found: boolean }> {
-    await ensureDaintreeDirMigrated(projectPath);
     const filePath = path.join(projectPath, DAINTREE_PROJECT_JSON);
     try {
       let content = await fs.readFile(filePath, "utf-8");
@@ -82,7 +80,6 @@ export class ProjectIdentityFiles {
     projectPath: string,
     data: { name?: string; emoji?: string; color?: string }
   ): Promise<void> {
-    await ensureDaintreeDirMigrated(projectPath);
     await this.assertDaintreeDirNotSymlink(projectPath);
     const daintreeDir = path.join(projectPath, DAINTREE_DIR);
     const filePath = path.join(projectPath, DAINTREE_PROJECT_JSON);
@@ -123,7 +120,6 @@ export class ProjectIdentityFiles {
   }
 
   async writeInRepoSettings(projectPath: string, settings: ProjectSettings): Promise<void> {
-    await ensureDaintreeDirMigrated(projectPath);
     await this.assertDaintreeDirNotSymlink(projectPath);
     const daintreeDir = path.join(projectPath, DAINTREE_DIR);
     const filePath = path.join(projectPath, DAINTREE_SETTINGS_JSON);
@@ -202,7 +198,6 @@ export class ProjectIdentityFiles {
   }
 
   async writeInRepoRecipe(projectPath: string, recipe: TerminalRecipe): Promise<void> {
-    await ensureDaintreeDirMigrated(projectPath);
     await this.assertDaintreeDirNotSymlink(projectPath);
     const recipesDir = path.join(projectPath, DAINTREE_RECIPES_DIR);
 
@@ -248,7 +243,6 @@ export class ProjectIdentityFiles {
   }
 
   async readInRepoRecipes(projectPath: string): Promise<TerminalRecipe[]> {
-    await ensureDaintreeDirMigrated(projectPath);
     const recipesDir = path.join(projectPath, DAINTREE_RECIPES_DIR);
     let entries;
     try {
@@ -291,7 +285,6 @@ export class ProjectIdentityFiles {
    * Returns a map keyed by agent id; malformed or unrecognized files are skipped with a warn.
    */
   async readInRepoPresets(projectPath: string): Promise<Record<string, AgentPreset[]>> {
-    await ensureDaintreeDirMigrated(projectPath);
     const presetsDir = path.join(projectPath, DAINTREE_PRESETS_DIR);
     let agentDirs;
     try {
@@ -364,7 +357,6 @@ export class ProjectIdentityFiles {
   }
 
   async deleteInRepoRecipe(projectPath: string, recipeName: string): Promise<void> {
-    await ensureDaintreeDirMigrated(projectPath);
     await this.assertDaintreeDirNotSymlink(projectPath);
     const recipesDir = path.join(projectPath, DAINTREE_RECIPES_DIR);
 

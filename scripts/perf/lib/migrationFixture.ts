@@ -129,7 +129,7 @@ export function createHeavyMigrationFixture(): StoreSchema {
     appAgentConfig: {} as StoreSchema["appAgentConfig"],
     windowStates: {},
     worktreeIssueMap: worktreeIssueMap as StoreSchema["worktreeIssueMap"],
-    appTheme: { colorSchemeId: "canopy" },
+    appTheme: { colorSchemeId: "daintree" },
     privacy: {
       telemetryLevel: "off",
       hasSeenPrompt: false,
@@ -161,7 +161,6 @@ export function createHeavyMigrationFixture(): StoreSchema {
       seenAgentIds: [],
       welcomeCardDismissed: false,
       setupBannerDismissed: false,
-      migratedFromLocalStorage: false,
     } as StoreSchema["onboarding"],
     activationFunnel: {},
     orchestrationMilestones: {},

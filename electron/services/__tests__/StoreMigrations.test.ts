@@ -33,7 +33,6 @@ import type { Migration } from "../StoreMigrations.js";
 import { LATEST_SCHEMA_VERSION, MigrationRunner } from "../StoreMigrations.js";
 import { migrations } from "../migrations/index.js";
 import { migration004 } from "../migrations/004-upgrade-correction-model.js";
-import { migration006 } from "../migrations/006-rename-theme-canopy-to-daintree.js";
 import { migration007 } from "../migrations/007-reduce-default-terminal-scrollback.js";
 import { migration008 } from "../migrations/008-split-notification-sounds.js";
 import { migration011 } from "../migrations/011-minimal-soundscape-defaults.js";
@@ -219,43 +218,6 @@ describe("MigrationRunner", () => {
       const store = createMockStore(storePath, {});
       migration004.up(store as never);
       expect(store.data.voiceInput).toBeUndefined();
-    });
-  });
-
-  describe("migration 006 — rename theme canopy to daintree", () => {
-    it('renames colorSchemeId "canopy" to "daintree" and preserves sibling fields', () => {
-      const store = createMockStore(storePath, {
-        appTheme: { colorSchemeId: "canopy", colorVisionMode: "default", customSchemes: "[]" },
-      });
-      migration006.up(store as never);
-      const appTheme = store.data.appTheme as Record<string, unknown>;
-      expect(appTheme.colorSchemeId).toBe("daintree");
-      expect(appTheme.colorVisionMode).toBe("default");
-      expect(appTheme.customSchemes).toBe("[]");
-    });
-
-    it('renames colorSchemeId "canopy-slate" to "daintree"', () => {
-      const store = createMockStore(storePath, {
-        appTheme: { colorSchemeId: "canopy-slate" },
-      });
-      migration006.up(store as never);
-      const appTheme = store.data.appTheme as Record<string, unknown>;
-      expect(appTheme.colorSchemeId).toBe("daintree");
-    });
-
-    it('leaves "daintree" unchanged', () => {
-      const store = createMockStore(storePath, {
-        appTheme: { colorSchemeId: "daintree" },
-      });
-      migration006.up(store as never);
-      const appTheme = store.data.appTheme as Record<string, unknown>;
-      expect(appTheme.colorSchemeId).toBe("daintree");
-    });
-
-    it("skips when no appTheme settings exist", () => {
-      const store = createMockStore(storePath, {});
-      migration006.up(store as never);
-      expect(store.data.appTheme).toBeUndefined();
     });
   });
 
@@ -612,7 +574,7 @@ describe("MigrationRunner", () => {
             { issueNumber: 1000 + i, url: `https://github.com/org/repo/issues/${1000 + i}` },
           ])
         ),
-        appTheme: { colorSchemeId: "canopy" },
+        appTheme: { colorSchemeId: "daintree" },
         privacy: { telemetryLevel: "off", hasSeenPrompt: false, logRetentionDays: 30 },
         voiceInput: {
           enabled: true,
@@ -640,7 +602,6 @@ describe("MigrationRunner", () => {
           seenAgentIds: [],
           welcomeCardDismissed: false,
           setupBannerDismissed: false,
-          migratedFromLocalStorage: false,
         },
         activationFunnel: {},
         orchestrationMilestones: {},
@@ -669,9 +630,6 @@ describe("MigrationRunner", () => {
       // Migration 003: recipes should be cleared
       expect((store.data.appState as Record<string, unknown>).recipes).toEqual([]);
       expect(mockProjectStore.saveRecipes).toHaveBeenCalled();
-
-      // Migration 006: canopy → daintree
-      expect((store.data.appTheme as Record<string, unknown>).colorSchemeId).toBe("daintree");
 
       // Migration 007: scrollback reduced
       expect((store.data.terminalConfig as Record<string, unknown>).scrollbackLines).toBe(1000);

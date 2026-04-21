@@ -18,7 +18,6 @@ import type {
 } from "../../shared/types/workspace-host.js";
 import { invalidateGitStatusCache } from "../utils/git.js";
 import { getGitDir, clearGitDirCache } from "../utils/gitUtils.js";
-import { ensureDaintreeDirMigrated } from "../services/projectDirMigration.js";
 import { extractIssueNumberSync, extractIssueNumber } from "../services/issueExtractor.js";
 import { GitHubAuth } from "../services/github/GitHubAuth.js";
 import { pullRequestService } from "../services/PullRequestService.js";
@@ -224,10 +223,6 @@ export class WorkspaceService {
   ): Promise<void> {
     try {
       this.projectRootPath = projectRootPath;
-      // TODO(0.9.0): Remove — .canopy -> .daintree project dir rename.
-      // Must run before any .daintree/config.json read so legacy worktree
-      // lifecycle configs and recipes from pre-rebrand repos migrate in time.
-      await ensureDaintreeDirMigrated(projectRootPath);
       // Merge: global (lowest priority) < project-level < DAINTREE_* (set in buildEnv)
       const projectEnvVars = await this.loadProjectEnvVars(projectRootPath);
       this.projectEnvVars = { ...(globalEnvVars ?? {}), ...projectEnvVars };

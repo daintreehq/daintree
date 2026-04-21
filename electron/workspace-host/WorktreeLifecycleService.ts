@@ -3,7 +3,6 @@ import { readFile, access, cp } from "fs/promises";
 import { join as pathJoin, basename, dirname } from "path";
 import os from "os";
 import { z } from "zod/v4";
-import { ensureDaintreeDirMigrated } from "../services/projectDirMigration.js";
 
 const OUTPUT_TAIL_BYTES = 8192;
 const DEFAULT_TIMEOUT_MS = 120_000;
@@ -104,14 +103,6 @@ export class WorktreeLifecycleService {
     worktreePath: string,
     projectRootPath: string
   ): Promise<DaintreeLifecycleConfig | null> {
-    // TODO(0.9.0): Remove — .canopy -> .daintree migration. Per-path cached,
-    // so repeat calls from the polling loop are cheap. Must run before the
-    // .daintree/config.json reads below so a legacy .canopy/config.json in
-    // the worktree or project root gets picked up on first load.
-    await ensureDaintreeDirMigrated(worktreePath);
-    if (worktreePath !== projectRootPath) {
-      await ensureDaintreeDirMigrated(projectRootPath);
-    }
     const sanitizedRoot = projectRootPath.replace(/[/\\:*?"<>|]/g, "_");
     const candidates = [
       pathJoin(this.homeDir, ".daintree", "projects", sanitizedRoot, "config.json"),

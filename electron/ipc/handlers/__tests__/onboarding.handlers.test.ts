@@ -47,7 +47,6 @@ function seedOnboarding(partial: Record<string, unknown> = {}) {
     seenAgentIds: [],
     welcomeCardDismissed: false,
     setupBannerDismissed: false,
-    migratedFromLocalStorage: false,
     checklist: {
       dismissed: false,
       celebrationShown: false,
@@ -81,7 +80,6 @@ describe("registerOnboardingHandlers — discovery IPC", () => {
       firstRunToastSeen: false,
       newsletterPromptSeen: false,
       waitingNudgeSeen: false,
-      migratedFromLocalStorage: false,
       checklist: {
         dismissed: false,
         celebrationShown: false,
@@ -200,34 +198,6 @@ describe("registerOnboardingHandlers — discovery IPC", () => {
     expect(state.setupBannerDismissed).toBe(false);
   });
 
-  it("migrate sets setupBannerDismissed: true when all legacy keys are complete", () => {
-    storeMock._data["privacy"] = { hasSeenPrompt: true };
-    registerOnboardingHandlers();
-    seedOnboarding({ migratedFromLocalStorage: false });
-    const migrate = getHandler("onboarding:migrate");
-    const result = migrate(null, {
-      agentSelectionDismissed: true,
-      agentSetupComplete: true,
-      firstRunToastSeen: true,
-    }) as { completed: boolean; setupBannerDismissed: boolean };
-    expect(result.completed).toBe(true);
-    expect(result.setupBannerDismissed).toBe(true);
-  });
-
-  it("migrate leaves setupBannerDismissed false when legacy state is partial", () => {
-    storeMock._data["privacy"] = { hasSeenPrompt: false };
-    registerOnboardingHandlers();
-    seedOnboarding({ migratedFromLocalStorage: false });
-    const migrate = getHandler("onboarding:migrate");
-    const result = migrate(null, {
-      agentSelectionDismissed: true,
-      agentSetupComplete: false,
-      firstRunToastSeen: true,
-    }) as { completed: boolean; setupBannerDismissed: boolean };
-    expect(result.completed).toBe(false);
-    expect(result.setupBannerDismissed).toBe(false);
-  });
-
   it("dismissSetupBanner flips the flag and returns the updated state", () => {
     registerOnboardingHandlers();
     seedOnboarding({ setupBannerDismissed: false });
@@ -263,33 +233,5 @@ describe("registerOnboardingHandlers — discovery IPC", () => {
     setOnboardingCompleteTagMock.mockClear();
     complete(null);
     expect(setOnboardingCompleteTagMock).toHaveBeenCalledWith(true);
-  });
-
-  it("migrate stamps the onboarding_complete Sentry tag when legacy state was fully complete", () => {
-    storeMock._data["privacy"] = { hasSeenPrompt: true };
-    registerOnboardingHandlers();
-    seedOnboarding({ migratedFromLocalStorage: false });
-    const migrate = getHandler("onboarding:migrate");
-    setOnboardingCompleteTagMock.mockClear();
-    migrate(null, {
-      agentSelectionDismissed: true,
-      agentSetupComplete: true,
-      firstRunToastSeen: true,
-    });
-    expect(setOnboardingCompleteTagMock).toHaveBeenCalledWith(true);
-  });
-
-  it("migrate does NOT stamp the onboarding_complete tag when legacy state is partial", () => {
-    storeMock._data["privacy"] = { hasSeenPrompt: false };
-    registerOnboardingHandlers();
-    seedOnboarding({ migratedFromLocalStorage: false });
-    const migrate = getHandler("onboarding:migrate");
-    setOnboardingCompleteTagMock.mockClear();
-    migrate(null, {
-      agentSelectionDismissed: true,
-      agentSetupComplete: false,
-      firstRunToastSeen: true,
-    });
-    expect(setOnboardingCompleteTagMock).not.toHaveBeenCalled();
   });
 });

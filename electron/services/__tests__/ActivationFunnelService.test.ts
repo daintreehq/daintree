@@ -72,7 +72,6 @@ function seedOnboardingDefaults() {
     seenAgentIds: [],
     welcomeCardDismissed: false,
     setupBannerDismissed: false,
-    migratedFromLocalStorage: false,
     checklist: {
       dismissed: false,
       celebrationShown: false,

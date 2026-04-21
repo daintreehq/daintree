@@ -85,15 +85,6 @@ function runMigrationChain(fixture: ReturnType<typeof createHeavyMigrationFixtur
     };
   }
 
-  // Migration 006 — Rename theme canopy to daintree (O(1))
-  const appTheme006 = state.appTheme as Record<string, unknown> | undefined;
-  if (appTheme006) {
-    const colorSchemeId = appTheme006.colorSchemeId as string | undefined;
-    if (colorSchemeId === "canopy" || colorSchemeId === "canopy-slate") {
-      appTheme006.colorSchemeId = "daintree";
-    }
-  }
-
   // Migration 007 — Reduce default terminal scrollback (O(1))
   const terminalConfig007 = state.terminalConfig as Record<string, unknown> | undefined;
   if (terminalConfig007 && terminalConfig007.scrollbackLines === 2500) {
