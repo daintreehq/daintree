@@ -61,7 +61,7 @@ vi.mock("../../../window/portDistribution.js", () => ({
 
 import { ipcMain } from "electron";
 import { CHANNELS } from "../../channels.js";
-import { registerProjectCrudHandlers } from "../projectCrud.js";
+import { registerProjectCrudHandlers } from "../projectCrud/index.js";
 import type { HandlerDependencies } from "../../types.js";
 import type {
   WindowRegistry,

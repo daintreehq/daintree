@@ -274,3 +274,109 @@ describe("portalStore", () => {
     });
   });
 });
+
+describe("portalStore persistence migration", () => {
+  const STORAGE_KEY = "portal-storage";
+
+  function installLocalStorageWith(initial: Record<string, string>): Map<string, string> {
+    const backing = new Map<string, string>(Object.entries(initial));
+    const mock = {
+      getItem: (key: string) => backing.get(key) ?? null,
+      setItem: (key: string, value: string) => {
+        backing.set(key, value);
+      },
+      removeItem: (key: string) => {
+        backing.delete(key);
+      },
+      clear: () => {
+        backing.clear();
+      },
+    } as unknown as Storage;
+    (globalThis as unknown as { localStorage: Storage }).localStorage = mock;
+    window.localStorage = mock;
+    return backing;
+  }
+
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    vi.resetModules();
+    vi.restoreAllMocks();
+  });
+
+  it("rehydrates a legacy unversioned blob and keeps user links", async () => {
+    const legacyBlob = JSON.stringify({
+      state: {
+        width: 600,
+        links: [
+          {
+            id: "user-1",
+            type: "user",
+            title: "Custom",
+            url: "https://example.com",
+            icon: "globe",
+            enabled: true,
+            order: 0,
+          },
+        ],
+      },
+    });
+    installLocalStorageWith({ [STORAGE_KEY]: legacyBlob });
+
+    const { usePortalStore: store } = await import("../portalStore");
+
+    const userLinks = store.getState().links.filter((l) => l.type === "user");
+    expect(userLinks).toHaveLength(1);
+    expect(userLinks[0]!.id).toBe("user-1");
+    expect(store.getState().width).toBe(600);
+  });
+
+  it("still runs the discovered→system merge migration after version check", async () => {
+    const legacyBlob = JSON.stringify({
+      state: {
+        links: [
+          {
+            id: "discovered-foo",
+            type: "discovered",
+            title: "Foo",
+            url: "https://foo.test",
+            icon: "globe",
+            enabled: true,
+          },
+        ],
+      },
+    });
+    installLocalStorageWith({ [STORAGE_KEY]: legacyBlob });
+
+    const { usePortalStore: store } = await import("../portalStore");
+
+    const migrated = store.getState().links.find((l) => l.id === "system-foo");
+    expect(migrated).toBeDefined();
+    expect(migrated!.type).toBe("system");
+    expect(store.getState().links.some((l) => l.id === "discovered-foo")).toBe(false);
+  });
+
+  it("writes version: 0 on the next persist after rehydration", async () => {
+    const legacyBlob = JSON.stringify({
+      state: {
+        width: 600,
+        links: [],
+      },
+    });
+    const backing = installLocalStorageWith({ [STORAGE_KEY]: legacyBlob });
+
+    const { usePortalStore: store } = await import("../portalStore");
+    store.getState().setWidth(620);
+
+    const written = backing.get(STORAGE_KEY);
+    expect(written).toBeDefined();
+    const parsed = JSON.parse(written!) as {
+      version: number;
+      state: { width: number };
+    };
+    expect(parsed.version).toBe(0);
+    expect(parsed.state.width).toBe(620);
+  });
+});

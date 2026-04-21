@@ -89,7 +89,7 @@ vi.mock("../../../services/SoundService.js", () => ({
 }));
 
 import { CHANNELS } from "../../channels.js";
-import { registerWorktreeHandlers } from "../worktree.js";
+import { registerWorktreeHandlers } from "../worktree/index.js";
 
 function getInvokeHandler(channel: string): (...args: unknown[]) => Promise<unknown> {
   const call = (ipcMainMock.handle as Mock).mock.calls.find(

@@ -67,10 +67,10 @@ const registerMocks = vi.hoisted(() => ({
   registerPerfHandlers: vi.fn(),
 }));
 
-vi.mock("../handlers/worktree.js", () => ({
+vi.mock("../handlers/worktree/index.js", () => ({
   registerWorktreeHandlers: registerMocks.registerWorktreeHandlers,
 }));
-vi.mock("../handlers/terminal.js", () => ({
+vi.mock("../handlers/terminal/index.js", () => ({
   registerTerminalHandlers: registerMocks.registerTerminalHandlers,
 }));
 vi.mock("../handlers/files.js", () => ({
@@ -94,7 +94,7 @@ vi.mock("../handlers/editorConfig.js", () => ({
 vi.mock("../handlers/agentCli.js", () => ({
   registerAgentCliHandlers: registerMocks.registerAgentCliHandlers,
 }));
-vi.mock("../handlers/projectCrud.js", () => ({
+vi.mock("../handlers/projectCrud/index.js", () => ({
   registerProjectCrudHandlers: registerMocks.registerProjectCrudHandlers,
 }));
 vi.mock("../handlers/projectRecipes.js", () => ({

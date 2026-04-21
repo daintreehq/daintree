@@ -121,6 +121,8 @@ export const useUrlHistoryStore = create<UrlHistoryState>()(
     {
       name: "daintree-url-history",
       storage: createSafeJSONStorage(),
+      version: 0,
+      migrate: (persistedState) => persistedState as UrlHistoryState,
       partialize: (state) => ({ entries: state.entries }),
     }
   )

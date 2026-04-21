@@ -105,7 +105,7 @@ vi.mock("../../../utils/logger.js", () => ({
   logError: vi.fn(),
 }));
 
-import { registerWorktreeHandlers } from "../worktree.js";
+import { registerWorktreeHandlers } from "../worktree/index.js";
 import { CHANNELS } from "../../channels.js";
 import type { HandlerDependencies } from "../../types.js";
 

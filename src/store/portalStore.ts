@@ -409,6 +409,8 @@ const portalStoreCreator: StateCreator<
 > = persist(createPortalStore, {
   name: "portal-storage",
   storage: createSafeJSONStorage(),
+  version: 0,
+  migrate: (persistedState) => persistedState as PortalState & PortalActions,
   partialize: (state) => ({
     links: state.links,
     width: state.width,
