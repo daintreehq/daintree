@@ -68,115 +68,7 @@ jobs:
       - name: Test
         run: npm run test
 
-  compiler-budget:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v6
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: npm
-
-      - name: Install Linux dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libarchive-tools
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Build renderer (with React Compiler logger)
-        run: npm run compiler-budget:build
-
-      - name: Check compiler bailout budget
-        run: npm run compiler-budget:check
-
-  eager-import-budget:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v6
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: npm
-
-      - name: Install Linux dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libarchive-tools
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Build eager-import metafile
-        run: npm run import-budget:build
-
-      - name: Check eager-import budget
-        run: npm run import-budget:check
-
-  renderer-bundle-budget:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    permissions:
-      contents: read
-      pull-requests: read
-
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v6
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: npm
-
-      - name: Install Linux dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libarchive-tools
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Build renderer (with bundle size report)
-        run: npm run renderer-bundle-budget:build
-
-      - name: Check renderer bundle size budget
-        id: budget-check
-        run: |
-          OVERRIDE=false
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            LABELS=$(gh pr view ${{ github.event.pull_request.number }} --json labels -q '.labels[].name' 2>/dev/null || echo "")
-            if echo "$LABELS" | grep -qx "bundle-size-override"; then
-              OVERRIDE=true
-            fi
-            HEAD_SHA="${{ github.event.pull_request.head.sha }}"
-            HEAD_MSG=$(gh api "repos/${{ github.repository }}/commits/$HEAD_SHA" --jq '.commit.message' 2>/dev/null || echo "")
-            if echo "$HEAD_MSG" | grep -q '\[bundle-size-override\]'; then
-              OVERRIDE=true
-            fi
-          fi
-          if [ "$OVERRIDE" = "true" ]; then
-            npm run renderer-bundle-budget:check -- --override
-          else
-            npm run renderer-bundle-budget:check
-          fi
-        env:
-          GH_TOKEN: ${{ github.token }}
-
   build:
-    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
@@ -202,6 +94,7 @@ jobs:
         run: npm run build
 
       - name: Smoke test
+        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
         run: xvfb-run --auto-servernum npm run test:smoke
         env:
           NODE_ENV: production
@@ -214,7 +107,7 @@ jobs:
   # Insulates against matrix/job name changes breaking required checks.
   ci-ok:
     if: always()
-    needs: [check, test, compiler-budget, eager-import-budget, renderer-bundle-budget]
+    needs: [check, test, build]
     runs-on: ubuntu-latest
     timeout-minutes: 2
 

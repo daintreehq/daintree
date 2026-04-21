@@ -29,8 +29,8 @@ npm run rebuild      # Rebuild native modules
 
 ### CI Testing Strategy
 
-- **PRs / pushes:** Typecheck, lint, format, and unit tests on **Ubuntu only** (no E2E). `ci-ok` gate job is the sole required status check.
-- **Nightly (2 AM UTC):** Full cross-platform CI on all 3 OSes: check + test + build + smoke + E2E full + E2E online + E2E nightly. Auto-creates GitHub issue on failure (`nightly-failure` label).
+- **PRs / pushes:** Typecheck, lint, format, unit tests, and build on **Ubuntu only** (smoke on push only; no E2E, no budgets). `ci-ok` gate job is the sole required status check.
+- **Nightly (2 AM UTC):** Full cross-platform CI on all 3 OSes: check + test + build + smoke + compiler / eager-import / renderer-bundle budgets + E2E full + E2E online + E2E nightly. Auto-creates GitHub issue on failure (`nightly-failure` label).
 - **Releases:** E2E core and E2E online gate the release publish on macOS + Linux. Windows E2E is nightly-only.
 - **E2E tiers:** `e2e/core/` (13 tests — gates releases), `e2e/full/` (61 tests — nightly), `e2e/online/` (2 agent integration tests — gates releases), `e2e/nightly/` (memory leak detection).
 - **Single-file E2E:** `gh workflow run "E2E Core Tests" --ref develop -f platform=linux -f test_file=e2e/core/core-foo.spec.ts` — use this when fixing a specific flaky test instead of re-running the full suite.
