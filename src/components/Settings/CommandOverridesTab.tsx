@@ -1,13 +1,5 @@
 import { useState, useEffect, useMemo, useCallback } from "react";
-import {
-  ChevronDown,
-  ChevronRight,
-  RotateCcw,
-  Power,
-  PowerOff,
-  AlertCircle,
-  Search,
-} from "lucide-react";
+import { ChevronRight, RotateCcw, Power, PowerOff, AlertCircle, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { commandsClient } from "@/clients/commandsClient";
 import type { CommandManifestEntry, CommandOverride } from "@shared/types/commands";
@@ -341,11 +333,13 @@ export function CommandOverridesTab({ projectId, overrides, onChange }: CommandO
                     className="p-0.5 rounded hover:bg-daintree-border/50 transition-colors"
                     aria-label={isExpanded ? "Collapse" : "Expand"}
                   >
-                    {isExpanded ? (
-                      <ChevronDown className="h-4 w-4 text-daintree-text/60" />
-                    ) : (
-                      <ChevronRight className="h-4 w-4 text-daintree-text/60" />
-                    )}
+                    <ChevronRight
+                      data-animated-chevron
+                      className={cn(
+                        "h-4 w-4 text-daintree-text/60 transition-transform duration-150 ease-[var(--ease-out-expo)] motion-reduce:transition-none",
+                        isExpanded && "rotate-90"
+                      )}
+                    />
                   </button>
                 )}
                 {!canExpand && <div className="w-5" />}

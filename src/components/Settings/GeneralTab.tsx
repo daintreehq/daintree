@@ -1,6 +1,5 @@
 import { useState, useEffect, useRef } from "react";
 import {
-  ChevronDown,
   ChevronRight,
   Moon,
   CheckCircle,
@@ -581,11 +580,13 @@ export function GeneralTab({
               aria-controls="keyboard-shortcuts-content"
               className="flex items-center gap-2 text-sm text-daintree-text/60 hover:text-daintree-text transition-colors"
             >
-              {isShortcutsOpen ? (
-                <ChevronDown className="w-4 h-4" />
-              ) : (
-                <ChevronRight className="w-4 h-4" />
-              )}
+              <ChevronRight
+                data-animated-chevron
+                className={cn(
+                  "w-4 h-4 transition-transform duration-150 ease-[var(--ease-out-expo)] motion-reduce:transition-none",
+                  isShortcutsOpen && "rotate-90"
+                )}
+              />
               <span>{isShortcutsOpen ? "Hide shortcuts" : "Show shortcuts"}</span>
             </button>
 

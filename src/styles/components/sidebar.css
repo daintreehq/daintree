@@ -1,3 +1,9 @@
+.sidebar-worktree-card {
+  transition:
+    background-color var(--duration-150) var(--ease-out-expo),
+    box-shadow var(--duration-150) var(--ease-out-expo);
+}
+
 .sidebar-worktree-card[data-active="true"] {
   background: var(--sidebar-active-bg, rgba(255, 255, 255, 0.03));
   box-shadow: inset 2px 0 0 var(--theme-accent-primary);
@@ -14,4 +20,14 @@
 
 .worktree-section-button:hover {
   background: var(--worktree-section-hover-bg, var(--theme-overlay-hover));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sidebar-worktree-card {
+    transition: none;
+  }
+}
+
+body[data-reduce-animations="true"] .sidebar-worktree-card {
+  transition: none;
 }

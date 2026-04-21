@@ -349,7 +349,7 @@ export function AppLayout({
           className="flex-1 flex overflow-hidden"
           style={{ flex: 1, display: "flex", overflow: "hidden" }}
         >
-          {showSidebar && (
+          {currentProject != null && (
             <ErrorBoundary variant="section" componentName="Sidebar">
               <Sidebar width={effectiveSidebarWidth} onResize={handleSidebarResize}>
                 {sidebarContent}

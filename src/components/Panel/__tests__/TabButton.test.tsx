@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import React from "react";
 import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { TabButton } from "../TabButton";
@@ -7,6 +8,30 @@ vi.mock("react-dom", async () => {
   const actual = await vi.importActual<typeof import("react-dom")>("react-dom");
   return { ...actual, createPortal: (children: React.ReactNode) => children };
 });
+
+vi.mock("framer-motion", () => ({
+  motion: {
+    div: React.forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDivElement>>(
+      ({ children, ...props }, ref) => {
+        const {
+          layoutId: _layoutId,
+          layout: _layout,
+          transition: _transition,
+          ...rest
+        } = props as Record<string, unknown>;
+        return (
+          <div
+            ref={ref}
+            data-testid="motion-div"
+            {...(rest as React.HTMLAttributes<HTMLDivElement>)}
+          >
+            {children}
+          </div>
+        );
+      }
+    ),
+  },
+}));
 
 vi.mock("@/components/ui/tooltip", () => ({
   TooltipProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
@@ -74,6 +99,19 @@ describe("TabButton", () => {
     const tooltipContent = screen.queryByText(
       "Launched with dangerous permissions — agent can modify files without prompting"
     );
-    expect(tooltipContent).toBeDefined();
+    expect(tooltipContent).not.toBeNull();
+  });
+
+  it("renders the active indicator element when isActive is true", () => {
+    render(<TabButton {...defaultProps} isActive={true} />);
+    const indicator = screen.queryByTestId("motion-div");
+    expect(indicator).not.toBeNull();
+    expect(indicator?.className).toContain("bg-daintree-accent");
+  });
+
+  it("does not render the active indicator when isActive is false", () => {
+    render(<TabButton {...defaultProps} isActive={false} />);
+    const indicator = screen.queryByTestId("motion-div");
+    expect(indicator).toBeNull();
   });
 });

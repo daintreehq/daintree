@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import React from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import { PanelHeader } from "../PanelHeader";
@@ -8,6 +9,27 @@ vi.mock("react-dom", async () => {
   const actual = await vi.importActual<typeof import("react-dom")>("react-dom");
   return { ...actual, createPortal: (children: React.ReactNode) => children };
 });
+
+vi.mock("framer-motion", () => ({
+  LayoutGroup: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  motion: {
+    div: React.forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDivElement>>(
+      ({ children, ...props }, ref) => {
+        const {
+          layoutId: _layoutId,
+          layout: _layout,
+          transition: _transition,
+          ...rest
+        } = props as Record<string, unknown>;
+        return (
+          <div ref={ref} {...(rest as React.HTMLAttributes<HTMLDivElement>)}>
+            {children}
+          </div>
+        );
+      }
+    ),
+  },
+}));
 
 const mockScrollLeft = vi.fn();
 const mockScrollRight = vi.fn();

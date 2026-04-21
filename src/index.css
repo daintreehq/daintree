@@ -1290,6 +1290,10 @@ body[data-reduce-animations="true"]
   transition: none !important;
 }
 
+body[data-reduce-animations="true"] [data-animated-chevron] {
+  transition: none !important;
+}
+
 /* Terminal trash/restore animations */
 @keyframes terminal-restore {
   from {

@@ -1,5 +1,6 @@
 import React, { useCallback, useState, useRef, useEffect, forwardRef } from "react";
 import type { DraggableAttributes, DraggableSyntheticListeners } from "@dnd-kit/core";
+import { motion } from "framer-motion";
 import { X, AlertTriangle } from "lucide-react";
 import type { PanelKind, TerminalType, AgentState } from "@/types";
 import type { WaitingReason } from "@shared/types/agent";
@@ -237,7 +238,7 @@ const TabButtonComponent = forwardRef<HTMLDivElement, TabButtonProps>(function T
             onKeyDown={handleKeyDown}
             onPointerDown={handlePointerDown}
             className={cn(
-              "flex items-center gap-1.5 px-2 py-1 text-xs font-medium select-none cursor-pointer group/tab",
+              "relative flex items-center gap-1.5 px-2 py-1 text-xs font-medium select-none cursor-pointer group/tab",
               "border-r border-divider transition-colors",
               "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-[-2px]",
               isActive
@@ -248,6 +249,15 @@ const TabButtonComponent = forwardRef<HTMLDivElement, TabButtonProps>(function T
             {...mergedAttributes}
             {...sortableListeners}
           >
+            {isActive && (
+              <motion.div
+                layoutId="panel-tab-indicator"
+                layout="position"
+                className="absolute inset-x-0 bottom-0 h-0.5 bg-daintree-accent pointer-events-none"
+                transition={{ duration: 0.15, ease: [0.16, 1, 0.3, 1] }}
+                aria-hidden="true"
+              />
+            )}
             <span className="shrink-0 flex items-center justify-center w-3.5 h-3.5">
               <TerminalIcon
                 type={type}
