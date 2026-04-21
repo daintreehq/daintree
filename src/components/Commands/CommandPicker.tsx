@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useCallback, useDeferredValue } from "react";
+import { useState, useMemo, useEffect, useCallback } from "react";
 import { cn } from "@/lib/utils";
 import { SearchablePalette } from "@/components/ui/SearchablePalette";
 import { Spinner } from "@/components/ui/Spinner";
@@ -47,7 +47,6 @@ export function CommandPicker({
   filter,
 }: CommandPickerProps) {
   const [query, setQuery] = useState("");
-  const deferredQuery = useDeferredValue(query);
   const [selectedIndex, setSelectedIndex] = useState(0);
 
   const filteredCommands = useMemo(() => {
@@ -57,15 +56,15 @@ export function CommandPicker({
       result = result.filter((cmd) => filter.includes(cmd.category));
     }
 
-    if (deferredQuery.trim()) {
+    if (query.trim()) {
       result = result.filter((cmd) => {
         const searchText = `${cmd.id} ${cmd.label} ${cmd.description} ${cmd.keywords?.join(" ") ?? ""}`;
-        return fuzzyMatch(searchText, deferredQuery.trim());
+        return fuzzyMatch(searchText, query.trim());
       });
     }
 
     return result;
-  }, [commands, filter, deferredQuery]);
+  }, [commands, filter, query]);
 
   const groupedCommands = useMemo(() => {
     const groups = new Map<CommandCategory, CommandManifestEntry[]>();

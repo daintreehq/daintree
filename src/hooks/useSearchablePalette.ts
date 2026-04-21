@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo, useEffect, useRef, useDeferredValue } from "react";
+import { useState, useCallback, useMemo, useEffect, useRef } from "react";
 import Fuse, { type IFuseOptions, type FuseResultMatch } from "fuse.js";
 import { usePaletteStore, type PaletteId } from "@/store/paletteStore";
 
@@ -27,7 +27,6 @@ export interface UseSearchablePaletteReturn<T> {
   results: T[];
   totalResults: number;
   selectedIndex: number;
-  isStale: boolean;
   matchesById: Map<string, readonly FuseResultMatch[]>;
   open: () => void;
   close: () => void;
@@ -65,7 +64,6 @@ export function useSearchablePalette<T>(
 
   const [query, setQuery] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
-  const deferredQuery = useDeferredValue(query);
 
   const effectiveFuseOptions = useMemo(() => {
     if (!fuseOptions) return null;
@@ -83,11 +81,11 @@ export function useSearchablePalette<T>(
     const matches = new Map<string, readonly FuseResultMatch[]>();
 
     if (filterFn) {
-      filtered = filterFn(items, deferredQuery);
-    } else if (!deferredQuery.trim()) {
+      filtered = filterFn(items, query);
+    } else if (!query.trim()) {
       filtered = items;
     } else if (fuse) {
-      const fuseResults = fuse.search(deferredQuery);
+      const fuseResults = fuse.search(query);
       filtered = fuseResults.map((r) => r.item);
       if (includeMatches) {
         for (const r of fuseResults) {
@@ -105,7 +103,7 @@ export function useSearchablePalette<T>(
       totalResults: filtered.length,
       matchesById: matches,
     };
-  }, [deferredQuery, items, fuse, filterFn, maxResults, includeMatches, getItemId]);
+  }, [query, items, fuse, filterFn, maxResults, includeMatches, getItemId]);
 
   const findNavigable = useCallback(
     (startIndex: number, direction: 1 | -1): number => {
@@ -205,15 +203,12 @@ export function useSearchablePalette<T>(
     });
   }, [results.length, canNavigate, findNavigable]);
 
-  const isStale = query !== deferredQuery;
-
   return {
     isOpen,
     query,
     results,
     totalResults,
     selectedIndex,
-    isStale,
     matchesById,
     open,
     close,

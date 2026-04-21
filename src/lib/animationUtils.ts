@@ -37,6 +37,9 @@ export function getUiAnimationDuration(): number {
 export const UI_ENTER_DURATION = DURATION_200;
 export const UI_EXIT_DURATION = 120;
 
+export const UI_PALETTE_ENTER_DURATION = DURATION_150;
+export const UI_PALETTE_EXIT_DURATION = DURATION_100;
+
 export const UI_ENTER_EASING = EASE_SPRING_CRITICAL;
 export const UI_EXIT_EASING = "cubic-bezier(0.2, 0, 0.7, 0)";
 

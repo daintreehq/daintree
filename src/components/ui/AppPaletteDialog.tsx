@@ -10,6 +10,8 @@ import { usePaletteStore } from "@/store/paletteStore";
 import {
   UI_ENTER_DURATION,
   UI_EXIT_DURATION,
+  UI_PALETTE_ENTER_DURATION,
+  UI_PALETTE_EXIT_DURATION,
   UI_ENTER_EASING,
   UI_EXIT_EASING,
   getUiTransitionDuration,
@@ -110,6 +112,7 @@ export function AppPaletteDialog({
       )}
       style={{
         transitionDuration: isVisible ? `${UI_ENTER_DURATION}ms` : `${UI_EXIT_DURATION}ms`,
+        transitionTimingFunction: "linear",
       }}
       onClick={handleBackdropClick}
       role="dialog"
@@ -119,16 +122,16 @@ export function AppPaletteDialog({
       <div
         ref={dialogRef}
         className={cn(
-          "w-full max-w-xl mx-4 bg-daintree-bg border border-[var(--border-overlay)] rounded-[var(--radius-xl)] shadow-modal overflow-hidden",
+          "w-full max-w-xl mx-4 bg-daintree-bg border border-[var(--border-overlay)] rounded-[var(--radius-xl)] shadow-modal overflow-hidden origin-top",
           "transition-[opacity,transform]",
-          "motion-reduce:transition-none motion-reduce:duration-0 motion-reduce:transform-none",
-          isVisible
-            ? "opacity-100 translate-y-0 scale-100"
-            : "opacity-0 -translate-y-3 scale-[0.97]",
+          "motion-reduce:transition-opacity motion-reduce:scale-100",
+          isVisible ? "opacity-100 scale-100" : "opacity-0 scale-[0.96]",
           className
         )}
         style={{
-          transitionDuration: isVisible ? `${UI_ENTER_DURATION}ms` : `${UI_EXIT_DURATION}ms`,
+          transitionDuration: isVisible
+            ? `${UI_PALETTE_ENTER_DURATION}ms`
+            : `${UI_PALETTE_EXIT_DURATION}ms`,
           transitionTimingFunction: isVisible ? UI_ENTER_EASING : UI_EXIT_EASING,
         }}
         onClick={(e) => e.stopPropagation()}
