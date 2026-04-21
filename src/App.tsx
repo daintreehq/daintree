@@ -257,7 +257,13 @@ function App() {
     if (isSettingsOpen) setHasOpenedSettings(true);
   }, [isSettingsOpen]);
 
-  useThemeBrowserSettingsBridge(isSettingsOpen, setIsSettingsOpen);
+  useThemeBrowserSettingsBridge(
+    isSettingsOpen,
+    setIsSettingsOpen,
+    settingsTab,
+    settingsSubtab,
+    settingsSectionId
+  );
   const [isShortcutsOpen, setIsShortcutsOpen] = useState(false);
   const isThemePaletteOpen = usePaletteStore((state) => state.activePaletteId === "theme");
   const isLogLevelPaletteOpen = usePaletteStore((state) => state.activePaletteId === "log-level");

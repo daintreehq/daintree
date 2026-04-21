@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import type { SettingsTab } from "@/components/Settings/SettingsDialog";
 import { useThemeBrowserStore } from "@/store";
 
 /**
@@ -14,11 +15,15 @@ import { useThemeBrowserStore } from "@/store";
  */
 export function useThemeBrowserSettingsBridge(
   isSettingsOpen: boolean,
-  setIsSettingsOpen: (open: boolean) => void
+  setIsSettingsOpen: (open: boolean) => void,
+  settingsTab?: SettingsTab,
+  settingsSubtab?: string,
+  settingsSectionId?: string
 ) {
   const isThemeBrowserOpen = useThemeBrowserStore((s) => s.isOpen);
   const prevIsOpenRef = useRef(false);
   const openedFromSettingsRef = useRef(false);
+  const originTargetRef = useRef<Parameters<typeof dispatchOriginTarget>[0] | null>(null);
 
   useEffect(() => {
     const wasOpen = prevIsOpenRef.current;
@@ -26,16 +31,36 @@ export function useThemeBrowserSettingsBridge(
 
     if (!wasOpen && isThemeBrowserOpen) {
       openedFromSettingsRef.current = isSettingsOpen;
+      originTargetRef.current = {
+        tab: settingsTab,
+        subtab: settingsSubtab,
+        sectionId: settingsSectionId,
+      };
       setIsSettingsOpen(false);
     } else if (wasOpen && !isThemeBrowserOpen) {
       if (openedFromSettingsRef.current) {
-        window.dispatchEvent(
-          new CustomEvent("daintree:open-settings-tab", {
-            detail: { tab: "general", sectionId: "appearance-theme" },
-          })
-        );
+        dispatchOriginTarget(originTargetRef.current);
       }
       openedFromSettingsRef.current = false;
+      originTargetRef.current = null;
     }
-  }, [isThemeBrowserOpen, isSettingsOpen, setIsSettingsOpen]);
+  }, [
+    isThemeBrowserOpen,
+    isSettingsOpen,
+    setIsSettingsOpen,
+    settingsTab,
+    settingsSubtab,
+    settingsSectionId,
+  ]);
+}
+
+type OriginTarget = { tab?: SettingsTab | null; subtab?: string | null; sectionId?: string | null };
+
+function dispatchOriginTarget(origin: OriginTarget | null) {
+  const tab = origin?.tab ?? "general";
+  window.dispatchEvent(
+    new CustomEvent("daintree:open-settings-tab", {
+      detail: { tab, subtab: origin?.subtab, sectionId: "appearance-theme" },
+    })
+  );
 }
