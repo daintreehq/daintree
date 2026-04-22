@@ -49,10 +49,14 @@ describe("AgentStateMachine", () => {
       expect(isValidTransition("completed", "idle")).toBe(false);
     });
 
-    it("should not allow exited → any state (terminal state)", () => {
-      expect(isValidTransition("exited", "idle")).toBe(false);
+    it("should allow exited → idle (Issue #5767 — agent respawn in same PTY)", () => {
+      expect(isValidTransition("exited", "idle")).toBe(true);
+    });
+
+    it("should not allow exited → working/completed/waiting directly", () => {
       expect(isValidTransition("exited", "working")).toBe(false);
       expect(isValidTransition("exited", "completed")).toBe(false);
+      expect(isValidTransition("exited", "waiting")).toBe(false);
     });
 
     it("should allow idle → exited (Issue #5767 — graceful agent exit detected from idle)", () => {
@@ -232,6 +236,21 @@ describe("AgentStateMachine", () => {
       it("should not transition from exited on exit (terminal state)", () => {
         const event: AgentEvent = { type: "exit", code: 0 };
         expect(nextAgentState("exited", event)).toBe("exited");
+      });
+    });
+
+    describe("respawn event (Issue #5767 — fresh agent session in same PTY)", () => {
+      it("should transition exited → idle on respawn", () => {
+        const event: AgentEvent = { type: "respawn" };
+        expect(nextAgentState("exited", event)).toBe("idle");
+      });
+
+      it("should be a no-op from non-exited states", () => {
+        const event: AgentEvent = { type: "respawn" };
+        expect(nextAgentState("idle", event)).toBe("idle");
+        expect(nextAgentState("working", event)).toBe("working");
+        expect(nextAgentState("waiting", event)).toBe("waiting");
+        expect(nextAgentState("completed", event)).toBe("completed");
       });
     });
 

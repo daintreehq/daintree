@@ -1412,6 +1412,10 @@ export class TerminalProcess {
       terminal.everDetectedAgent = true;
 
       if (previousType !== result.agentType) {
+        if (terminal.agentState === "exited") {
+          this.deps.agentStateService.updateAgentState(terminal, { type: "respawn" });
+        }
+
         terminal.detectedAgentType = result.agentType;
         terminal.type = result.agentType;
 

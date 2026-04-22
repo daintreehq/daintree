@@ -47,6 +47,8 @@ export class AgentStateService {
         return "activity";
       case "completion":
         return "activity";
+      case "respawn":
+        return "activity";
       default:
         return "output";
     }
