@@ -36,16 +36,19 @@ const { useWorktreeSelectionStore } = await import("../worktreeStore");
 
 function makeTerminal(
   id: string,
-  kind: "terminal" | "terminal",
+  _legacyKind: "terminal" | "agent",
   agentId?: string,
   worktreeId?: string,
   detectedAgentId?: "claude" | "gemini" | "codex",
   everDetectedAgent?: boolean
 ) {
+  // After the kind collapse (#5777), all PTY panels have kind:"terminal".
+  // The `_legacyKind` parameter is retained only so legacy test call sites
+  // keep compiling — agent-ness is expressed via `agentId` / `detectedAgentId`.
   return {
     id,
     type: "terminal" as const,
-    kind: kind as "agent" | "terminal",
+    kind: "terminal" as const,
     agentId,
     worktreeId,
     title: id,

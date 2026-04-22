@@ -372,8 +372,9 @@ export const createRestartActions = (
         // Demoted panels must spawn as plain terminals. Every agent-adjacent
         // field must be cleared — the IPC handler re-derives agent-ness from
         // `type` and `agentId` (electron/ipc/handlers/terminal/lifecycle.ts),
-        // so forcing only `kind` is not enough (issue #5764).
-        kind: isAgent ? (currentTerminal.kind ?? "agent") : "terminal",
+        // so forcing only `kind` is not enough (issue #5764). All PTY panels
+        // use `kind: "terminal"`; agent identity lives on `agentId`.
+        kind: "terminal",
         type: isAgent ? currentTerminal.type : "terminal",
         agentId: isAgent ? currentTerminal.agentId : undefined,
         title: currentTerminal.title,
@@ -705,7 +706,8 @@ export const createRestartActions = (
     );
 
     const effectiveAgentId = newAgentId ?? (isRegisteredAgent(newType) ? newType : undefined);
-    const newKind: "terminal" | "agent" = effectiveAgentId ? "agent" : "terminal";
+    // All PTY panels use `kind: "terminal"`; agent identity lives on `agentId`.
+    const newKind = "terminal" as const;
     const newTitle = getDefaultTitle(newKind, newType, effectiveAgentId);
 
     let commandToRun: string | undefined;
@@ -1017,7 +1019,7 @@ export const createRestartActions = (
         cwd: terminal.cwd,
         cols: spawnCols,
         rows: spawnRows,
-        kind: terminal.kind ?? "agent",
+        kind: "terminal",
         type: terminal.type,
         agentId: terminal.agentId,
         title: terminal.title,

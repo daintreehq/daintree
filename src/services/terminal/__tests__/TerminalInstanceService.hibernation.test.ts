@@ -710,7 +710,6 @@ describe("TerminalInstanceService - Hibernation", () => {
         kind: "terminal",
         agentId: "claude",
         type: "claude",
-        agentId: "claude",
         ipcListenerCount: 0,
       });
       agent.listeners = [];
@@ -745,7 +744,6 @@ describe("TerminalInstanceService - Hibernation", () => {
         kind: "terminal",
         agentId: "claude",
         type: "claude",
-        agentId: "claude",
         ipcListenerCount: 0,
       });
       agent.listeners = [];
@@ -787,7 +785,6 @@ describe("TerminalInstanceService - Hibernation", () => {
         kind: "terminal",
         agentId: "claude",
         type: "claude",
-        agentId: "claude",
         canonicalAgentState: "completed",
         onInput: vi.fn(),
       });

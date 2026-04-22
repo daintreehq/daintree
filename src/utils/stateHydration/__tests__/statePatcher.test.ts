@@ -119,10 +119,13 @@ describe("inferAgentIdFromTitle", () => {
     expect(inferAgentIdFromTitle("Claude", "browser", undefined, "t1", "test")).toBeUndefined();
   });
 
-  it("infers claude from terminal title (PTY panels can carry agent identity)", () => {
-    expect(inferAgentIdFromTitle("Claude Code", "terminal", undefined, "t1", "test")).toBe(
-      "claude"
-    );
+  it("does not mine plain terminal titles (avoids #5777 respawn takeover regression)", () => {
+    // A user-renamed plain terminal "Claude notes" must not be silently
+    // promoted to a Claude agent terminal on respawn. Title mining is gated
+    // on the legacy kind: "agent" marker — plain terminals do not enter.
+    expect(
+      inferAgentIdFromTitle("Claude notes", "terminal", undefined, "t1", "test")
+    ).toBeUndefined();
   });
 
   it("infers claude from title", () => {
@@ -237,9 +240,12 @@ describe("buildArgsForBackendTerminal", () => {
     expect(result.devCommand).toBeUndefined();
   });
 
-  it("infers agentId from backend title and emits terminal kind", () => {
+  it('infers agentId from backend title on legacy kind:"agent" and emits terminal kind', () => {
+    // Legacy persistence: backend reports kind:"agent" with no explicit
+    // agentId. Title mining recovers the identity; the returned args emit
+    // the normalized kind:"terminal" per the #5777 collapse.
     const result = buildArgsForBackendTerminal(
-      { id: "t1", cwd: "/p", kind: "terminal", title: "Claude Code" },
+      { id: "t1", cwd: "/p", kind: "agent", title: "Claude Code" },
       { id: "t1", location: "grid" },
       "/p"
     );
@@ -911,9 +917,13 @@ describe("buildArgsForOrphanedTerminal", () => {
     expect(result.worktreeId).toBeUndefined();
   });
 
-  it("infers agentId from title on orphaned terminals", () => {
+  it('recovers agentId from title on orphaned legacy kind:"agent" terminals', () => {
+    // Legacy pre-refactor persistence: backend reports kind:"agent" with no
+    // explicit agentId. The migration shim normalizes kind to "terminal" in
+    // the returned args, but the agentId is recovered from the title mining
+    // path because the input `kind: "agent"` still signals agent intent.
     const result = buildArgsForOrphanedTerminal(
-      { id: "t1", kind: "terminal", title: "Gemini", cwd: "/p" },
+      { id: "t1", kind: "agent", title: "Gemini", cwd: "/p" },
       "/p"
     );
     expect(result.agentId).toBe("gemini");

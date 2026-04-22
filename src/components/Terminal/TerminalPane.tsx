@@ -715,8 +715,9 @@ function TerminalPaneComponent({
   const isWorking = agentState === "working";
   const allowPing = !isMaximized && (location !== "grid" || (gridPanelCount ?? 2) > 1);
 
-  // Determine panel kind based on agent
-  const kind = effectiveAgentId ? "agent" : "terminal";
+  // Panel kind is always "terminal" for PTY panels — agent identity lives on
+  // effectiveAgentId, which flows to ContentPanel as a separate prop.
+  const kind = "terminal" as const;
 
   const agentHeaderActions = useMemo(() => {
     if (!effectiveAgentId) return undefined;

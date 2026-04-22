@@ -128,10 +128,12 @@ export function inferAgentIdFromTitle(
   _logContext: string
 ): string | undefined {
   if (existingAgentId) return existingAgentId;
-  // Only recover agent identity for PTY-backed panels; browser/dev-preview
-  // titles must not be mined for agent names. The legacy "agent" kind is
-  // treated as "terminal" after migration.
-  if (kind !== undefined && kind !== "terminal" && kind !== "agent") return undefined;
+  // Only recover agent identity from persisted state that was *itself* written
+  // as an agent panel — the legacy `kind: "agent"` marker. Plain terminals with
+  // incidental "claude" or "gemini" in their user-assigned title must not be
+  // silently promoted to agent terminals during respawn (that would regenerate
+  // a Claude launch command and take over the user's renamed shell).
+  if (kind !== "agent") return undefined;
 
   const titleLower = (title ?? "").toLowerCase();
   if (titleLower.includes("claude")) return "claude";
