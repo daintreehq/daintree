@@ -157,6 +157,9 @@ export { TRASH_TTL_MS } from "../../../shared/config/trash.js";
 // Graceful shutdown configuration
 export const GRACEFUL_SHUTDOWN_TIMEOUT_MS = 2500;
 export const GRACEFUL_SHUTDOWN_BUFFER_SIZE = 8 * 1024;
+// Delay between writing the input-clear prelude and the quit command. Without this gap,
+// the target CLI's async event loop can drop or corrupt the quit command bytes under load.
+export const GRACEFUL_SHUTDOWN_CLEAR_DELAY_MS = 100;
 
 // IPC Flow Control Configuration
 export const IPC_MAX_QUEUE_BYTES = 8 * 1024 * 1024; // 8MB max per terminal

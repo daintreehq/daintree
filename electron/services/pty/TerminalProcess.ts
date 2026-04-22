@@ -22,6 +22,7 @@ import {
   WRITE_INTERVAL_MS,
   GRACEFUL_SHUTDOWN_TIMEOUT_MS,
   GRACEFUL_SHUTDOWN_BUFFER_SIZE,
+  GRACEFUL_SHUTDOWN_CLEAR_DELAY_MS,
 } from "./types.js";
 import { getTerminalSerializerService } from "./TerminalSerializerService.js";
 import { events } from "../events.js";
@@ -799,13 +800,34 @@ export class TerminalProcess {
         finish(match?.[1] ?? null);
       });
 
-      try {
-        terminal.ptyProcess.write(quitCommand + "\r");
-      } catch {
-        origOnData.dispose();
-        origOnExit.dispose();
-        finish(null);
-      }
+      // Clear any partial user input at the agent prompt before issuing the quit command.
+      // Without this prelude, concatenated input (e.g. "half-typed/quit") is treated as a
+      // chat message by the agent and the session-ID line is never emitted. See #5785.
+      //   \x05 — Ctrl-E: move cursor to end of line
+      //   \x15 — Ctrl-U: erase from cursor to beginning of line
+      // ESC is avoided because it navigates/dismisses TUI state in bubbletea and ink CLIs.
+      (async () => {
+        try {
+          terminal.ptyProcess.write("\x05\x15");
+        } catch {
+          origOnData.dispose();
+          origOnExit.dispose();
+          finish(null);
+          return;
+        }
+
+        await new Promise<void>((r) => setTimeout(r, GRACEFUL_SHUTDOWN_CLEAR_DELAY_MS));
+
+        if (resolved) return;
+
+        try {
+          terminal.ptyProcess.write(quitCommand + "\r");
+        } catch {
+          origOnData.dispose();
+          origOnExit.dispose();
+          finish(null);
+        }
+      })();
     });
   }
 
