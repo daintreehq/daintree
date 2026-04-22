@@ -1209,6 +1209,13 @@ export class TerminalProcess {
     this.terminalInfo.headlessTerminal.options.scrollback = targetLines;
   }
 
+  growScrollback(targetLines: number): void {
+    if (this._scrollback >= targetLines) return;
+    if (!this.terminalInfo.headlessTerminal) return;
+    this._scrollback = targetLines;
+    this.terminalInfo.headlessTerminal.options.scrollback = targetLines;
+  }
+
   dispose(): void {
     this.stopProcessDetector();
     this.stopActivityMonitor();
@@ -1444,6 +1451,15 @@ export class TerminalProcess {
       if (previousType !== result.agentType) {
         if (terminal.agentState === "exited") {
           this.deps.agentStateService.updateAgentState(terminal, { type: "respawn" });
+        }
+
+        // Runtime-promoted plain terminals were spawned with DEFAULT_SCROLLBACK and
+        // pool-stripped env. Detection-buffer growth is the only in-process repair
+        // available — env cannot propagate into the already-running child. The
+        // user-visible "restart for full agent support" cue is surfaced by the
+        // renderer banner.
+        if (!this.isAgentTerminal) {
+          this.growScrollback(AGENT_SCROLLBACK);
         }
 
         terminal.detectedAgentType = result.agentType;

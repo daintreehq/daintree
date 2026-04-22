@@ -1853,6 +1853,14 @@ class TerminalInstanceService {
     restoreScrollback(managed);
   }
 
+  applyAgentPromotion(id: string, agentType: TerminalType): void {
+    const managed = this.instances.get(id);
+    if (!managed) return;
+    if (managed.type === agentType) return;
+    managed.type = agentType;
+    restoreScrollback(managed);
+  }
+
   reduceScrollbackAllBackground(targetLines: number): void {
     for (const managed of this.instances.values()) {
       if (managed.isHibernated) continue;

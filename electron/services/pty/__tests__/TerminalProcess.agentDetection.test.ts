@@ -93,6 +93,44 @@ function createAgentTerminal(deps?: Partial<TerminalProcessDeps>): TerminalProce
   );
 }
 
+function createPlainTerminal(id = "t-plain", deps?: Partial<TerminalProcessDeps>): TerminalProcess {
+  const options: TerminalProcessOptions = {
+    cwd: process.cwd(),
+    cols: 80,
+    rows: 24,
+    kind: "terminal",
+    type: "terminal",
+  } as TerminalProcessOptions;
+  const ctx: SpawnContext = {
+    shell: "/bin/zsh",
+    args: ["-l"],
+    isAgentTerminal: false,
+    agentId: undefined,
+    env: {},
+  };
+  return new TerminalProcess(
+    id,
+    options,
+    { emitData: () => {}, onExit: () => {} },
+    {
+      agentStateService: {
+        handleActivityState: () => {},
+        updateAgentState: () => {},
+        emitAgentKilled: () => {},
+      } as unknown as TerminalProcessDeps["agentStateService"],
+      ptyPool: null,
+      processTreeCache: createMockProcessTreeCache(),
+      ...deps,
+    } as TerminalProcessDeps,
+    ctx,
+    createMockPty()
+  );
+}
+
+function getScrollback(terminal: TerminalProcess): number {
+  return (terminal as unknown as { _scrollback: number })._scrollback;
+}
+
 type HandleAgentDetection = (result: DetectionResult, spawnedAt: number) => void;
 
 function callHandleAgentDetection(
@@ -285,6 +323,102 @@ describe("TerminalProcess.handleAgentDetection — polling loop teardown", () =>
       expect(handleActivityState).not.toHaveBeenCalled();
     } finally {
       trackedTerminal.dispose();
+    }
+  });
+});
+
+// Issue #5776: spawn-sealed agent behaviours on runtime-promoted panels.
+// Plain terminals spawned with kind="terminal" inherit DEFAULT_SCROLLBACK (1k);
+// when runtime detection sees an agent appear, the headless detection buffer
+// must grow to AGENT_SCROLLBACK (10k) so the buffer carries enough history for
+// the agent's longer output. Cold agent terminals already start at 10k and
+// must be untouched.
+describe("TerminalProcess.handleAgentDetection — runtime promotion scrollback", () => {
+  it("grows scrollback to AGENT_SCROLLBACK when a plain terminal first detects an agent", () => {
+    const terminal = createPlainTerminal();
+    try {
+      expect(getScrollback(terminal)).toBe(1000);
+
+      callHandleAgentDetection(
+        terminal,
+        { detected: true, agentType: "claude", processIconId: "claude" },
+        getSpawnedAt(terminal)
+      );
+
+      expect(getScrollback(terminal)).toBe(10000);
+    } finally {
+      terminal.dispose();
+    }
+  });
+
+  it("is idempotent on repeated detection of the same agent", () => {
+    const terminal = createPlainTerminal("t-plain-idem");
+    try {
+      callHandleAgentDetection(
+        terminal,
+        { detected: true, agentType: "claude", processIconId: "claude" },
+        getSpawnedAt(terminal)
+      );
+      expect(getScrollback(terminal)).toBe(10000);
+
+      callHandleAgentDetection(
+        terminal,
+        { detected: true, agentType: "claude", processIconId: "claude" },
+        getSpawnedAt(terminal)
+      );
+      expect(getScrollback(terminal)).toBe(10000);
+    } finally {
+      terminal.dispose();
+    }
+  });
+
+  it("does not change scrollback for cold-spawned agent terminals", () => {
+    const terminal = createAgentTerminal();
+    try {
+      // Cold-spawned agent already starts at AGENT_SCROLLBACK.
+      expect(getScrollback(terminal)).toBe(10000);
+
+      callHandleAgentDetection(
+        terminal,
+        { detected: true, agentType: "claude", processIconId: "claude" },
+        getSpawnedAt(terminal)
+      );
+
+      expect(getScrollback(terminal)).toBe(10000);
+    } finally {
+      terminal.dispose();
+    }
+  });
+
+  it("growScrollback never shrinks", () => {
+    const terminal = createAgentTerminal();
+    try {
+      expect(getScrollback(terminal)).toBe(10000);
+      terminal.growScrollback(5000);
+      expect(getScrollback(terminal)).toBe(10000);
+    } finally {
+      terminal.dispose();
+    }
+  });
+
+  it("keeps scrollback at AGENT_SCROLLBACK across an agent-to-agent switch", () => {
+    const terminal = createPlainTerminal("t-plain-switch");
+    try {
+      callHandleAgentDetection(
+        terminal,
+        { detected: true, agentType: "claude", processIconId: "claude" },
+        getSpawnedAt(terminal)
+      );
+      expect(getScrollback(terminal)).toBe(10000);
+
+      callHandleAgentDetection(
+        terminal,
+        { detected: true, agentType: "gemini", processIconId: "gemini" },
+        getSpawnedAt(terminal)
+      );
+      expect(getScrollback(terminal)).toBe(10000);
+    } finally {
+      terminal.dispose();
     }
   });
 });

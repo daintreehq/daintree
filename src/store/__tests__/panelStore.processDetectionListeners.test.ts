@@ -158,6 +158,8 @@ vi.mock("@/clients", () => ({
   },
 }));
 
+const applyAgentPromotionMock = vi.fn();
+
 vi.mock("@/services/TerminalInstanceService", () => ({
   terminalInstanceService: {
     prewarmTerminal: vi.fn(),
@@ -176,6 +178,7 @@ vi.mock("@/services/TerminalInstanceService", () => ({
     detachForProjectSwitch: vi.fn(),
     handleBackendRecovery: vi.fn(),
     cleanup: vi.fn(),
+    applyAgentPromotion: applyAgentPromotionMock,
   },
 }));
 
@@ -381,6 +384,70 @@ describe("terminalStore process detection listeners", () => {
 
     exited?.({ terminalId: "term-1", timestamp: Date.now() });
     expect(usePanelStore.getState().panelsById["term-1"]?.detectedAgentId).toBeUndefined();
+    cleanup();
+  });
+
+  // Issue #5776: when a plain terminal is runtime-promoted to host an agent,
+  // the renderer must apply the agent scrollback policy to the live xterm —
+  // the only in-process repair available for spawn-sealed terminals.
+  it("calls applyAgentPromotion when a plain terminal (no agentId) detects a built-in agent", () => {
+    const cleanup = setupTerminalStoreListeners();
+    const detected = handlers.agentDetected;
+
+    applyAgentPromotionMock.mockClear();
+
+    detected?.({
+      terminalId: "term-1",
+      agentType: "claude",
+      processIconId: "claude",
+      processName: "claude",
+      timestamp: Date.now(),
+    });
+
+    expect(applyAgentPromotionMock).toHaveBeenCalledWith("term-1", "claude");
+    cleanup();
+  });
+
+  it("does not call applyAgentPromotion for cold-spawned agent panels (agentId set at spawn)", () => {
+    usePanelStore.setState((s) => ({
+      panelsById: {
+        ...s.panelsById,
+        "term-1": { ...s.panelsById["term-1"]!, agentId: "claude" },
+      },
+    }));
+
+    const cleanup = setupTerminalStoreListeners();
+    const detected = handlers.agentDetected;
+
+    applyAgentPromotionMock.mockClear();
+
+    detected?.({
+      terminalId: "term-1",
+      agentType: "claude",
+      processIconId: "claude",
+      processName: "claude",
+      timestamp: Date.now(),
+    });
+
+    expect(applyAgentPromotionMock).not.toHaveBeenCalled();
+    cleanup();
+  });
+
+  it("does not call applyAgentPromotion when agentType is not a built-in agent", () => {
+    const cleanup = setupTerminalStoreListeners();
+    const detected = handlers.agentDetected;
+
+    applyAgentPromotionMock.mockClear();
+
+    detected?.({
+      terminalId: "term-1",
+      agentType: "not-a-real-agent",
+      processIconId: "mystery",
+      processName: "mystery",
+      timestamp: Date.now(),
+    });
+
+    expect(applyAgentPromotionMock).not.toHaveBeenCalled();
     cleanup();
   });
 
