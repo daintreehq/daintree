@@ -290,7 +290,7 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
             "rounded border shadow-[var(--theme-shadow-ambient)] transition-colors duration-300",
           location === "grid" &&
             !isMaximized &&
-            (isFocused && showGridAttention
+            ((isFocused || isSelected) && showGridAttention
               ? "terminal-selected"
               : showGridAttention && showGridAgentHighlights && blockedState === "waiting"
                 ? "panel-state-waiting"
