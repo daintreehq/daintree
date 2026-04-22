@@ -98,7 +98,8 @@ export function useSendToAgentPalette() {
       if (t.kind && !panelKindHasPty(t.kind)) continue;
       if (t.hasPty === false) continue;
 
-      const agentConfig = t.agentId ? getAgentConfig(t.agentId) : null;
+      const effectiveAgentId = t.detectedAgentId ?? t.agentId;
+      const agentConfig = effectiveAgentId ? getAgentConfig(effectiveAgentId) : null;
       const subtitle = agentConfig ? agentConfig.name : t.type !== "terminal" ? t.type : "Terminal";
 
       result.push({

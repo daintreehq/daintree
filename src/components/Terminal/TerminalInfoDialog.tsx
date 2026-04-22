@@ -173,10 +173,11 @@ export function TerminalInfoDialog({ isOpen, onClose, terminalId }: TerminalInfo
       (info.agentLaunchFlags && info.agentLaunchFlags.length > 0) ||
       info.agentModelId
     );
-  // "Live State" reflects what's running right now — only shown for agent panels
-  // (`isAgentTerminal`) or when a runtime detection is active (`detectedAgentId`).
+  // "Live State" reflects what's running right now. Shown for agent panels,
+  // while a runtime agent is detected, or once an agent has ever been detected
+  // in this session (so plain terminals that ran `claude` still show the exit).
   const showAgentLiveSection = (info: TerminalInfoPayload): boolean =>
-    !!(info.isAgentTerminal || info.detectedAgentId);
+    !!(info.isAgentTerminal || info.detectedAgentId || info.everDetectedAgent);
 
   const formatArgsForClipboard = (args: string[] | undefined): string => {
     if (args === undefined) return "N/A";

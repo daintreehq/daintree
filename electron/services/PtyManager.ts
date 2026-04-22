@@ -526,6 +526,7 @@ export class PtyManager extends EventEmitter {
       agentLaunchFlags: terminalInfo.agentLaunchFlags,
       agentModelId: terminalInfo.agentModelId,
       exitCode: terminalInfo.exitCode,
+      everDetectedAgent: terminalInfo.everDetectedAgent,
     };
   }
 
