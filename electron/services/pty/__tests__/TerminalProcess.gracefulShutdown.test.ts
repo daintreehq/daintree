@@ -131,6 +131,9 @@ describe("TerminalProcess.gracefulShutdown — input-clear prelude", () => {
     // Emit the session-ID line and the promise should resolve with the captured ID.
     handles.emitData("claude --resume abc-123\n");
     await expect(shutdownPromise).resolves.toBe("abc-123");
+
+    // The captured ID must also be stored on the terminal for resume-later callers.
+    expect(terminal.getInfo().agentSessionId).toBe("abc-123");
   });
 
   it("captures session ID when surrounded by ANSI erase sequences from the clear prelude", async () => {
@@ -156,6 +159,33 @@ describe("TerminalProcess.gracefulShutdown — input-clear prelude", () => {
     await vi.advanceTimersByTimeAsync(GRACEFUL_SHUTDOWN_TIMEOUT_MS);
 
     await expect(shutdownPromise).resolves.toBeNull();
+    // Both writes must have been attempted before the timeout — guards against a
+    // broken async IIFE that silently swallows the second write.
+    expect(handles.writeMock).toHaveBeenCalledTimes(2);
+    expect(handles.writeMock.mock.calls[0]?.[0]).toBe("\x05\x15");
+    expect(handles.writeMock.mock.calls[1]?.[0]).toBe("/quit\r");
+  });
+
+  it("skips the quit write when the PTY exits during the clear-delay window", async () => {
+    const handles = createMockPty();
+    const terminal = createAgentTerminal(handles);
+
+    const shutdownPromise = terminal.gracefulShutdown();
+
+    // Wait for the prelude write, then fire onExit before the delay timer elapses.
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(handles.writeMock).toHaveBeenCalledTimes(1);
+
+    handles.emitExit(0);
+
+    // Advance past the clear delay — the guarded branch should short-circuit and
+    // NOT issue the quit command after the process has already exited.
+    await vi.advanceTimersByTimeAsync(GRACEFUL_SHUTDOWN_CLEAR_DELAY_MS);
+
+    await expect(shutdownPromise).resolves.toBeNull();
+    expect(handles.writeMock).toHaveBeenCalledTimes(1);
+    expect(handles.writeMock.mock.calls[0]?.[0]).toBe("\x05\x15");
   });
 
   it("resolves null when the clear-prelude write throws, without attempting the quit write", async () => {
