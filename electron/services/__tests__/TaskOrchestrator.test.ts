@@ -155,6 +155,61 @@ describe("TaskOrchestrator", () => {
       expect(updatedTask?.status).toBe("queued");
     });
 
+    it("assigns queued task to plain terminal with detected agent", async () => {
+      const task = await queueService.createTask({ title: "Test task" });
+
+      mockPtyClient.getAvailableTerminalsAsync.mockResolvedValue([
+        {
+          id: "term-detected",
+          kind: "terminal",
+          detectedAgentId: "claude",
+          agentState: "idle",
+        },
+      ]);
+
+      await queueService.enqueueTask(task.id);
+      await settle();
+
+      const updatedTask = await queueService.getTask(task.id);
+      expect(updatedTask?.status).toBe("running");
+      // assignedAgentId persists the logical agent identity (detectedAgentId),
+      // not the terminal id.
+      expect(updatedTask?.assignedAgentId).toBe("claude");
+      expect(updatedTask?.runId).toBeDefined();
+    });
+
+    it("tracks two panels with the same agentId independently", async () => {
+      const task1 = await queueService.createTask({ title: "Task 1", priority: 10 });
+      const task2 = await queueService.createTask({ title: "Task 2", priority: 5 });
+
+      mockPtyClient.getAvailableTerminalsAsync.mockResolvedValue([
+        {
+          id: "term-a",
+          kind: "agent",
+          agentId: "claude",
+          agentState: "idle",
+        },
+        {
+          id: "term-b",
+          kind: "agent",
+          agentId: "claude",
+          agentState: "idle",
+        },
+      ]);
+
+      await queueService.enqueueTask(task1.id);
+      await queueService.enqueueTask(task2.id);
+      await settle();
+
+      const running1 = await queueService.getTask(task1.id);
+      const running2 = await queueService.getTask(task2.id);
+      // Both tasks assigned — historically with agentId-keyed tracking, the
+      // second would stay queued because the "claude" slot was "taken".
+      expect(running1?.status).toBe("running");
+      expect(running2?.status).toBe("running");
+      expect(running1?.runId).not.toBe(running2?.runId);
+    });
+
     it("does not assign when no tasks queued", async () => {
       mockPtyClient.getAvailableTerminalsAsync.mockResolvedValue([
         {
@@ -255,6 +310,37 @@ describe("TaskOrchestrator", () => {
       expect(updated?.status).toBe("running");
     });
 
+    it("triggers assignment when runtime-detected agent becomes idle (terminalId only)", async () => {
+      const task = await queueService.createTask({ title: "Test task" });
+      await queueService.enqueueTask(task.id);
+
+      mockPtyClient.getAvailableTerminalsAsync.mockResolvedValue([
+        {
+          id: "term-detected",
+          kind: "terminal",
+          detectedAgentId: "gemini",
+          agentState: "idle",
+        },
+      ]);
+
+      // Emit an agent:state-changed payload with only terminalId (no agentId),
+      // as happens for runtime-detected agents in plain terminals.
+      events.emit("agent:state-changed", {
+        terminalId: "term-detected",
+        state: "idle",
+        previousState: "working",
+        timestamp: Date.now(),
+        trigger: "output",
+        confidence: 1.0,
+      });
+
+      await settle();
+
+      const updated = await queueService.getTask(task.id);
+      expect(updated?.status).toBe("running");
+      expect(updated?.assignedAgentId).toBe("gemini");
+    });
+
     it("triggers assignment when agent becomes waiting", async () => {
       const task = await queueService.createTask({ title: "Test task" });
       await queueService.enqueueTask(task.id);
@@ -341,6 +427,84 @@ describe("TaskOrchestrator", () => {
 
       const completedTask = await queueService.getTask(task.id);
       expect(completedTask?.status).toBe("completed");
+    });
+
+    it("correlates completion by terminalId when payload includes it", async () => {
+      const task1 = await queueService.createTask({ title: "Task 1", priority: 10 });
+      const task2 = await queueService.createTask({ title: "Task 2", priority: 5 });
+
+      mockPtyClient.getAvailableTerminalsAsync.mockResolvedValue([
+        {
+          id: "term-a",
+          kind: "agent",
+          agentId: "claude",
+          agentState: "idle",
+        },
+        {
+          id: "term-b",
+          kind: "agent",
+          agentId: "claude",
+          agentState: "idle",
+        },
+      ]);
+
+      await queueService.enqueueTask(task1.id);
+      await queueService.enqueueTask(task2.id);
+      await settle();
+
+      const running1 = await queueService.getTask(task1.id);
+      const running2 = await queueService.getTask(task2.id);
+      expect(running1?.status).toBe("running");
+      expect(running2?.status).toBe("running");
+
+      // Complete only the second panel — the orchestrator must route the
+      // completion to task2 via terminalId, not just pick the first claude.
+      events.emit("agent:completed", {
+        agentId: "claude",
+        terminalId: "term-b",
+        exitCode: 0,
+        duration: 1000,
+        timestamp: Date.now(),
+      });
+
+      await settle();
+
+      const updated1 = await queueService.getTask(task1.id);
+      const updated2 = await queueService.getTask(task2.id);
+      expect(updated1?.status).toBe("running");
+      expect(updated2?.status).toBe("completed");
+    });
+
+    it("ignores completion when payload terminalId is not tracked", async () => {
+      const task = await queueService.createTask({ title: "Test task" });
+
+      mockPtyClient.getAvailableTerminalsAsync.mockResolvedValue([
+        {
+          id: "term-1",
+          kind: "agent",
+          agentId: "claude",
+          agentState: "idle",
+        },
+      ]);
+
+      await queueService.enqueueTask(task.id);
+      await settle();
+
+      // Emit completion for an untracked terminal (event carries terminalId
+      // but it doesn't match any tracked run).
+      events.emit("agent:completed", {
+        agentId: "claude",
+        terminalId: "term-untracked",
+        exitCode: 0,
+        duration: 1000,
+        timestamp: Date.now(),
+      });
+
+      await settle();
+
+      // Task must remain running — no mis-correlation.
+      const updated = await queueService.getTask(task.id);
+      expect(updated?.status).toBe("running");
     });
 
     it("ignores completion for unknown agents", async () => {

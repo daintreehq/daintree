@@ -29,8 +29,24 @@ export class TaskOrchestrator {
   /** Map of runId -> taskId for correlating agent completions to tasks */
   private runToTaskMap: Map<string, string> = new Map();
 
-  /** Map of agentId -> runId for tracking current runs */
+  /**
+   * Map of terminalId -> runId for tracking current runs.
+   *
+   * Keyed by terminalId (immutable for the panel's lifetime) rather than the
+   * logical agentId. This avoids collisions when multiple panels share an
+   * agentId of the same named type (e.g. two "claude" panels) and lets the
+   * orchestrator track runtime-detected agents — plain terminals with a
+   * `detectedAgentId` but no stored `agentId` — without colliding on the
+   * shared agent type.
+   */
   private agentToRunMap: Map<string, string> = new Map();
+
+  /**
+   * Map of runId -> terminalId. Used to clean up `agentToRunMap` during
+   * worktree removal, since `task.assignedAgentId` holds the logical agent
+   * identity rather than the terminal id.
+   */
+  private terminalIdByRunId: Map<string, string> = new Map();
 
   /** Lock to prevent concurrent assignment operations */
   private isAssigning = false;
@@ -118,18 +134,18 @@ export class TaskOrchestrator {
         }
 
         // Try capability-based routing first if routing hints are present
-        let selectedAgentId: string | null = null;
+        let selected: SelectedAgent | null = null;
 
         if (task.routingHints) {
-          selectedAgentId = await this.routeTaskWithHints(task.routingHints, task.worktreeId);
+          selected = await this.routeTaskWithHints(task.routingHints, task.worktreeId);
         }
 
         // Fall back to simple availability-based selection
-        if (!selectedAgentId) {
-          selectedAgentId = await this.findAvailableAgent(task.worktreeId);
+        if (!selected) {
+          selected = await this.findAvailableAgent(task.worktreeId);
         }
 
-        if (!selectedAgentId) {
+        if (!selected) {
           // No available agents - task will stay queued for next attempt
           break;
         }
@@ -139,15 +155,22 @@ export class TaskOrchestrator {
 
         // Set tracking maps BEFORE marking running to avoid race with fast agent events
         this.runToTaskMap.set(runId, task.id);
-        this.agentToRunMap.set(selectedAgentId, runId);
+        this.agentToRunMap.set(selected.terminalId, runId);
+        this.terminalIdByRunId.set(runId, selected.terminalId);
 
-        // Mark task as running (atomic state transition)
+        // Mark task as running (atomic state transition).
+        // Note: markRunning receives the logical agentId (which may originate
+        // from either stored `agentId` or runtime-detected `detectedAgentId`),
+        // so `Task.assignedAgentId` retains its documented agent-identity
+        // semantics. The orchestrator's internal bookkeeping is keyed by the
+        // immutable terminalId.
         try {
-          await this.queueService.markRunning(task.id, selectedAgentId, runId);
+          await this.queueService.markRunning(task.id, selected.agentId, runId);
         } catch (error) {
           // Task state transition failed - roll back tracking maps
           this.runToTaskMap.delete(runId);
-          this.agentToRunMap.delete(selectedAgentId);
+          this.agentToRunMap.delete(selected.terminalId);
+          this.terminalIdByRunId.delete(runId);
 
           console.warn(
             `[TaskOrchestrator] Failed to mark task ${task.id} as running:`,
@@ -168,12 +191,15 @@ export class TaskOrchestrator {
 
   /**
    * Route a task using capability-based routing.
-   * Returns the best agent ID or null if no suitable agent is found.
+   * Returns the selected terminal + logical agentId, or null if no suitable
+   * agent is found. Matches on stored identity (`agentId`) OR runtime
+   * detection (`detectedAgentId`) so plain terminals that have an agent CLI
+   * detected at runtime are also eligible.
    */
   private async routeTaskWithHints(
     hints: TaskRoutingHints,
     worktreeId?: string
-  ): Promise<string | null> {
+  ): Promise<SelectedAgent | null> {
     const routedAgentId = await this.router.routeTask({
       ...hints,
       worktreeId,
@@ -184,56 +210,66 @@ export class TaskOrchestrator {
     }
 
     // Verify the routed agent is still available in the terminal list
-    // and not already running a task
+    // and not already running a task. Lock check is keyed by terminalId.
     const availableTerminals = await this.ptyClient.getAvailableTerminalsAsync();
     const terminal = availableTerminals.find(
       (t) =>
-        t.kind === "agent" &&
-        t.agentId === routedAgentId &&
+        (t.agentId === routedAgentId || t.detectedAgentId === routedAgentId) &&
         isAgentAvailable(t.agentState) &&
-        !this.agentToRunMap.has(routedAgentId) &&
+        !this.agentToRunMap.has(t.id) &&
         (!worktreeId || t.worktreeId === worktreeId)
     );
 
-    return terminal ? routedAgentId : null;
+    return terminal ? { terminalId: terminal.id, agentId: routedAgentId } : null;
   }
 
   /**
    * Find any available agent using simple availability-based selection.
-   * Used as fallback when no routing hints are present.
+   * Used as fallback when no routing hints are present. Accepts either
+   * stored identity (`kind === "agent"` / `agentId`) or runtime-detected
+   * identity (`detectedAgentId`) so agent CLIs launched from plain
+   * terminals can receive tasks.
    */
-  private async findAvailableAgent(worktreeId?: string): Promise<string | null> {
+  private async findAvailableAgent(worktreeId?: string): Promise<SelectedAgent | null> {
     const availableTerminals = await this.ptyClient.getAvailableTerminalsAsync();
 
-    // Filter to only agent-type terminals that are actually available
-    // Match worktree if task has one, otherwise allow any agent
-    const availableAgent = availableTerminals.find(
-      (t) =>
-        t.kind === "agent" &&
-        t.agentId &&
+    // Filter to terminals that look like an agent (stored OR detected) and
+    // are available. Lock check is keyed by terminalId so two panels of the
+    // same named agent type can be tracked independently.
+    const availableAgent = availableTerminals.find((t) => {
+      const logicalAgentId = t.agentId ?? t.detectedAgentId;
+      return (
+        logicalAgentId &&
         isAgentAvailable(t.agentState) &&
-        !this.agentToRunMap.has(t.agentId) && // Not already running a task
-        (!worktreeId || t.worktreeId === worktreeId) // Worktree match if specified
-    );
+        !this.agentToRunMap.has(t.id) &&
+        (!worktreeId || t.worktreeId === worktreeId)
+      );
+    });
 
-    return availableAgent?.agentId ?? null;
+    if (!availableAgent) return null;
+    const logicalAgentId = availableAgent.agentId ?? availableAgent.detectedAgentId;
+    if (!logicalAgentId) return null;
+
+    return { terminalId: availableAgent.id, agentId: logicalAgentId };
   }
 
   /**
    * Handle agent state changes.
    * When an agent becomes idle or waiting, attempt to assign a new task.
+   * Triggers on either a stored `agentId` or a bare `terminalId` so
+   * runtime-detected agents (no stored agentId) also wake the scheduler.
    */
   private async handleAgentStateChange(
     payload: DaintreeEventMap["agent:state-changed"]
   ): Promise<void> {
     if (this.isDisposed) return;
 
-    const { state, agentId } = payload;
+    const { state, agentId, terminalId } = payload;
 
     // Only trigger assignment when agent becomes available
     // Don't clear run mappings here - let completion/failure events handle that
     // to avoid race conditions with out-of-order events
-    if (isAgentAvailable(state) && agentId) {
+    if (isAgentAvailable(state) && (agentId || terminalId)) {
       // Try to assign next task
       await this.assignNextTask();
     }
@@ -251,27 +287,64 @@ export class TaskOrchestrator {
   }
 
   /**
+   * Resolve the terminalId that owns a run, given an agent lifecycle payload.
+   * Prefers the payload's explicit `terminalId`; only when the payload has no
+   * terminalId does it fall back to matching by `agentId` against
+   * `task.assignedAgentId` for tasks currently tracked by the orchestrator.
+   *
+   * Real emitters (`AgentStateService`, `PtyEventsBridge`) always set
+   * `terminalId` on these events, but the type leaves it optional. The
+   * fallback preserves the old agentId-keyed behaviour when `terminalId` is
+   * genuinely absent, without risking mis-correlation when the payload
+   * includes a terminalId for a terminal the orchestrator isn't tracking.
+   */
+  private async resolveTerminalIdForRun(
+    payloadTerminalId: string | undefined,
+    payloadAgentId: string | undefined
+  ): Promise<string | null> {
+    if (payloadTerminalId) {
+      return this.agentToRunMap.has(payloadTerminalId) ? payloadTerminalId : null;
+    }
+    if (!payloadAgentId) return null;
+
+    // Fallback: scan tracked runs for a task whose assignedAgentId matches.
+    for (const [runId, terminalId] of this.terminalIdByRunId) {
+      const taskId = this.runToTaskMap.get(runId);
+      if (!taskId) continue;
+      const task = await this.queueService.getTask(taskId);
+      if (task?.assignedAgentId === payloadAgentId) {
+        return terminalId;
+      }
+    }
+    return null;
+  }
+
+  /**
    * Handle agent completion.
    * Correlate the completion to a running task and mark it as completed.
    */
   private async handleAgentComplete(payload: DaintreeEventMap["agent:completed"]): Promise<void> {
     if (this.isDisposed) return;
 
-    const { agentId } = payload;
-    if (!agentId) return;
+    const { agentId, terminalId } = payload;
+    if (!agentId && !terminalId) return;
 
-    // Find the run ID for this agent
-    const runId = this.agentToRunMap.get(agentId);
-    if (!runId) {
+    const resolvedTerminalId = await this.resolveTerminalIdForRun(terminalId, agentId);
+    if (!resolvedTerminalId) {
       // Agent completed without a tracked task - that's fine
       return;
     }
+
+    // Find the run ID for this terminal
+    const runId = this.agentToRunMap.get(resolvedTerminalId);
+    if (!runId) return;
 
     // Find the task for this run
     const taskId = this.runToTaskMap.get(runId);
     if (!taskId) {
       // Run completed without a tracked task
-      this.agentToRunMap.delete(agentId);
+      this.agentToRunMap.delete(resolvedTerminalId);
+      this.terminalIdByRunId.delete(runId);
       return;
     }
 
@@ -280,14 +353,15 @@ export class TaskOrchestrator {
     if (!task || task.status !== "running" || task.runId !== runId) {
       // Task state has changed - don't update it
       this.runToTaskMap.delete(runId);
-      this.agentToRunMap.delete(agentId);
+      this.agentToRunMap.delete(resolvedTerminalId);
+      this.terminalIdByRunId.delete(runId);
       return;
     }
 
     // Mark task as completed
     try {
       await this.queueService.markCompleted(taskId, {
-        summary: `Completed by agent ${agentId}`,
+        summary: `Completed by agent ${task.assignedAgentId ?? agentId ?? "unknown"}`,
       });
     } catch (error) {
       console.error(
@@ -298,7 +372,8 @@ export class TaskOrchestrator {
 
     // Clean up tracking
     this.runToTaskMap.delete(runId);
-    this.agentToRunMap.delete(agentId);
+    this.agentToRunMap.delete(resolvedTerminalId);
+    this.terminalIdByRunId.delete(runId);
 
     // Try to assign next task now that this agent is free
     await this.assignNextTask();
@@ -311,22 +386,27 @@ export class TaskOrchestrator {
   private async handleAgentKilled(payload: DaintreeEventMap["agent:killed"]): Promise<void> {
     if (this.isDisposed) return;
 
-    const { agentId } = payload;
-    if (!agentId) return;
+    const { agentId, terminalId } = payload;
+    if (!agentId && !terminalId) return;
 
-    const runId = this.agentToRunMap.get(agentId);
+    const resolvedTerminalId = await this.resolveTerminalIdForRun(terminalId, agentId);
+    if (!resolvedTerminalId) return;
+
+    const runId = this.agentToRunMap.get(resolvedTerminalId);
     if (!runId) return;
 
     const taskId = this.runToTaskMap.get(runId);
     if (!taskId) {
-      this.agentToRunMap.delete(agentId);
+      this.agentToRunMap.delete(resolvedTerminalId);
+      this.terminalIdByRunId.delete(runId);
       return;
     }
 
     const task = await this.queueService.getTask(taskId);
     if (!task || task.status !== "running" || task.runId !== runId) {
       this.runToTaskMap.delete(runId);
-      this.agentToRunMap.delete(agentId);
+      this.agentToRunMap.delete(resolvedTerminalId);
+      this.terminalIdByRunId.delete(runId);
       return;
     }
 
@@ -340,7 +420,8 @@ export class TaskOrchestrator {
     }
 
     this.runToTaskMap.delete(runId);
-    this.agentToRunMap.delete(agentId);
+    this.agentToRunMap.delete(resolvedTerminalId);
+    this.terminalIdByRunId.delete(runId);
 
     await this.assignNextTask();
   }
@@ -368,10 +449,16 @@ export class TaskOrchestrator {
       try {
         await this.queueService.cancelTask(task.id);
 
-        // Clean up tracking for running tasks
-        if (task.runId && task.assignedAgentId) {
+        // Clean up tracking for running tasks. Look up the terminalId via
+        // the runId → terminalId map (task.assignedAgentId holds the logical
+        // agent identity, not the terminal id used as the agentToRunMap key).
+        if (task.runId) {
+          const terminalId = this.terminalIdByRunId.get(task.runId);
           this.runToTaskMap.delete(task.runId);
-          this.agentToRunMap.delete(task.assignedAgentId);
+          this.terminalIdByRunId.delete(task.runId);
+          if (terminalId) {
+            this.agentToRunMap.delete(terminalId);
+          }
         }
       } catch (error) {
         // Task may already be in a terminal state
@@ -395,7 +482,16 @@ export class TaskOrchestrator {
     this.unsubscribers = [];
     this.runToTaskMap.clear();
     this.agentToRunMap.clear();
+    this.terminalIdByRunId.clear();
   }
+}
+
+/** Internal result type for agent selection. */
+interface SelectedAgent {
+  /** Immutable terminal id used as the agentToRunMap key. */
+  terminalId: string;
+  /** Logical agent identity (stored `agentId` or runtime `detectedAgentId`), persisted as `Task.assignedAgentId`. */
+  agentId: string;
 }
 
 // Singleton instance
