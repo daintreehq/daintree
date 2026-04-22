@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useRef, type ReactNode } from "react";
-import { cn } from "@/lib/utils";
+import { createPortal } from "react-dom";
 import { Toolbar } from "./Toolbar";
 import { Sidebar } from "./Sidebar";
 import { TerminalDockRegion } from "./TerminalDockRegion";
@@ -342,11 +342,7 @@ export function AppLayout({
       </div>
       <div
         {...(isThemeBrowserOpen ? { inert: true } : {})}
-        className={cn(
-          "flex-1 flex flex-col overflow-hidden",
-          "transition-[filter,opacity] duration-300",
-          isThemeBrowserOpen && "bg-scrim-soft/30 backdrop-blur-[2px]"
-        )}
+        className="flex-1 flex flex-col overflow-hidden"
         style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}
       >
         <div
@@ -387,22 +383,6 @@ export function AppLayout({
                   </div>
                 </ErrorBoundary>
               )}
-              {themeBrowserOpen && (
-                <ErrorBoundary
-                  variant="section"
-                  componentName="ThemeBrowser"
-                  onError={() => useThemeBrowserStore.getState().close()}
-                >
-                  <div
-                    className="absolute top-0 bottom-0 z-40 pointer-events-auto"
-                    style={{
-                      right: layout.portalOpen ? `${layout.portalWidth}px` : "0px",
-                    }}
-                  >
-                    <ThemeBrowser />
-                  </div>
-                </ErrorBoundary>
-              )}
               {layout.portalOpen && (
                 <ErrorBoundary variant="section" componentName="PortalDock">
                   <div className="absolute right-0 top-0 bottom-0 z-50 shadow-2xl border-l border-daintree-border">
@@ -423,6 +403,30 @@ export function AppLayout({
       <ChordIndicator />
 
       <AllClearOverlay />
+      {themeBrowserOpen &&
+        createPortal(
+          <>
+            <div
+              aria-hidden="true"
+              className="fixed inset-0 z-30 bg-scrim-soft/30 transition-[backdrop-filter] duration-200 hover:backdrop-blur-[2px]"
+            />
+            <ErrorBoundary
+              variant="section"
+              componentName="ThemeBrowser"
+              onError={() => useThemeBrowserStore.getState().close()}
+            >
+              <div
+                className="fixed inset-y-0 z-40 pointer-events-auto"
+                style={{
+                  right: layout.portalOpen ? `${layout.portalWidth}px` : "0px",
+                }}
+              >
+                <ThemeBrowser />
+              </div>
+            </ErrorBoundary>
+          </>,
+          document.body
+        )}
       {window.electron?.demo && (
         <>
           <DemoOverlay />
