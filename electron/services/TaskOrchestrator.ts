@@ -90,6 +90,18 @@ export class TaskOrchestrator {
       })
     );
 
+    // Subscribe to agent exit (process gone from the terminal). This is the
+    // only lifecycle signal that fires for runtime-detected agents — the
+    // stored-identity `agent:completed`/`agent:killed` emitters in
+    // AgentStateService guard on `terminal.agentId` and skip detected-only
+    // terminals. Without this subscription, a task assigned to a detected-only
+    // terminal would lock that terminalId in `agentToRunMap` forever.
+    this.unsubscribers.push(
+      events.on("agent:exited", (payload) => {
+        void this.handleAgentExited(payload);
+      })
+    );
+
     // Subscribe to worktree removals
     this.unsubscribers.push(
       events.on("sys:worktree:remove", (payload) => {
@@ -297,6 +309,13 @@ export class TaskOrchestrator {
    * fallback preserves the old agentId-keyed behaviour when `terminalId` is
    * genuinely absent, without risking mis-correlation when the payload
    * includes a terminalId for a terminal the orchestrator isn't tracking.
+   *
+   * Trade-off: when `terminalId` is present but unknown (e.g. the tracking
+   * entry was lost to a dispose/reinit race, or a late event arrives after
+   * worktree removal), the run is not recovered and the task may remain in
+   * `"running"` until a higher-level reconciliation (e.g. worktree teardown)
+   * sweeps it. Preferring correctness over recovery is deliberate — a false
+   * match in this path would mark an unrelated task as completed.
    */
   private async resolveTerminalIdForRun(
     payloadTerminalId: string | undefined,
@@ -421,6 +440,64 @@ export class TaskOrchestrator {
 
     this.runToTaskMap.delete(runId);
     this.agentToRunMap.delete(resolvedTerminalId);
+    this.terminalIdByRunId.delete(runId);
+
+    await this.assignNextTask();
+  }
+
+  /**
+   * Handle agent exit.
+   *
+   * Fires when the CLI process leaves the terminal. For stored-identity
+   * agents this usually runs after `agent:completed`/`agent:killed` has
+   * already cleaned up, so the terminalId lookup misses and we no-op. For
+   * runtime-detected agents — whose `agent:completed`/`agent:killed` never
+   * fire because `AgentStateService` guards on `terminal.agentId` — this is
+   * the *only* cleanup path, and we mark the running task as completed so
+   * the user sees the task closed out and the next queued task can run.
+   *
+   * Exit codes are not available on `agent:exited`, so we cannot distinguish
+   * success from crash here. Marking completed is the pragmatic choice:
+   * tasks that assigned successfully and then exited are treated as done;
+   * the terminal output still reflects any errors, and the user can re-queue
+   * if needed.
+   */
+  private async handleAgentExited(payload: DaintreeEventMap["agent:exited"]): Promise<void> {
+    if (this.isDisposed) return;
+
+    const { terminalId } = payload;
+    if (!terminalId) return;
+
+    const runId = this.agentToRunMap.get(terminalId);
+    if (!runId) {
+      // Not tracking this terminal — normal for non-agent terminals and for
+      // stored-identity agents whose completion/kill events already cleaned up.
+      return;
+    }
+
+    const taskId = this.runToTaskMap.get(runId);
+    if (!taskId) {
+      this.agentToRunMap.delete(terminalId);
+      this.terminalIdByRunId.delete(runId);
+      return;
+    }
+
+    const task = await this.queueService.getTask(taskId);
+    if (task && task.status === "running" && task.runId === runId) {
+      try {
+        await this.queueService.markCompleted(taskId, {
+          summary: `Completed by agent ${task.assignedAgentId ?? "unknown"}`,
+        });
+      } catch (err) {
+        console.error(
+          `[TaskOrchestrator] Failed to mark task ${taskId} completed after agent exit:`,
+          err instanceof Error ? err.message : String(err)
+        );
+      }
+    }
+
+    this.runToTaskMap.delete(runId);
+    this.agentToRunMap.delete(terminalId);
     this.terminalIdByRunId.delete(runId);
 
     await this.assignNextTask();
