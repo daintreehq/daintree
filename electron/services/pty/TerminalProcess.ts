@@ -1412,6 +1412,10 @@ export class TerminalProcess {
       terminal.everDetectedAgent = true;
 
       if (previousType !== result.agentType) {
+        if (terminal.agentState === "exited") {
+          this.deps.agentStateService.updateAgentState(terminal, { type: "respawn" });
+        }
+
         terminal.detectedAgentType = result.agentType;
         terminal.type = result.agentType;
 
@@ -1435,6 +1439,7 @@ export class TerminalProcess {
       // If we're transitioning directly from an agent, clear agent state first
       if (terminal.detectedAgentType) {
         const previousType = terminal.detectedAgentType;
+        this.deps.agentStateService.updateAgentState(terminal, { type: "exit", code: 0 });
         terminal.detectedAgentType = undefined;
         terminal.type = "terminal";
         terminal.title = "Terminal";
@@ -1457,6 +1462,7 @@ export class TerminalProcess {
     } else if (!result.detected && (terminal.detectedAgentType || this.lastDetectedProcessIconId)) {
       const previousType = terminal.detectedAgentType;
       if (previousType) {
+        this.deps.agentStateService.updateAgentState(terminal, { type: "exit", code: 0 });
         terminal.detectedAgentType = undefined;
         terminal.type = "terminal";
         terminal.title = "Terminal";

@@ -90,6 +90,68 @@ describe("AgentStateService", () => {
     expect(terminal.agentState).toBe("exited");
   });
 
+  it("transitions idle → exited on graceful agent exit detected from idle (Issue #5767)", () => {
+    const service = new AgentStateService();
+    const terminal = createTerminal({ agentState: "idle" });
+    const stateChanges: Array<{ state: string; previousState: string; trigger: string }> = [];
+
+    events.on("agent:state-changed", (payload) => {
+      stateChanges.push({
+        state: payload.state,
+        previousState: payload.previousState,
+        trigger: payload.trigger,
+      });
+    });
+
+    const changed = service.updateAgentState(terminal, { type: "exit", code: 0 });
+
+    expect(changed).toBe(true);
+    expect(terminal.agentState).toBe("exited");
+    expect(stateChanges).toHaveLength(1);
+    expect(stateChanges[0]?.state).toBe("exited");
+    expect(stateChanges[0]?.previousState).toBe("idle");
+    expect(stateChanges[0]?.trigger).toBe("exit");
+  });
+
+  it("is idempotent when exit event fires on an already-exited terminal", () => {
+    const service = new AgentStateService();
+    const terminal = createTerminal({ agentState: "exited" });
+    const stateChanges: unknown[] = [];
+
+    events.on("agent:state-changed", (payload) => {
+      stateChanges.push(payload);
+    });
+
+    const changed = service.updateAgentState(terminal, { type: "exit", code: 0 });
+
+    expect(changed).toBe(false);
+    expect(terminal.agentState).toBe("exited");
+    expect(stateChanges).toHaveLength(0);
+  });
+
+  it("transitions exited → idle on respawn (Issue #5767 — agent re-detected in same PTY)", () => {
+    const service = new AgentStateService();
+    const terminal = createTerminal({ agentState: "exited" });
+    const stateChanges: Array<{ state: string; previousState: string; trigger: string }> = [];
+
+    events.on("agent:state-changed", (payload) => {
+      stateChanges.push({
+        state: payload.state,
+        previousState: payload.previousState,
+        trigger: payload.trigger,
+      });
+    });
+
+    const changed = service.updateAgentState(terminal, { type: "respawn" });
+
+    expect(changed).toBe(true);
+    expect(terminal.agentState).toBe("idle");
+    expect(stateChanges).toHaveLength(1);
+    expect(stateChanges[0]?.state).toBe("idle");
+    expect(stateChanges[0]?.previousState).toBe("exited");
+    expect(stateChanges[0]?.trigger).toBe("activity");
+  });
+
   it("error event is a no-op and does not change state", () => {
     const service = new AgentStateService();
     const terminal = createTerminal({ agentState: "working" });
