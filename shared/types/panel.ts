@@ -174,12 +174,26 @@ interface BasePanelData {
 export interface PtyPanelData extends BasePanelData {
   kind: "terminal";
   /**
-   * Legacy field retained for persistence; new code should prefer `agentId`.
-   * - "terminal" for default terminals
-   * - legacy agent ids ("claude", "gemini", "codex") when migrated from old state
+   * @deprecated Legacy terminal classification. Predates the canonical identity
+   * model; conflates launch intent with UI classification. Kept for compatibility
+   * with `TerminalPane` and persisted state.
+   *
+   * Do not use for new identity decisions. Prefer `agentId` (launch intent),
+   * `detectedAgentId` (live detection), or `capabilityAgentId` (capability mode).
+   * See `docs/architecture/terminal-identity.md`.
    */
   type: TerminalType;
-  /** Agent identity, when this terminal is running an agent. Absent for plain shells. */
+  /**
+   * Launch intent — the agent identity this terminal was spawned as, if any.
+   *
+   * Sealed at spawn time; must not be rewritten by runtime process detection
+   * (see "Known violations" in `docs/architecture/terminal-identity.md`). Drives
+   * spawn-sealed behavior: environment shaping, non-interactive shell
+   * configuration, PTY pool selection, scrollback sizing, graceful shutdown,
+   * and restart semantics. Persisted so crash recovery respawns as the same agent.
+   *
+   * Absent for plain shells.
+   */
   agentId?: AgentId;
   /** Current working directory of the terminal */
   cwd: string;
@@ -248,17 +262,33 @@ export interface PtyPanelData extends BasePanelData {
   /** Detected process icon ID for dynamic terminal icons (transient, not persisted) */
   detectedProcessId?: string;
   /**
-   * Set once when runtime agent detection first fires in this terminal session; never cleared.
-   * Used at exit time to preserve plain terminals that ran an agent mid-session. Live-session-only
-   * (not persisted); rehydrated from backend reconnect payload.
+   * Sticky live-session flag. True once runtime detection fires in this session,
+   * even if no agent is currently detected. Used at exit time to preserve plain
+   * terminals that hosted an agent mid-session.
+   *
+   * Live-only convenience signal. Not persisted; rehydrated from backend
+   * reconnect payload. Not launch intent; not capability mode.
    */
   everDetectedAgent?: boolean;
   /**
-   * Runtime-detected agent identity. Reflects the agent currently running in this terminal as
-   * identified by the backend process detector. Cleared on agent exit. Live-session-only
-   * (not persisted); rehydrated from backend reconnect payload.
+   * Live detected identity — the agent currently running in this terminal as
+   * identified by the backend process detector. Volatile UI signal for icon,
+   * badge, activity headline, and live state events.
+   *
+   * Cleared when the detected agent exits. Not persisted; rehydrated from
+   * backend reconnect payload. See `docs/architecture/terminal-identity.md`.
    */
   detectedAgentId?: BuiltInAgentId;
+  /**
+   * Capability mode — the agent capability surface this terminal is allowed to
+   * participate in (fleet membership, orchestration, hybrid input).
+   *
+   * Currently expected to follow launch intent (`agentId`). Derived at read
+   * time; not persisted; reserved for future consumers. No production code
+   * writes this field yet — the slot exists so consumers can migrate without
+   * further IPC contract churn.
+   */
+  capabilityAgentId?: BuiltInAgentId;
   /** Captured agent session ID from graceful shutdown (used for session resume) */
   agentSessionId?: string;
   /** Process-level flags captured at launch time, persisted for session resume */
@@ -359,7 +389,16 @@ export interface TerminalInstance {
   id: string;
   worktreeId?: string;
   kind?: PanelKind;
+  /**
+   * @deprecated Legacy terminal classification. See `PtyPanelData.type` and
+   * `docs/architecture/terminal-identity.md`. Prefer `agentId` (launch intent),
+   * `detectedAgentId` (live detection), or `capabilityAgentId` (capability mode).
+   */
   type?: TerminalType;
+  /**
+   * Launch intent — the agent identity this terminal was spawned as.
+   * Sealed at spawn time. See `PtyPanelData.agentId` for full contract.
+   */
   agentId?: AgentId;
   title: string;
   /** Last meaningful OSC title observed from the running agent — survives the trash window for display. */
@@ -427,17 +466,20 @@ export interface TerminalInstance {
   /** Detected process icon ID for dynamic terminal icons (transient, not persisted) */
   detectedProcessId?: string;
   /**
-   * Set once when runtime agent detection first fires in this terminal session; never cleared.
-   * Used at exit time to preserve plain terminals that ran an agent mid-session. Live-session-only
-   * (not persisted); rehydrated from backend reconnect payload.
+   * Sticky live-session flag; set once on first runtime detection, never cleared.
+   * See `PtyPanelData.everDetectedAgent` for full contract.
    */
   everDetectedAgent?: boolean;
   /**
-   * Runtime-detected agent identity. Reflects the agent currently running in this terminal as
-   * identified by the backend process detector. Cleared on agent exit. Live-session-only
-   * (not persisted); rehydrated from backend reconnect payload.
+   * Live detected identity — the agent currently running in this terminal.
+   * See `PtyPanelData.detectedAgentId` for full contract.
    */
   detectedAgentId?: BuiltInAgentId;
+  /**
+   * Capability mode slot. See `PtyPanelData.capabilityAgentId` for full contract.
+   * Not yet populated by any writer.
+   */
+  capabilityAgentId?: BuiltInAgentId;
   /** Captured agent session ID from graceful shutdown (used for session resume) */
   agentSessionId?: string;
   /** Process-level flags captured at launch time, persisted for session resume */

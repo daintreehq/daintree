@@ -3,6 +3,7 @@ import type { Terminal as HeadlessTerminal } from "@xterm/headless";
 import type { SerializeAddon } from "@xterm/addon-serialize";
 import type { AgentState, AgentId, WaitingReason } from "../../../shared/types/agent.js";
 import type { TerminalType, PanelKind } from "../../../shared/types/panel.js";
+import type { BuiltInAgentId } from "../../../shared/config/agentIds.js";
 import type { PtyHostSpawnOptions } from "../../../shared/types/pty-host.js";
 import type { ProcessDetector } from "../ProcessDetector.js";
 
@@ -16,6 +17,12 @@ export type PtySpawnOptions = PtyHostSpawnOptions;
  * - State persistence
  * - IPC payloads
  * - External APIs
+ *
+ * Identity fields follow the canonical model documented in
+ * `docs/architecture/terminal-identity.md`. Note: this PTY-side type uses the
+ * internal name `detectedAgentType` for the live-detection concept. The IPC
+ * boundary (`electron/pty-host.ts#narrowDetectedAgentId`) translates it to
+ * `detectedAgentId` on the renderer-facing types.
  */
 export interface TerminalPublicState {
   id: string;
@@ -23,7 +30,18 @@ export interface TerminalPublicState {
   cwd: string;
   shell: string;
   kind?: PanelKind;
+  /**
+   * @deprecated Legacy terminal classification. See
+   * `docs/architecture/terminal-identity.md`. Prefer `agentId` (launch intent),
+   * `detectedAgentType` (live detection), or `capabilityAgentId` (capability mode).
+   */
   type?: TerminalType;
+  /**
+   * Launch intent — the agent identity this terminal was spawned as, if any.
+   * Sealed at spawn time; must not be rewritten by runtime process detection.
+   * See `docs/architecture/terminal-identity.md` for the full contract and the
+   * known `handleAgentDetection()` bridge-write violation.
+   */
   agentId?: AgentId;
   title?: string;
   spawnedAt: number;
@@ -37,11 +55,30 @@ export interface TerminalPublicState {
   lastInputTime: number;
   lastOutputTime: number;
   lastCheckTime: number;
+  /**
+   * Live detected identity — internal PTY-side name for the agent currently
+   * running in this PTY. Equivalent to `detectedAgentId` on IPC-facing types;
+   * translated via `narrowDetectedAgentId()` in `electron/pty-host.ts` at the
+   * IPC boundary.
+   *
+   * Cleared when the detected agent exits. Not persisted.
+   */
   detectedAgentType?: TerminalType;
   /** Runtime-detected non-agent process icon id (npm, yarn, python, etc.). Cleared when the process exits. */
   detectedProcessIconId?: string;
-  /** Set once on first runtime agent detection; never cleared. Sticky across agent exit/re-enter within session. */
+  /**
+   * Sticky live-session flag. True once runtime detection fires in this session,
+   * even if no agent is currently detected. Not persisted; not launch intent;
+   * not capability mode.
+   */
   everDetectedAgent?: boolean;
+  /**
+   * Capability mode — the agent capability surface this terminal is allowed to
+   * participate in. Currently expected to follow launch intent (`agentId`);
+   * derived at read time; not persisted; not written by any production code
+   * yet. See `docs/architecture/terminal-identity.md`.
+   */
+  capabilityAgentId?: BuiltInAgentId;
   restartCount: number;
   isTrashed?: boolean;
   trashExpiresAt?: number;
