@@ -49,6 +49,7 @@ describe("ProcessDetector", () => {
 
     const detector = new ProcessDetector("terminal-1", Date.now(), 100, callback, cache as never);
     detector.start();
+    cache.emitRefresh();
 
     expect(callback).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -75,6 +76,7 @@ describe("ProcessDetector", () => {
 
     const detector = new ProcessDetector("terminal-2", Date.now(), 100, callback, cache as never);
     detector.start();
+    cache.emitRefresh();
     cache.emitRefresh();
 
     expect(callback).toHaveBeenCalledTimes(1);
@@ -104,6 +106,7 @@ describe("ProcessDetector", () => {
 
     const detector = new ProcessDetector("terminal-map", Date.now(), 100, callback, cache as never);
     detector.start();
+    cache.emitRefresh();
 
     expect(callback).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -132,6 +135,7 @@ describe("ProcessDetector", () => {
       cache as never
     );
     detector.start();
+    cache.emitRefresh();
 
     expect(callback).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -160,6 +164,7 @@ describe("ProcessDetector", () => {
       cache as never
     );
     detector.start();
+    cache.emitRefresh();
 
     expect(callback).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -207,9 +212,13 @@ describe("ProcessDetector", () => {
       callback,
       cache as never
     );
+    // Two polls to commit the ON state (hysteresis threshold).
     detector.start();
+    cache.emitRefresh();
 
+    // Two polls with no children to commit the OFF state (hysteresis threshold).
     cache.setChildren(100, []);
+    cache.emitRefresh();
     cache.emitRefresh();
 
     expect(callback).toHaveBeenCalledTimes(2);
@@ -236,6 +245,7 @@ describe("ProcessDetector", () => {
 
     const detector = new ProcessDetector("terminal-win", Date.now(), 100, callback, cache as never);
     detector.start();
+    cache.emitRefresh();
 
     expect(callback).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -247,5 +257,280 @@ describe("ProcessDetector", () => {
       }),
       expect.any(Number)
     );
+  });
+
+  describe("hysteresis", () => {
+    it("does not emit detection after a single agent poll", () => {
+      const cache = createCacheMock();
+      cache.setChildren(100, [{ pid: 200, comm: "claude", command: "claude --resume" }]);
+      const callback = vi.fn();
+
+      const detector = new ProcessDetector(
+        "terminal-hys-1",
+        Date.now(),
+        100,
+        callback,
+        cache as never
+      );
+      detector.start();
+
+      expect(callback).not.toHaveBeenCalled();
+    });
+
+    it("commits detection after two consecutive matching polls and emits once", () => {
+      const cache = createCacheMock();
+      cache.setChildren(100, [{ pid: 200, comm: "claude", command: "claude --resume" }]);
+      const callback = vi.fn();
+
+      const detector = new ProcessDetector(
+        "terminal-hys-2",
+        Date.now(),
+        100,
+        callback,
+        cache as never
+      );
+      detector.start();
+      cache.emitRefresh();
+
+      expect(callback).toHaveBeenCalledTimes(1);
+      expect(callback).toHaveBeenCalledWith(
+        expect.objectContaining({
+          detected: true,
+          agentType: "claude",
+          processIconId: "claude",
+        }),
+        expect.any(Number)
+      );
+    });
+
+    it("does not emit off after a single absent poll; commits after two", () => {
+      const cache = createCacheMock();
+      cache.setChildren(100, [{ pid: 200, comm: "claude", command: "claude --resume" }]);
+      const callback = vi.fn();
+
+      const detector = new ProcessDetector(
+        "terminal-hys-3",
+        Date.now(),
+        100,
+        callback,
+        cache as never
+      );
+      detector.start();
+      cache.emitRefresh();
+      expect(callback).toHaveBeenCalledTimes(1);
+
+      cache.setChildren(100, []);
+      cache.emitRefresh();
+      expect(callback).toHaveBeenCalledTimes(1);
+
+      cache.emitRefresh();
+      expect(callback).toHaveBeenCalledTimes(2);
+      expect(callback).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          detected: false,
+          isBusy: false,
+          currentCommand: undefined,
+        }),
+        expect.any(Number)
+      );
+    });
+
+    it("does not commit detection when polls alternate between present and absent", () => {
+      const cache = createCacheMock();
+      const callback = vi.fn();
+
+      const detector = new ProcessDetector(
+        "terminal-hys-4",
+        Date.now(),
+        100,
+        callback,
+        cache as never
+      );
+
+      cache.setChildren(100, [{ pid: 200, comm: "claude", command: "claude --resume" }]);
+      detector.start();
+
+      cache.setChildren(100, []);
+      cache.emitRefresh();
+
+      cache.setChildren(100, [{ pid: 200, comm: "claude", command: "claude --resume" }]);
+      cache.emitRefresh();
+
+      cache.setChildren(100, []);
+      cache.emitRefresh();
+
+      // Alternation may update busy/command, but the gated agent/icon state must
+      // never flip into a detected state while the on-streak keeps resetting.
+      const detectedCalls = callback.mock.calls.filter(([result]) => result.detected === true);
+      expect(detectedCalls).toHaveLength(0);
+      expect(detector.getLastDetected()).toBeNull();
+    });
+
+    it("requires two consecutive polls for a new agent when swapping from another", () => {
+      const cache = createCacheMock();
+      cache.setChildren(100, [{ pid: 200, comm: "claude", command: "claude --resume" }]);
+      const callback = vi.fn();
+
+      const detector = new ProcessDetector(
+        "terminal-hys-5",
+        Date.now(),
+        100,
+        callback,
+        cache as never
+      );
+      detector.start();
+      cache.emitRefresh();
+      expect(callback).toHaveBeenCalledTimes(1);
+      expect(callback).toHaveBeenLastCalledWith(
+        expect.objectContaining({ agentType: "claude" }),
+        expect.any(Number)
+      );
+
+      cache.setChildren(100, [{ pid: 201, comm: "codex", command: "codex --model o3" }]);
+      cache.emitRefresh();
+      expect(callback).toHaveBeenCalledTimes(1);
+
+      cache.emitRefresh();
+      expect(callback).toHaveBeenCalledTimes(2);
+      expect(callback).toHaveBeenLastCalledWith(
+        expect.objectContaining({ agentType: "codex" }),
+        expect.any(Number)
+      );
+    });
+
+    it("flushes a pending off streak on stop() so teardown does not leave ghost state", () => {
+      const cache = createCacheMock();
+      cache.setChildren(100, [{ pid: 200, comm: "claude", command: "claude --resume" }]);
+      const callback = vi.fn();
+
+      const detector = new ProcessDetector(
+        "terminal-hys-6",
+        Date.now(),
+        100,
+        callback,
+        cache as never
+      );
+      detector.start();
+      cache.emitRefresh();
+      expect(callback).toHaveBeenCalledTimes(1);
+
+      cache.setChildren(100, []);
+      cache.emitRefresh();
+      expect(callback).toHaveBeenCalledTimes(1);
+
+      detector.stop();
+
+      expect(callback).toHaveBeenCalledTimes(2);
+      expect(callback).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          detected: false,
+          isBusy: false,
+          currentCommand: undefined,
+        }),
+        expect.any(Number)
+      );
+    });
+
+    it("does not emit a synthetic on event when stop() is called mid on-streak", () => {
+      const cache = createCacheMock();
+      cache.setChildren(100, [{ pid: 200, comm: "claude", command: "claude --resume" }]);
+      const callback = vi.fn();
+
+      const detector = new ProcessDetector(
+        "terminal-hys-7",
+        Date.now(),
+        100,
+        callback,
+        cache as never
+      );
+      detector.start();
+
+      detector.stop();
+
+      expect(callback).not.toHaveBeenCalled();
+    });
+
+    it("does not emit a spurious idle callback after a one-poll blip on an idle terminal", () => {
+      const cache = createCacheMock();
+      const callback = vi.fn();
+
+      const detector = new ProcessDetector(
+        "terminal-hys-blip",
+        Date.now(),
+        100,
+        callback,
+        cache as never
+      );
+
+      // Idle start: emits the baseline { detected:false, isBusy:false } once.
+      detector.start();
+      const baseline = callback.mock.calls.length;
+
+      // One-poll blip of a short-lived agent process.
+      cache.setChildren(100, [{ pid: 200, comm: "claude", command: "claude --version" }]);
+      cache.emitRefresh();
+
+      // Back to idle — side-channel state must not have been mutated during the
+      // suppressed on-streak, so no spurious callback fires here.
+      cache.setChildren(100, []);
+      cache.emitRefresh();
+
+      expect(callback).toHaveBeenCalledTimes(baseline);
+    });
+
+    it("does not emit a spurious command-change callback after an aborted agent swap", () => {
+      const cache = createCacheMock();
+      cache.setChildren(100, [{ pid: 200, comm: "claude", command: "claude --resume" }]);
+      const callback = vi.fn();
+
+      const detector = new ProcessDetector(
+        "terminal-hys-swap-abort",
+        Date.now(),
+        100,
+        callback,
+        cache as never
+      );
+
+      // Commit claude.
+      detector.start();
+      cache.emitRefresh();
+      expect(callback).toHaveBeenCalledTimes(1);
+
+      // One-poll blip of codex (swap candidate).
+      cache.setChildren(100, [{ pid: 201, comm: "codex", command: "codex --version" }]);
+      cache.emitRefresh();
+
+      // Back to claude — committed state matches raw again, and side-channel
+      // state was not overwritten by the aborted swap, so no callback fires.
+      cache.setChildren(100, [{ pid: 200, comm: "claude", command: "claude --resume" }]);
+      cache.emitRefresh();
+
+      expect(callback).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not emit a second off flush on repeated stop() calls", () => {
+      const cache = createCacheMock();
+      cache.setChildren(100, [{ pid: 200, comm: "claude", command: "claude --resume" }]);
+      const callback = vi.fn();
+
+      const detector = new ProcessDetector(
+        "terminal-hys-8",
+        Date.now(),
+        100,
+        callback,
+        cache as never
+      );
+      detector.start();
+      cache.emitRefresh();
+
+      cache.setChildren(100, []);
+      cache.emitRefresh();
+      detector.stop();
+
+      expect(callback).toHaveBeenCalledTimes(2);
+
+      detector.stop();
+      expect(callback).toHaveBeenCalledTimes(2);
+    });
   });
 });

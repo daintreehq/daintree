@@ -90,6 +90,12 @@ export interface DetectionResult {
 export type DetectionCallback = (result: DetectionResult, spawnedAt: number) => void;
 
 export class ProcessDetector {
+  // Require N consecutive polls agreeing on a new agent/icon state before
+  // committing it. At the 2500 ms base poll interval that is ~5 s of confirmation,
+  // which is enough to filter out short-lived processes (e.g. `claude --version`)
+  // that would otherwise cause the detector to thrash between on/off.
+  private static readonly HYSTERESIS_THRESHOLD = 2;
+
   private terminalId: string;
   private spawnedAt: number;
   private ptyPid: number;
@@ -101,6 +107,9 @@ export class ProcessDetector {
   private cache: ProcessTreeCache;
   private unsubscribe: (() => void) | null = null;
   private isStarted: boolean = false;
+  private onStreak: number = 0;
+  private offStreak: number = 0;
+  private pendingDetected: { agentType?: TerminalType; processIconId?: string } | null = null;
 
   constructor(
     terminalId: string,
@@ -134,6 +143,28 @@ export class ProcessDetector {
 
   stop(): void {
     if (this.unsubscribe) {
+      // Flush a pending OFF streak on teardown so a detected agent whose process
+      // exited inside the hysteresis window does not leave ghost state in the UI.
+      if (this.offStreak > 0 && (this.lastDetected !== null || this.lastProcessIconId !== null)) {
+        const spawnedAt = this.spawnedAt;
+        this.lastDetected = null;
+        this.lastProcessIconId = null;
+        this.lastBusyState = false;
+        this.lastCurrentCommand = undefined;
+        this.offStreak = 0;
+        this.onStreak = 0;
+        this.pendingDetected = null;
+        try {
+          this.callback({ detected: false, isBusy: false, currentCommand: undefined }, spawnedAt);
+        } catch (err) {
+          console.error(`ProcessDetector stop flush error for terminal ${this.terminalId}:`, err);
+        }
+      } else {
+        this.onStreak = 0;
+        this.offStreak = 0;
+        this.pendingDetected = null;
+      }
+
       this.unsubscribe();
       this.unsubscribe = null;
       logDebug(`Stopped ProcessDetector for terminal ${this.terminalId}`);
@@ -145,32 +176,75 @@ export class ProcessDetector {
     try {
       const result = this.detectAgent();
 
-      const nextAgent = result.agentType ?? null;
-      const agentChanged =
-        (result.detected && nextAgent !== this.lastDetected) ||
-        (!result.detected && this.lastDetected !== null);
+      const rawAgent = result.agentType ?? null;
+      const rawIcon = result.processIconId ?? null;
+      const rawDetected = result.detected;
+      const committedAgent = this.lastDetected;
+      const committedIcon = this.lastProcessIconId;
 
-      const processIconChanged = (result.processIconId ?? null) !== this.lastProcessIconId;
+      const agentOrIconDiffers = rawAgent !== committedAgent || rawIcon !== committedIcon;
+
+      let gatedCommitted = false;
+
+      if (agentOrIconDiffers) {
+        if (rawDetected) {
+          // ON or swap direction: count consecutive polls agreeing on the same
+          // candidate; a different candidate mid-streak resets the counter.
+          const sameCandidate =
+            this.pendingDetected !== null &&
+            (this.pendingDetected.agentType ?? null) === rawAgent &&
+            (this.pendingDetected.processIconId ?? null) === rawIcon;
+
+          this.onStreak = sameCandidate ? this.onStreak + 1 : 1;
+          this.pendingDetected = {
+            agentType: result.agentType,
+            processIconId: result.processIconId,
+          };
+          this.offStreak = 0;
+
+          if (this.onStreak >= ProcessDetector.HYSTERESIS_THRESHOLD) {
+            this.lastDetected = rawAgent;
+            this.lastProcessIconId = rawIcon;
+            this.onStreak = 0;
+            this.pendingDetected = null;
+            gatedCommitted = true;
+          }
+        } else {
+          // OFF direction: raw reports no detection but committed state has one.
+          this.offStreak += 1;
+          this.onStreak = 0;
+          this.pendingDetected = null;
+
+          if (this.offStreak >= ProcessDetector.HYSTERESIS_THRESHOLD) {
+            this.lastDetected = null;
+            this.lastProcessIconId = null;
+            this.offStreak = 0;
+            gatedCommitted = true;
+          }
+        }
+      } else {
+        // Raw matches committed state — no transition in flight.
+        this.onStreak = 0;
+        this.offStreak = 0;
+        this.pendingDetected = null;
+      }
+
+      const inPendingTransition = this.onStreak > 0 || this.offStreak > 0;
 
       const busyChanged = result.isBusy !== undefined && result.isBusy !== this.lastBusyState;
-
       const commandChanged = result.currentCommand !== this.lastCurrentCommand;
 
-      if (result.detected) {
-        this.lastDetected = result.agentType ?? null;
-        this.lastProcessIconId = result.processIconId ?? null;
-      } else {
-        this.lastDetected = null;
-        this.lastProcessIconId = null;
-      }
+      // Suppress busy/command emissions while a gated transition is pending —
+      // otherwise a one-poll blip would leak through the side-channel and undo
+      // the hysteresis gate. Once the gated streak commits (or the raw state
+      // stabilises back onto committed), immediate emissions resume.
+      const shouldEmitImmediate = (busyChanged || commandChanged) && !inPendingTransition;
 
-      if (result.isBusy !== undefined) {
-        this.lastBusyState = result.isBusy;
-      }
-
-      this.lastCurrentCommand = result.currentCommand;
-
-      if (agentChanged || processIconChanged || busyChanged || commandChanged) {
+      if (gatedCommitted || shouldEmitImmediate) {
+        if (result.isBusy !== undefined) {
+          this.lastBusyState = result.isBusy;
+        }
+        this.lastCurrentCommand = result.currentCommand;
         this.callback(result, this.spawnedAt);
       }
     } catch (_error) {
