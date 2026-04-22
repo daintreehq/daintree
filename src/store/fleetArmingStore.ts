@@ -53,7 +53,9 @@ export function isFleetArmEligible(t: TerminalInstance | undefined): t is Termin
   if (!t) return false;
   if (t.location === "trash" || t.location === "background") return false;
   if (t.hasPty === false) return false;
-  return isAgentTerminal(t.kind ?? t.type, t.agentId);
+  return (
+    isAgentTerminal(t.kind ?? t.type, t.agentId) || !!t.detectedAgentId || !!t.everDetectedAgent
+  );
 }
 
 /**
