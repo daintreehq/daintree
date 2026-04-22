@@ -363,265 +363,317 @@ export const createCorePanelActions = (
     const projectStore = await resolveProjectStore();
     const capturedProjectId = projectStore.getState().currentProject?.id;
 
-    // Merge environment variables: global < project < spawn-time (later wins)
-    let mergedEnv: Record<string, string> | undefined = options.env;
-    try {
-      let globalEnvVars: Record<string, string> = {};
-      try {
-        globalEnvVars = await window.electron.globalEnv.get();
-      } catch (error) {
-        logWarn("[TerminalStore] Failed to fetch global environment variables", { error });
-      }
+    const isReconnect = !!options.existingId;
+    const isAgent = kind === "agent";
+    // Reserve the id up front so the panel can be committed to the store before
+    // any async work (env fetch, spawn IPC). #5789: commit-then-spawn collapses
+    // six rapid agent clicks from serialized spawns into six parallel placeholders.
+    const id =
+      options.existingId ??
+      options.requestedId ??
+      `${kind}-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 
-      let projectEnvVars: Record<string, string> = {};
-      if (capturedProjectId) {
-        const projectSettings = await projectClient.getSettings(capturedProjectId);
-        if (
-          projectSettings?.environmentVariables &&
-          Object.keys(projectSettings.environmentVariables).length > 0
-        ) {
-          projectEnvVars = projectSettings.environmentVariables;
+    // For reconnects, use the backend's state directly - don't default to "working".
+    // For new spawns, start with "working" in UI to show spinner immediately during boot.
+    const agentState = isReconnect
+      ? options.agentState
+      : (options.agentState ?? (isAgent ? "working" : undefined));
+    const lastStateChange = isReconnect
+      ? options.lastStateChange
+      : (options.lastStateChange ?? (agentState !== undefined ? Date.now() : undefined));
+
+    // PTY-backed plugin-contributed kinds are rare today, but stamp pluginId
+    // if the registry has an entry so the panel survives plugin removal.
+    const ptyKindConfig = getPanelKindConfig(kind);
+    const ptyPluginId = ptyKindConfig?.extensionId ?? options.pluginId;
+    // Reconnects don't go through a fresh spawn — mark them "ready" directly.
+    const spawnStatus: "spawning" | "ready" = isReconnect ? "ready" : "spawning";
+    const terminal: TerminalInstance = {
+      id,
+      kind,
+      type: legacyType,
+      agentId,
+      title,
+      worktreeId: options.worktreeId,
+      cwd: options.cwd ?? "",
+      cols: 80,
+      rows: 24,
+      agentState,
+      lastStateChange,
+      location,
+      command: options.command,
+      // Initialize grid terminals as visible to avoid initial under-throttling
+      // IntersectionObserver will update this once mounted
+      isVisible: location === "grid" ? true : false,
+      runtimeStatus,
+      isInputLocked: options.isInputLocked,
+      exitBehavior: options.exitBehavior,
+      agentSessionId: options.agentSessionId,
+      agentLaunchFlags: options.agentLaunchFlags,
+      agentModelId: options.agentModelId,
+      everDetectedAgent: options.everDetectedAgent,
+      detectedAgentId: options.detectedAgentId,
+      agentPresetId: options.agentPresetId,
+      agentPresetColor: options.agentPresetColor,
+      originalPresetId: options.originalPresetId ?? options.agentPresetId,
+      isUsingFallback: options.isUsingFallback,
+      fallbackChainIndex: options.fallbackChainIndex,
+      extensionState: options.extensionState,
+      pluginId: ptyPluginId,
+      spawnedBy: options.spawnedBy,
+      startedAt: Date.now(),
+      spawnStatus,
+    };
+
+    // Commit the panel to `panelsById` BEFORE any async IPC (#5789 optimistic
+    // placeholder) so the user sees the panel immediately and IPC event
+    // listeners (onAgentStateChanged, onExit, onAgentDetected, activity flushes,
+    // etc.) that look panels up by id always find the entry.
+    if (isHydrationBatchActive()) {
+      // Batched path: commit `panelsById` immediately; defer `panelIds` append.
+      set((state) => {
+        const existing = state.panelsById[id];
+        const preservedTerminal =
+          existing && isReconnect
+            ? {
+                ...terminal,
+                agentState: terminal.agentState ?? existing.agentState,
+                lastStateChange: terminal.lastStateChange ?? existing.lastStateChange,
+                exitBehavior: terminal.exitBehavior ?? existing.exitBehavior,
+                extensionState: terminal.extensionState ?? existing.extensionState,
+                // Sticky: once detected, never downgrade on a partial reconnect payload.
+                everDetectedAgent: terminal.everDetectedAgent || existing.everDetectedAgent,
+                // Prefer the fresh reconnect value if present; otherwise keep an existing
+                // live detection (live IPC event may have landed before reconnect flush).
+                detectedAgentId: terminal.detectedAgentId ?? existing.detectedAgentId,
+              }
+            : terminal;
+        return { panelsById: { ...state.panelsById, [id]: preservedTerminal } };
+      });
+      collectPanelIdForBatch(id);
+    } else {
+      set((state) => {
+        const existing = state.panelsById[id];
+        if (existing) {
+          // Update existing terminal in place (reconnection case or double hydration)
+          logDebug("[TerminalStore] Terminal already exists, updating instead of adding", { id });
+          // Preserve existing agentState/lastStateChange/exitBehavior if new values are undefined
+          const preservedTerminal = isReconnect
+            ? {
+                ...terminal,
+                agentState: terminal.agentState ?? existing.agentState,
+                lastStateChange: terminal.lastStateChange ?? existing.lastStateChange,
+                exitBehavior: terminal.exitBehavior ?? existing.exitBehavior,
+                extensionState: terminal.extensionState ?? existing.extensionState,
+                // Sticky: once detected, never downgrade on a partial reconnect payload.
+                everDetectedAgent: terminal.everDetectedAgent || existing.everDetectedAgent,
+                // Prefer the fresh reconnect value if present; otherwise keep an existing
+                // live detection (live IPC event may have landed before reconnect flush).
+                detectedAgentId: terminal.detectedAgentId ?? existing.detectedAgentId,
+              }
+            : terminal;
+          const newById = { ...state.panelsById, [id]: preservedTerminal };
+          saveNormalized(newById, state.panelIds);
+          return { panelsById: newById };
         }
-      }
-
-      const hasGlobal = Object.keys(globalEnvVars).length > 0;
-      const hasProject = Object.keys(projectEnvVars).length > 0;
-
-      if (hasGlobal || hasProject) {
-        mergedEnv = { ...globalEnvVars, ...projectEnvVars, ...options.env };
-      }
-    } catch (error) {
-      logWarn("[TerminalStore] Failed to fetch environment variables", { error });
+        const newById = { ...state.panelsById, [id]: terminal };
+        const newIds = [...state.panelIds, id];
+        saveNormalized(newById, newIds);
+        return { panelsById: newById, panelIds: newIds };
+      });
     }
 
+    // Prewarm renderer-side xterm immediately so we never drop startup output/ANSI while hidden.
+    // earlyDataBuffer in terminalClient buffers any data that arrives before the
+    // xterm data callback is registered, so prewarming with the pre-assigned id
+    // before spawn completes is safe (see #5789 research notes).
     try {
-      let id: string;
+      const appearance = getTerminalAppearanceSnapshot();
+      const { fontSize, fontFamily, performanceMode } = appearance;
 
-      if (options.existingId) {
-        // Reconnecting to existing backend process - don't spawn new
-        id = options.existingId;
-        logDebug("[TerminalStore] Reconnecting to existing terminal", { id });
-      } else {
-        // Spawn new process - only execute command if not skipping
-        const commandToExecute = options.skipCommandExecution ? undefined : options.command;
-        id = await terminalClient.spawn({
-          id: options.requestedId,
-          projectId: capturedProjectId,
-          cwd: options.cwd,
-          shell: options.shell,
-          cols: 80,
-          rows: 24,
-          command: commandToExecute,
-          kind,
-          type: legacyType,
-          agentId,
-          title,
-          env: mergedEnv,
-          restore: options.restore,
-          agentLaunchFlags: options.agentLaunchFlags,
-          agentModelId: options.agentModelId,
-          worktreeId: options.worktreeId,
-          agentPresetId: options.agentPresetId,
-          originalAgentPresetId: options.originalPresetId ?? options.agentPresetId,
+      // Project-level scrollback override for non-agent terminals
+      const projectScrollback = kind !== "agent" ? appearance.projectScrollback : undefined;
+
+      const effectiveScrollback = performanceMode
+        ? PERFORMANCE_MODE_SCROLLBACK
+        : getScrollbackForType(legacyType, projectScrollback ?? appearance.scrollbackLines);
+
+      const terminalOptions = getXtermOptions({
+        fontSize,
+        fontFamily,
+        scrollback: effectiveScrollback,
+        performanceMode,
+        theme: appearance.effectiveTheme,
+        screenReaderMode: appearance.screenReaderMode,
+      });
+
+      // Prewarm ALL terminal types to ensure managed instance exists.
+      // This is critical for terminals in inactive worktrees - they need a managed
+      // instance for proper BACKGROUND→VISIBLE tier transitions when worktree activates.
+      const currentActiveWorktreeId = useWorktreeSelectionStore.getState().activeWorktreeId;
+      // When activeWorktreeId is null (hydration in progress), don't treat the
+      // terminal as offscreen — it would be prewarmed in the offscreen container
+      // at -20000px and backgrounded, suppressing data flow from the pty-host.
+      const offscreenOrInactive =
+        location === "dock" ||
+        (currentActiveWorktreeId !== null &&
+          (options.worktreeId ?? null) !== (currentActiveWorktreeId ?? null));
+
+      if (kind !== "agent") {
+        terminalInstanceService.prewarmTerminal(id, legacyType, terminalOptions, {
+          offscreen: offscreenOrInactive,
+          widthPx: location === "dock" ? DOCK_PREWARM_WIDTH_PX : DOCK_TERM_WIDTH,
+          heightPx: location === "dock" ? DOCK_PREWARM_HEIGHT_PX : DOCK_TERM_HEIGHT,
         });
+      } else {
+        // Agent terminals also need prewarm for proper tier management.
+        // This ensures they can receive wake signals when their worktree activates.
+        const widthPx = location === "dock" ? DOCK_PREWARM_WIDTH_PX : DOCK_TERM_WIDTH;
+        const heightPx = location === "dock" ? DOCK_PREWARM_HEIGHT_PX : DOCK_TERM_HEIGHT;
+
+        terminalInstanceService.prewarmTerminal(id, legacyType, terminalOptions, {
+          offscreen: offscreenOrInactive,
+          widthPx,
+          heightPx,
+        });
+
+        // For offscreen/inactive agents, prewarmTerminal's fit() already handles
+        // initial PTY resize through settled strategy. Only send explicit resize
+        // for active grid spawns where fit() is skipped.
+        if (!offscreenOrInactive) {
+          const cellWidth = Math.max(6, Math.floor(fontSize * 0.6));
+          const cellHeight = Math.max(10, Math.floor(fontSize * 1.1));
+          const cols = Math.max(20, Math.min(500, Math.floor(widthPx / cellWidth)));
+          const rows = Math.max(10, Math.min(200, Math.floor(heightPx / cellHeight)));
+          terminalInstanceService.sendPtyResize(id, cols, rows);
+        }
+      }
+    } catch (error) {
+      logWarn("[TerminalStore] Failed to prewarm terminal", { id, error });
+    }
+
+    // Determine if terminal should start backgrounded:
+    // 1. Dock terminals are always backgrounded (offscreen)
+    // 2. Grid terminals in inactive worktrees should also be backgrounded
+    //    since they won't mount until the worktree becomes active
+    if (shouldBackground) {
+      // Terminal is either in dock or in an inactive worktree.
+      // Apply BACKGROUND policy to prevent renderer updates for unmounted terminals.
+      terminalInstanceService.applyRendererPolicy(id, TerminalRefreshTier.BACKGROUND);
+    }
+
+    terminalInstanceService.setInputLocked(id, !!options.isInputLocked);
+
+    if (isReconnect) {
+      // Reconnect path does not spawn; the panel is already "ready".
+      logDebug("[TerminalStore] Reconnecting to existing terminal", { id });
+      return id;
+    }
+
+    // Fire env fetch + spawn IPC in the background so the panel render is not
+    // blocked on ~200-500ms of IPC round-trips. Any caller that needs to pipe
+    // input after spawn already gates on agentState (which starts at "working"
+    // for agents and only drops to "idle" once the PTY reports ready).
+    const spawnPromise = (async () => {
+      let mergedEnv: Record<string, string> | undefined = options.env;
+      try {
+        const [globalEnvVars, projectEnvVars] = await Promise.all([
+          window.electron.globalEnv.get().catch((error: unknown) => {
+            logWarn("[TerminalStore] Failed to fetch global environment variables", { error });
+            return {} as Record<string, string>;
+          }),
+          capturedProjectId
+            ? projectClient.getSettings(capturedProjectId).then(
+                (s) => s?.environmentVariables ?? ({} as Record<string, string>),
+                (error: unknown) => {
+                  logWarn("[TerminalStore] Failed to fetch project environment variables", {
+                    error,
+                  });
+                  return {} as Record<string, string>;
+                }
+              )
+            : Promise.resolve({} as Record<string, string>),
+        ]);
+
+        const hasGlobal = Object.keys(globalEnvVars).length > 0;
+        const hasProject = Object.keys(projectEnvVars).length > 0;
+        if (hasGlobal || hasProject) {
+          mergedEnv = { ...globalEnvVars, ...projectEnvVars, ...options.env };
+        }
+      } catch (error) {
+        logWarn("[TerminalStore] Failed to fetch environment variables", { error });
       }
 
-      const isAgent = kind === "agent";
-      const isReconnect = !!options.existingId;
-
-      // For reconnects, use the backend's state directly - don't default to "working".
-      // For new spawns, start with "working" in UI to show spinner immediately during boot.
-      const agentState = isReconnect
-        ? options.agentState
-        : (options.agentState ?? (isAgent ? "working" : undefined));
-      const lastStateChange = isReconnect
-        ? options.lastStateChange
-        : (options.lastStateChange ?? (agentState !== undefined ? Date.now() : undefined));
-
-      // PTY-backed plugin-contributed kinds are rare today, but stamp pluginId
-      // if the registry has an entry so the panel survives plugin removal.
-      const ptyKindConfig = getPanelKindConfig(kind);
-      const ptyPluginId = ptyKindConfig?.extensionId ?? options.pluginId;
-      const terminal: TerminalInstance = {
+      const commandToExecute = options.skipCommandExecution ? undefined : options.command;
+      await terminalClient.spawn({
         id,
+        projectId: capturedProjectId,
+        cwd: options.cwd,
+        shell: options.shell,
+        cols: 80,
+        rows: 24,
+        command: commandToExecute,
         kind,
         type: legacyType,
         agentId,
         title,
-        worktreeId: options.worktreeId,
-        cwd: options.cwd ?? "",
-        cols: 80,
-        rows: 24,
-        agentState,
-        lastStateChange,
-        location,
-        command: options.command,
-        // Initialize grid terminals as visible to avoid initial under-throttling
-        // IntersectionObserver will update this once mounted
-        isVisible: location === "grid" ? true : false,
-        runtimeStatus,
-        isInputLocked: options.isInputLocked,
-        exitBehavior: options.exitBehavior,
-        agentSessionId: options.agentSessionId,
+        env: mergedEnv,
+        restore: options.restore,
         agentLaunchFlags: options.agentLaunchFlags,
         agentModelId: options.agentModelId,
-        everDetectedAgent: options.everDetectedAgent,
-        detectedAgentId: options.detectedAgentId,
+        worktreeId: options.worktreeId,
         agentPresetId: options.agentPresetId,
-        agentPresetColor: options.agentPresetColor,
-        originalPresetId: options.originalPresetId ?? options.agentPresetId,
-        isUsingFallback: options.isUsingFallback,
-        fallbackChainIndex: options.fallbackChainIndex,
-        extensionState: options.extensionState,
-        pluginId: ptyPluginId,
-        spawnedBy: options.spawnedBy,
-        startedAt: Date.now(),
-      };
+        originalAgentPresetId: options.originalPresetId ?? options.agentPresetId,
+      });
+    })();
 
-      // Commit the panel to `panelsById` BEFORE prewarm so IPC event listeners
-      // (onAgentStateChanged, onExit, onAgentDetected, activity flushes, etc.)
-      // that look panels up by id always find the entry — even during the
-      // spawn/prewarm window of concurrent panels in the same hydration batch.
-      // Prewarm is synchronous so any React render from this `set` runs after
-      // the managed terminal instance is created.
-      if (isHydrationBatchActive()) {
-        // Batched path: commit `panelsById` immediately; defer `panelIds` append.
+    void spawnPromise.then(
+      () => {
+        // Promote spawnStatus to "ready" once the PTY is live. If the panel was
+        // removed during the spawn window, issue a compensating kill to avoid
+        // orphaning the freshly-spawned PTY (removePanel's kill IPC was a no-op
+        // at the time because the backend had no terminal yet).
+        let orphaned = false;
         set((state) => {
-          const existing = state.panelsById[id];
-          const preservedTerminal =
-            existing && isReconnect
-              ? {
-                  ...terminal,
-                  agentState: terminal.agentState ?? existing.agentState,
-                  lastStateChange: terminal.lastStateChange ?? existing.lastStateChange,
-                  exitBehavior: terminal.exitBehavior ?? existing.exitBehavior,
-                  extensionState: terminal.extensionState ?? existing.extensionState,
-                  // Sticky: once detected, never downgrade on a partial reconnect payload.
-                  everDetectedAgent: terminal.everDetectedAgent || existing.everDetectedAgent,
-                  // Prefer the fresh reconnect value if present; otherwise keep an existing
-                  // live detection (live IPC event may have landed before reconnect flush).
-                  detectedAgentId: terminal.detectedAgentId ?? existing.detectedAgentId,
-                }
-              : terminal;
-          return { panelsById: { ...state.panelsById, [id]: preservedTerminal } };
-        });
-        collectPanelIdForBatch(id);
-      } else {
-        set((state) => {
-          const existing = state.panelsById[id];
-          if (existing) {
-            // Update existing terminal in place (reconnection case or double hydration)
-            logDebug("[TerminalStore] Terminal already exists, updating instead of adding", { id });
-            // Preserve existing agentState/lastStateChange/exitBehavior if new values are undefined
-            const preservedTerminal = isReconnect
-              ? {
-                  ...terminal,
-                  agentState: terminal.agentState ?? existing.agentState,
-                  lastStateChange: terminal.lastStateChange ?? existing.lastStateChange,
-                  exitBehavior: terminal.exitBehavior ?? existing.exitBehavior,
-                  extensionState: terminal.extensionState ?? existing.extensionState,
-                  // Sticky: once detected, never downgrade on a partial reconnect payload.
-                  everDetectedAgent: terminal.everDetectedAgent || existing.everDetectedAgent,
-                  // Prefer the fresh reconnect value if present; otherwise keep an existing
-                  // live detection (live IPC event may have landed before reconnect flush).
-                  detectedAgentId: terminal.detectedAgentId ?? existing.detectedAgentId,
-                }
-              : terminal;
-            const newById = { ...state.panelsById, [id]: preservedTerminal };
-            saveNormalized(newById, state.panelIds);
-            return { panelsById: newById };
+          const current = state.panelsById[id];
+          if (!current) {
+            orphaned = true;
+            return state;
           }
-          const newById = { ...state.panelsById, [id]: terminal };
-          const newIds = [...state.panelIds, id];
-          saveNormalized(newById, newIds);
-          return { panelsById: newById, panelIds: newIds };
+          if (current.spawnStatus !== "spawning") return state;
+          return {
+            panelsById: { ...state.panelsById, [id]: { ...current, spawnStatus: "ready" } },
+          };
         });
-      }
-
-      // Prewarm renderer-side xterm immediately so we never drop startup output/ANSI while hidden.
-      // For docked terminals, also open + fit offscreen so the PTY starts with correct dimensions.
-      try {
-        const appearance = getTerminalAppearanceSnapshot();
-        const { fontSize, fontFamily, performanceMode } = appearance;
-
-        // Project-level scrollback override for non-agent terminals
-        const projectScrollback = kind !== "agent" ? appearance.projectScrollback : undefined;
-
-        const effectiveScrollback = performanceMode
-          ? PERFORMANCE_MODE_SCROLLBACK
-          : getScrollbackForType(legacyType, projectScrollback ?? appearance.scrollbackLines);
-
-        const terminalOptions = getXtermOptions({
-          fontSize,
-          fontFamily,
-          scrollback: effectiveScrollback,
-          performanceMode,
-          theme: appearance.effectiveTheme,
-          screenReaderMode: appearance.screenReaderMode,
-        });
-
-        // Prewarm ALL terminal types to ensure managed instance exists.
-        // This is critical for terminals in inactive worktrees - they need a managed
-        // instance for proper BACKGROUND→VISIBLE tier transitions when worktree activates.
-        const currentActiveWorktreeId = useWorktreeSelectionStore.getState().activeWorktreeId;
-        // When activeWorktreeId is null (hydration in progress), don't treat the
-        // terminal as offscreen — it would be prewarmed in the offscreen container
-        // at -20000px and backgrounded, suppressing data flow from the pty-host.
-        const offscreenOrInactive =
-          location === "dock" ||
-          (currentActiveWorktreeId !== null &&
-            (options.worktreeId ?? null) !== (currentActiveWorktreeId ?? null));
-
-        if (kind !== "agent") {
-          terminalInstanceService.prewarmTerminal(id, legacyType, terminalOptions, {
-            offscreen: offscreenOrInactive,
-            widthPx: location === "dock" ? DOCK_PREWARM_WIDTH_PX : DOCK_TERM_WIDTH,
-            heightPx: location === "dock" ? DOCK_PREWARM_HEIGHT_PX : DOCK_TERM_HEIGHT,
+        if (orphaned) {
+          terminalClient.kill(id).catch((killError) => {
+            logWarn("[TerminalStore] Compensating kill after orphan spawn failed", {
+              id,
+              error: killError,
+            });
           });
-        } else {
-          // Agent terminals also need prewarm for proper tier management.
-          // This ensures they can receive wake signals when their worktree activates.
-          const widthPx = location === "dock" ? DOCK_PREWARM_WIDTH_PX : DOCK_TERM_WIDTH;
-          const heightPx = location === "dock" ? DOCK_PREWARM_HEIGHT_PX : DOCK_TERM_HEIGHT;
-
-          terminalInstanceService.prewarmTerminal(id, legacyType, terminalOptions, {
-            offscreen: offscreenOrInactive,
-            widthPx,
-            heightPx,
-          });
-
-          // For offscreen/inactive agents, prewarmTerminal's fit() already handles
-          // initial PTY resize through settled strategy. Only send explicit resize
-          // for active grid spawns where fit() is skipped.
-          if (!offscreenOrInactive) {
-            const cellWidth = Math.max(6, Math.floor(fontSize * 0.6));
-            const cellHeight = Math.max(10, Math.floor(fontSize * 1.1));
-            const cols = Math.max(20, Math.min(500, Math.floor(widthPx / cellWidth)));
-            const rows = Math.max(10, Math.min(200, Math.floor(heightPx / cellHeight)));
-            terminalInstanceService.sendPtyResize(id, cols, rows);
-          }
         }
-      } catch (error) {
-        logWarn("[TerminalStore] Failed to prewarm terminal", { id, error });
+      },
+      (error) => {
+        logError("[TerminalStore] Failed to spawn terminal", error);
+        // Only remove the placeholder we committed. If the id has been reused
+        // (e.g. the user closed the panel mid-spawn and a reconnect slot picked
+        // the id up) or the panel was already removed, skip the cleanup —
+        // otherwise we'd destroy someone else's panel.
+        const current = get().panelsById[id];
+        if (current?.spawnStatus !== "spawning") return;
+        try {
+          get().removePanel(id);
+        } catch (removeError) {
+          logWarn("[TerminalStore] Failed to remove panel after spawn failure", {
+            id,
+            error: removeError,
+          });
+        }
       }
+    );
 
-      // Determine if terminal should start backgrounded:
-      // 1. Dock terminals are always backgrounded (offscreen)
-      // 2. Grid terminals in inactive worktrees should also be backgrounded
-      //    since they won't mount until the worktree becomes active
-      if (shouldBackground) {
-        // Terminal is either in dock or in an inactive worktree.
-        // Apply BACKGROUND policy to prevent renderer updates for unmounted terminals.
-        terminalInstanceService.applyRendererPolicy(id, TerminalRefreshTier.BACKGROUND);
-      }
-
-      terminalInstanceService.setInputLocked(id, !!options.isInputLocked);
-
-      return id;
-    } catch (error) {
-      logError("[TerminalStore] Failed to spawn terminal", error);
-      throw error;
-    }
+    return id;
   },
 
   removePanel: (id) => {
