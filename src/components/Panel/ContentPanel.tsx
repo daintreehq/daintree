@@ -80,6 +80,13 @@ export interface ContentPanelProps extends BasePanelProps {
   // from the other selected panes.
   isSelected?: boolean;
 
+  // Receiver indicator for live broadcast. True when this pane is armed,
+  // not the focused pane, and the fleet has 2+ members — i.e. keystrokes
+  // typed elsewhere will fan out here. Renders an amber left stripe on the
+  // title bar so the user can verify "yes, this pane will mirror" without
+  // looking up at the fleet ribbon.
+  isFleetFollower?: boolean;
+
   // Tab support
   tabs?: TabInfo[];
   groupId?: string;
@@ -136,6 +143,7 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
     wasJustSelected,
     ambientAgentState,
     isSelected = false,
+    isFleetFollower = false,
     tabs,
     groupId,
     onTabClick,
@@ -342,6 +350,7 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
           isPinged={isPinged}
           wasJustSelected={wasJustSelected}
           isSelected={isSelected}
+          isFleetFollower={isFleetFollower}
           headerContent={resolvedHeaderContent}
           headerActions={headerActions}
           tabs={tabs}

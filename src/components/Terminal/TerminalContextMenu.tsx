@@ -5,6 +5,7 @@ import { type PanelLocation, type TerminalType } from "@/types";
 import { usePanelStore } from "@/store";
 import { useShallow } from "zustand/react/shallow";
 import { useWorktrees } from "@/hooks/useWorktrees";
+import { useFleetArmingStore, isFleetArmEligible } from "@/store/fleetArmingStore";
 import { AGENT_IDS, getAgentConfig } from "@/config/agents";
 import { isValidBrowserUrl } from "@/components/Browser/browserUtils";
 import { actionService } from "@/services/ActionService";
@@ -29,6 +30,8 @@ import {
   OctagonX,
   Pencil,
   Play,
+  Radio,
+  RadioTower,
   RefreshCw,
   Repeat2,
   RotateCcw,
@@ -89,6 +92,15 @@ export function TerminalContextMenu({
   const { worktrees } = useWorktrees();
 
   const isWatched = usePanelStore((state) => state.watchedPanels.has(terminalId));
+  const isArmed = useFleetArmingStore((s) => s.armedIds.has(terminalId));
+  const fleetSize = useFleetArmingStore((s) => s.armedIds.size);
+  // Pull the panel directly here (rather than indexing through the shallow
+  // selector above) so the eligibility check sees the live record. The
+  // dropdown only renders fleet items when the panel is fleet-arm-eligible
+  // — non-agent terminals, trashed/backgrounded panels, and PTY-less panels
+  // don't get the option, matching the gesture-level rules in
+  // `multiSelectGestures`.
+  const fleetEligible = isFleetArmEligible(terminal);
 
   const availability = useCliAvailabilityStore((s) => s.availability);
   const hasRealData = useCliAvailabilityStore((s) => s.hasRealData);
@@ -156,6 +168,34 @@ export function TerminalContextMenu({
       }
 
       switch (actionId) {
+        case "fleet-toggle":
+          // Mirror the gesture rule from multiSelectGestures: a toggle on
+          // an empty fleet implicitly seeds the focused pane so the user
+          // ends up with a 2-pane fleet rather than a single armed peer.
+          if (
+            !useFleetArmingStore.getState().armedIds.has(terminalId) &&
+            useFleetArmingStore.getState().armedIds.size === 0
+          ) {
+            const focusedId = usePanelStore.getState().focusedId;
+            if (focusedId && focusedId !== terminalId) {
+              const focusedTerminal = usePanelStore.getState().panelsById[focusedId];
+              if (focusedTerminal && isFleetArmEligible(focusedTerminal)) {
+                useFleetArmingStore.getState().armId(focusedId);
+              }
+            }
+          }
+          useFleetArmingStore.getState().toggleId(terminalId);
+          break;
+        case "fleet-arm-worktree":
+          void actionService.dispatch("terminal.bulkCommand", undefined, {
+            source: "context-menu",
+          });
+          break;
+        case "fleet-clear":
+          void actionService.dispatch("terminal.disarmAll", undefined, {
+            source: "context-menu",
+          });
+          break;
         case "copy":
           void actionService.dispatch("terminal.copy", { terminalId }, { source: "context-menu" });
           break;
@@ -543,6 +583,29 @@ export function TerminalContextMenu({
                   Copy Link Address
                 </ContextMenuItem>
               </>
+            )}
+            <ContextMenuSeparator />
+          </>
+        )}
+        {fleetEligible && (
+          <>
+            <ContextMenuItem onSelect={() => handleAction("fleet-toggle")}>
+              {isArmed ? (
+                <Radio className={ICON_CLASS} aria-hidden="true" />
+              ) : (
+                <RadioTower className={ICON_CLASS} aria-hidden="true" />
+              )}
+              {isArmed ? "Remove from Fleet" : "Add to Fleet"}
+            </ContextMenuItem>
+            <ContextMenuItem onSelect={() => handleAction("fleet-arm-worktree")}>
+              <RadioTower className={ICON_CLASS} aria-hidden="true" />
+              Arm All in This Worktree
+            </ContextMenuItem>
+            {isArmed && fleetSize >= 2 && (
+              <ContextMenuItem destructive onSelect={() => handleAction("fleet-clear")}>
+                <Radio className={ICON_CLASS} aria-hidden="true" />
+                Clear Fleet
+              </ContextMenuItem>
             )}
             <ContextMenuSeparator />
           </>

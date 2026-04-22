@@ -206,6 +206,11 @@ function TerminalPaneComponent({
   const armedIds = useFleetArmingStore((state) => state.armedIds);
   const isArmed = armedIds.has(id);
   const isSelected = isArmed;
+  // A "follower" is any armed pane that isn't currently the focused/origin
+  // pane while the fleet is broadcasting (size >= 2). The follower stripe
+  // is suppressed on a single-armed seed selection because nothing fans out
+  // until a second pane joins.
+  const isFleetFollower = isArmed && !isFocused && armedIds.size >= 2;
 
   // Consolidate terminal state selectors to avoid multiple scans and ensure consistent snapshots
   const terminalState = usePanelStore(
@@ -765,6 +770,7 @@ function TerminalPaneComponent({
       wasJustSelected={wasJustSelected}
       ambientAgentState={ambientAgentState}
       isSelected={isSelected}
+      isFleetFollower={isFleetFollower}
       tabs={tabs}
       onTabClick={onTabClick}
       onTabClose={onTabClose}

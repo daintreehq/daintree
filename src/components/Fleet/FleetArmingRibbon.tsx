@@ -6,6 +6,7 @@ import { cn } from "@/lib/utils";
 import { isMac } from "@/lib/platform";
 import { useEscapeStack, useWorktreeColorMap } from "@/hooks";
 import { useFleetArmingStore, type FleetArmStatePreset } from "@/store/fleetArmingStore";
+import { useFleetFailureStore } from "@/store/fleetFailureStore";
 import { useWorktreeFilterStore } from "@/store/worktreeFilterStore";
 import {
   useFleetPendingActionStore,
@@ -302,6 +303,11 @@ export function FleetArmingRibbon(): ReactElement | null {
           failureCount: result.failureCount,
           failedIds: result.failedIds,
         });
+        useFleetFailureStore.getState().recordFailure(text, result.failedIds);
+      } else {
+        // Successful resend clears any prior failure markers on the targets
+        // we just sent to — the partial-failure state is now resolved.
+        for (const id of targets) useFleetFailureStore.getState().dismissId(id);
       }
       useNotificationStore.getState().addNotification({
         type: result.successCount > 0 ? "success" : "warning",
@@ -316,6 +322,40 @@ export function FleetArmingRibbon(): ReactElement | null {
       setPendingPaste(null);
     }
   }, [pendingPaste, isSendingPaste]);
+
+  const failedIds = useFleetFailureStore((s) => s.failedIds);
+  const failurePayload = useFleetFailureStore((s) => s.payload);
+  const clearFailures = useFleetFailureStore((s) => s.clear);
+  const dismissFailure = useFleetFailureStore((s) => s.dismissId);
+  const failureCount = failedIds.size;
+  const [isRetryingFailures, setIsRetryingFailures] = useState(false);
+
+  const retryFailures = useCallback(async () => {
+    if (failureCount === 0 || failurePayload == null || isRetryingFailures) return;
+    setIsRetryingFailures(true);
+    try {
+      // Snapshot once — `failedIds` mutates during the dispatch loop as
+      // dismissId fires, and we'd skip retries if we re-read mid-loop.
+      const targets = Array.from(failedIds);
+      const result = await broadcastFleetLiteralPaste(failurePayload, targets);
+      // Drop succeeded targets from the failure set; whatever remains stays
+      // visible until the next attempt or explicit acknowledge.
+      const stillFailed = new Set(result.failedIds);
+      for (const id of targets) {
+        if (!stillFailed.has(id)) dismissFailure(id);
+      }
+      useNotificationStore.getState().addNotification({
+        type: result.failureCount === 0 ? "success" : "warning",
+        priority: "low",
+        message:
+          result.failureCount === 0
+            ? `Retried — all ${result.successCount} succeeded`
+            : `Retried — ${result.successCount} ok, ${result.failureCount} still failing`,
+      });
+    } finally {
+      setIsRetryingFailures(false);
+    }
+  }, [failedIds, failureCount, failurePayload, dismissFailure, isRetryingFailures]);
 
   const selectionMenuItems = (
     <>
@@ -510,6 +550,34 @@ export function FleetArmingRibbon(): ReactElement | null {
             </DropdownMenuContent>
           </DropdownMenu>
           <div className="ml-auto flex items-center gap-1.5">
+            {failureCount > 0 && failurePayload != null && (
+              <>
+                <button
+                  type="button"
+                  disabled={isRetryingFailures}
+                  onClick={() => void retryFailures()}
+                  data-testid="fleet-retry-failed"
+                  aria-label={`Retry failed broadcast on ${failureCount} agent${failureCount === 1 ? "" : "s"}`}
+                  className={cn(
+                    "inline-flex items-center gap-1 rounded px-2 py-0.5 text-[11px] transition-colors",
+                    "bg-status-error/15 text-status-error hover:bg-status-error/25",
+                    "disabled:cursor-not-allowed disabled:opacity-50"
+                  )}
+                >
+                  <span aria-hidden="true">⚠</span>
+                  <span>Retry failed ({failureCount})</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={clearFailures}
+                  data-testid="fleet-acknowledge-failed"
+                  aria-label="Acknowledge fleet broadcast failures"
+                  className="inline-flex items-center rounded px-2 py-0.5 text-[11px] text-daintree-text/60 transition-colors hover:bg-tint/[0.08] hover:text-daintree-text"
+                >
+                  Dismiss
+                </button>
+              </>
+            )}
             <button
               type="button"
               onClick={exitFleet}

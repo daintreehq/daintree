@@ -1,9 +1,17 @@
 import { useEffect, useLayoutEffect, useRef } from "react";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
+import { useFleetFailureStore } from "@/store/fleetFailureStore";
 import { useNotificationStore } from "@/store/notificationStore";
 import { logWarn } from "@/utils/logger";
-import { needsFleetBroadcastConfirmation, resolveFleetBroadcastTargetIds } from "./fleetBroadcast";
+import {
+  needsFleetBroadcastConfirmation,
+  resolveFleetBroadcastByOrigin,
+  resolveFleetBroadcastTargetIds,
+} from "./fleetBroadcast";
 import { broadcastFleetKeySequence, broadcastFleetLiteralPaste } from "./fleetExecution";
+
+const FLEET_DIVERGENCE_CORRELATION = "fleet-broadcast-divergence";
+const FLEET_DIVERGENCE_NOTIFY_INTERVAL_MS = 2000;
 
 export interface FleetLiveBroadcastOptions {
   enabled: boolean;
@@ -115,32 +123,76 @@ export function useFleetLiveBroadcast({
   }, [onPasteConfirm]);
 
   const isComposingRef = useRef(false);
+  const lastDivergenceNotifyAtRef = useRef(0);
 
   useEffect(() => {
     if (!enabled) return;
 
-    type Surface = "hybrid-input" | "armed-xterm" | "ignore";
+    type Surface =
+      | { kind: "hybrid-input" }
+      | { kind: "armed-xterm"; originId: string }
+      | { kind: "ignore" };
 
     const classifyTarget = (target: EventTarget | null): Surface => {
-      if (!(target instanceof Element)) return "ignore";
+      if (!(target instanceof Element)) return { kind: "ignore" };
       // Hybrid input takes priority — the editor handles its own
       // keystrokes; mirroring to followers is done at the bar level via
       // `terminalInputStore`, not here.
       if (target.closest<HTMLElement>("[data-hybrid-input-editor]")) {
-        return "hybrid-input";
+        return { kind: "hybrid-input" };
       }
       const pane = target.closest<HTMLElement>("[data-panel-id]");
-      if (!pane) return "ignore";
+      if (!pane) return { kind: "ignore" };
       const id = pane.dataset.panelId;
-      if (!id) return "ignore";
-      if (!useFleetArmingStore.getState().armedIds.has(id)) return "ignore";
-      return "armed-xterm";
+      if (!id) return { kind: "ignore" };
+      if (!useFleetArmingStore.getState().armedIds.has(id)) return { kind: "ignore" };
+      return { kind: "armed-xterm", originId: id };
+    };
+
+    /**
+     * Surface a coalesced "Sent to N/M — K in different state" pill when a
+     * keystroke fans out to fewer panes than the armed set. The notification
+     * store collapses by `correlationId`, so a typing burst against a divergent
+     * fleet shows one toast that updates in place rather than a fresh toast
+     * per keystroke. We additionally rate-limit to once per
+     * FLEET_DIVERGENCE_NOTIFY_INTERVAL_MS so a fast typist doesn't churn the
+     * store on every character.
+     */
+    const notifyDivergence = (matchedCount: number, divergedCount: number): void => {
+      const now = Date.now();
+      if (now - lastDivergenceNotifyAtRef.current < FLEET_DIVERGENCE_NOTIFY_INTERVAL_MS) return;
+      lastDivergenceNotifyAtRef.current = now;
+      const sentTo = matchedCount + 1; // +1 for the origin pane
+      const totalArmed = sentTo + divergedCount;
+      useNotificationStore.getState().addNotification({
+        type: "info",
+        priority: "low",
+        correlationId: FLEET_DIVERGENCE_CORRELATION,
+        message: `Sent to ${sentTo}/${totalArmed} — ${divergedCount} in different state`,
+      });
+    };
+
+    /**
+     * Live keystroke fan-out with origin-state gating. The keystroke goes to
+     * the origin pane plus every armed peer in a compatible state group
+     * (working/running together, completed/exited together, otherwise exact
+     * match). Peers in a divergent state are silently dropped — sending `y`
+     * from a `[y/N]` waiting prompt should never accidentally inject a `y`
+     * into a peer's vim normal-mode buffer. `notifyDivergence` keeps the user
+     * aware without crowding the surface.
+     */
+    const fanOutKeystroke = (sequence: string, originId: string): void => {
+      const { matched, diverged } = resolveFleetBroadcastByOrigin(originId);
+      const targets = [originId, ...matched];
+      broadcastFleetKeySequence(sequence, targets);
+      if (diverged.length > 0) notifyDivergence(matched.length, diverged.length);
     };
 
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") return;
       if (event.isComposing || event.keyCode === 229 || isComposingRef.current) return;
-      if (classifyTarget(event.target) !== "armed-xterm") return;
+      const surface = classifyTarget(event.target);
+      if (surface.kind !== "armed-xterm") return;
 
       const sequence = mapKeyToSequence(event);
       if (sequence == null) return;
@@ -148,26 +200,25 @@ export function useFleetLiveBroadcast({
       event.preventDefault();
       event.stopPropagation();
 
-      const targets = resolveFleetBroadcastTargetIds();
-      broadcastFleetKeySequence(sequence, targets);
+      fanOutKeystroke(sequence, surface.originId);
     };
 
     const handleCompositionStart = (event: CompositionEvent) => {
-      if (classifyTarget(event.target) !== "armed-xterm") return;
+      if (classifyTarget(event.target).kind !== "armed-xterm") return;
       isComposingRef.current = true;
     };
 
     const handleCompositionEnd = (event: CompositionEvent) => {
-      if (classifyTarget(event.target) !== "armed-xterm") return;
+      const surface = classifyTarget(event.target);
+      if (surface.kind !== "armed-xterm") return;
       isComposingRef.current = false;
       const data = event.data ?? "";
       if (!data) return;
-      const targets = resolveFleetBroadcastTargetIds();
-      broadcastFleetKeySequence(data, targets);
+      fanOutKeystroke(data, surface.originId);
     };
 
     const handlePaste = (event: ClipboardEvent) => {
-      if (classifyTarget(event.target) !== "armed-xterm") return;
+      if (classifyTarget(event.target).kind !== "armed-xterm") return;
       const text = event.clipboardData?.getData("text/plain") ?? "";
       event.preventDefault();
       event.stopPropagation();
@@ -178,22 +229,24 @@ export function useFleetLiveBroadcast({
         return;
       }
 
+      // Pastes ignore the state-divergence gate: a multi-line paste is an
+      // intentional bulk action the user explicitly took, and bracketed-paste
+      // semantics protect TUIs from interpreting the contents as keystrokes.
       const targets = resolveFleetBroadcastTargetIds();
       void (async () => {
         const result = await broadcastFleetLiteralPaste(text, targets);
-        if (result.failureCount === 0) return;
+        if (result.failureCount === 0) {
+          // A successful broadcast clears any stale failure dot on these
+          // targets so the user isn't left with an out-of-date red dot from
+          // a prior partial failure that this paste implicitly retried.
+          for (const id of targets) useFleetFailureStore.getState().dismissId(id);
+          return;
+        }
         logWarn("[FleetLiveBroadcast] paste broadcast had rejections", {
           failureCount: result.failureCount,
           failedIds: result.failedIds,
         });
-        useNotificationStore.getState().addNotification({
-          type: result.successCount > 0 ? "warning" : "error",
-          priority: "low",
-          message:
-            result.successCount > 0
-              ? `Sent to ${result.successCount} agent${result.successCount === 1 ? "" : "s"} (${result.failureCount} failed)`
-              : "Paste failed — no agents received the payload",
-        });
+        useFleetFailureStore.getState().recordFailure(text, result.failedIds);
       })();
     };
 

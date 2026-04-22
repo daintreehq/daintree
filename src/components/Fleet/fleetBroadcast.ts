@@ -2,6 +2,7 @@ import { useFleetArmingStore, isFleetArmEligible } from "@/store/fleetArmingStor
 import { usePanelStore } from "@/store/panelStore";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import type { RecipeContext } from "@/utils/recipeVariables";
+import type { AgentState } from "@/types";
 
 export const FLEET_BROADCAST_HISTORY_KEY = "fleet-broadcast" as const;
 
@@ -86,6 +87,76 @@ export function resolveFleetBroadcastTargetIds(): string[] {
     if (isFleetArmEligible(panel)) out.push(id);
   }
   return out;
+}
+
+/**
+ * Group AgentStates that should accept the same keystroke. Mirrors the
+ * grouping in `fleetArmingStore.matchesPreset`: working/running act together,
+ * completed/exited as "finished", everything else stays in its own group.
+ */
+function agentStateGroup(state: AgentState | null | undefined): string {
+  if (state == null) return "unknown";
+  if (state === "working" || state === "running") return "active";
+  if (state === "completed" || state === "exited") return "finished";
+  return state;
+}
+
+/**
+ * Two states are broadcast-compatible when they sit in the same group. A
+ * keystroke typed at a `[y/N]` prompt (waiting) should only fan out to other
+ * waiting agents — sending `y` to a vim pane would yank a line, sending it to
+ * an active task would inject a stray character. The grouping rule lets a
+ * "working" origin still target a "running" peer because their input semantics
+ * are identical.
+ */
+export function areAgentStatesBroadcastCompatible(
+  origin: AgentState | null | undefined,
+  target: AgentState | null | undefined
+): boolean {
+  return agentStateGroup(origin) === agentStateGroup(target);
+}
+
+export interface ResolveByOriginResult {
+  /** Targets whose state matches the origin — receive the broadcast. */
+  matched: string[];
+  /** Targets in the armed set with incompatible state — silently dropped. */
+  diverged: string[];
+}
+
+/**
+ * Live-broadcast variant of `resolveFleetBroadcastTargetIds` that filters
+ * by origin state compatibility. The origin pane itself is excluded from
+ * `matched` (it already received the keystroke locally via xterm) but its
+ * inclusion in the armed set is what makes the rest of the fleet "the
+ * peers I'm broadcasting to." The origin's state, not its membership, is
+ * what governs the gate.
+ *
+ * `diverged` is returned separately so the caller can surface a one-shot
+ * "Sent to N/M — K in different state" pill without spamming on every
+ * keystroke (callers should debounce by correlationId).
+ */
+export function resolveFleetBroadcastByOrigin(originId: string): ResolveByOriginResult {
+  const { armOrder, armedIds } = useFleetArmingStore.getState();
+  const empty: ResolveByOriginResult = { matched: [], diverged: [] };
+  if (armedIds.size === 0) return empty;
+  const { panelsById } = usePanelStore.getState();
+  const originPanel = panelsById[originId];
+  const originState = originPanel?.agentState ?? null;
+
+  const matched: string[] = [];
+  const diverged: string[] = [];
+  for (const id of armOrder) {
+    if (!armedIds.has(id)) continue;
+    if (id === originId) continue;
+    const panel = panelsById[id];
+    if (!isFleetArmEligible(panel)) continue;
+    if (areAgentStatesBroadcastCompatible(originState, panel.agentState ?? null)) {
+      matched.push(id);
+    } else {
+      diverged.push(id);
+    }
+  }
+  return { matched, diverged };
 }
 
 export function buildFleetBroadcastRecipeContext(terminalId: string): RecipeContext | null {

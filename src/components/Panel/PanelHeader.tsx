@@ -66,6 +66,7 @@ import { useShallow } from "zustand/react/shallow";
 import { panelKindCanRestart, panelKindHasPty } from "@shared/config/panelKindRegistry";
 import { actionService } from "@/services/ActionService";
 import { fireWatchNotification } from "@/lib/watchNotification";
+import { useFleetFailureStore } from "@/store/fleetFailureStore";
 
 export interface PanelHeaderProps {
   id: string;
@@ -110,6 +111,13 @@ export interface PanelHeaderProps {
   // 2+ terminals the header surface lifts to the same bg as a focused pane.
   // No accent border, no accent title — just a highlighted title bar.
   isSelected?: boolean;
+
+  // Follower indicator. Renders a 2px amber left-edge stripe on the header,
+  // matching the fleet ribbon's stripe idiom, so the user can confirm
+  // "this pane is going to receive what I type elsewhere" without looking
+  // up at the ribbon. Always paired with isSelected, but the stripe only
+  // appears on non-focused armed panes (true followers, not the primary).
+  isFleetFollower?: boolean;
 
   // Slots for kind-specific content
   headerContent?: ReactNode;
@@ -158,6 +166,7 @@ function PanelHeaderComponent({
   isPinged,
   wasJustSelected = false,
   isSelected = false,
+  isFleetFollower = false,
   headerContent,
   headerActions,
   tabs,
@@ -231,6 +240,13 @@ function PanelHeaderComponent({
   const watchPanel = usePanelStore((state) => state.watchPanel);
   const unwatchPanel = usePanelStore((state) => state.unwatchPanel);
   const showWatchButton = !!agentId;
+
+  // Fleet failure state for this pane: when the most recent broadcast
+  // rejected on this terminal (e.g. PTY died mid-paste), surface a red
+  // dot adjacent to the title so the user can see the divergence at the
+  // pane the same way a "Retry failed" button surfaces it in the ribbon.
+  const isFleetFailed = useFleetFailureStore((s) => s.failedIds.has(id));
+  const dismissFleetFailure = useFleetFailureStore((s) => s.dismissId);
 
   const duplicateShortcut = useKeybindingDisplay("terminal.duplicate");
   const moveToDockShortcut = useKeybindingDisplay("terminal.moveToDock");
@@ -458,6 +474,7 @@ function PanelHeaderComponent({
     <div
       {...dragListeners}
       data-selected={isSelected || undefined}
+      data-fleet-follower={isFleetFollower || undefined}
       data-pane-chrome=""
       className={cn(
         "flex items-center justify-between px-3 shrink-0 text-xs transition-colors relative overflow-hidden group",
@@ -469,6 +486,14 @@ function PanelHeaderComponent({
             : isFocused || isSelected
               ? "bg-overlay-subtle"
               : "bg-transparent",
+        // Mirror the fleet ribbon's 2px amber left stripe on follower panes.
+        // Renders via `before:` so it stacks alongside the worktree-identity
+        // `after:` stripe on the panel container without conflicting. The
+        // stripe sits in the title bar — fovea-adjacent when reading the
+        // pane body — so users don't have to look up at the ribbon to verify
+        // which panes will receive their keystrokes.
+        isFleetFollower &&
+          "before:absolute before:inset-y-0 before:left-0 before:w-0.5 before:bg-[var(--color-category-amber-border)] before:z-[1]",
         dragListeners && "cursor-grab active:cursor-grabbing",
         isPinged && !isMaximized && "animate-terminal-header-ping",
         isDragging && "pointer-events-none"
@@ -751,6 +776,30 @@ function PanelHeaderComponent({
                 </TooltipTrigger>
                 <TooltipContent side="bottom">
                   Launched with dangerous permissions — agent can modify files without prompting
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+          )}
+
+          {isFleetFailed && (
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      dismissFleetFailure(id);
+                    }}
+                    onPointerDown={(e) => e.stopPropagation()}
+                    aria-label="Last fleet broadcast failed on this terminal — click to acknowledge"
+                    data-testid="panel-fleet-failure-dot"
+                    className="w-2 h-2 rounded-full bg-status-error shrink-0 hover:scale-125 transition-transform"
+                  />
+                </TooltipTrigger>
+                <TooltipContent side="bottom">
+                  Last fleet broadcast failed here — click to dismiss, or use "Retry failed" in the
+                  fleet ribbon
                 </TooltipContent>
               </Tooltip>
             </TooltipProvider>

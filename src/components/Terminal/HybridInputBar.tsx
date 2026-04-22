@@ -39,6 +39,7 @@ import { useCommandStore } from "@/store/commandStore";
 import { useProjectStore } from "@/store/projectStore";
 import { usePanelStore, useVoiceRecordingStore } from "@/store";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
+import { FleetDraftingPill } from "@/components/Fleet/FleetDraftingPill";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { VoiceInputButton } from "./VoiceInputButton";
 import { Archive, Loader2 } from "lucide-react";
@@ -658,6 +659,15 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
 
     const collapseEditor = useCallback(() => setIsExpanded(false), []);
 
+    // Reset the editor's CodeMirror doc to empty after a fleet "Send to all"
+    // — the persisted draft is wiped via clearDraftInput, but the local
+    // doc is owned by this view and must be cleared explicitly.
+    const resetEditorDoc = useCallback(() => {
+      applyEditorValue("", {
+        selection: EditorSelection.create([EditorSelection.cursor(0)]),
+      });
+    }, [applyEditorValue]);
+
     const focusEditor = useCallback(() => {
       const view = editorViewRef.current;
       if (!view) return;
@@ -1245,6 +1255,14 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         className="group cursor-text px-3.5 pb-2.5 pt-2.5"
         style={{ backgroundColor: inputBarColors.background, ...shellVars }}
       >
+        {isFleetPrimary && (
+          <FleetDraftingPill
+            terminalId={terminalId}
+            draft={value}
+            projectId={projectId}
+            onResetEditor={resetEditorDoc}
+          />
+        )}
         <div className="flex items-end gap-2">
           <div
             ref={inputShellRef}
