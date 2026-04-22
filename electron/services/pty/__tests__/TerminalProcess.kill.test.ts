@@ -116,7 +116,7 @@ describe("TerminalProcess.kill — agent state event", () => {
     const emitAgentKilledSpy = vi.fn();
 
     const terminal = createTerminal(
-      { kind: "agent", type: "claude", agentId: "claude" },
+      { kind: "terminal", type: "claude", agentId: "claude" },
       {
         agentStateService: {
           handleActivityState: () => {},
@@ -153,7 +153,7 @@ describe("TerminalProcess.kill — session persistence", () => {
   });
 
   it("does not persist session for agent terminals on kill", () => {
-    const terminal = createTerminal({ kind: "agent", type: "claude" });
+    const terminal = createTerminal({ kind: "terminal", type: "claude" });
 
     vi.spyOn(terminal, "getSerializedState").mockReturnValue("scrollback-data");
 

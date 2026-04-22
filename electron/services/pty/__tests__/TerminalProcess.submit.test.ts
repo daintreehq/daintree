@@ -119,7 +119,7 @@ describe("TerminalProcess.submit", () => {
 
   it("does not use bracketed paste for Gemini; uses soft newlines and then sends CR", async () => {
     vi.useFakeTimers();
-    const terminal = createTerminal({ kind: "agent", type: "gemini" });
+    const terminal = createTerminal({ kind: "terminal", type: "gemini" });
 
     terminal.submit("line1\nline2");
 
@@ -132,7 +132,7 @@ describe("TerminalProcess.submit", () => {
 
   it("sends Enter immediately for Copilot with submitEnterDelayMs: 0", async () => {
     vi.useFakeTimers();
-    const terminal = createTerminal({ kind: "agent", type: "copilot" });
+    const terminal = createTerminal({ kind: "terminal", type: "copilot" });
 
     terminal.submit("test");
 

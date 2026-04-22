@@ -179,7 +179,7 @@ describe("WorktreeTerminalSection arming click handlers", () => {
   });
 
   it("plain click on an eligible agent tile arms it", () => {
-    const term = makeTerminal({ id: "a1", agentId: "claude", kind: "agent", hasPty: true });
+    const term = makeTerminal({ id: "a1", agentId: "claude", kind: "terminal", hasPty: true });
     const onSelect = vi.fn();
     renderSection({
       isExpanded: true,
@@ -200,9 +200,9 @@ describe("WorktreeTerminalSection arming click handlers", () => {
     // The grid uses Shift = single add; the sidebar mirrors the same model
     // so the gesture is consistent across surfaces. There is no range
     // extension on either surface.
-    const t1 = makeTerminal({ id: "a1", agentId: "claude", kind: "agent", hasPty: true });
-    const t2 = makeTerminal({ id: "a2", agentId: "claude", kind: "agent", hasPty: true });
-    const t3 = makeTerminal({ id: "a3", agentId: "claude", kind: "agent", hasPty: true });
+    const t1 = makeTerminal({ id: "a1", agentId: "claude", kind: "terminal", hasPty: true });
+    const t2 = makeTerminal({ id: "a2", agentId: "claude", kind: "terminal", hasPty: true });
+    const t3 = makeTerminal({ id: "a3", agentId: "claude", kind: "terminal", hasPty: true });
     renderSection({
       isExpanded: true,
       terminals: [t1, t2, t3],
@@ -218,8 +218,8 @@ describe("WorktreeTerminalSection arming click handlers", () => {
   });
 
   it("cmd-click (metaKey) toggles the armed state without clearing others", () => {
-    const t1 = makeTerminal({ id: "a1", agentId: "claude", kind: "agent", hasPty: true });
-    const t2 = makeTerminal({ id: "a2", agentId: "claude", kind: "agent", hasPty: true });
+    const t1 = makeTerminal({ id: "a1", agentId: "claude", kind: "terminal", hasPty: true });
+    const t2 = makeTerminal({ id: "a2", agentId: "claude", kind: "terminal", hasPty: true });
     renderSection({
       isExpanded: true,
       terminals: [t1, t2],
@@ -257,7 +257,7 @@ describe("WorktreeTerminalSection arming click handlers", () => {
   });
 
   it("armed tile gets aria-selected=true", () => {
-    const term = makeTerminal({ id: "a1", agentId: "claude", kind: "agent", hasPty: true });
+    const term = makeTerminal({ id: "a1", agentId: "claude", kind: "terminal", hasPty: true });
     renderSection({
       isExpanded: true,
       terminals: [term],
@@ -272,7 +272,7 @@ describe("WorktreeTerminalSection arming click handlers", () => {
   });
 
   it("scroll container has aria-multiselectable", () => {
-    const term = makeTerminal({ id: "a1", agentId: "claude", kind: "agent", hasPty: true });
+    const term = makeTerminal({ id: "a1", agentId: "claude", kind: "terminal", hasPty: true });
     const { container } = renderSection({
       isExpanded: true,
       terminals: [term],

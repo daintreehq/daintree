@@ -393,7 +393,7 @@ describe("PtyManager adversarial", () => {
     manager.spawn(
       "agent-1",
       spawnOptions({
-        kind: "agent",
+        kind: "terminal",
         type: "claude",
         projectId: "project-a",
         agentId: "agent-1",
@@ -429,7 +429,7 @@ describe("PtyManager adversarial", () => {
 
     manager.spawn(
       "agent-1",
-      spawnOptions({ kind: "agent", type: "claude", agentId: "agent-1", projectId: "project-a" })
+      spawnOptions({ kind: "terminal", type: "claude", agentId: "agent-1", projectId: "project-a" })
     );
 
     const created = shared.created[0]!;
@@ -473,7 +473,7 @@ describe("PtyManager adversarial", () => {
 
     manager.spawn(
       "agent-1",
-      spawnOptions({ kind: "agent", type: "claude", agentId: "agent-1", projectId: "project-a" })
+      spawnOptions({ kind: "terminal", type: "claude", agentId: "agent-1", projectId: "project-a" })
     );
     manager.spawn("term-1", spawnOptions({ projectId: "project-a" }));
 

@@ -10,6 +10,8 @@ interface InferKindInput {
 }
 
 export function inferKind(saved: InferKindInput): PanelKind {
+  // Migration: legacy persisted "agent" kind collapses into "terminal"; agent identity lives on agentId.
+  if (saved.kind === "agent") return "terminal";
   if (saved.kind) return saved.kind;
   if (saved.browserUrl !== undefined) return "browser";
   if (saved.devCommand !== undefined) return "dev-preview";

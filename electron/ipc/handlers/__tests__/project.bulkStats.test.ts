@@ -142,7 +142,7 @@ describe("handleProjectGetBulkStats", () => {
         {
           id: "t1",
           projectId: "proj-a",
-          kind: "agent",
+          kind: "terminal",
           agentId: "claude",
           agentState: "working",
           hasPty: true,
@@ -167,7 +167,8 @@ describe("handleProjectGetBulkStats", () => {
         {
           id: "t1",
           projectId: "proj-a",
-          kind: "agent",
+          kind: "terminal",
+          agentId: "claude",
           agentState: "working",
           hasPty: true,
           cwd: "/tmp",
@@ -176,7 +177,8 @@ describe("handleProjectGetBulkStats", () => {
         {
           id: "t2",
           projectId: "proj-a",
-          kind: "agent",
+          kind: "terminal",
+          agentId: "claude",
           agentState: "waiting",
           hasPty: true,
           cwd: "/tmp",
@@ -185,7 +187,8 @@ describe("handleProjectGetBulkStats", () => {
         {
           id: "t3",
           projectId: "proj-a",
-          kind: "agent",
+          kind: "terminal",
+          agentId: "claude",
           agentState: "running",
           hasPty: true,
           cwd: "/tmp",
@@ -194,7 +197,8 @@ describe("handleProjectGetBulkStats", () => {
         {
           id: "t4",
           projectId: "proj-a",
-          kind: "agent",
+          kind: "terminal",
+          agentId: "claude",
           agentState: "idle",
           hasPty: true,
           cwd: "/tmp",
@@ -220,7 +224,8 @@ describe("handleProjectGetBulkStats", () => {
         {
           id: "t1",
           projectId: "proj-a",
-          kind: "agent",
+          kind: "terminal",
+          agentId: "claude",
           agentState: "working",
           hasPty: true,
           isTrashed: true,
@@ -239,7 +244,8 @@ describe("handleProjectGetBulkStats", () => {
         {
           id: "t3",
           projectId: "proj-a",
-          kind: "agent",
+          kind: "terminal",
+          agentId: "claude",
           agentState: "working",
           hasPty: false,
           cwd: "/tmp",
@@ -249,6 +255,7 @@ describe("handleProjectGetBulkStats", () => {
           id: "t4",
           projectId: "proj-a",
           kind: "terminal",
+          // Plain terminal (no agentId) — filtered out by the agent-count guard.
           agentState: "working",
           hasPty: true,
           cwd: "/tmp",
@@ -257,7 +264,8 @@ describe("handleProjectGetBulkStats", () => {
         {
           id: "t5",
           projectId: "proj-a",
-          kind: "agent",
+          kind: "terminal",
+          agentId: "claude",
           agentState: "working",
           hasPty: true,
           cwd: "/tmp",
@@ -316,7 +324,8 @@ describe("handleProjectGetBulkStats", () => {
         {
           id: "t1",
           projectId: "proj-a",
-          kind: "agent",
+          kind: "terminal",
+          agentId: "claude",
           agentState: "working",
           hasPty: true,
           cwd: "/tmp",
@@ -325,7 +334,8 @@ describe("handleProjectGetBulkStats", () => {
         {
           id: "t2",
           projectId: "proj-a",
-          kind: "agent",
+          kind: "terminal",
+          agentId: "claude",
           agentState: "waiting",
           hasPty: true,
           cwd: "/tmp",
@@ -334,7 +344,8 @@ describe("handleProjectGetBulkStats", () => {
         {
           id: "t3",
           projectId: "proj-b",
-          kind: "agent",
+          kind: "terminal",
+          agentId: "claude",
           agentState: "running",
           hasPty: true,
           cwd: "/tmp",
@@ -343,7 +354,8 @@ describe("handleProjectGetBulkStats", () => {
         {
           id: "t4",
           projectId: "proj-c",
-          kind: "agent",
+          kind: "terminal",
+          agentId: "claude",
           agentState: "working",
           hasPty: true,
           cwd: "/tmp",
@@ -403,7 +415,8 @@ describe("handleProjectGetBulkStats", () => {
         {
           id: "t1",
           projectId: "proj-ok",
-          kind: "agent",
+          kind: "terminal",
+          agentId: "claude",
           agentState: "working",
           hasPty: true,
           cwd: "/tmp",
@@ -464,11 +477,20 @@ describe("handleProjectGetBulkStats", () => {
   it("skips terminals without a projectId", async () => {
     const ptyClient = makePtyClient({
       getAllTerminalsAsync: vi.fn().mockResolvedValue([
-        { id: "t1", kind: "agent", agentState: "working", hasPty: true, cwd: "/tmp", spawnedAt: 1 }, // no projectId
+        {
+          id: "t1",
+          kind: "terminal",
+          agentId: "claude",
+          agentState: "working",
+          hasPty: true,
+          cwd: "/tmp",
+          spawnedAt: 1,
+        }, // no projectId
         {
           id: "t2",
           projectId: "proj-a",
-          kind: "agent",
+          kind: "terminal",
+          agentId: "claude",
           agentState: "working",
           hasPty: true,
           cwd: "/tmp",

@@ -221,7 +221,7 @@ describe("TerminalInstanceService - Scrollback", () => {
 
     it("ignores project override for agent terminals", () => {
       mockProjectSettingsStore.settings = { terminalSettings: { scrollbackLines: 2000 } };
-      const managed = makeMockManaged({ type: "claude", kind: "agent" });
+      const managed = makeMockManaged({ type: "claude", kind: "terminal", agentId: "claude" });
       managed.terminal.options.scrollback = 100;
       service.instances.set("t1", managed);
 
@@ -267,13 +267,15 @@ describe("TerminalInstanceService - Scrollback", () => {
 
     it("skips active agent terminals but reduces completed agents", () => {
       const working = makeMockManaged({
-        kind: "agent",
+        kind: "terminal",
+        agentId: "claude",
         type: "claude",
         canonicalAgentState: "working",
       });
       working.terminal.buffer.active.length = 3000;
       const completed = makeMockManaged({
-        kind: "agent",
+        kind: "terminal",
+        agentId: "claude",
         type: "claude",
         canonicalAgentState: "completed",
       });

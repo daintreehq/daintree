@@ -583,7 +583,7 @@ function App() {
               );
               if (command && agentConfig) {
                 addPanel({
-                  kind: "agent",
+                  kind: "terminal",
                   type: session.agentId as TerminalType,
                   agentId: session.agentId,
                   title: agentConfig.name,
@@ -600,7 +600,7 @@ function App() {
               }
             } else {
               addPanel({
-                kind: result.id as Exclude<BuiltInPanelKind, "agent">,
+                kind: result.id as BuiltInPanelKind,
                 cwd: defaultTerminalCwd,
                 worktreeId: activeWorktreeId ?? undefined,
                 location: "grid",
@@ -621,7 +621,7 @@ function App() {
               );
               if (command && agentConfig) {
                 addPanel({
-                  kind: "agent",
+                  kind: "terminal",
                   type: session.agentId as TerminalType,
                   agentId: session.agentId,
                   title: agentConfig.name,
@@ -638,7 +638,7 @@ function App() {
               }
             } else {
               addPanel({
-                kind: selected.id as Exclude<BuiltInPanelKind, "agent">,
+                kind: selected.id as BuiltInPanelKind,
                 cwd: defaultTerminalCwd,
                 worktreeId: activeWorktreeId ?? undefined,
                 location: "grid",

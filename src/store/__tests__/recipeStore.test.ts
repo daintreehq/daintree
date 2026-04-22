@@ -122,7 +122,7 @@ describe("recipeStore", () => {
       panelStoreState.panelsById = {
         "panel-agent": {
           id: "panel-agent",
-          kind: "agent",
+          kind: "terminal",
           agentId: "claude",
           title: "Claude",
           worktreeId: "wt-1",
@@ -390,7 +390,7 @@ describe("recipeStore", () => {
 
     expect(addTerminalMock).toHaveBeenCalledTimes(1);
     const spawned = addTerminalMock.mock.calls[0]?.[0];
-    expect(spawned.kind).toBe("agent");
+    expect(spawned.kind).toBe("terminal");
     expect(spawned.agentId).toBe("codex");
     expect(spawned.command).toContain("codex");
     expect(spawned.command).toContain("/prompts:merge-prs");

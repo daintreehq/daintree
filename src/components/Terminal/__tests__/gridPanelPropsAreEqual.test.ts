@@ -155,7 +155,17 @@ describe("gridPanelPropsAreEqual", () => {
 
   it("returns false when terminal.kind changes", () => {
     const prev = baseProps({ terminal: { ...baseTerminal, kind: "terminal" } as TerminalInstance });
-    const next = baseProps({ terminal: { ...baseTerminal, kind: "agent" } as TerminalInstance });
+    const next = baseProps({ terminal: { ...baseTerminal, kind: "browser" } as TerminalInstance });
+    expect(gridPanelPropsAreEqual(prev, next)).toBe(false);
+  });
+
+  it("returns false when terminal.agentId changes (identity swap)", () => {
+    const prev = baseProps({
+      terminal: { ...baseTerminal, kind: "terminal", agentId: undefined } as TerminalInstance,
+    });
+    const next = baseProps({
+      terminal: { ...baseTerminal, kind: "terminal", agentId: "claude" } as TerminalInstance,
+    });
     expect(gridPanelPropsAreEqual(prev, next)).toBe(false);
   });
 

@@ -565,7 +565,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
             recipeArgs: terminal.args?.trim() || undefined,
           });
           terminalId = await terminalStore.addPanel({
-            kind: "agent",
+            kind: "terminal",
             agentId: terminal.type,
             command,
             title: terminal.title,

@@ -260,13 +260,15 @@ describe("TerminalInstanceService adversarial", () => {
     TerminalWebGLManager.setMaxContexts(1);
 
     const managedA = makeManaged({
-      kind: "agent",
+      kind: "terminal",
+      agentId: "claude",
       type: "claude",
       isOpened: false,
       lastAppliedTier: TerminalRefreshTier.FOCUSED,
     });
     const managedB = makeManaged({
-      kind: "agent",
+      kind: "terminal",
+      agentId: "claude",
       type: "codex",
       isOpened: false,
       lastAppliedTier: TerminalRefreshTier.FOCUSED,
@@ -286,7 +288,8 @@ describe("TerminalInstanceService adversarial", () => {
 
   it("ATTACH_AFTER_DESTROY_RETURNS_NULL", () => {
     const managed = makeManaged({
-      kind: "agent",
+      kind: "terminal",
+      agentId: "claude",
       type: "claude",
       isOpened: false,
       lastAppliedTier: TerminalRefreshTier.FOCUSED,

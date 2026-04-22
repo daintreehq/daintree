@@ -69,7 +69,7 @@ const DEFAULT_APP_STATE = {
   terminals: [
     {
       id: "term-1",
-      kind: "agent",
+      kind: "terminal",
       agentId: "agent-1",
       title: "Claude Agent",
       location: "dock" as const,

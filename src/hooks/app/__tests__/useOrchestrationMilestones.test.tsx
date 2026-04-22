@@ -104,7 +104,7 @@ describe("useOrchestrationMilestones", () => {
 
   it("silently marks already-achieved milestones during reconciliation", async () => {
     terminalState = {
-      panelsById: { t1: { id: "t1", kind: "agent", agentState: "completed" } },
+      panelsById: { t1: { id: "t1", kind: "terminal", agentState: "completed" } },
       panelIds: ["t1"],
     };
 
@@ -120,14 +120,14 @@ describe("useOrchestrationMilestones", () => {
     await vi.advanceTimersByTimeAsync(0);
 
     const prev = {
-      panelsById: { t1: { id: "t1", kind: "agent", agentState: "working" } } as Record<
+      panelsById: { t1: { id: "t1", kind: "terminal", agentState: "working" } } as Record<
         string,
         TerminalLike
       >,
       panelIds: ["t1"],
     };
     const next = {
-      panelsById: { t1: { id: "t1", kind: "agent", agentState: "completed" } } as Record<
+      panelsById: { t1: { id: "t1", kind: "terminal", agentState: "completed" } } as Record<
         string,
         TerminalLike
       >,
@@ -154,14 +154,14 @@ describe("useOrchestrationMilestones", () => {
     await vi.advanceTimersByTimeAsync(0);
 
     const prev = {
-      panelsById: { t1: { id: "t1", kind: "agent", agentState: "working" } } as Record<
+      panelsById: { t1: { id: "t1", kind: "terminal", agentState: "working" } } as Record<
         string,
         TerminalLike
       >,
       panelIds: ["t1"],
     };
     const next = {
-      panelsById: { t1: { id: "t1", kind: "agent", agentState: "completed" } } as Record<
+      panelsById: { t1: { id: "t1", kind: "terminal", agentState: "completed" } } as Record<
         string,
         TerminalLike
       >,
@@ -213,10 +213,10 @@ describe("useOrchestrationMilestones", () => {
     };
     const next1 = {
       panelsById: {
-        t1: { id: "t1", kind: "agent", agentState: "completed" },
-        t2: { id: "t2", kind: "agent", agentState: "working" },
-        t3: { id: "t3", kind: "agent", agentState: "working" },
-        t4: { id: "t4", kind: "agent", agentState: "working" },
+        t1: { id: "t1", kind: "terminal", agentState: "completed" },
+        t2: { id: "t2", kind: "terminal", agentState: "working" },
+        t3: { id: "t3", kind: "terminal", agentState: "working" },
+        t4: { id: "t4", kind: "terminal", agentState: "working" },
       } as Record<string, TerminalLike>,
       panelIds: ["t1", "t2", "t3", "t4"],
     };

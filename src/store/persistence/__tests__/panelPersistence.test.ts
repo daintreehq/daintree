@@ -165,7 +165,7 @@ describe("PanelPersistence", () => {
 
       const terminal = createMockTerminal({
         id: "test-1",
-        kind: "agent",
+        kind: "terminal",
         type: "claude",
         agentId: "claude",
         title: "Claude",
@@ -184,7 +184,7 @@ describe("PanelPersistence", () => {
       expect(client.setTerminals).toHaveBeenCalledWith(projectId, [
         {
           id: "test-1",
-          kind: "agent",
+          kind: "terminal",
           type: "claude",
           agentId: "claude",
           title: "Claude",

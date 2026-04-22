@@ -453,7 +453,7 @@ describe("hydrateAppState", () => {
         terminals: [
           {
             id: "agent-1",
-            kind: "agent",
+            kind: "terminal",
             type: "claude",
             agentId: "claude",
             title: "Claude",
@@ -502,7 +502,7 @@ describe("hydrateAppState", () => {
         terminals: [
           {
             id: "agent-1",
-            kind: "agent",
+            kind: "terminal",
             type: "claude",
             agentId: "claude",
             title: "Claude",
@@ -537,7 +537,7 @@ describe("hydrateAppState", () => {
     expect(addPanel).toHaveBeenCalledTimes(1);
     expect(addPanel).toHaveBeenCalledWith(
       expect.objectContaining({
-        kind: "agent",
+        kind: "terminal",
         requestedId: "agent-1",
       })
     );
@@ -552,7 +552,7 @@ describe("hydrateAppState", () => {
         terminals: [
           {
             id: "agent-1",
-            kind: "agent",
+            kind: "terminal",
             type: "claude",
             agentId: "claude",
             title: "Claude Agent",
@@ -576,7 +576,7 @@ describe("hydrateAppState", () => {
       exists: true,
       id: "agent-1",
       projectId: "project-1",
-      kind: "agent",
+      kind: "terminal",
       type: "claude",
       agentId: "claude",
       title: "Claude Agent",
@@ -608,7 +608,7 @@ describe("hydrateAppState", () => {
     expect(addPanel).toHaveBeenCalledTimes(1);
     expect(addPanel).toHaveBeenCalledWith(
       expect.objectContaining({
-        kind: "agent",
+        kind: "terminal",
         agentId: "claude",
         existingId: "agent-1", // reconnect path uses existingId
         agentState: "waiting",
@@ -1192,7 +1192,7 @@ describe("hydrateAppState", () => {
         terminals: [
           {
             id: "agent-1",
-            kind: "agent",
+            kind: "terminal",
             type: "claude",
             agentId: "claude",
             title: "Claude",
@@ -1235,7 +1235,7 @@ describe("hydrateAppState", () => {
         terminals: [
           {
             id: "agent-1",
-            kind: "agent",
+            kind: "terminal",
             type: "claude",
             agentId: "claude",
             title: "Claude",
@@ -1279,7 +1279,7 @@ describe("hydrateAppState", () => {
         terminals: [
           {
             id: "agent-1",
-            kind: "agent",
+            kind: "terminal",
             type: "claude",
             agentId: "claude",
             title: "Claude",
@@ -1313,7 +1313,7 @@ describe("hydrateAppState", () => {
     expect(addPanel).toHaveBeenCalledTimes(1);
     expect(addPanel).toHaveBeenCalledWith(
       expect.objectContaining({
-        kind: "agent",
+        kind: "terminal",
         requestedId: "agent-1",
       })
     );
@@ -1325,7 +1325,7 @@ describe("hydrateAppState", () => {
         terminals: [
           {
             id: "agent-1",
-            kind: "agent",
+            kind: "terminal",
             type: "claude",
             agentId: "claude",
             title: "Claude",
@@ -1348,7 +1348,7 @@ describe("hydrateAppState", () => {
         id: "agent-1",
         hasPty: true,
         cwd: "/project",
-        kind: "agent",
+        kind: "terminal",
         type: "claude",
         agentId: "claude",
         title: "Claude",
@@ -2347,7 +2347,7 @@ describe("hydrateAppState", () => {
           id: "dead-agent-1",
           hasPty: false,
           cwd: "/project",
-          kind: "agent",
+          kind: "terminal",
           type: "claude",
           agentId: "claude",
           title: "Claude",
@@ -2415,7 +2415,7 @@ describe("hydrateAppState", () => {
           id: "live-agent-1",
           hasPty: true,
           cwd: "/project",
-          kind: "agent",
+          kind: "terminal",
           type: "claude",
           agentId: "claude",
           title: "Claude",
@@ -2477,7 +2477,7 @@ describe("hydrateAppState", () => {
           terminals: [
             {
               id: "agent-1",
-              kind: "agent",
+              kind: "terminal",
               type: "claude",
               agentId: "claude",
               title: "Claude",
@@ -2497,7 +2497,7 @@ describe("hydrateAppState", () => {
           id: "agent-1",
           hasPty: false,
           cwd: "/project",
-          kind: "agent",
+          kind: "terminal",
           type: "claude",
           agentId: "claude",
           title: "Claude",
@@ -2566,7 +2566,7 @@ describe("hydrateAppState", () => {
           terminals: [
             {
               id: "agent-1",
-              kind: "agent",
+              kind: "terminal",
               type: "claude",
               agentId: "claude",
               title: "Claude",
@@ -2607,7 +2607,7 @@ describe("hydrateAppState", () => {
 
       // Agent should still respawn on timeout (could be a temporary network issue)
       expect(addPanel).toHaveBeenCalledTimes(1);
-      expect(addPanel).toHaveBeenCalledWith(expect.objectContaining({ kind: "agent" }));
+      expect(addPanel).toHaveBeenCalledWith(expect.objectContaining({ kind: "terminal" }));
     });
 
     it("still respawns non-agent terminal when not found in backend", async () => {

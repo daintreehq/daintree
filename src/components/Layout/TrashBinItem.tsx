@@ -58,7 +58,7 @@ export function TrashBinItem({ terminal, trashedInfo, worktreeName }: TrashBinIt
   const terminalName = (() => {
     const observed = terminal.lastObservedTitle;
     if (observed && !isUselessTitle(observed)) return observed;
-    if (terminal.kind === "agent" || terminal.agentId) {
+    if (terminal.agentId) {
       if (terminal.title && !isUselessTitle(terminal.title)) return terminal.title;
       const agentConfig = terminal.agentId ? getEffectiveAgentConfig(terminal.agentId) : undefined;
       return agentConfig?.name ?? terminal.agentId ?? terminal.type ?? "Agent";

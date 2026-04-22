@@ -46,7 +46,7 @@ vi.mock("@shared/config/agentRegistry", () => ({
 function makeAgentTerminal(overrides: Partial<TerminalInstance> = {}): TerminalInstance {
   return {
     id: "t1",
-    kind: "agent",
+    kind: "terminal",
     agentId: "claude",
     type: "claude",
     title: "claude",

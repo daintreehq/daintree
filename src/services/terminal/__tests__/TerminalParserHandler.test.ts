@@ -40,7 +40,7 @@ describe("TerminalParserHandler", () => {
 
     mockManaged = {
       terminal: mockTerminal,
-      kind: "agent", // Default to agent for blocking tests
+      kind: "terminal", // Default to agent for blocking tests
       agentId: "codex",
       type: "codex",
     } as any;

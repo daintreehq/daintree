@@ -237,7 +237,8 @@ describe("TerminalInstanceService - Hibernation", () => {
 
     it("should never hibernate active agent terminals", () => {
       const managed = makeMockManaged({
-        kind: "agent",
+        kind: "terminal",
+        agentId: "claude",
         type: "claude",
         canonicalAgentState: "working",
       });
@@ -251,7 +252,8 @@ describe("TerminalInstanceService - Hibernation", () => {
 
     it("should never hibernate waiting agent terminals", () => {
       const managed = makeMockManaged({
-        kind: "agent",
+        kind: "terminal",
+        agentId: "claude",
         type: "claude",
         canonicalAgentState: "waiting",
       });
@@ -265,7 +267,8 @@ describe("TerminalInstanceService - Hibernation", () => {
 
     it("should hibernate completed agent terminals", () => {
       const managed = makeMockManaged({
-        kind: "agent",
+        kind: "terminal",
+        agentId: "claude",
         type: "claude",
         canonicalAgentState: "completed",
       });
@@ -417,7 +420,8 @@ describe("TerminalInstanceService - Hibernation", () => {
       const managed = makeMockManaged({
         lastAppliedTier: TerminalRefreshTier.FOCUSED,
         isVisible: false,
-        kind: "agent",
+        kind: "terminal",
+        agentId: "claude",
         type: "claude",
         canonicalAgentState: "working",
       });
@@ -433,7 +437,8 @@ describe("TerminalInstanceService - Hibernation", () => {
       const managed = makeMockManaged({
         lastAppliedTier: TerminalRefreshTier.FOCUSED,
         isVisible: false,
-        kind: "agent",
+        kind: "terminal",
+        agentId: "claude",
         type: "claude",
         canonicalAgentState: "completed",
       });
@@ -449,7 +454,8 @@ describe("TerminalInstanceService - Hibernation", () => {
       const managed = makeMockManaged({
         lastAppliedTier: TerminalRefreshTier.FOCUSED,
         isVisible: false,
-        kind: "agent",
+        kind: "terminal",
+        agentId: "claude",
         type: "claude",
         canonicalAgentState: "completed",
       });
@@ -701,9 +707,9 @@ describe("TerminalInstanceService - Hibernation", () => {
       const agent = makeMockManaged({
         isHibernated: true,
         isOpened: false,
-        kind: "agent",
-        type: "claude",
+        kind: "terminal",
         agentId: "claude",
+        type: "claude",
         ipcListenerCount: 0,
       });
       agent.listeners = [];
@@ -735,9 +741,9 @@ describe("TerminalInstanceService - Hibernation", () => {
       const agent = makeMockManaged({
         isHibernated: true,
         isOpened: false,
-        kind: "agent",
-        type: "claude",
+        kind: "terminal",
         agentId: "claude",
+        type: "claude",
         ipcListenerCount: 0,
       });
       agent.listeners = [];
@@ -776,9 +782,9 @@ describe("TerminalInstanceService - Hibernation", () => {
 
       const managed = makeMockManaged({
         ipcListenerCount: 2,
-        kind: "agent",
-        type: "claude",
+        kind: "terminal",
         agentId: "claude",
+        type: "claude",
         canonicalAgentState: "completed",
         onInput: vi.fn(),
       });

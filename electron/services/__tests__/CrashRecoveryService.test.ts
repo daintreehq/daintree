@@ -173,7 +173,7 @@ describe("CrashRecoveryService", () => {
           appState: {
             terminals: [
               { id: "t1", kind: "terminal" },
-              { id: "t2", kind: "agent" },
+              { id: "t2", kind: "terminal" },
             ],
           },
         })
@@ -197,7 +197,7 @@ describe("CrashRecoveryService", () => {
       expect(typeof pending!.entry.nodeVersion).toBe("string");
       expect(typeof pending!.entry.totalMemory).toBe("number");
       expect(pending!.entry.panelCount).toBe(2);
-      expect(pending!.entry.panelKinds).toEqual({ terminal: 1, agent: 1 });
+      expect(pending!.entry.panelKinds).toEqual({ terminal: 2 });
     });
 
     it("surfaces dev-mode marker with crashLogPath as a genuine crash", () => {
@@ -302,7 +302,7 @@ describe("CrashRecoveryService", () => {
           return {
             terminals: [
               { id: "t1", kind: "terminal" },
-              { id: "t2", kind: "agent" },
+              { id: "t2", kind: "terminal" },
               { id: "t3", kind: "terminal" },
             ],
           };
@@ -330,7 +330,7 @@ describe("CrashRecoveryService", () => {
       expect(entry.windowCount).toBe(1);
       expect(entry.gpuAccelerationDisabled).toBe(false);
       expect(entry.panelCount).toBe(3);
-      expect(entry.panelKinds).toEqual({ terminal: 2, agent: 1 });
+      expect(entry.panelKinds).toEqual({ terminal: 3 });
     });
 
     it("does not record crash twice (idempotent)", () => {
@@ -508,7 +508,7 @@ describe("CrashRecoveryService", () => {
           sidebarWidth: 999,
           terminals: [
             { id: "t1", kind: "terminal", title: "T1" },
-            { id: "t2", kind: "agent", title: "T2" },
+            { id: "t2", kind: "terminal", title: "T2" },
             { id: "t3", kind: "browser", title: "T3" },
           ],
         },
@@ -623,7 +623,7 @@ describe("CrashRecoveryService", () => {
       fs.mkdirSync(backupDir, { recursive: true });
       const terminals = [
         { id: "t1", kind: "terminal", title: "Shell", cwd: "/home", location: "grid" },
-        { id: "t2", kind: "agent", title: "Claude", location: "dock", worktreeId: "w1" },
+        { id: "t2", kind: "terminal", title: "Claude", location: "dock", worktreeId: "w1" },
       ];
       fs.writeFileSync(
         path.join(backupDir, "session-state.json"),
@@ -651,7 +651,7 @@ describe("CrashRecoveryService", () => {
       expect(pending!.panels).toBeDefined();
       expect(pending!.panels!.length).toBe(2);
       expect(pending!.panels![0]).toMatchObject({ id: "t1", kind: "terminal", title: "Shell" });
-      expect(pending!.panels![1]).toMatchObject({ id: "t2", kind: "agent", location: "dock" });
+      expect(pending!.panels![1]).toMatchObject({ id: "t2", kind: "terminal", location: "dock" });
     });
 
     it("marks panels as suspect when created near crash time", () => {
@@ -711,7 +711,7 @@ describe("CrashRecoveryService", () => {
         },
         {
           id: "t2",
-          kind: "agent",
+          kind: "terminal",
           title: "Claude",
           location: "dock",
           agentState: "working",

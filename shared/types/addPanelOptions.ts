@@ -39,7 +39,7 @@ export interface AddPanelOptionsBase {
   // --- PTY-related fields (optional on all types, only used by PTY panel kinds) ---
   shell?: string;
   command?: string;
-  /** Agent ID when kind is 'agent' */
+  /** Agent identity, when spawning an agent-running terminal. Absent for plain shells. */
   agentId?: string;
   agentState?: AgentState;
   lastStateChange?: number;
@@ -73,18 +73,14 @@ export interface AddPanelOptionsBase {
   fallbackChainIndex?: number;
 }
 
-/** Options for creating a terminal panel */
+/**
+ * Options for creating a terminal panel.
+ *
+ * Agent-running terminals set `agentId` (and typically `command`). There is no
+ * separate "agent" panel kind — agent identity lives on the `agentId` field.
+ */
 export interface TerminalPanelOptions extends AddPanelOptionsBase {
   kind?: "terminal";
-}
-
-/** Options for creating an agent panel */
-export interface AgentPanelOptions extends AddPanelOptionsBase {
-  kind: "agent";
-  /** Agent ID (e.g., "claude", "gemini") — required for agent panels to prevent bare-shell spawns */
-  agentId: string;
-  /** Launch command — required for agent panels to prevent bare-shell spawns */
-  command: string;
 }
 
 /** Options for creating a browser panel */
@@ -140,8 +136,4 @@ export interface ExtensionPanelOptions extends AddPanelOptionsBase {
 }
 
 /** Discriminated union of all built-in panel creation option types */
-export type AddPanelOptions =
-  | TerminalPanelOptions
-  | AgentPanelOptions
-  | BrowserPanelOptions
-  | DevPreviewPanelOptions;
+export type AddPanelOptions = TerminalPanelOptions | BrowserPanelOptions | DevPreviewPanelOptions;

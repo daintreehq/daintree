@@ -28,7 +28,7 @@ describe("getTerminalRefreshTier - runtime agent identity", () => {
     // detectedAgentId is now undefined but everDetectedAgent is true is a
     // genuine ex-agent and should be free to hibernate.
     const terminal = makeTerminal({
-      kind: "agent",
+      kind: "terminal",
       agentId: "claude",
       detectedAgentId: undefined,
       everDetectedAgent: true,
@@ -50,7 +50,7 @@ describe("getTerminalRefreshTier - runtime agent identity", () => {
     // detectedAgentId is undefined during the first few seconds; the spawn-time
     // fallback keeps the panel at VISIBLE so it doesn't immediately hibernate.
     const terminal = makeTerminal({
-      kind: "agent",
+      kind: "terminal",
       agentId: "claude",
       detectedAgentId: undefined,
       agentState: "idle",
@@ -65,7 +65,7 @@ describe("getTerminalRefreshTier - runtime agent identity", () => {
   it("drops an exited agent even when detectedAgentId is still set (race guard)", () => {
     // Covers the race between onAgentExited and the process-detector exit event.
     const terminal = makeTerminal({
-      kind: "agent",
+      kind: "terminal",
       agentId: "claude",
       detectedAgentId: "claude",
       agentState: "exited",
@@ -75,7 +75,7 @@ describe("getTerminalRefreshTier - runtime agent identity", () => {
 
   it("drops a completed agent to BACKGROUND", () => {
     const terminal = makeTerminal({
-      kind: "agent",
+      kind: "terminal",
       agentId: "claude",
       detectedAgentId: "claude",
       agentState: "completed",

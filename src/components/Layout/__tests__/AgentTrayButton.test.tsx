@@ -402,7 +402,7 @@ describe("AgentTrayButton", () => {
     mockPanelsById = {
       "panel-1": {
         id: "panel-1",
-        kind: "agent",
+        kind: "terminal",
         agentId: "claude",
         worktreeId: "wt-1",
         location: "grid",
@@ -820,7 +820,7 @@ describe("AgentTrayButton", () => {
     mockPanelsById = {
       "panel-1": {
         id: "panel-1",
-        kind: "agent",
+        kind: "terminal",
         agentId: "claude",
         worktreeId: "wt-other",
         location: "grid",

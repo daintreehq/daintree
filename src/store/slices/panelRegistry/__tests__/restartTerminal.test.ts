@@ -100,7 +100,7 @@ const { usePanelStore } = await import("../../../panelStore");
 const agentPanelBase = {
   id: "test-1",
   type: "claude" as const,
-  kind: "agent" as const,
+  kind: "terminal" as const,
   agentId: "claude",
   agentLaunchFlags: ["--persisted-flag"],
   title: "Claude",
@@ -169,7 +169,7 @@ describe("restartTerminal agent-exited demotion (#5764)", () => {
     expect(payload.agentLaunchFlags).toBeUndefined();
   });
 
-  it("restarts as agent when agent is still active (working)", async () => {
+  it("restarts as agent terminal when agent is still active (working)", async () => {
     const active = { ...agentPanelBase, agentState: "working" as const };
     usePanelStore.setState({
       panelsById: { [active.id]: active },
@@ -180,7 +180,7 @@ describe("restartTerminal agent-exited demotion (#5764)", () => {
 
     expect(mockSpawn).toHaveBeenCalledTimes(1);
     const payload = mockSpawn.mock.calls[0]![0];
-    expect(payload.kind).toBe("agent");
+    expect(payload.kind).toBe("terminal");
     expect(payload.type).toBe("claude");
     expect(payload.agentId).toBe("claude");
     expect(payload.agentLaunchFlags).toEqual(["--persisted-flag"]);

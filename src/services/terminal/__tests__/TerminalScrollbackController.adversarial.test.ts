@@ -74,7 +74,7 @@ describe("TerminalScrollbackController adversarial", () => {
 
     const terminalManaged = createManagedTerminal();
     const agentManaged = createManagedTerminal({
-      kind: "agent",
+      kind: "terminal",
       type: "claude",
     });
 

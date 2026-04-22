@@ -39,7 +39,7 @@ export function restoreScrollback(managed: ManagedTerminal): void {
     return;
   }
 
-  const isAgent = managed.kind === "agent";
+  const isAgent = Boolean(managed.agentId);
   const projectScrollback = !isAgent
     ? getValidScrollbackBase(
         useProjectSettingsStore.getState().settings?.terminalSettings?.scrollbackLines

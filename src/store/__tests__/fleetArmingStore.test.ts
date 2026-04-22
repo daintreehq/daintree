@@ -21,7 +21,7 @@ function makeAgentTerminal(
     id,
     title: id,
     type: "terminal",
-    kind: "agent",
+    kind: "terminal",
     agentId: "claude",
     worktreeId: "wt-1",
     projectId: "proj-1",

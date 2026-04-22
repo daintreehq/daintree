@@ -64,7 +64,7 @@ export interface SpawnTerminalOptions {
  */
 export interface SpawnTerminalResult {
   id: string;
-  kind: "terminal" | "agent";
+  kind: "terminal";
   type: TerminalType;
   agentId?: string;
   title: string;
@@ -97,10 +97,9 @@ class TerminalRegistryController {
    * Returns spawn result with derived values (kind, agentId, title, etc.)
    */
   async spawn(options: SpawnTerminalOptions): Promise<SpawnTerminalResult> {
-    const requestedKind = options.kind ?? (options.agentId ? "agent" : "terminal");
     const legacyType: TerminalType = options.type || "terminal";
     const agentId = options.agentId ?? (isRegisteredAgent(legacyType) ? legacyType : undefined);
-    const kind: "terminal" | "agent" = agentId ? "agent" : requestedKind;
+    const kind = "terminal" as const;
     const title = options.title || getDefaultTitle(legacyType, agentId);
 
     const commandToExecute = options.skipCommandExecution ? undefined : options.command;
@@ -126,7 +125,7 @@ class TerminalRegistryController {
       type: legacyType,
       agentId,
       title,
-      agentState: kind === "agent" ? "idle" : undefined,
+      agentState: agentId ? "idle" : undefined,
     };
   }
 
@@ -134,18 +133,14 @@ class TerminalRegistryController {
    * Prewarm a terminal's renderer-side xterm instance.
    * Call this after spawning to ensure no output is lost.
    */
-  prewarm(
-    id: string,
-    type: TerminalType,
-    kind: "terminal" | "agent",
-    location: PanelLocation
-  ): void {
+  prewarm(id: string, type: TerminalType, location: PanelLocation, agentId?: string): void {
+    const isAgent = Boolean(agentId);
     try {
       const appearance = getTerminalAppearanceSnapshot();
       const { fontSize, fontFamily, performanceMode } = appearance;
 
       // Project-level scrollback override applies to non-agent terminals only
-      const projectScrollback = kind !== "agent" ? appearance.projectScrollback : undefined;
+      const projectScrollback = isAgent ? undefined : appearance.projectScrollback;
       const effectiveScrollback = performanceMode
         ? PERFORMANCE_MODE_SCROLLBACK
         : getScrollbackForType(type, projectScrollback ?? appearance.scrollbackLines);
@@ -172,7 +167,7 @@ class TerminalRegistryController {
       // For offscreen agents, prewarmTerminal's fit() already handles initial
       // PTY resize through settled strategy. Only send explicit resize for
       // active grid spawns where fit() is skipped.
-      if (kind === "agent" && !offscreen) {
+      if (isAgent && !offscreen) {
         const cellWidth = Math.max(6, Math.floor(fontSize * 0.6));
         const cellHeight = Math.max(10, Math.floor(fontSize * 1.1));
         const cols = Math.max(20, Math.min(500, Math.floor(widthPx / cellWidth)));

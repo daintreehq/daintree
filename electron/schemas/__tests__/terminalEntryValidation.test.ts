@@ -191,7 +191,7 @@ describe("Terminal Entry Validation Schemas", () => {
     it("accepts valid snapshot with all fields", () => {
       const snapshot = {
         id: "snap-123",
-        kind: "agent",
+        kind: "terminal",
         type: "claude",
         agentId: "claude",
         title: "Claude Agent",
@@ -255,7 +255,7 @@ describe("Terminal Entry Validation Schemas", () => {
     it("rejects PTY panel snapshot without cwd (agent)", () => {
       const snapshot = {
         id: "agent-123",
-        kind: "agent",
+        kind: "terminal",
         agentId: "claude",
         title: "Claude",
         location: "grid",

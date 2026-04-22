@@ -50,7 +50,7 @@ export class TerminalAgentStateController {
     const managed = this.deps.getInstance(id);
     if (!managed) return;
 
-    if (managed.kind === "agent" && managed.canonicalAgentState === "waiting") {
+    if (managed.agentId && managed.canonicalAgentState === "waiting") {
       if (managed.agentState === "working") return;
 
       const count = this.compositionCounts.get(id) ?? 0;
@@ -99,7 +99,7 @@ export class TerminalAgentStateController {
   onEnterPressed(id: string): void {
     const managed = this.deps.getInstance(id);
     if (!managed) return;
-    if (managed.kind !== "agent" || managed.canonicalAgentState !== "waiting") return;
+    if (!managed.agentId || managed.canonicalAgentState !== "waiting") return;
     if (managed.agentState === "working") return;
 
     const timer = this.directingTimers.get(id);

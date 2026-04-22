@@ -21,14 +21,14 @@ import { initBuiltInPanelKinds } from "../registry";
 // binding catches renames and key removals at TypeScript compile time.
 //
 // Asymmetries:
-//  - terminal/agent have no getDeserializer() entry — they restore through
-//    buildArgsForRespawn / buildArgsForBackendTerminal using backend PTY state.
-//    Serializer coverage only.
+//  - terminal has no getDeserializer() entry — agent-running terminals restore
+//    through buildArgsForRespawn / buildArgsForBackendTerminal using backend
+//    PTY state. Serializer coverage only.
 //  - dev-preview `cwd` and `exitBehavior` are injected by
 //    buildArgsForNonPtyRecreation's base args, not the registry deserializer.
 //    Excluded from the deserializer-side check for that kind.
 
-type PtyData = Extract<PanelInstance, { kind: "terminal" | "agent" }>;
+type PtyData = Extract<PanelInstance, { kind: "terminal" }>;
 type BrowserData = Extract<PanelInstance, { kind: "browser" }>;
 type DevPreviewData = Extract<PanelInstance, { kind: "dev-preview" }>;
 
@@ -64,7 +64,6 @@ const PERSISTED_DEV_PREVIEW_FIELDS = [
 
 const BUILT_IN_KINDS = [
   "terminal",
-  "agent",
   "browser",
   "dev-preview",
 ] as const satisfies readonly BuiltInPanelKind[];
@@ -104,11 +103,6 @@ const terminalFixture: TerminalInstance = {
   agentModelId: "claude-3-5-sonnet",
   agentState: "idle",
   lastStateChange: 1_700_000_000_000,
-};
-
-const agentFixture: TerminalInstance = {
-  ...terminalFixture,
-  ...baseFields("agent"),
 };
 
 const browserFixture: TerminalInstance = {
@@ -201,11 +195,6 @@ describe("panel serializer field coverage", () => {
     assertCovers("terminal serializer", output, PERSISTED_PTY_FIELDS);
   });
 
-  it("agent serializer covers every persisted PTY field", () => {
-    const output = getPanelKindConfig("agent")!.serialize!(agentFixture) as Record<string, unknown>;
-    assertCovers("agent serializer", output, PERSISTED_PTY_FIELDS);
-  });
-
   it("browser serializer covers every persisted browser field", () => {
     const output = getPanelKindConfig("browser")!.serialize!(browserFixture) as Record<
       string,
@@ -245,12 +234,12 @@ describe("panel deserializer field coverage", () => {
     ]);
   });
 
-  it("terminal and agent have no deserializer registry entry", () => {
-    // PTY kinds restore through buildArgsForRespawn / buildArgsForBackendTerminal
-    // using BackendTerminalData, not the getDeserializer() registry. Pinning
-    // this asymmetry so an accidental registry entry forces a deliberate
-    // decision about the new restore path.
+  it("terminal has no deserializer registry entry", () => {
+    // PTY panels (including agent-running terminals) restore through
+    // buildArgsForRespawn / buildArgsForBackendTerminal using BackendTerminalData,
+    // not the getDeserializer() registry. Pinning this asymmetry so an
+    // accidental registry entry forces a deliberate decision about the new
+    // restore path.
     expect(getDeserializer("terminal")).toBeUndefined();
-    expect(getDeserializer("agent")).toBeUndefined();
   });
 });

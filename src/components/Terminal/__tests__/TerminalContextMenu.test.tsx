@@ -130,7 +130,7 @@ describe("TerminalContextMenu - Convert To Submenu", () => {
     });
 
     it("should include Terminal option and agents for agent terminal", () => {
-      const terminal = { type: "claude", kind: "agent", agentId: "claude" };
+      const terminal = { type: "claude", kind: "terminal", agentId: "claude" };
       const submenu = buildConvertToSubmenu(terminal);
 
       expect(submenu.length).toBeGreaterThan(0);
@@ -158,7 +158,7 @@ describe("TerminalContextMenu - Convert To Submenu", () => {
     });
 
     it("should disable current agent in submenu", () => {
-      const terminal = { type: "gemini", kind: "agent", agentId: "gemini" };
+      const terminal = { type: "gemini", kind: "terminal", agentId: "gemini" };
       const submenu = buildConvertToSubmenu(terminal);
 
       const currentAgentItem = submenu.find((i) => i.id === "convert-to:gemini");
@@ -169,7 +169,7 @@ describe("TerminalContextMenu - Convert To Submenu", () => {
     });
 
     it("should keep current agent visible even if missing after initialization", () => {
-      const terminal = { type: "claude", kind: "agent", agentId: "claude" };
+      const terminal = { type: "claude", kind: "terminal", agentId: "claude" };
       const availability: CliAvailability = Object.fromEntries(
         AGENT_IDS.map((id) => [id, "missing"])
       ) as CliAvailability;
@@ -189,7 +189,7 @@ describe("TerminalContextMenu - Convert To Submenu", () => {
 
     it("should handle legacy agent terminal (type without agentId)", () => {
       const agentType = AGENT_IDS[0]!;
-      const terminal = { type: agentType, kind: "agent" };
+      const terminal = { type: agentType, kind: "terminal" };
       const submenu = buildConvertToSubmenu(terminal);
 
       const terminalItem = submenu.find((i) => i.id === "convert-to:terminal");
@@ -228,7 +228,7 @@ describe("TerminalContextMenu - Convert To Submenu", () => {
     });
 
     it("should handle unknown agent type gracefully", () => {
-      const terminal = { type: "some-unknown-agent", kind: "agent" };
+      const terminal = { type: "some-unknown-agent", kind: "terminal" };
       const submenu = buildConvertToSubmenu(terminal);
 
       const terminalItem = submenu.find((i) => i.id === "convert-to:terminal");
@@ -275,7 +275,7 @@ describe("TerminalContextMenu - Convert To Submenu", () => {
       const launched = AGENT_IDS[1] ?? AGENT_IDS[0]!;
       const terminal = {
         type: launched,
-        kind: "agent",
+        kind: "terminal",
         agentId: launched,
         detectedAgentId: detected,
       };

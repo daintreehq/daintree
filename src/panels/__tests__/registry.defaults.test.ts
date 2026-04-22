@@ -57,10 +57,10 @@ describe("panelKindRegistry createDefaults (co-located)", () => {
     expect(Object.keys(result)).toHaveLength(0);
   });
 
-  it("agent factory returns empty object (PTY path handles fields)", () => {
-    const config = getPanelKindConfig("agent")!;
+  it("terminal factory with agentId still returns empty (PTY path handles fields)", () => {
+    const config = getPanelKindConfig("terminal")!;
     const result = config.createDefaults!({
-      kind: "agent",
+      kind: "terminal",
       agentId: "claude",
       command: "claude",
     } as AddPanelOptions);

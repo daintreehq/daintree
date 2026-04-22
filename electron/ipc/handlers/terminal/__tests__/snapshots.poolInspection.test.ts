@@ -23,7 +23,7 @@ describe("terminal pool inspection handlers", () => {
         getAvailableTerminalsAsync: vi.fn(async () => [
           {
             id: "t-idle",
-            kind: "agent",
+            kind: "terminal",
             type: "claude",
             cwd: "/tmp",
             agentState: "idle",
@@ -31,7 +31,7 @@ describe("terminal pool inspection handlers", () => {
           },
           {
             id: "t-waiting",
-            kind: "agent",
+            kind: "terminal",
             type: "claude",
             cwd: "/tmp",
             agentState: "waiting",
@@ -102,7 +102,7 @@ describe("terminal pool inspection handlers", () => {
         getAvailableTerminalsAsync: vi.fn(async () => [
           {
             id: "t-idle",
-            kind: "agent",
+            kind: "terminal",
             type: "claude",
             cwd: "/tmp",
             agentState: "idle",
@@ -140,7 +140,7 @@ describe("terminal pool inspection handlers", () => {
         getTerminalsByStateAsync: vi.fn(async () => [
           {
             id: "t-working-1",
-            kind: "agent",
+            kind: "terminal",
             type: "claude",
             cwd: "/tmp",
             agentState: "working",
@@ -148,7 +148,7 @@ describe("terminal pool inspection handlers", () => {
           },
           {
             id: "t-working-2",
-            kind: "agent",
+            kind: "terminal",
             type: "codex",
             cwd: "/tmp",
             agentState: "working",
@@ -182,7 +182,7 @@ describe("terminal pool inspection handlers", () => {
         getTerminalsByStateAsync: vi.fn(async () => [
           {
             id: "t-working",
-            kind: "agent",
+            kind: "terminal",
             type: "claude",
             cwd: "/tmp",
             agentState: "working",
@@ -287,7 +287,7 @@ describe("terminal pool inspection handlers", () => {
           {
             id: "t-full",
             projectId: "proj-1",
-            kind: "agent",
+            kind: "terminal",
             type: "claude",
             agentId: "claude",
             title: "Claude Agent",
@@ -342,7 +342,7 @@ describe("terminal pool inspection handlers", () => {
         getAllTerminalsAsync: vi.fn(async () => [
           {
             id: "t-1",
-            kind: "agent",
+            kind: "terminal",
             type: "claude",
             cwd: "/tmp",
             agentState: "idle",
@@ -358,7 +358,7 @@ describe("terminal pool inspection handlers", () => {
           },
           {
             id: "t-3",
-            kind: "agent",
+            kind: "terminal",
             type: "codex",
             cwd: "/tmp",
             agentState: "working",
@@ -424,7 +424,7 @@ describe("terminal pool inspection handlers", () => {
         getAllTerminalsAsync: vi.fn(async () => [
           {
             id: "t-active",
-            kind: "agent",
+            kind: "terminal",
             type: "claude",
             cwd: "/tmp",
             agentState: "working",
@@ -434,7 +434,7 @@ describe("terminal pool inspection handlers", () => {
           },
           {
             id: "t-background",
-            kind: "agent",
+            kind: "terminal",
             type: "codex",
             cwd: "/tmp",
             agentState: "idle",

@@ -301,7 +301,7 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
 
       const options: AddPanelOptions = isAgent
         ? {
-            kind: "agent",
+            kind: "terminal",
             type: agentId as import("@shared/types/panel").TerminalType,
             agentId,
             command: command as string,

@@ -66,7 +66,7 @@ const DEFAULT_APP_STATE = {
   terminals: [
     {
       id: "term-1",
-      kind: "agent",
+      kind: "terminal",
       agentId: "agent-1",
       title: "Claude Agent",
       location: "dock",
@@ -391,7 +391,7 @@ describe("AgentNotificationService", () => {
           terminals: [
             {
               id: "term-1",
-              kind: "agent",
+              kind: "terminal",
               agentId: "agent-1",
               title: "Claude Agent",
               location: "grid",
@@ -414,7 +414,7 @@ describe("AgentNotificationService", () => {
           terminals: [
             {
               id: "term-1",
-              kind: "agent",
+              kind: "terminal",
               agentId: "agent-1",
               title: "My Custom Agent",
               location: "dock",
@@ -497,7 +497,7 @@ describe("AgentNotificationService", () => {
           terminals: [
             {
               id: "term-1",
-              kind: "agent",
+              kind: "terminal",
               agentId: "agent-1",
               title: "Claude Agent",
               location: "grid",
@@ -555,7 +555,7 @@ describe("AgentNotificationService", () => {
         activeWorktreeId: "wt-1",
         terminals: Array.from({ length: count }, (_, i) => ({
           id: `term-${i + 1}`,
-          kind: "agent",
+          kind: "terminal",
           agentId: `agent-${i + 1}`,
           title: `Agent ${i + 1}`,
           location: "dock" as const,
@@ -706,7 +706,7 @@ describe("AgentNotificationService", () => {
           terminals: [
             {
               id: "term-1",
-              kind: "agent",
+              kind: "terminal",
               agentId: "agent-1",
               title: "Claude Agent",
               location: "grid",
@@ -969,7 +969,7 @@ describe("AgentNotificationService", () => {
           terminals: [
             {
               id: "term-1",
-              kind: "agent",
+              kind: "terminal",
               agentId: "agent-1",
               title: "Claude",
               location: "dock",
@@ -999,7 +999,7 @@ describe("AgentNotificationService", () => {
           terminals: [
             {
               id: "term-1",
-              kind: "agent",
+              kind: "terminal",
               agentId: "agent-1",
               title: "Claude",
               location: "dock",
@@ -1029,7 +1029,7 @@ describe("AgentNotificationService", () => {
           terminals: [
             {
               id: "term-1",
-              kind: "agent",
+              kind: "terminal",
               agentId: "agent-1",
               title: "Claude",
               location: "dock",

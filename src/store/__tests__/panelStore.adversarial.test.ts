@@ -215,7 +215,7 @@ describe("panelStore adversarial", () => {
           location: "grid",
           createdAt: 1,
           type: "claude",
-          kind: "agent",
+          kind: "terminal",
         } as unknown as never,
       },
       panelIds: ["agent1"],

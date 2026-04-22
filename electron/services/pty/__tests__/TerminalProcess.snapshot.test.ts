@@ -54,7 +54,7 @@ function createTerminal(options?: Partial<TerminalProcessOptions>): TerminalProc
     cwd: process.cwd(),
     cols: 80,
     rows: 24,
-    kind: "agent" as const,
+    kind: "terminal" as const,
     type: "claude" as const,
     agentId: "claude",
     ...options,

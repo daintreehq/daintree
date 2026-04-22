@@ -145,7 +145,7 @@ async function cloneLayoutPanels(
         modelId: t.agentModelId,
       });
       await addPanel({
-        kind: "agent",
+        kind: "terminal",
         agentId: t.type,
         command,
         title: t.title,

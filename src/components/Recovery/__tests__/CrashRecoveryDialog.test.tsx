@@ -59,7 +59,7 @@ const mockPanels = [
   },
   {
     id: "t2",
-    kind: "agent",
+    kind: "terminal",
     title: "Claude",
     cwd: "/project",
     location: "dock" as const,

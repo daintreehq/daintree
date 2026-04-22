@@ -71,7 +71,7 @@ export function registerProjectStatsHandlers(deps: HandlerDependencies): () => v
       if (terminal.isTrashed) continue;
       if (terminal.kind === "dev-preview") continue;
       if (terminal.hasPty === false) continue;
-      if (terminal.kind !== "agent" && !terminal.agentId) continue;
+      if (!terminal.agentId) continue;
 
       if (terminal.agentState === "waiting") {
         counts.waiting += 1;

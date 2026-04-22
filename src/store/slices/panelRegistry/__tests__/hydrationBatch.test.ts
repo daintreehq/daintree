@@ -253,7 +253,7 @@ describe("hydration batch (#5196)", () => {
         ...state.panelsById,
         "term-1": {
           id: "term-1",
-          kind: "agent",
+          kind: "terminal",
           type: "terminal",
           title: "Agent",
           cwd: "/",
@@ -273,7 +273,7 @@ describe("hydration batch (#5196)", () => {
 
     const token = beginHydrationBatch();
     await addPanel({
-      kind: "agent",
+      kind: "terminal",
       agentId: "claude",
       command: "claude",
       existingId: "term-1",
@@ -297,7 +297,7 @@ describe("hydration batch (#5196)", () => {
 
     const token = beginHydrationBatch();
     await addPanel({
-      kind: "agent",
+      kind: "terminal",
       agentId: "claude",
       command: "claude",
       type: "terminal",

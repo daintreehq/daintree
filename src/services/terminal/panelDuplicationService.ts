@@ -107,20 +107,20 @@ function buildDevPreviewOptions(panel: TerminalInstance) {
  * Does not include location — callers inject it at use time.
  *
  * Called synchronously from `trashPanel` / `trashPanelGroup` — must not throw.
- * Returns `null` for broken agent panels (missing `command` or `agentId`).
- * Callers should treat `null` as "don't overwrite lastClosedConfig". Returning
- * a terminal-kind fallback is unsafe: `addPanel` re-derives `kind: "agent"`
- * from `agentId` on reopen (core.ts), resurrecting the #5211 bare-shell bug.
+ * Returns `null` for broken agent-running terminals (missing `command` or
+ * `agentId`). Callers should treat `null` as "don't overwrite lastClosedConfig" —
+ * silently dropping agent identity (the #5211 bare-shell bug) is worse than no
+ * snapshot.
  */
 export function buildPanelSnapshotOptions(panel: TerminalInstance): AddPanelOptions | null {
   const kind = panel.kind ?? "terminal";
 
-  if (kind === "agent") {
-    if (!panel.agentId || !panel.command) {
+  if (panel.agentId && kind === "terminal") {
+    if (!panel.command) {
       return null;
     }
     return {
-      kind: "agent",
+      kind: "terminal",
       type: panel.type,
       agentId: panel.agentId,
       command: panel.command,
@@ -189,11 +189,9 @@ export async function buildPanelDuplicateOptions(
   const kind = sourcePanel.kind ?? "terminal";
   const { command, env, presetWasStale } = await resolveCommandForPanel(sourcePanel);
 
-  if (kind === "agent") {
-    if (!sourcePanel.agentId || !command) {
-      throw new Error(
-        `Cannot duplicate agent panel: ${!sourcePanel.agentId ? "agentId" : "command"} is missing`
-      );
+  if (sourcePanel.agentId && kind === "terminal") {
+    if (!command) {
+      throw new Error(`Cannot duplicate agent terminal: command is missing`);
     }
     // When the saved preset no longer resolves (deleted custom preset, CCR
     // route removed from config), null out the preset-derived fields so the
@@ -205,7 +203,7 @@ export async function buildPanelDuplicateOptions(
     const agentPresetColor = presetWasStale ? undefined : sourcePanel.agentPresetColor;
     const title = presetWasStale ? fallbackTitle : sourcePanel.title;
     return {
-      kind: "agent",
+      kind: "terminal",
       type: sourcePanel.type,
       agentId: sourcePanel.agentId,
       command,

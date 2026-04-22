@@ -177,10 +177,9 @@ describe("useGettingStartedChecklist", () => {
         panelIds: [] as string[],
       };
       const next = {
-        panelsById: { t1: { id: "t1", kind: "agent", agentState: "idle" } } as Record<
-          string,
-          TerminalLike
-        >,
+        panelsById: {
+          t1: { id: "t1", kind: "terminal", agentId: "claude", agentState: "idle" },
+        } as Record<string, TerminalLike>,
         panelIds: ["t1"],
       };
       for (const sub of terminalSubscribers) sub(next, prev);

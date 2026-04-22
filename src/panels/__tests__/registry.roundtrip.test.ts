@@ -181,15 +181,6 @@ describe("panel serializer round-trip (property tests)", () => {
     });
   });
 
-  describe("agent", () => {
-    test.prop([ptyArb])("agent serializer output equals terminal serializer output", (fields) => {
-      const input: TerminalInstance = { ...basePanel("agent"), ...fields };
-      const terminalOut = getPanelKindConfig("terminal")!.serialize!(input);
-      const agentOut = getPanelKindConfig("agent")!.serialize!(input);
-      expect(agentOut).toEqual(terminalOut);
-    });
-  });
-
   describe("browser", () => {
     test.prop([browserArb])(
       "deserialize(serialize(x)) preserves all persisted fields",

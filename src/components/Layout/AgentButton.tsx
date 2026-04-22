@@ -81,7 +81,7 @@ export function AgentButton({
       const p = panelsById[pid];
       if (
         !p ||
-        p.kind !== "agent" ||
+        !p.agentId ||
         p.agentId !== type ||
         p.location === "trash" ||
         p.location === "background"
