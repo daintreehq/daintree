@@ -219,6 +219,25 @@ describe("fleetArmingStore", () => {
       useFleetArmingStore.getState().armAll("all");
       expect([...useFleetArmingStore.getState().armedIds].sort()).toEqual(["a1", "a2"]);
     });
+
+    it("includes plain terminals currently running a detected agent", () => {
+      seedPanels([
+        makeAgentTerminal("a1"),
+        makeAgentTerminal("p1", {
+          kind: "terminal",
+          agentId: undefined,
+          detectedAgentId: "claude",
+        }),
+        makeAgentTerminal("p2", {
+          kind: "terminal",
+          agentId: undefined,
+          everDetectedAgent: true,
+        }),
+        makeAgentTerminal("p3", { kind: "terminal", agentId: undefined }),
+      ]);
+      useFleetArmingStore.getState().armAll("current");
+      expect([...useFleetArmingStore.getState().armedIds].sort()).toEqual(["a1", "p1", "p2"]);
+    });
   });
 
   describe("armMatchingFilter", () => {
@@ -304,6 +323,26 @@ describe("fleetArmingStore", () => {
       ]);
       useFleetArmingStore.getState().armMatchingFilter(["wt-1", "wt-1", "wt-1"]);
       expect(useFleetArmingStore.getState().armOrder).toEqual(["a1", "a2"]);
+    });
+
+    it("includes plain terminals with runtime-detected agent identity", () => {
+      seedPanels([
+        makeAgentTerminal("a1", { worktreeId: "wt-1" }),
+        makeAgentTerminal("p1", {
+          worktreeId: "wt-1",
+          kind: "terminal",
+          agentId: undefined,
+          detectedAgentId: "claude",
+        }),
+        makeAgentTerminal("p2", {
+          worktreeId: "wt-1",
+          kind: "terminal",
+          agentId: undefined,
+          everDetectedAgent: true,
+        }),
+      ]);
+      useFleetArmingStore.getState().armMatchingFilter(["wt-1"]);
+      expect([...useFleetArmingStore.getState().armedIds].sort()).toEqual(["a1", "p1", "p2"]);
     });
 
     it("is fully idempotent — repeated calls preserve armOrder, armOrderById, and lastArmedId", () => {

@@ -228,6 +228,33 @@ describe("resolveFleetBroadcastTargetIds", () => {
     useFleetArmingStore.getState().armIds(["a", "ghost"]);
     expect(resolveFleetBroadcastTargetIds()).toEqual(["a"]);
   });
+
+  it("includes a plain terminal running a detected agent", () => {
+    seedPanels([
+      makeAgent("a"),
+      makeAgent("p", {
+        kind: "terminal",
+        agentId: undefined,
+        detectedAgentId: "claude",
+      }),
+    ]);
+    useFleetArmingStore.getState().armIds(["a", "p"]);
+    expect(resolveFleetBroadcastTargetIds()).toEqual(["a", "p"]);
+  });
+
+  it("keeps a plain terminal armed after detected agent exits (sticky everDetectedAgent)", () => {
+    seedPanels([
+      makeAgent("a"),
+      makeAgent("p", {
+        kind: "terminal",
+        agentId: undefined,
+        detectedAgentId: undefined,
+        everDetectedAgent: true,
+      }),
+    ]);
+    useFleetArmingStore.getState().armIds(["a", "p"]);
+    expect(resolveFleetBroadcastTargetIds()).toEqual(["a", "p"]);
+  });
 });
 
 describe("areAgentStatesBroadcastCompatible", () => {
