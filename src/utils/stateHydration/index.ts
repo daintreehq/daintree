@@ -463,8 +463,7 @@ export async function hydrateAppState(
                   // Skip dead agent backend terminals — they create phantom idle panels
                   const isDeadAgentBackend =
                     backendTerminal.hasPty === false &&
-                    (backendTerminal.kind === "agent" ||
-                      resolveAgentId(backendTerminal.agentId, backendTerminal.type) !== undefined);
+                    resolveAgentId(backendTerminal.agentId, backendTerminal.type) !== undefined;
                   if (isDeadAgentBackend) {
                     logHydrationInfo(`Skipping dead agent backend terminal: ${backendTerminal.id}`);
                     backendTerminalMap.delete(saved.id);
@@ -593,8 +592,7 @@ export async function hydrateAppState(
                       // panels that no longer exist in the backend — they are phantoms.
                       // On cold app restart (_switchId undefined), not_found simply means the
                       // PTY process was killed on quit and needs to be respawned.
-                      const isAgentKind =
-                        kind === "agent" || resolveAgentId(saved.agentId, saved.type) !== undefined;
+                      const isAgentKind = resolveAgentId(saved.agentId, saved.type) !== undefined;
                       if (
                         isAgentKind &&
                         reconnectOutcome.status === "not_found" &&
@@ -621,7 +619,7 @@ export async function hydrateAppState(
                       }
 
                       logHydrationInfo(
-                        `Respawning PTY panel: ${saved.id} (${respawnArgs.kind === "agent" ? "agent" : "terminal"})`
+                        `Respawning PTY panel: ${saved.id} (${respawnArgs.agentId ? "agent" : "terminal"})`
                       );
 
                       logHydrationInfo(`[HYDRATION-RESPAWN] Adding terminal:`, {

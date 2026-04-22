@@ -21,17 +21,20 @@ describe("panelKindRegistry metadata", () => {
     expect(panelKindUsesTerminalUi("dev-preview")).toBe(false);
   });
 
-  it("terminal and agent use terminal UI", () => {
+  it("terminal uses terminal UI", () => {
     expect(panelKindUsesTerminalUi("terminal")).toBe(true);
-    expect(panelKindUsesTerminalUi("agent")).toBe(true);
   });
 
   it("browser does not use terminal UI", () => {
     expect(panelKindUsesTerminalUi("browser")).toBe(false);
   });
 
+  it('legacy "agent" kind is unregistered (collapsed into terminal)', () => {
+    expect(getPanelKindConfig("agent")).toBeUndefined();
+  });
+
   it("returns config for all built-in kinds", () => {
-    for (const kind of ["terminal", "agent", "browser", "dev-preview"]) {
+    for (const kind of ["terminal", "browser", "dev-preview"]) {
       const config = getPanelKindConfig(kind);
       expect(config).toBeDefined();
       expect(config!.id).toBe(kind);
@@ -43,7 +46,7 @@ describe("panelKindRegistry metadata", () => {
   });
 });
 
-const BUILT_IN_KINDS = ["terminal", "agent", "browser", "dev-preview"] as const;
+const BUILT_IN_KINDS = ["terminal", "browser", "dev-preview"] as const;
 
 const makeExtensionConfig = (id: string, extensionId: string): PanelKindConfig => ({
   id,

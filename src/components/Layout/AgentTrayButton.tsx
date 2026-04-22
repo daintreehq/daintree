@@ -328,14 +328,7 @@ export function AgentTrayButton({
     const statesPerAgent = new Map<string, (AgentState | undefined)[]>();
     for (const pid of panelIds) {
       const p = panelsById[pid];
-      if (
-        !p ||
-        p.kind !== "agent" ||
-        !p.agentId ||
-        p.location === "trash" ||
-        p.location === "background"
-      )
-        continue;
+      if (!p || !p.agentId || p.location === "trash" || p.location === "background") continue;
       if (activeWorktreeId && p.worktreeId !== activeWorktreeId) continue;
       if (!ACTIVE_AGENT_STATES.has(p.agentState)) continue;
       const arr = statesPerAgent.get(p.agentId) ?? [];

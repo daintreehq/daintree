@@ -194,21 +194,21 @@ describe("TerminalHibernationManager", () => {
     });
 
     it("should no-op for working agent terminal", () => {
-      managed.kind = "agent";
+      managed.agentId = "claude";
       managed.canonicalAgentState = "working";
       manager.hibernate("t1");
       expect(managed.isHibernated).toBeFalsy();
     });
 
     it("should no-op for waiting agent terminal", () => {
-      managed.kind = "agent";
+      managed.agentId = "claude";
       managed.canonicalAgentState = "waiting";
       manager.hibernate("t1");
       expect(managed.isHibernated).toBeFalsy();
     });
 
     it("should hibernate completed agent terminal", () => {
-      managed.kind = "agent";
+      managed.agentId = "claude";
       managed.canonicalAgentState = "completed";
       manager.hibernate("t1");
       expect(managed.isHibernated).toBe(true);

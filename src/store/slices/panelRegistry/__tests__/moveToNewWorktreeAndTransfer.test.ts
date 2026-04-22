@@ -113,7 +113,7 @@ const { usePanelStore } = await import("../../../panelStore");
 const agentTerminal = {
   id: "test-1",
   type: "claude" as const,
-  kind: "agent" as const,
+  kind: "terminal" as const,
   agentId: "claude",
   title: "Claude",
   cwd: "/old/path",

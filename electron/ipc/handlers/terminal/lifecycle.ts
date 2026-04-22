@@ -44,15 +44,13 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
 
     const type = validatedOptions.type || "terminal";
 
-    // Normalize kind and agentId from type when type is a registered agent
-    // This ensures agent terminals are consistently identified across all layers
-    // Override kind when type is an agent to prevent mixed metadata
+    // Agent identity now lives on agentId; panel kind is always "terminal"
+    // for PTY-backed panels. Derive agentId from a registered agent type when
+    // the renderer omitted it (legacy spawn path).
     const { isRegisteredAgent } = await import("../../../../shared/config/agentRegistry.js");
     const isAgentType = type !== "terminal" && isRegisteredAgent(type);
 
-    const kind = isAgentType
-      ? "agent"
-      : validatedOptions.kind || (validatedOptions.agentId ? "agent" : "terminal");
+    const kind = "terminal";
     const agentId = validatedOptions.agentId || (isAgentType ? type : undefined);
     const title = validatedOptions.title;
 
@@ -78,7 +76,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
     let projectShell: string | undefined;
     let projectArgs: string[] | undefined;
     let projectCwd: string | undefined;
-    if (projectId && kind !== "agent") {
+    if (projectId && !agentId) {
       const projSettings = await projectStore.getProjectSettings(projectId);
       const ts = projSettings.terminalSettings;
       if (ts) {
@@ -151,7 +149,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
     // commands, prompts, stty tricks) since the shell runs the command directly
     // after sourcing rc files, with no interactive prompt.
     const trimmedCommand = validatedOptions.command?.trim() || "";
-    const isAgent = kind === "agent" || Boolean(agentId);
+    const isAgent = Boolean(agentId);
     const useShellExec = isAgent && trimmedCommand.length > 0 && process.platform !== "win32";
 
     let spawnArgs = resolvedArgs;

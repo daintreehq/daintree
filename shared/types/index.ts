@@ -62,7 +62,6 @@ export { isBuiltInPanelKind, isPtyPanelKind, TerminalRefreshTier } from "./panel
 export type {
   AddPanelOptionsBase,
   TerminalPanelOptions,
-  AgentPanelOptions,
   BrowserPanelOptions,
   DevPreviewPanelOptions,
   ExtensionPanelOptions,

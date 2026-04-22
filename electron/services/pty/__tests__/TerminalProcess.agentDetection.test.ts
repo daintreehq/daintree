@@ -63,7 +63,7 @@ function createAgentTerminal(deps?: Partial<TerminalProcessDeps>): TerminalProce
     cwd: process.cwd(),
     cols: 80,
     rows: 24,
-    kind: "agent",
+    kind: "terminal",
     type: "claude",
     agentId: "claude",
   } as TerminalProcessOptions;

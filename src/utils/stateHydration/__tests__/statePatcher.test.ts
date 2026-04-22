@@ -78,7 +78,11 @@ beforeEach(() => {
 
 describe("inferKind", () => {
   it("returns saved kind when present", () => {
-    expect(inferKind({ id: "t1", kind: "agent" })).toBe("agent");
+    expect(inferKind({ id: "t1", kind: "browser" })).toBe("browser");
+  });
+
+  it('migrates legacy "agent" kind to "terminal"', () => {
+    expect(inferKind({ id: "t1", kind: "agent" })).toBe("terminal");
   });
 
   it("infers browser from browserUrl", () => {
@@ -111,8 +115,14 @@ describe("inferAgentIdFromTitle", () => {
     expect(inferAgentIdFromTitle("Claude AI", "agent", "gemini", "t1", "test")).toBe("gemini");
   });
 
-  it("returns undefined for non-agent kind", () => {
-    expect(inferAgentIdFromTitle("Claude", "terminal", undefined, "t1", "test")).toBeUndefined();
+  it("returns undefined for non-PTY kind (e.g. browser)", () => {
+    expect(inferAgentIdFromTitle("Claude", "browser", undefined, "t1", "test")).toBeUndefined();
+  });
+
+  it("infers claude from terminal title (PTY panels can carry agent identity)", () => {
+    expect(inferAgentIdFromTitle("Claude Code", "terminal", undefined, "t1", "test")).toBe(
+      "claude"
+    );
   });
 
   it("infers claude from title", () => {
@@ -227,14 +237,24 @@ describe("buildArgsForBackendTerminal", () => {
     expect(result.devCommand).toBeUndefined();
   });
 
-  it("infers agentId from backend title for agent kind", () => {
+  it("infers agentId from backend title and emits terminal kind", () => {
     const result = buildArgsForBackendTerminal(
-      { id: "t1", cwd: "/p", kind: "agent", title: "Claude Code" },
+      { id: "t1", cwd: "/p", kind: "terminal", title: "Claude Code" },
       { id: "t1", location: "grid" },
       "/p"
     );
     expect(result.agentId).toBe("claude");
-    expect(result.kind).toBe("agent");
+    expect(result.kind).toBe("terminal");
+  });
+
+  it('migrates legacy backend kind "agent" to "terminal" while preserving agentId', () => {
+    const result = buildArgsForBackendTerminal(
+      { id: "t1", cwd: "/p", kind: "agent", agentId: "claude", title: "Claude Code" },
+      { id: "t1", location: "grid" },
+      "/p"
+    );
+    expect(result.agentId).toBe("claude");
+    expect(result.kind).toBe("terminal");
   });
 
   it("prefers saved title over backend title to preserve user renames", () => {
@@ -257,7 +277,7 @@ describe("buildArgsForBackendTerminal", () => {
 
   it("uses saved worktreeId (renderer-owned layout state)", () => {
     const result = buildArgsForBackendTerminal(
-      { id: "t1", cwd: "/p", kind: "agent", title: "Claude" },
+      { id: "t1", cwd: "/p", kind: "terminal", title: "Claude" },
       { id: "t1", location: "grid", worktreeId: "wt-dragged" },
       "/p"
     );
@@ -295,7 +315,7 @@ describe("buildArgsForReconnectedFallback", () => {
 
   it("uses saved worktreeId (renderer-owned layout state)", () => {
     const result = buildArgsForReconnectedFallback(
-      { id: "t1", cwd: "/p", kind: "agent", title: "Claude" },
+      { id: "t1", cwd: "/p", kind: "terminal", title: "Claude" },
       { id: "t1", location: "grid", worktreeId: "wt-dragged" },
       "/p"
     );
@@ -344,10 +364,10 @@ describe("buildArgsForRespawn", () => {
     Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
   });
 
-  it("builds respawn args with resume command for agent with session", () => {
+  it("builds respawn args with resume command for agent terminal with session", () => {
     const saved = {
       id: "t1",
-      kind: "agent" as const,
+      kind: "terminal" as const,
       agentId: "claude",
       title: "Claude Code",
       cwd: "/project",
@@ -356,9 +376,17 @@ describe("buildArgsForRespawn", () => {
       agentLaunchFlags: ["--flag"],
     };
 
-    const result = buildArgsForRespawn(saved, "agent", "/project", { agents: {} }, false, "/tmp");
+    const result = buildArgsForRespawn(
+      saved,
+      "terminal",
+      "/project",
+      { agents: {} },
+      false,
+      "/tmp"
+    );
     expect(result.command).toBe("claude --resume sess-123");
-    expect(result.kind).toBe("agent");
+    expect(result.kind).toBe("terminal");
+    expect(result.agentId).toBe("claude");
     expect(result.requestedId).toBe("t1");
     expect(result.restore).toBe(true);
   });
@@ -375,10 +403,10 @@ describe("buildArgsForRespawn", () => {
     expect(result.requestedId).toBeUndefined();
   });
 
-  it("generates fresh command for agent without session", () => {
+  it("generates fresh command for agent terminal without session", () => {
     const result = buildArgsForRespawn(
-      { id: "t1", kind: "agent" as const, agentId: "claude", cwd: "/p", location: "grid" },
-      "agent",
+      { id: "t1", kind: "terminal" as const, agentId: "claude", cwd: "/p", location: "grid" },
+      "terminal",
       "/p",
       { agents: { claude: {} } },
       false,
@@ -387,17 +415,17 @@ describe("buildArgsForRespawn", () => {
     expect(result.command).toBe("claude --generated");
   });
 
-  it("clears exitBehavior for agent panels", () => {
+  it("clears exitBehavior for agent terminals", () => {
     const result = buildArgsForRespawn(
       {
         id: "t1",
-        kind: "agent" as const,
+        kind: "terminal" as const,
         agentId: "claude",
         cwd: "/p",
         location: "grid",
         exitBehavior: "keep",
       },
-      "agent",
+      "terminal",
       "/p",
       { agents: {} },
       false,
@@ -411,20 +439,21 @@ describe("buildArgsForRespawn", () => {
     const result = buildArgsForRespawn(
       {
         id: "t1",
-        kind: "agent" as const,
+        kind: "terminal" as const,
         agentId: "claude",
         cwd: "/p",
         location: "grid",
         agentSessionId: "sess-expired",
       },
-      "agent",
+      "terminal",
       "/p",
       { agents: { claude: {} } },
       false,
       "/tmp/clip"
     );
     expect(result.command).toBe("claude --generated");
-    expect(result.kind).toBe("agent");
+    expect(result.kind).toBe("terminal");
+    expect(result.agentId).toBe("claude");
   });
 
   it("preserves exitBehavior for non-agent panels", () => {
@@ -443,7 +472,7 @@ describe("buildArgsForRespawn", () => {
     const result = buildArgsForRespawn(
       {
         id: "t1",
-        kind: "agent" as const,
+        kind: "terminal" as const,
         agentId: "claude",
         cwd: "/p",
         location: "grid",
@@ -463,7 +492,7 @@ describe("buildArgsForRespawn", () => {
     buildArgsForRespawn(
       {
         id: "t1",
-        kind: "agent" as const,
+        kind: "terminal" as const,
         agentId: "claude",
         cwd: "/p",
         location: "grid",
@@ -488,7 +517,7 @@ describe("buildArgsForRespawn", () => {
     const result = buildArgsForRespawn(
       {
         id: "t1",
-        kind: "agent" as const,
+        kind: "terminal" as const,
         agentId: "claude",
         cwd: "/p",
         location: "grid",
@@ -509,7 +538,7 @@ describe("buildArgsForRespawn", () => {
     const result = buildArgsForRespawn(
       {
         id: "t1",
-        kind: "agent" as const,
+        kind: "terminal" as const,
         agentId: "claude",
         cwd: "/p",
         location: "grid",
@@ -531,7 +560,7 @@ describe("buildArgsForRespawn", () => {
     const result = buildArgsForRespawn(
       {
         id: "t1",
-        kind: "agent" as const,
+        kind: "terminal" as const,
         agentId: "claude",
         cwd: "/p",
         location: "grid",
@@ -554,7 +583,7 @@ describe("buildArgsForRespawn", () => {
     const result = buildArgsForRespawn(
       {
         id: "t1",
-        kind: "agent" as const,
+        kind: "terminal" as const,
         agentId: "claude",
         cwd: "/p",
         location: "grid",
@@ -574,7 +603,7 @@ describe("buildArgsForRespawn", () => {
     const result = buildArgsForRespawn(
       {
         id: "t1",
-        kind: "agent" as const,
+        kind: "terminal" as const,
         agentId: "gemini",
         cwd: "/p",
         location: "grid",
@@ -595,7 +624,7 @@ describe("buildArgsForRespawn", () => {
     const result = buildArgsForRespawn(
       {
         id: "t1",
-        kind: "agent" as const,
+        kind: "terminal" as const,
         agentId: "gemini",
         cwd: "/p",
         location: "grid",
@@ -620,7 +649,7 @@ describe("buildArgsForRespawn", () => {
     const result = buildArgsForRespawn(
       {
         id: "t1",
-        kind: "agent" as const,
+        kind: "terminal" as const,
         agentId: "claude",
         cwd: "/p",
         location: "grid",
@@ -649,7 +678,7 @@ describe("buildArgsForRespawn", () => {
     const result = buildArgsForRespawn(
       {
         id: "t1",
-        kind: "agent" as const,
+        kind: "terminal" as const,
         agentId: "claude",
         cwd: "/p",
         location: "grid",
@@ -676,7 +705,7 @@ describe("buildArgsForRespawn", () => {
 describe("agentModelId propagation", () => {
   it("buildArgsForBackendTerminal includes agentModelId", () => {
     const result = buildArgsForBackendTerminal(
-      { id: "t1", cwd: "/p", kind: "agent", agentId: "claude" },
+      { id: "t1", cwd: "/p", kind: "terminal", agentId: "claude" },
       {
         id: "t1",
         location: "grid",
@@ -776,7 +805,7 @@ describe("detectedAgentId propagation", () => {
   it("buildArgsForRespawn does not carry detectedAgentId even if saved JSON somehow has one", () => {
     const saved = {
       id: "t1",
-      kind: "agent" as const,
+      kind: "terminal" as const,
       agentId: "claude",
       title: "Claude",
       cwd: "/p",
@@ -882,13 +911,13 @@ describe("buildArgsForOrphanedTerminal", () => {
     expect(result.worktreeId).toBeUndefined();
   });
 
-  it("infers agent kind from title", () => {
+  it("infers agentId from title on orphaned terminals", () => {
     const result = buildArgsForOrphanedTerminal(
-      { id: "t1", kind: "agent", title: "Gemini", cwd: "/p" },
+      { id: "t1", kind: "terminal", title: "Gemini", cwd: "/p" },
       "/p"
     );
     expect(result.agentId).toBe("gemini");
-    expect(result.kind).toBe("agent");
+    expect(result.kind).toBe("terminal");
   });
 
   it("falls back to projectRoot when cwd is empty", () => {
@@ -900,7 +929,7 @@ describe("buildArgsForOrphanedTerminal", () => {
     const result = buildArgsForOrphanedTerminal(
       {
         id: "t1",
-        kind: "agent",
+        kind: "terminal",
         type: "claude",
         agentId: "claude",
         title: "Claude",
@@ -918,7 +947,14 @@ describe("buildArgsForOrphanedTerminal", () => {
 
   it("handles empty agentLaunchFlags array correctly", () => {
     const result = buildArgsForOrphanedTerminal(
-      { id: "t1", kind: "agent", title: "Claude", cwd: "/p", agentLaunchFlags: [] },
+      {
+        id: "t1",
+        kind: "terminal",
+        agentId: "claude",
+        title: "Claude",
+        cwd: "/p",
+        agentLaunchFlags: [],
+      },
       "/p"
     );
     expect(result.agentLaunchFlags).toEqual([]);
@@ -1074,7 +1110,7 @@ describe("buildArgsForBackendTerminal — agent launch flags", () => {
     const result = buildArgsForBackendTerminal(
       {
         id: "t1",
-        kind: "agent",
+        kind: "terminal",
         type: "claude",
         agentId: "claude",
         title: "Claude",
@@ -1095,7 +1131,7 @@ describe("buildArgsForBackendTerminal — agent launch flags", () => {
 
   it("falls back to saved when backend has no flags", () => {
     const result = buildArgsForBackendTerminal(
-      { id: "t1", kind: "agent", type: "claude", agentId: "claude", title: "Claude", cwd: "/p" },
+      { id: "t1", kind: "terminal", type: "claude", agentId: "claude", title: "Claude", cwd: "/p" },
       { id: "t1", agentLaunchFlags: ["--saved-flag"], agentModelId: "saved-model" },
       "/p"
     );
@@ -1107,7 +1143,7 @@ describe("buildArgsForBackendTerminal — agent launch flags", () => {
     const result = buildArgsForBackendTerminal(
       {
         id: "t1",
-        kind: "agent",
+        kind: "terminal",
         type: "claude",
         agentId: "claude",
         title: "Claude",
@@ -1126,7 +1162,7 @@ describe("buildArgsForBackendTerminal — agent launch flags", () => {
 describe("buildArgsForReconnectedFallback — agent launch flags", () => {
   it("prefers reconnected flags over saved", () => {
     const result = buildArgsForReconnectedFallback(
-      { id: "t1", kind: "agent", title: "Claude", cwd: "/p", agentLaunchFlags: ["--new"] },
+      { id: "t1", kind: "terminal", title: "Claude", cwd: "/p", agentLaunchFlags: ["--new"] },
       { id: "t1", agentLaunchFlags: ["--old"] },
       "/p"
     );
@@ -1135,7 +1171,7 @@ describe("buildArgsForReconnectedFallback — agent launch flags", () => {
 
   it("falls back to saved when reconnected has no flags", () => {
     const result = buildArgsForReconnectedFallback(
-      { id: "t1", kind: "agent", title: "Claude", cwd: "/p" },
+      { id: "t1", kind: "terminal", title: "Claude", cwd: "/p" },
       { id: "t1", agentLaunchFlags: ["--saved"], agentModelId: "saved-m" },
       "/p"
     );
@@ -1165,7 +1201,7 @@ describe("buildArgsForRespawn — preset overrides", () => {
     const result = buildArgsForRespawn(
       {
         id: "t1",
-        kind: "agent",
+        kind: "terminal",
         agentId: "claude",
         cwd: "/p",
         location: "grid",
@@ -1185,7 +1221,7 @@ describe("buildArgsForRespawn — preset overrides", () => {
     const result = buildArgsForRespawn(
       {
         id: "t1",
-        kind: "agent",
+        kind: "terminal",
         agentId: "claude",
         cwd: "/p",
         location: "grid",
@@ -1205,7 +1241,7 @@ describe("buildArgsForRespawn — preset overrides", () => {
     buildArgsForRespawn(
       {
         id: "t1",
-        kind: "agent",
+        kind: "terminal",
         agentId: "claude",
         cwd: "/p",
         location: "grid",
@@ -1230,7 +1266,7 @@ describe("buildArgsForRespawn — preset overrides", () => {
     const result = buildArgsForRespawn(
       {
         id: "t1",
-        kind: "agent",
+        kind: "terminal",
         agentId: "claude",
         cwd: "/p",
         location: "grid",
@@ -1250,7 +1286,7 @@ describe("buildArgsForRespawn — preset overrides", () => {
     const result = buildArgsForRespawn(
       {
         id: "t1",
-        kind: "agent",
+        kind: "terminal",
         agentId: "claude",
         cwd: "/p",
         location: "grid",
@@ -1269,7 +1305,7 @@ describe("buildArgsForRespawn — preset overrides", () => {
 
   it("does not call getMergedPreset when agentPresetId is absent", () => {
     buildArgsForRespawn(
-      { id: "t1", kind: "agent", agentId: "claude", cwd: "/p", location: "grid" },
+      { id: "t1", kind: "terminal", agentId: "claude", cwd: "/p", location: "grid" },
       "agent",
       "/p",
       { agents: { claude: {} } },
@@ -1282,7 +1318,7 @@ describe("buildArgsForRespawn — preset overrides", () => {
   it("preserves agentPresetId through all four buildArgs paths", () => {
     // buildArgsForBackendTerminal
     const r1 = buildArgsForBackendTerminal(
-      { id: "t1", cwd: "/p", kind: "agent", agentId: "claude" },
+      { id: "t1", cwd: "/p", kind: "terminal", agentId: "claude" },
       { id: "t1", location: "grid", agentPresetId: "user-aaa" },
       "/p"
     );
@@ -1301,7 +1337,7 @@ describe("buildArgsForRespawn — preset overrides", () => {
     const r3 = buildArgsForRespawn(
       {
         id: "t1",
-        kind: "agent",
+        kind: "terminal",
         agentId: "claude",
         cwd: "/p",
         location: "grid",
@@ -1338,7 +1374,7 @@ describe("buildArgsForRespawn — preset overrides", () => {
     };
 
     const r1 = buildArgsForBackendTerminal(
-      { id: "t1", cwd: "/p", kind: "agent", agentId: "claude" },
+      { id: "t1", cwd: "/p", kind: "terminal", agentId: "claude" },
       legacy,
       "/p"
     );
@@ -1351,7 +1387,7 @@ describe("buildArgsForRespawn — preset overrides", () => {
 
     getMergedPresetMock.mockReturnValue({ id: "old-aaa", name: "Legacy", color: "#00ff00" });
     const r3 = buildArgsForRespawn(
-      { ...legacy, kind: "agent", agentId: "claude", cwd: "/p" },
+      { ...legacy, kind: "terminal", agentId: "claude", cwd: "/p" },
       "agent",
       "/p",
       { agents: { claude: {} } },
@@ -1376,7 +1412,7 @@ describe("buildArgsForRespawn — preset overrides", () => {
       agentFlavorColor: "#ff0000",
     };
     const r = buildArgsForBackendTerminal(
-      { id: "t1", cwd: "/p", kind: "agent", agentId: "claude" },
+      { id: "t1", cwd: "/p", kind: "terminal", agentId: "claude" },
       mixed,
       "/p"
     );
@@ -1394,7 +1430,7 @@ describe("buildArgsForRespawn — preset overrides", () => {
 describe("adversarial: behavioral overrides flow through to generateAgentCommand", () => {
   const BASE = {
     id: "t1",
-    kind: "agent" as const,
+    kind: "terminal" as const,
     agentId: "claude",
     cwd: "/p",
     location: "grid" as const,
@@ -1509,7 +1545,7 @@ describe("adversarial: behavioral overrides flow through to generateAgentCommand
   it("no preset → generateAgentCommand receives unmodified base entry", () => {
     const baseWithNoPreset = {
       id: "t1",
-      kind: "agent" as const,
+      kind: "terminal" as const,
       agentId: "claude",
       cwd: "/p",
       location: "grid" as const,
@@ -1552,7 +1588,7 @@ describe("adversarial: agentPresetColor must be carried through buildArgsForResp
     const result = buildArgsForRespawn(
       {
         id: "t1",
-        kind: "agent",
+        kind: "terminal",
         agentId: "claude",
         cwd: "/p",
         location: "grid",
@@ -1572,7 +1608,7 @@ describe("adversarial: agentPresetColor must be carried through buildArgsForResp
     const result = buildArgsForRespawn(
       {
         id: "t1",
-        kind: "agent",
+        kind: "terminal",
         agentId: "claude",
         cwd: "/p",
         location: "grid",
@@ -1597,7 +1633,7 @@ describe("adversarial: agentPresetColor must be carried through buildArgsForResp
     const result = buildArgsForRespawn(
       {
         id: "t1",
-        kind: "agent",
+        kind: "terminal",
         agentId: "claude",
         cwd: "/p",
         location: "grid",
@@ -1624,7 +1660,7 @@ describe("adversarial: agentPresetColor must be carried through buildArgsForResp
 describe("Adversarial: buildArgsForBackendTerminal preserves agentPresetColor", () => {
   it("forwards agentPresetColor from saved state", () => {
     const result = buildArgsForBackendTerminal(
-      { id: "t1", cwd: "/p", kind: "agent", agentId: "claude" },
+      { id: "t1", cwd: "/p", kind: "terminal", agentId: "claude" },
       { id: "t1", location: "grid", agentPresetId: "user-x", agentPresetColor: "#ff6600" },
       "/p"
     );
@@ -1633,7 +1669,7 @@ describe("Adversarial: buildArgsForBackendTerminal preserves agentPresetColor", 
 
   it("returns undefined agentPresetColor when saved has none", () => {
     const result = buildArgsForBackendTerminal(
-      { id: "t1", cwd: "/p", kind: "agent", agentId: "claude" },
+      { id: "t1", cwd: "/p", kind: "terminal", agentId: "claude" },
       { id: "t1", location: "grid", agentPresetId: "user-x" },
       "/p"
     );
@@ -1644,7 +1680,7 @@ describe("Adversarial: buildArgsForBackendTerminal preserves agentPresetColor", 
 describe("Adversarial: buildArgsForReconnectedFallback preserves agentPresetColor", () => {
   it("forwards agentPresetColor from saved state", () => {
     const result = buildArgsForReconnectedFallback(
-      { id: "t1", cwd: "/p", kind: "agent", agentId: "claude" },
+      { id: "t1", cwd: "/p", kind: "terminal", agentId: "claude" },
       { id: "t1", location: "grid", agentPresetId: "user-x", agentPresetColor: "#ff6600" },
       "/p"
     );
@@ -1653,7 +1689,7 @@ describe("Adversarial: buildArgsForReconnectedFallback preserves agentPresetColo
 
   it("returns undefined agentPresetColor when saved has none", () => {
     const result = buildArgsForReconnectedFallback(
-      { id: "t1", cwd: "/p", kind: "agent", agentId: "claude" },
+      { id: "t1", cwd: "/p", kind: "terminal", agentId: "claude" },
       { id: "t1", location: "grid", agentPresetId: "user-x" },
       "/p"
     );
@@ -1688,7 +1724,7 @@ describe("Adversarial: buildArgsForOrphanedTerminal preserves agentPresetColor",
   // and therefore the result is always undefined (by design — no saved state available).
   it("result has no agentPresetColor (backend-only data — no saved state available)", () => {
     const result = buildArgsForOrphanedTerminal(
-      { id: "t1", cwd: "/p", kind: "agent", agentId: "claude" },
+      { id: "t1", cwd: "/p", kind: "terminal", agentId: "claude" },
       "/p"
     );
     expect(result.agentPresetColor).toBeUndefined();
@@ -1708,7 +1744,7 @@ describe("Adversarial: globalEnv merge in buildArgsForRespawn", () => {
     const result = buildArgsForRespawn(
       {
         id: "t1",
-        kind: "agent",
+        kind: "terminal",
         agentId: "claude",
         cwd: "/p",
         location: "grid",
@@ -1732,7 +1768,7 @@ describe("Adversarial: globalEnv merge in buildArgsForRespawn", () => {
     const result = buildArgsForRespawn(
       {
         id: "t1",
-        kind: "agent",
+        kind: "terminal",
         agentId: "claude",
         cwd: "/p",
         location: "grid",
@@ -1758,7 +1794,7 @@ describe("Adversarial: globalEnv merge in buildArgsForRespawn", () => {
     const result = buildArgsForRespawn(
       {
         id: "t1",
-        kind: "agent",
+        kind: "terminal",
         agentId: "claude",
         cwd: "/p",
         location: "grid",
@@ -1778,7 +1814,7 @@ describe("Adversarial: globalEnv merge in buildArgsForRespawn", () => {
     const result = buildArgsForRespawn(
       {
         id: "t1",
-        kind: "agent",
+        kind: "terminal",
         agentId: "claude",
         cwd: "/p",
         location: "grid",

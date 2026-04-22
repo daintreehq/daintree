@@ -35,14 +35,14 @@ export class TerminalParserHandler {
     blockAltScreen: boolean;
     blockMouseReporting: boolean;
   } {
-    if (this.managed.kind !== "agent") {
+    if (!this.managed.agentId) {
       return {
         blockAltScreen: false,
         blockMouseReporting: false,
       };
     }
 
-    const effectiveAgentId = this.managed.agentId ?? this.managed.type;
+    const effectiveAgentId = this.managed.agentId;
     const config = getAgentConfig(effectiveAgentId);
 
     return {
@@ -142,7 +142,7 @@ export class TerminalParserHandler {
 
   private shouldBlock(): boolean {
     // Block for all agent terminals by default
-    return this.managed.kind === "agent";
+    return Boolean(this.managed.agentId);
   }
 
   dispose(): void {

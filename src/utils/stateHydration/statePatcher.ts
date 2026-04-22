@@ -14,7 +14,6 @@ import {
   buildResumeCommand,
   buildLaunchCommandFromFlags,
 } from "@shared/types";
-import { logWarn } from "@/utils/logger";
 import { inferKind as inferKindShared } from "@shared/utils/inferPanelKind";
 import { getDeserializer } from "@/config/panelKindSerialisers";
 import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
@@ -125,11 +124,14 @@ export function inferAgentIdFromTitle(
   title: string | undefined,
   kind: PanelKind | undefined,
   existingAgentId: string | undefined,
-  terminalId: string,
-  logContext: string
+  _terminalId: string,
+  _logContext: string
 ): string | undefined {
   if (existingAgentId) return existingAgentId;
-  if (kind !== "agent") return undefined;
+  // Only recover agent identity for PTY-backed panels; browser/dev-preview
+  // titles must not be mined for agent names. The legacy "agent" kind is
+  // treated as "terminal" after migration.
+  if (kind !== undefined && kind !== "terminal" && kind !== "agent") return undefined;
 
   const titleLower = (title ?? "").toLowerCase();
   if (titleLower.includes("claude")) return "claude";
@@ -137,9 +139,6 @@ export function inferAgentIdFromTitle(
   if (titleLower.includes("codex")) return "codex";
   if (titleLower.includes("opencode")) return "opencode";
 
-  logWarn(
-    `${logContext} agent terminal ${terminalId} missing agentId and title doesn't match known agents: "${title ?? ""}"`
-  );
   return undefined;
 }
 
@@ -157,6 +156,17 @@ export function resolveAgentId(
 }
 
 export const inferKind: (saved: SavedTerminalData) => PanelKind = inferKindShared;
+
+/**
+ * Normalize a kind value for hydration builders. Legacy `"agent"` values
+ * (from persisted state written before the kind collapse) migrate to
+ * `"terminal"`. Missing/unknown values fall through to `"terminal"`, matching
+ * the previous fallback behavior for PTY panels.
+ */
+function normalizePtyKind(kind: PanelKind | undefined): PanelKind {
+  if (!kind || kind === "agent") return "terminal";
+  return kind;
+}
 
 export function buildArgsForBackendTerminal(
   backendTerminal: BackendTerminalData,
@@ -178,7 +188,7 @@ export function buildArgsForBackendTerminal(
   const devCommand = isDevPreview ? saved.command?.trim() : undefined;
 
   return {
-    kind: backendTerminal.kind ?? (agentId ? "agent" : "terminal"),
+    kind: normalizePtyKind(backendTerminal.kind),
     type: backendTerminal.type,
     agentId,
     title: saved.title ?? backendTerminal.title,
@@ -233,7 +243,7 @@ export function buildArgsForReconnectedFallback(
   const devCommand = isDevPreview ? saved.command?.trim() : undefined;
 
   return {
-    kind: reconnectedKind ?? (agentId ? "agent" : "terminal"),
+    kind: normalizePtyKind(reconnectedKind),
     type: reconnectedTerminal.type ?? saved.type,
     agentId,
     title: saved.title ?? reconnectedTerminal.title,
@@ -278,7 +288,7 @@ export function buildArgsForRespawn(
     "Respawn"
   );
 
-  const isAgentPanel = kind === "agent" || Boolean(effectiveAgentId);
+  const isAgentPanel = Boolean(effectiveAgentId);
   const agentId = effectiveAgentId;
   let command = saved.command?.trim() || undefined;
   let presetEnv: Record<string, string> | undefined;
@@ -345,7 +355,7 @@ export function buildArgsForRespawn(
     }
   }
 
-  const respawnKind = isAgentPanel ? "agent" : kind;
+  const respawnKind = normalizePtyKind(kind);
   const isDevPreview = kind === "dev-preview";
   const location = (saved.location === "dock" ? "dock" : "grid") as "grid" | "dock";
 
@@ -453,7 +463,7 @@ export function buildArgsForOrphanedTerminal(
   agentId = inferAgentIdFromTitle(terminal.title, terminal.kind, agentId, terminal.id, "Orphaned");
 
   return {
-    kind: terminal.kind ?? (agentId ? "agent" : "terminal"),
+    kind: normalizePtyKind(terminal.kind),
     type: terminal.type,
     agentId,
     title: terminal.title,

@@ -9,7 +9,7 @@ function makeAgent(id: string, overrides: Partial<TerminalInstance> = {}): Termi
     id,
     title: id,
     type: "terminal",
-    kind: "agent",
+    kind: "terminal",
     agentId: "claude",
     worktreeId: "wt-1",
     location: "grid",

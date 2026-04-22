@@ -6,7 +6,7 @@ describe("initBuiltInPanelKinds", () => {
   it("registers serialize and createDefaults on built-in kinds", () => {
     initBuiltInPanelKinds();
 
-    for (const kind of ["terminal", "agent", "browser", "dev-preview"]) {
+    for (const kind of ["terminal", "browser", "dev-preview"]) {
       const config = getPanelKindConfig(kind);
       expect(config?.serialize, `${kind} should have serialize`).toBeTypeOf("function");
       expect(config?.createDefaults, `${kind} should have createDefaults`).toBeTypeOf("function");

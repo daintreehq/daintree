@@ -218,7 +218,7 @@ export const createCorePanelActions = (
       }
     }
 
-    const requestedKind = options.kind ?? (options.agentId ? "agent" : "terminal");
+    const requestedKind = options.kind ?? "terminal";
     const legacyType = options.type || "terminal";
 
     // Handle panels that use custom UI (browser, dev-preview, extensions) separately
@@ -290,16 +290,12 @@ export const createCorePanelActions = (
       return id;
     }
 
-    // PTY panels: terminal/agent/dev-preview
-    // Derive agentId: explicit option, or from legacy type if it's a registered agent
+    // PTY panels: terminal / dev-preview. Agent identity lives on `agentId`.
+    // Derive agentId: explicit option, or from legacy type if it's a registered agent.
     const agentId = options.agentId ?? (isRegisteredAgent(legacyType) ? legacyType : undefined);
     // Determine kind for PTY handling (dev-preview keeps its own kind)
-    const kind: "terminal" | "agent" | "dev-preview" =
-      requestedKind === "dev-preview"
-        ? "dev-preview"
-        : agentId || requestedKind === "agent"
-          ? "agent"
-          : "terminal";
+    const kind: "terminal" | "dev-preview" =
+      requestedKind === "dev-preview" ? "dev-preview" : "terminal";
     const title = options.title || getDefaultTitle(kind, legacyType, agentId);
 
     // Auto-dock if grid is full and user requested grid location
@@ -364,7 +360,7 @@ export const createCorePanelActions = (
     const capturedProjectId = projectStore.getState().currentProject?.id;
 
     const isReconnect = !!options.existingId;
-    const isAgent = kind === "agent";
+    const isAgent = Boolean(agentId);
     // Reserve the id up front so the panel can be committed to the store before
     // any async work (env fetch, spawn IPC). #5789: commit-then-spawn collapses
     // six rapid agent clicks from serialized spawns into six parallel placeholders.
@@ -492,7 +488,7 @@ export const createCorePanelActions = (
       const { fontSize, fontFamily, performanceMode } = appearance;
 
       // Project-level scrollback override for non-agent terminals
-      const projectScrollback = kind !== "agent" ? appearance.projectScrollback : undefined;
+      const projectScrollback = isAgent ? undefined : appearance.projectScrollback;
 
       const effectiveScrollback = performanceMode
         ? PERFORMANCE_MODE_SCROLLBACK
@@ -519,7 +515,7 @@ export const createCorePanelActions = (
         (currentActiveWorktreeId !== null &&
           (options.worktreeId ?? null) !== (currentActiveWorktreeId ?? null));
 
-      if (kind !== "agent") {
+      if (!isAgent) {
         terminalInstanceService.prewarmTerminal(id, legacyType, terminalOptions, {
           offscreen: offscreenOrInactive,
           widthPx: location === "dock" ? DOCK_PREWARM_WIDTH_PX : DOCK_TERM_WIDTH,

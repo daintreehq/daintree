@@ -269,7 +269,7 @@ class TerminalInstanceService {
           }
         }
 
-        if (managed.kind === "agent") {
+        if (managed.agentId) {
           if (
             tier === TerminalRefreshTier.FOCUSED ||
             tier === TerminalRefreshTier.BURST ||
@@ -349,7 +349,7 @@ class TerminalInstanceService {
    * element. Throttled per terminal.
    */
   private maybeReflowTerminal(managed: ManagedTerminal): void {
-    if (managed.kind === "agent") return;
+    if (managed.agentId) return;
     if (managed.isHibernated) return;
     if (!managed.isVisible) return;
     if (managed.isAttaching) return;
@@ -759,11 +759,11 @@ class TerminalInstanceService {
     });
     listeners.push(unsubExit);
 
-    const kind =
+    const kind: "terminal" = "terminal";
+    const agentId =
       type === "claude" || type === "gemini" || type === "codex" || type === "opencode"
-        ? "agent"
-        : "terminal";
-    const agentId = kind === "agent" ? type : undefined;
+        ? type
+        : undefined;
 
     const managed: ManagedTerminal = {
       terminal,
@@ -1046,7 +1046,7 @@ class TerminalInstanceService {
     });
     listeners.push(() => inputDisposable.dispose());
 
-    if (kind === "agent") {
+    if (agentId) {
       const keyDisposable = terminal.onKey(({ domEvent }) => {
         if (
           !managed.isInputLocked &&
@@ -1201,7 +1201,7 @@ class TerminalInstanceService {
       managed.isOpened = true;
       logDebug(`[TIS.attach] Opened terminal ${id}`);
       if (
-        managed.kind === "agent" &&
+        managed.agentId &&
         (managed.lastAppliedTier === TerminalRefreshTier.FOCUSED ||
           managed.lastAppliedTier === TerminalRefreshTier.BURST ||
           managed.lastAppliedTier === TerminalRefreshTier.VISIBLE)
@@ -1858,7 +1858,7 @@ class TerminalInstanceService {
       if (managed.isHibernated) continue;
       if (managed.isFocused) continue;
       if (
-        managed.kind === "agent" &&
+        managed.agentId &&
         managed.canonicalAgentState !== "completed" &&
         managed.canonicalAgentState !== "exited"
       )
@@ -1889,7 +1889,7 @@ class TerminalInstanceService {
   private isHibernationEligible(tier: TerminalRefreshTier, managed: ManagedTerminal): boolean {
     if (tier !== TerminalRefreshTier.BACKGROUND) return false;
     return (
-      managed.kind !== "agent" ||
+      !managed.agentId ||
       managed.canonicalAgentState === "completed" ||
       managed.canonicalAgentState === "exited"
     );

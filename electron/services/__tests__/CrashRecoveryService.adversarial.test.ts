@@ -116,7 +116,7 @@ describe("CrashRecoveryService adversarial", () => {
     writeBackup(tmpDir, {
       capturedAt: Date.now(),
       appState: {
-        terminals: [{ id: "agent-1", kind: "agent", title: "Recovered" }],
+        terminals: [{ id: "agent-1", kind: "terminal", title: "Recovered" }],
       },
       windowState: {
         width: 1200,
@@ -136,7 +136,7 @@ describe("CrashRecoveryService adversarial", () => {
 
     expect(service.restoreBackup()).toBe(true);
     expect(storeMock.set).toHaveBeenCalledWith("appState", {
-      terminals: [{ id: "agent-1", kind: "agent", title: "Recovered" }],
+      terminals: [{ id: "agent-1", kind: "terminal", title: "Recovered" }],
     });
     expect(storeMock.set).toHaveBeenCalledWith("windowState", {
       width: 1200,
@@ -161,7 +161,7 @@ describe("CrashRecoveryService adversarial", () => {
         terminals: [
           {
             id: "panel-1",
-            kind: "agent",
+            kind: "terminal",
             meta: {
               badges: ["active", "pinned"],
               layout: {
@@ -175,7 +175,7 @@ describe("CrashRecoveryService adversarial", () => {
       windowStates: {
         main: {
           bounds: { width: 1440, height: 900 },
-          tabs: [{ id: "panel-1", kind: "agent" }],
+          tabs: [{ id: "panel-1", kind: "terminal" }],
         },
       },
       windowState: {
@@ -191,7 +191,7 @@ describe("CrashRecoveryService adversarial", () => {
       terminals: [
         {
           id: "panel-1",
-          kind: "agent",
+          kind: "terminal",
           meta: {
             badges: ["active", "pinned"],
             layout: {
@@ -205,7 +205,7 @@ describe("CrashRecoveryService adversarial", () => {
     expect(storeMock.set).toHaveBeenCalledWith("windowStates", {
       main: {
         bounds: { width: 1440, height: 900 },
-        tabs: [{ id: "panel-1", kind: "agent" }],
+        tabs: [{ id: "panel-1", kind: "terminal" }],
       },
     });
     expect(storeMock.set).toHaveBeenCalledWith("windowState", {

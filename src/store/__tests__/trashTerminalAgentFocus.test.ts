@@ -36,7 +36,7 @@ const { useWorktreeSelectionStore } = await import("../worktreeStore");
 
 function makeTerminal(
   id: string,
-  kind: "agent" | "terminal",
+  kind: "terminal" | "terminal",
   agentId?: string,
   worktreeId?: string,
   detectedAgentId?: "claude" | "gemini" | "codex",

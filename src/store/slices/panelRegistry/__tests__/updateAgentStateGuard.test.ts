@@ -38,7 +38,7 @@ const { usePanelStore } = await import("../../../panelStore");
 const baseTerminal = {
   id: "test-terminal-1",
   type: "terminal" as const,
-  kind: "agent" as const,
+  kind: "terminal" as const,
   title: "Test Agent",
   cwd: "/test",
   cols: 80,

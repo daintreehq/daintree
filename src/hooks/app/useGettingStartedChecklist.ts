@@ -11,7 +11,7 @@ import type { TerminalInstance } from "@shared/types/panel";
 function countActiveAgentPanels(panelsById: Record<string, TerminalInstance>): number {
   let count = 0;
   for (const panel of Object.values(panelsById)) {
-    if (panel?.kind !== "agent") continue;
+    if (!panel?.agentId) continue;
     const state = panel.agentState;
     if (state && ACTIVE_AGENT_STATES.has(state)) count += 1;
     if (count >= 2) return count;
@@ -44,7 +44,7 @@ function reconcileCurrentState(
     !cl.items.launchedAgent &&
     usePanelStore.getState().panelIds.some((id) => {
       const p = usePanelStore.getState().panelsById[id];
-      return p?.kind === "agent" || p?.everDetectedAgent === true;
+      return Boolean(p?.agentId) || p?.everDetectedAgent === true;
     })
   ) {
     markItem("launchedAgent");
@@ -176,7 +176,7 @@ export function useGettingStartedChecklist(isStateLoaded: boolean): GettingStart
           !cl.items.launchedAgent &&
           state.panelIds.some((id) => {
             const p = state.panelsById[id];
-            return p?.kind === "agent" || p?.everDetectedAgent === true;
+            return Boolean(p?.agentId) || p?.everDetectedAgent === true;
           })
         ) {
           markItem("launchedAgent");

@@ -22,7 +22,7 @@ describe("Agent Classification Matrix", () => {
         cwd: process.cwd(),
         cols: 80,
         rows: 24,
-        kind: "agent" as PanelKind,
+        kind: "terminal" as PanelKind,
         type: "terminal" as TerminalType,
       });
 
@@ -143,7 +143,7 @@ describe("Agent Classification Matrix", () => {
         cwd: process.cwd(),
         cols: 80,
         rows: 24,
-        kind: "agent" as PanelKind,
+        kind: "terminal" as PanelKind,
         agentId: "claude",
       });
 

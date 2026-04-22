@@ -194,10 +194,10 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
   const effectiveAgentState = ambientAgentState ?? agentState;
   const blockedState = useDockBlockedState(effectiveAgentState);
   const isWorkingState = effectiveAgentState === "working";
-  // Auto-construct TerminalHeaderContent for terminal/agent kinds if headerContent not provided
+  // Auto-construct TerminalHeaderContent for PTY-backed terminals if headerContent not provided
   const resolvedHeaderContent = useMemo(() => {
     if (headerContent !== undefined) return headerContent;
-    if (kind === "terminal" || kind === "agent") {
+    if (kind === "terminal") {
       return (
         <TerminalHeaderContent
           id={id}

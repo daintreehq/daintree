@@ -83,7 +83,7 @@ describe("TaskOrchestrator", () => {
       mockPtyClient.getAvailableTerminalsAsync.mockResolvedValue([
         {
           id: "term-1",
-          kind: "agent",
+          kind: "terminal",
           agentId: "agent-1",
           agentState: "idle",
         },
@@ -104,7 +104,7 @@ describe("TaskOrchestrator", () => {
       mockPtyClient.getAvailableTerminalsAsync.mockResolvedValue([
         {
           id: "term-1",
-          kind: "agent",
+          kind: "terminal",
           agentId: "agent-1",
           agentState: "waiting",
         },
@@ -124,7 +124,7 @@ describe("TaskOrchestrator", () => {
       mockPtyClient.getAvailableTerminalsAsync.mockResolvedValue([
         {
           id: "term-1",
-          kind: "agent",
+          kind: "terminal",
           agentId: "agent-1",
           agentState: "working",
         },
@@ -185,13 +185,13 @@ describe("TaskOrchestrator", () => {
       mockPtyClient.getAvailableTerminalsAsync.mockResolvedValue([
         {
           id: "term-a",
-          kind: "agent",
+          kind: "terminal",
           agentId: "claude",
           agentState: "idle",
         },
         {
           id: "term-b",
-          kind: "agent",
+          kind: "terminal",
           agentId: "claude",
           agentState: "idle",
         },
@@ -214,7 +214,7 @@ describe("TaskOrchestrator", () => {
       mockPtyClient.getAvailableTerminalsAsync.mockResolvedValue([
         {
           id: "term-1",
-          kind: "agent",
+          kind: "terminal",
           agentId: "agent-1",
           agentState: "idle",
         },
@@ -232,7 +232,7 @@ describe("TaskOrchestrator", () => {
       mockPtyClient.getAvailableTerminalsAsync.mockResolvedValue([
         {
           id: "term-1",
-          kind: "agent",
+          kind: "terminal",
           agentId: "agent-1",
           agentState: "idle",
         },
@@ -260,7 +260,7 @@ describe("TaskOrchestrator", () => {
       mockPtyClient.getAvailableTerminalsAsync.mockResolvedValue([
         {
           id: "term-1",
-          kind: "agent",
+          kind: "terminal",
           agentId: "agent-1",
           agentState: "idle",
         },
@@ -288,7 +288,7 @@ describe("TaskOrchestrator", () => {
       mockPtyClient.getAvailableTerminalsAsync.mockResolvedValue([
         {
           id: "term-1",
-          kind: "agent",
+          kind: "terminal",
           agentId: "agent-1",
           agentState: "idle",
         },
@@ -351,7 +351,7 @@ describe("TaskOrchestrator", () => {
       mockPtyClient.getAvailableTerminalsAsync.mockResolvedValue([
         {
           id: "term-1",
-          kind: "agent",
+          kind: "terminal",
           agentId: "agent-1",
           agentState: "waiting",
         },
@@ -405,7 +405,7 @@ describe("TaskOrchestrator", () => {
       mockPtyClient.getAvailableTerminalsAsync.mockResolvedValue([
         {
           id: "term-1",
-          kind: "agent",
+          kind: "terminal",
           agentId: "agent-1",
           agentState: "idle",
         },
@@ -439,13 +439,13 @@ describe("TaskOrchestrator", () => {
       mockPtyClient.getAvailableTerminalsAsync.mockResolvedValue([
         {
           id: "term-a",
-          kind: "agent",
+          kind: "terminal",
           agentId: "claude",
           agentState: "idle",
         },
         {
           id: "term-b",
-          kind: "agent",
+          kind: "terminal",
           agentId: "claude",
           agentState: "idle",
         },
@@ -484,7 +484,7 @@ describe("TaskOrchestrator", () => {
       mockPtyClient.getAvailableTerminalsAsync.mockResolvedValue([
         {
           id: "term-1",
-          kind: "agent",
+          kind: "terminal",
           agentId: "claude",
           agentState: "idle",
         },
@@ -530,7 +530,7 @@ describe("TaskOrchestrator", () => {
       mockPtyClient.getAvailableTerminalsAsync.mockResolvedValue([
         {
           id: "term-1",
-          kind: "agent",
+          kind: "terminal",
           agentId: "agent-1",
           agentState: "idle",
         },
@@ -713,7 +713,7 @@ describe("TaskOrchestrator", () => {
       mockPtyClient.getAvailableTerminalsAsync.mockResolvedValue([
         {
           id: "term-1",
-          kind: "agent",
+          kind: "terminal",
           agentId: "agent-1",
           agentState: "idle",
           worktreeId: "wt-1",
@@ -753,7 +753,7 @@ describe("TaskOrchestrator", () => {
       mockPtyClient.getAvailableTerminalsAsync.mockResolvedValue([
         {
           id: "term-1",
-          kind: "agent",
+          kind: "terminal",
           agentId: "agent-1",
           agentState: "idle",
         },
@@ -794,7 +794,7 @@ describe("TaskOrchestrator", () => {
       mockPtyClient.getAvailableTerminalsAsync.mockResolvedValue([
         {
           id: "term-1",
-          kind: "agent",
+          kind: "terminal",
           agentId: "routed-agent",
           agentState: "idle",
         },
@@ -831,7 +831,7 @@ describe("TaskOrchestrator", () => {
       mockPtyClient.getAvailableTerminalsAsync.mockResolvedValue([
         {
           id: "term-1",
-          kind: "agent",
+          kind: "terminal",
           agentId: "fallback-agent",
           agentState: "idle",
         },
@@ -851,7 +851,7 @@ describe("TaskOrchestrator", () => {
       mockPtyClient.getAvailableTerminalsAsync.mockResolvedValue([
         {
           id: "term-1",
-          kind: "agent",
+          kind: "terminal",
           agentId: "any-agent",
           agentState: "idle",
         },
@@ -883,7 +883,7 @@ describe("TaskOrchestrator", () => {
       mockPtyClient.getAvailableTerminalsAsync.mockResolvedValue([
         {
           id: "term-1",
-          kind: "agent",
+          kind: "terminal",
           agentId: "different-agent",
           agentState: "idle",
         },
@@ -928,7 +928,7 @@ describe("TaskOrchestrator", () => {
       mockPtyClient.getAvailableTerminalsAsync.mockResolvedValue([
         {
           id: "term-1",
-          kind: "agent",
+          kind: "terminal",
           agentId: "agent-1",
           agentState: "idle",
         },
@@ -950,7 +950,7 @@ describe("TaskOrchestrator", () => {
       mockPtyClient.getAvailableTerminalsAsync.mockResolvedValue([
         {
           id: "term-1",
-          kind: "agent",
+          kind: "terminal",
           agentId: "agent-1",
           agentState: "idle",
         },
@@ -976,7 +976,7 @@ describe("TaskOrchestrator", () => {
       mockPtyClient.getAvailableTerminalsAsync.mockResolvedValue([
         {
           id: "term-1",
-          kind: "agent",
+          kind: "terminal",
           agentId: "agent-1",
           agentState: "idle",
         },

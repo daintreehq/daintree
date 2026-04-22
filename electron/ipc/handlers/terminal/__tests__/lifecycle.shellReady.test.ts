@@ -117,7 +117,7 @@ describe("agent command injection via shell -c flag", () => {
     await handler({} as Electron.IpcMainInvokeEvent, {
       cols: 80,
       rows: 24,
-      kind: "agent",
+      kind: "terminal",
       agentId: "claude",
       command: "claude --dangerously-skip-permissions",
     });
@@ -137,7 +137,7 @@ describe("agent command injection via shell -c flag", () => {
     await handler({} as Electron.IpcMainInvokeEvent, {
       cols: 80,
       rows: 24,
-      kind: "agent",
+      kind: "terminal",
       agentId: "claude",
       command: "claude",
       shell: "/usr/bin/fish",
@@ -182,7 +182,7 @@ describe("agent command injection via shell -c flag", () => {
     await handler({} as Electron.IpcMainInvokeEvent, {
       cols: 80,
       rows: 24,
-      kind: "agent",
+      kind: "terminal",
       agentId: "claude",
       command: "claude",
     });
@@ -210,7 +210,7 @@ describe("agent command injection via shell -c flag", () => {
     await handler({} as Electron.IpcMainInvokeEvent, {
       cols: 80,
       rows: 24,
-      kind: "agent",
+      kind: "terminal",
       agentId: "claude",
       command: "claude\nmalicious",
     });
@@ -231,7 +231,7 @@ describe("agent command injection via shell -c flag", () => {
     await handler({} as Electron.IpcMainInvokeEvent, {
       cols: 80,
       rows: 24,
-      kind: "agent",
+      kind: "terminal",
       agentId: "gemini",
       command: "gemini chat",
     });

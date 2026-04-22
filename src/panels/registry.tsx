@@ -9,7 +9,6 @@ import type {
 } from "@shared/types/panel";
 import type {
   TerminalPanelOptions,
-  AgentPanelOptions,
   BrowserPanelOptions,
   DevPreviewPanelOptions,
 } from "@shared/types/addPanelOptions";
@@ -20,8 +19,6 @@ import { BrowserPaneSkeleton } from "@/components/Browser/BrowserPaneSkeleton";
 
 import { serializePtyPanel } from "./terminal/serializer";
 import { createTerminalDefaults } from "./terminal/defaults";
-import { serializeAgent } from "./agent/serializer";
-import { createAgentDefaults } from "./agent/defaults";
 import { serializeBrowser } from "./browser/serializer";
 import { createBrowserDefaults } from "./browser/defaults";
 import { serializeDevPreview } from "./dev-preview/serializer";
@@ -80,22 +77,21 @@ function DevPreviewPaneWrapper(props: any) {
 }
 
 /**
- * Maps each built-in panel kind to its panel data variant. Terminal/agent share
- * `PtyPanelData`; dev-preview carries an optional `type` that originates from
- * the legacy `TerminalInstance` shape. `createdAt` is intentionally widened on
- * the PTY and dev-preview entries so serializers can read the legacy field
- * without modifying the shared variant interfaces.
+ * Maps each built-in panel kind to its panel data variant. `PtyPanelData` covers
+ * all PTY-backed terminals (agent identity lives on `agentId`); dev-preview
+ * carries an optional `type` that originates from the legacy `TerminalInstance`
+ * shape. `createdAt` is intentionally widened on the PTY and dev-preview entries
+ * so serializers can read the legacy field without modifying the shared variant
+ * interfaces.
  */
 interface BuiltInPanelMap {
   terminal: PtyPanelData & { createdAt?: number };
-  agent: PtyPanelData & { createdAt?: number };
   browser: BrowserPanelData;
   "dev-preview": DevPreviewPanelData & { createdAt?: number; type?: TerminalType };
 }
 
 interface BuiltInPanelOptionsMap {
   terminal: TerminalPanelOptions;
-  agent: AgentPanelOptions;
   browser: BrowserPanelOptions;
   "dev-preview": DevPreviewPanelOptions;
 }
@@ -109,7 +105,6 @@ type BuiltInSerializeDefaults = {
 
 const BUILT_IN_SERIALIZE_DEFAULTS = {
   terminal: { serialize: serializePtyPanel, createDefaults: createTerminalDefaults },
-  agent: { serialize: serializeAgent, createDefaults: createAgentDefaults },
   browser: { serialize: serializeBrowser, createDefaults: createBrowserDefaults },
   "dev-preview": { serialize: serializeDevPreview, createDefaults: createDevPreviewDefaults },
 } satisfies BuiltInSerializeDefaults;
@@ -140,7 +135,6 @@ function requirePanelKindConfig(kind: string): PanelKindConfig {
 
 const PANEL_KIND_DEFINITION_REGISTRY: Record<string, PanelKindDefinition> = {
   terminal: { ...requirePanelKindConfig("terminal"), component: TerminalPane },
-  agent: { ...requirePanelKindConfig("agent"), component: TerminalPane },
   browser: { ...requirePanelKindConfig("browser"), component: BrowserPaneWrapper },
   "dev-preview": { ...requirePanelKindConfig("dev-preview"), component: DevPreviewPaneWrapper },
 };

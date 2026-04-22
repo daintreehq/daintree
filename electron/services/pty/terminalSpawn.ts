@@ -26,10 +26,9 @@ export function computeSpawnContext(id: string, options: PtySpawnOptions): Spawn
   const shell = options.shell || getDefaultShell();
   const args = options.args || getDefaultShellArgs(shell);
 
-  const isAgentByKind = options.kind === "agent";
   const isAgentByAgentId = !!options.agentId;
   const isAgentByType = !!(options.type && options.type !== "terminal");
-  const isAgentTerminal = isAgentByKind || isAgentByAgentId || isAgentByType;
+  const isAgentTerminal = isAgentByAgentId || isAgentByType;
   const agentId = isAgentTerminal
     ? (options.agentId ?? (options.type !== "terminal" ? options.type : id))
     : undefined;

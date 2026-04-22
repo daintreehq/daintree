@@ -16,8 +16,9 @@ vi.mock("@/services/terminal/panelDuplicationService", () => ({
 
 vi.mock("@shared/config/panelKindRegistry", () => ({
   getDefaultPanelTitle: (kind: string, agentId?: string) => {
-    if (kind === "agent" && agentId === "claude") return "Claude";
-    if (kind === "agent" && agentId === "gemini") return "Gemini";
+    // Agent identity takes precedence, matching production behavior
+    if (agentId === "claude") return "Claude";
+    if (agentId === "gemini") return "Gemini";
     if (kind === "terminal") return "Terminal";
     if (kind === "browser") return "Browser";
     if (kind === "notes") return "Notes";
@@ -96,7 +97,9 @@ describe("terminal.duplicate (copy) suffix", () => {
     const addPanel = vi.fn().mockResolvedValue(undefined);
     setPanelState({
       focusedId: "p1",
-      panels: [{ id: "p1", location: "grid", kind: "agent", agentId: "claude", title: "Claude" }],
+      panels: [
+        { id: "p1", location: "grid", kind: "terminal", agentId: "claude", title: "Claude" },
+      ],
       addPanel,
     });
     const run = setupActions();
@@ -110,7 +113,9 @@ describe("terminal.duplicate (copy) suffix", () => {
     const addPanel = vi.fn().mockResolvedValue(undefined);
     setPanelState({
       focusedId: "p1",
-      panels: [{ id: "p1", location: "grid", kind: "agent", agentId: "claude", title: "API work" }],
+      panels: [
+        { id: "p1", location: "grid", kind: "terminal", agentId: "claude", title: "API work" },
+      ],
       addPanel,
     });
     const run = setupActions();
@@ -139,7 +144,7 @@ describe("terminal.duplicate (copy) suffix", () => {
     setPanelState({
       focusedId: "p1",
       panels: [
-        { id: "p1", location: "grid", kind: "agent", agentId: "gemini", title: "Refactor run" },
+        { id: "p1", location: "grid", kind: "terminal", agentId: "gemini", title: "Refactor run" },
       ],
       addPanel,
     });
@@ -183,7 +188,7 @@ describe("terminal.duplicate (copy) suffix", () => {
   it("preserves stale-preset title normalization (no (copy) when service normalized title)", async () => {
     const addPanel = vi.fn().mockResolvedValue(undefined);
     buildPanelDuplicateOptionsMock.mockResolvedValueOnce({
-      kind: "agent",
+      kind: "terminal",
       agentId: "claude",
       type: "claude",
       title: "Claude", // normalized by service (stale preset dropped)
@@ -196,7 +201,7 @@ describe("terminal.duplicate (copy) suffix", () => {
         {
           id: "p1",
           location: "grid",
-          kind: "agent",
+          kind: "terminal",
           agentId: "claude",
           title: "Claude (Deleted Preset)",
         },

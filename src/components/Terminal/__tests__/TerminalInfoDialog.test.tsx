@@ -213,7 +213,7 @@ describe("TerminalInfoDialog", () => {
   it("renders Launch Context and Live State sections for agent terminals", async () => {
     const payload = makePayload({
       isAgentTerminal: true,
-      kind: "agent",
+      kind: "terminal",
       type: "claude",
       agentId: "agent-1",
       detectedAgentType: "claude",
@@ -247,7 +247,7 @@ describe("TerminalInfoDialog", () => {
   it("shows 'None — agent has exited' in Live State when agent panel has no detectedAgentId", async () => {
     const payload = makePayload({
       isAgentTerminal: true,
-      kind: "agent",
+      kind: "terminal",
       type: "claude",
       agentId: "agent-1",
       detectedAgentId: undefined,
@@ -292,7 +292,7 @@ describe("TerminalInfoDialog", () => {
   it("includes Spawn Command and both Agent sections in clipboard export", async () => {
     const payload = makePayload({
       isAgentTerminal: true,
-      kind: "agent",
+      kind: "terminal",
       type: "claude",
       agentId: "agent-1",
       detectedAgentType: "claude",

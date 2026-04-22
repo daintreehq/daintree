@@ -719,7 +719,7 @@ describe("TerminalFocusSlice - focusNextAgent / focusPreviousAgent runtime ident
   it("includes a freshly-spawned agent panel before the detector fires (boot window)", () => {
     // detectedAgentId is undefined during boot; kind/agentId fallback keeps it in cycle
     terminals = [
-      makeTerminal("fresh-agent", { kind: "agent", agentId: "claude" }),
+      makeTerminal("fresh-agent", { kind: "terminal", agentId: "claude" }),
       makeTerminal("shell-1", { kind: "terminal" }),
     ];
     state.focusedId = "shell-1";
@@ -747,12 +747,12 @@ describe("TerminalFocusSlice - focusNextAgent / focusPreviousAgent runtime ident
     // Spawned as agent, detector fired then cleared on exit — no longer in cycle.
     terminals = [
       makeTerminal("ex-agent", {
-        kind: "agent",
+        kind: "terminal",
         agentId: "claude",
         everDetectedAgent: true,
       }),
       makeTerminal("live-agent", {
-        kind: "agent",
+        kind: "terminal",
         agentId: "gemini",
         detectedAgentId: "gemini",
       }),
@@ -783,11 +783,11 @@ describe("TerminalFocusSlice - focusNextAgent / focusPreviousAgent runtime ident
 
   it("focusPreviousAgent wraps across a mixed set using runtime identity", () => {
     terminals = [
-      makeTerminal("agent-1", { kind: "agent", agentId: "claude", detectedAgentId: "claude" }),
+      makeTerminal("agent-1", { kind: "terminal", agentId: "claude", detectedAgentId: "claude" }),
       // Demoted: kind agent but detection fired and cleared → skipped
-      makeTerminal("demoted", { kind: "agent", agentId: "gemini", everDetectedAgent: true }),
+      makeTerminal("demoted", { kind: "terminal", agentId: "gemini", everDetectedAgent: true }),
       makeTerminal("shell", { kind: "terminal" }),
-      makeTerminal("agent-2", { kind: "agent", agentId: "codex", detectedAgentId: "codex" }),
+      makeTerminal("agent-2", { kind: "terminal", agentId: "codex", detectedAgentId: "codex" }),
     ];
     state.focusedId = "agent-1";
 
@@ -800,7 +800,7 @@ describe("TerminalFocusSlice - focusNextAgent / focusPreviousAgent runtime ident
   it("is a no-op when only ex-agent panels remain", () => {
     terminals = [
       makeTerminal("ex-agent", {
-        kind: "agent",
+        kind: "terminal",
         agentId: "claude",
         everDetectedAgent: true,
       }),

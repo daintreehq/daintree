@@ -96,7 +96,7 @@ describe("TerminalProcess exit code persistence", () => {
   });
 
   it("stores exitCode on clean exit for agent terminals", () => {
-    const terminal = createTerminal({ kind: "agent", type: "claude" });
+    const terminal = createTerminal({ kind: "terminal", type: "claude" });
 
     expect(exitHandler).not.toBeNull();
     exitHandler!({ exitCode: 0 });
@@ -107,7 +107,7 @@ describe("TerminalProcess exit code persistence", () => {
   });
 
   it("stores non-zero exitCode when agent terminal shouldPreserveOnExit returns false", () => {
-    const terminal = createTerminal({ kind: "agent", type: "claude" });
+    const terminal = createTerminal({ kind: "terminal", type: "claude" });
 
     expect(exitHandler).not.toBeNull();
     exitHandler!({ exitCode: 1 });
@@ -130,7 +130,7 @@ describe("TerminalProcess exit code persistence", () => {
   });
 
   it("does not store exitCode for killed terminals", () => {
-    const terminal = createTerminal({ kind: "agent", type: "claude" });
+    const terminal = createTerminal({ kind: "terminal", type: "claude" });
 
     terminal.kill("test");
     exitHandler!({ exitCode: 0 });

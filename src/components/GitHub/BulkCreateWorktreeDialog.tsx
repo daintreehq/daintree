@@ -823,7 +823,7 @@ export function BulkCreateWorktreeDialog({
                       });
 
                       panelId = await usePanelStore.getState().addPanel({
-                        kind: "agent",
+                        kind: "terminal",
                         agentId: t.type,
                         command,
                         title: t.title,

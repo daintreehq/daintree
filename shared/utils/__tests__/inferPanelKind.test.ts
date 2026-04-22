@@ -3,7 +3,15 @@ import { inferKind } from "../inferPanelKind.js";
 
 describe("inferKind", () => {
   it("returns saved kind when present", () => {
-    expect(inferKind({ kind: "agent" })).toBe("agent");
+    expect(inferKind({ kind: "browser" })).toBe("browser");
+  });
+
+  it('migrates legacy "agent" kind to "terminal" (agent identity lives on agentId)', () => {
+    expect(inferKind({ kind: "agent" })).toBe("terminal");
+  });
+
+  it('migrates legacy "agent" kind even when other fields are present', () => {
+    expect(inferKind({ kind: "agent", cwd: "/project", command: "claude" })).toBe("terminal");
   });
 
   it("infers browser from browserUrl", () => {

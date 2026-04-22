@@ -46,7 +46,7 @@ function makeMockMarker(line: number) {
 
 function makeMockManaged(overrides: Partial<ManagedTerminal> = {}): ManagedTerminal {
   return {
-    kind: "agent",
+    kind: "terminal",
     agentState: undefined,
     canonicalAgentState: undefined,
     agentStateSubscribers: new Set(),

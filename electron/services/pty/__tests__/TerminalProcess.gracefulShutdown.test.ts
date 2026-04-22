@@ -77,7 +77,7 @@ function createAgentTerminal(handles: MockPtyHandles): TerminalProcess {
     cwd: process.cwd(),
     cols: 80,
     rows: 24,
-    kind: "agent",
+    kind: "terminal",
     type: "claude",
     agentId: "claude",
   };

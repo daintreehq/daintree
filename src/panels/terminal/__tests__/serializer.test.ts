@@ -7,7 +7,7 @@ function makePanel(overrides: Partial<PtyPanelData> = {}): PtyPanelData {
   return {
     id: "p1",
     title: "Claude",
-    kind: "agent",
+    kind: "terminal",
     type: "claude",
     agentId: "claude",
     cwd: "/project",

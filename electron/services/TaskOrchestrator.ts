@@ -238,7 +238,7 @@ export class TaskOrchestrator {
   /**
    * Find any available agent using simple availability-based selection.
    * Used as fallback when no routing hints are present. Accepts either
-   * stored identity (`kind === "agent"` / `agentId`) or runtime-detected
+   * stored identity (`agentId`) or runtime-detected
    * identity (`detectedAgentId`) so agent CLIs launched from plain
    * terminals can receive tasks.
    */

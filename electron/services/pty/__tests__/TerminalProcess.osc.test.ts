@@ -57,7 +57,7 @@ function createAgentTerminal(
       cwd: process.cwd(),
       cols: 80,
       rows: 24,
-      kind: "agent",
+      kind: "terminal",
       type: agentId,
       agentId,
       ...options,

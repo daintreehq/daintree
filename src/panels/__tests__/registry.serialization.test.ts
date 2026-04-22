@@ -70,21 +70,6 @@ describe("panelKindRegistry serialize hooks (co-located)", () => {
     });
   });
 
-  describe("agent", () => {
-    it("serializes identically to terminal", () => {
-      const termConfig = getPanelKindConfig("terminal");
-      const agentConfig = getPanelKindConfig("agent");
-      const panel = makePanel({
-        type: "claude",
-        agentId: "claude",
-        cwd: "/project",
-        command: "claude",
-        agentSessionId: "s1",
-      });
-      expect(agentConfig!.serialize!(panel)).toEqual(termConfig!.serialize!(panel));
-    });
-  });
-
   describe("browser", () => {
     it("serializes browser fields", () => {
       const config = getPanelKindConfig("browser");

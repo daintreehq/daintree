@@ -120,9 +120,10 @@ describe("buildPanelSnapshotOptions", () => {
     expect(result.browserConsoleOpen).toBe(true);
   });
 
-  it("copies agent fields for agent panels", () => {
+  it("copies agent fields for agent terminals", () => {
     const panel = makePanel({
       agentId: "claude",
+      command: "claude --flag",
       agentModelId: "opus",
       agentLaunchFlags: ["--verbose"],
     });
@@ -138,27 +139,29 @@ describe("buildPanelSnapshotOptions", () => {
     expect(result!.agentLaunchFlags).toBeUndefined();
   });
 
-  it("returns null for broken agent panels (missing command)", () => {
+  it("returns null for broken agent terminals (missing command)", () => {
     const panel = makePanel({
-      kind: "agent",
+      kind: "terminal",
       agentId: "claude",
       command: undefined,
     });
     expect(buildPanelSnapshotOptions(panel)).toBeNull();
   });
 
-  it("returns null for broken agent panels (missing agentId)", () => {
+  it("returns a plain terminal snapshot when agentId is absent", () => {
     const panel = makePanel({
-      kind: "agent",
+      kind: "terminal",
       agentId: undefined,
-      command: "claude --flag",
+      command: "bash",
     });
-    expect(buildPanelSnapshotOptions(panel)).toBeNull();
+    const result = buildPanelSnapshotOptions(panel);
+    expect(result).toMatchObject({ kind: "terminal", command: "bash" });
+    expect(result!.agentId).toBeUndefined();
   });
 
-  it("returns a valid agent snapshot when command and agentId are present", () => {
+  it("returns a valid agent terminal snapshot when command and agentId are present", () => {
     const panel = makePanel({
-      kind: "agent",
+      kind: "terminal",
       agentId: "claude",
       command: "claude --flag",
       agentModelId: "opus",
@@ -166,7 +169,7 @@ describe("buildPanelSnapshotOptions", () => {
     });
     const result = buildPanelSnapshotOptions(panel);
     expect(result).toMatchObject({
-      kind: "agent",
+      kind: "terminal",
       agentId: "claude",
       command: "claude --flag",
       agentModelId: "opus",
@@ -310,31 +313,32 @@ describe("panelDuplicationService", () => {
     expect(result.cwd).toBe("");
   });
 
-  it("throws when duplicating agent panel with missing command", async () => {
+  it("throws when duplicating agent terminal with missing command", async () => {
     const { agentSettingsClient } = await import("@/clients");
     (agentSettingsClient.get as ReturnType<typeof vi.fn>).mockRejectedValue(
       new Error("settings unavailable")
     );
 
     const panel = makePanel({
-      kind: "agent",
+      kind: "terminal",
       agentId: "unknown-agent",
       command: undefined,
     });
     await expect(buildPanelDuplicateOptions(panel, "grid")).rejects.toThrow(
-      /Cannot duplicate agent panel.*command/
+      /Cannot duplicate agent terminal.*command/
     );
   });
 
-  it("throws when duplicating agent panel with missing agentId", async () => {
+  it("duplicates without agent identity when agentId is missing (plain terminal path)", async () => {
     const panel = makePanel({
-      kind: "agent",
+      kind: "terminal",
       agentId: undefined,
       command: "claude --flag",
     });
-    await expect(buildPanelDuplicateOptions(panel, "grid")).rejects.toThrow(
-      /Cannot duplicate agent panel.*agentId/
-    );
+    const result = await buildPanelDuplicateOptions(panel, "grid");
+    expect(result.kind).toBe("terminal");
+    expect(result.agentId).toBeUndefined();
+    expect(result.command).toBe("claude --flag");
   });
 
   it("copies agentPresetId to duplicate options", async () => {
@@ -367,7 +371,7 @@ describe("panelDuplicationService", () => {
     });
 
     const panel = makePanel({
-      kind: "agent",
+      kind: "terminal",
       agentId: "claude",
       agentPresetId: "user-abc",
     });
@@ -384,7 +388,7 @@ describe("panelDuplicationService", () => {
     getMergedPresetMock.mockReturnValue({ id: "user-abc", name: "No Env" });
 
     const panel = makePanel({
-      kind: "agent",
+      kind: "terminal",
       agentId: "claude",
       agentPresetId: "user-abc",
     });
@@ -399,7 +403,7 @@ describe("panelDuplicationService", () => {
       agents: { claude: {} },
     });
 
-    const panel = makePanel({ kind: "agent", agentId: "claude", agentPresetId: undefined });
+    const panel = makePanel({ kind: "terminal", agentId: "claude", agentPresetId: undefined });
     const result = await buildPanelDuplicateOptions(panel, "grid");
 
     expect(result.env).toBeUndefined();
@@ -419,7 +423,7 @@ describe("panelDuplicationService", () => {
       },
     });
 
-    const panel = makePanel({ kind: "agent", agentId: "claude", agentPresetId: undefined });
+    const panel = makePanel({ kind: "terminal", agentId: "claude", agentPresetId: undefined });
     const result = await buildPanelDuplicateOptions(panel, "grid");
 
     expect(result.env).toEqual({ ANTHROPIC_BASE_URL: "https://proxy.example.com" });
@@ -440,7 +444,7 @@ describe("panelDuplicationService", () => {
       env: { SHARED_KEY: "preset-wins", PRESET_ONLY: "yes" },
     });
 
-    const panel = makePanel({ kind: "agent", agentId: "claude", agentPresetId: "user-abc" });
+    const panel = makePanel({ kind: "terminal", agentId: "claude", agentPresetId: "user-abc" });
     const result = await buildPanelDuplicateOptions(panel, "grid");
 
     expect(result.env).toEqual({
@@ -463,7 +467,7 @@ describe("panelDuplicationService", () => {
     getMergedPresetMock.mockReturnValue(undefined);
 
     const panel = makePanel({
-      kind: "agent",
+      kind: "terminal",
       agentId: "claude",
       agentPresetId: "user-deleted",
       agentPresetColor: "#ff00ff",
@@ -516,7 +520,7 @@ describe("adversarial: behavioral overrides flow to generateAgentCommand in dupl
       dangerousEnabled: true,
     });
 
-    const panel = makePanel({ kind: "agent", agentId: "claude", agentPresetId: "user-abc" });
+    const panel = makePanel({ kind: "terminal", agentId: "claude", agentPresetId: "user-abc" });
     await buildPanelDuplicateOptions(panel, "grid");
 
     expect(spy).toHaveBeenCalled();
@@ -536,7 +540,7 @@ describe("adversarial: behavioral overrides flow to generateAgentCommand in dupl
       customFlags: "--extra-flag",
     });
 
-    const panel = makePanel({ kind: "agent", agentId: "claude", agentPresetId: "user-abc" });
+    const panel = makePanel({ kind: "terminal", agentId: "claude", agentPresetId: "user-abc" });
     await buildPanelDuplicateOptions(panel, "grid");
 
     const entry = spy.mock.calls[0]![1] as Record<string, unknown>;
@@ -551,7 +555,7 @@ describe("adversarial: behavioral overrides flow to generateAgentCommand in dupl
     });
     getMergedPresetMock.mockReturnValue({ id: "user-abc", name: "NoInline", inlineMode: false });
 
-    const panel = makePanel({ kind: "agent", agentId: "claude", agentPresetId: "user-abc" });
+    const panel = makePanel({ kind: "terminal", agentId: "claude", agentPresetId: "user-abc" });
     await buildPanelDuplicateOptions(panel, "grid");
 
     const entry = spy.mock.calls[0]![1] as Record<string, unknown>;
@@ -566,7 +570,7 @@ describe("adversarial: behavioral overrides flow to generateAgentCommand in dupl
     });
     getMergedPresetMock.mockReturnValue({ id: "user-abc", name: "NoOverride" });
 
-    const panel = makePanel({ kind: "agent", agentId: "claude", agentPresetId: "user-abc" });
+    const panel = makePanel({ kind: "terminal", agentId: "claude", agentPresetId: "user-abc" });
     await buildPanelDuplicateOptions(panel, "grid");
 
     const entry = spy.mock.calls[0]![1] as Record<string, unknown>;
@@ -585,7 +589,7 @@ describe("adversarial: behavioral overrides flow to generateAgentCommand in dupl
       args: ["--verbose", "--trace"],
     });
 
-    const panel = makePanel({ kind: "agent", agentId: "claude", agentPresetId: "user-abc" });
+    const panel = makePanel({ kind: "terminal", agentId: "claude", agentPresetId: "user-abc" });
     await buildPanelDuplicateOptions(panel, "grid");
 
     const opts = spy.mock.calls[0]![3] as Record<string, unknown>;
@@ -600,7 +604,7 @@ describe("adversarial: behavioral overrides flow to generateAgentCommand in dupl
     });
     getMergedPresetMock.mockReturnValue({ id: "user-abc", name: "NoArgs" });
 
-    const panel = makePanel({ kind: "agent", agentId: "claude", agentPresetId: "user-abc" });
+    const panel = makePanel({ kind: "terminal", agentId: "claude", agentPresetId: "user-abc" });
     await buildPanelDuplicateOptions(panel, "grid");
 
     const opts = spy.mock.calls[0]![3] as Record<string, unknown>;

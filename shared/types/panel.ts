@@ -3,13 +3,14 @@ import type { BuiltInAgentId } from "../config/agentIds.js";
 import type { BrowserHistory } from "./browser.js";
 
 /** Built-in panel kinds */
-export type BuiltInPanelKind = "terminal" | "agent" | "browser" | "dev-preview";
+export type BuiltInPanelKind = "terminal" | "browser" | "dev-preview";
 
 /**
- * Panel kind: distinguishes between default terminals, agent-driven terminals, browser panels,
- * and extension-provided panel types.
+ * Panel kind: distinguishes between default terminals, browser panels, and
+ * extension-provided panel types. Agent identity is represented via `agentId`
+ * on PTY panels rather than a distinct panel kind.
  *
- * Built-in kinds: "terminal" | "agent" | "browser"
+ * Built-in kinds: "terminal" | "browser" | "dev-preview"
  * Extensions can register additional kinds as strings.
  */
 export type PanelKind = BuiltInPanelKind | (string & {});
@@ -64,11 +65,11 @@ export interface DockRenderState {
 
 /** Type guard to check if a panel kind is a built-in kind */
 export function isBuiltInPanelKind(kind: PanelKind): kind is BuiltInPanelKind {
-  return kind === "terminal" || kind === "agent" || kind === "browser" || kind === "dev-preview";
+  return kind === "terminal" || kind === "browser" || kind === "dev-preview";
 }
 
 /**
- * Check if a built-in panel kind requires PTY (terminal or agent).
+ * Check if a built-in panel kind requires PTY.
  * For extension kinds, use `panelKindHasPty()` from panelKindRegistry
  * which consults the runtime registry configuration.
  * Note: dev-preview panels manage their own ephemeral PTYs via useDevServer hook,
@@ -76,7 +77,7 @@ export function isBuiltInPanelKind(kind: PanelKind): kind is BuiltInPanelKind {
  */
 export function isPtyPanelKind(kind: PanelKind): boolean {
   // Built-in kinds - for extension kinds, use panelKindHasPty() from registry
-  return kind === "terminal" || kind === "agent";
+  return kind === "terminal";
 }
 
 /**
@@ -171,14 +172,14 @@ interface BasePanelData {
 }
 
 export interface PtyPanelData extends BasePanelData {
-  kind: "terminal" | "agent";
+  kind: "terminal";
   /**
-   * Legacy field retained for persistence; new code should prefer `kind`.
+   * Legacy field retained for persistence; new code should prefer `agentId`.
    * - "terminal" for default terminals
    * - legacy agent ids ("claude", "gemini", "codex") when migrated from old state
    */
   type: TerminalType;
-  /** Agent ID when kind is 'agent' */
+  /** Agent identity, when this terminal is running an agent. Absent for plain shells. */
   agentId?: AgentId;
   /** Current working directory of the terminal */
   cwd: string;
@@ -332,7 +333,7 @@ export type PanelInstance = PtyPanelData | BrowserPanelData | DevPreviewPanelDat
 
 export function isPtyPanel(panel: PanelInstance | TerminalInstance): panel is PtyPanelData {
   const kind = panel.kind ?? "terminal";
-  return kind === "terminal" || kind === "agent";
+  return kind === "terminal";
 }
 
 export function isBrowserPanel(panel: PanelInstance | TerminalInstance): panel is BrowserPanelData {

@@ -122,14 +122,14 @@ describe("ProjectStatsService adversarial", () => {
     const ptyClient = makePtyClient();
     projectStoreMock.getAllProjects.mockReturnValue([{ id: "p1" }]);
     ptyClient.getAllTerminalsAsync.mockResolvedValue([
-      { projectId: "p1", isTrashed: true, kind: "agent", agentState: "working" },
+      { projectId: "p1", isTrashed: true, kind: "terminal", agentState: "working" },
       { projectId: "p1", kind: "dev-preview", agentState: "running" },
-      { projectId: "p1", hasPty: false, kind: "agent", agentState: "working" },
+      { projectId: "p1", hasPty: false, kind: "terminal", agentState: "working" },
       { projectId: "p1", kind: "terminal", agentState: "running" }, // no agentId, not "agent" kind → skip
       { projectId: "p1", kind: "terminal", agentId: "x", agentState: "waiting" }, // counts (waiting)
-      { projectId: "p1", kind: "agent", agentId: "x", agentState: "working" }, // counts (active)
-      { projectId: "p1", kind: "agent", agentId: "x", agentState: "running" }, // counts (active)
-      { projectId: "p1", kind: "agent", agentId: "x", agentState: "idle" }, // counts neither
+      { projectId: "p1", kind: "terminal", agentId: "x", agentState: "working" }, // counts (active)
+      { projectId: "p1", kind: "terminal", agentId: "x", agentState: "running" }, // counts (active)
+      { projectId: "p1", kind: "terminal", agentId: "x", agentState: "idle" }, // counts neither
     ]);
     ptyClient.getProjectStats.mockResolvedValue({
       projectId: "p1",

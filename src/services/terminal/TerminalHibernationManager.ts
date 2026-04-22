@@ -44,7 +44,7 @@ export class TerminalHibernationManager {
     if (
       !managed ||
       managed.isHibernated ||
-      (managed.kind === "agent" &&
+      (managed.agentId &&
         managed.canonicalAgentState !== "completed" &&
         managed.canonicalAgentState !== "exited")
     )
@@ -337,7 +337,7 @@ export class TerminalHibernationManager {
     }
 
     // Reinstall agent Enter key listener
-    if (managed.kind === "agent") {
+    if (managed.agentId) {
       const keyDisposable = terminal.onKey(({ domEvent }) => {
         if (
           !managed.isInputLocked &&

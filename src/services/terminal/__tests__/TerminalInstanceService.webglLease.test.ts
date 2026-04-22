@@ -207,7 +207,7 @@ describe("onTierApplied handler — WebGL manager integration", () => {
   let webGLManager: import("../TerminalWebGLManager").TerminalWebGLManager;
   let managed: ManagedTerminal;
 
-  function makeManagedTerminal(kind: "agent" | "terminal" = "agent"): ManagedTerminal {
+  function makeManagedTerminal(kind: "terminal" | "terminal" = "agent"): ManagedTerminal {
     return {
       terminal: { loadAddon: vi.fn(), refresh: vi.fn(), rows: 24 },
       isOpened: true,
