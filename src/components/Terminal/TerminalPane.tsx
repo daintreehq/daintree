@@ -193,11 +193,17 @@ function TerminalPaneComponent({
 
   useEffect(() => {
     setDismissedRestartPrompt(false);
-    setDismissedDegradedBanner(false);
     inputTracker.reset();
     // Track process start time on each restart for backoff stability window
     processStartTimeRef.current = Date.now();
   }, [restartKey, inputTracker]);
+
+  // Reset the degraded-mode dismissal whenever the panel restarts OR the
+  // detected agent identity changes, so a second agent (e.g. Claude → Gemini)
+  // running in the same plain shell gets its own restart-as-agent prompt.
+  useEffect(() => {
+    setDismissedDegradedBanner(false);
+  }, [restartKey, detectedAgentId]);
 
   const updateVisibility = usePanelStore((state) => state.updateVisibility);
   const getTerminal = usePanelStore((state) => state.getTerminal);

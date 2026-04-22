@@ -400,4 +400,25 @@ describe("TerminalProcess.handleAgentDetection — runtime promotion scrollback"
       terminal.dispose();
     }
   });
+
+  it("keeps scrollback at AGENT_SCROLLBACK across an agent-to-agent switch", () => {
+    const terminal = createPlainTerminal("t-plain-switch");
+    try {
+      callHandleAgentDetection(
+        terminal,
+        { detected: true, agentType: "claude", processIconId: "claude" },
+        getSpawnedAt(terminal)
+      );
+      expect(getScrollback(terminal)).toBe(10000);
+
+      callHandleAgentDetection(
+        terminal,
+        { detected: true, agentType: "gemini", processIconId: "gemini" },
+        getSpawnedAt(terminal)
+      );
+      expect(getScrollback(terminal)).toBe(10000);
+    } finally {
+      terminal.dispose();
+    }
+  });
 });
