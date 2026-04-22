@@ -343,6 +343,21 @@ describe("buildArgsForReconnectedFallback", () => {
     expect(result.worktreeId).toBe("wt-dragged");
   });
 
+  it('remaps the retired agentState "running" to "working" (issue #5810)', () => {
+    const result = buildArgsForReconnectedFallback(
+      {
+        id: "t1",
+        cwd: "/p",
+        kind: "terminal",
+        title: "Shell",
+        agentState: "running" as never,
+      },
+      { id: "t1", location: "grid" },
+      "/p"
+    );
+    expect(result.agentState).toBe("working");
+  });
+
   it("returns undefined worktreeId when saved has none", () => {
     const result = buildArgsForReconnectedFallback(
       { id: "t1", cwd: "/p", kind: "terminal", title: "Shell" },
@@ -948,6 +963,20 @@ describe("buildArgsForOrphanedTerminal", () => {
   it("falls back to projectRoot when cwd is empty", () => {
     const result = buildArgsForOrphanedTerminal({ id: "t1", cwd: "", title: "Test" }, "/project");
     expect(result.cwd).toBe("/project");
+  });
+
+  it('remaps the retired agentState "running" to "working" (issue #5810)', () => {
+    const result = buildArgsForOrphanedTerminal(
+      {
+        id: "t1",
+        cwd: "/p",
+        kind: "terminal",
+        title: "Shell",
+        agentState: "running" as never,
+      },
+      "/p"
+    );
+    expect(result.agentState).toBe("working");
   });
 
   it("preserves agentLaunchFlags and agentModelId from backend", () => {

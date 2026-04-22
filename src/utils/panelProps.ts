@@ -78,6 +78,7 @@ export function buildPanelProps({
       terminal.activityStatus,
       terminal.activityType
     ),
+    activityStatus: terminal.activityStatus,
     lastCommand: terminal.lastCommand,
     flowStatus: terminal.flowStatus,
     restartKey: terminal.restartKey,

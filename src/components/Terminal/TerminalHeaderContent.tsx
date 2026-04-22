@@ -47,6 +47,7 @@ export interface TerminalHeaderContentProps {
   type?: TerminalType;
   agentState?: AgentState;
   activity?: ActivityState | null;
+  activityStatus?: "working" | "waiting" | "success" | "failure";
   lastCommand?: string;
   isExited?: boolean;
   exitCode?: number | null;
@@ -72,6 +73,7 @@ function TerminalHeaderContentComponent({
   type,
   agentState,
   activity,
+  activityStatus,
   lastCommand,
   isExited = false,
   exitCode = null,
@@ -130,7 +132,7 @@ function TerminalHeaderContentComponent({
   // Show command pill only for plain terminals (not agent terminals)
   // Use kind to distinguish - agent panels have kind="agent"
   const isPlainTerminal = kind === "terminal" || (!kind && type === "terminal");
-  const showCommandPill = isPlainTerminal && flowStatus === "running" && !!lastCommand;
+  const showCommandPill = isPlainTerminal && activityStatus === "working" && !!lastCommand;
 
   const renderAgentStateChip = () => {
     if (!agentState || agentState === "idle") {

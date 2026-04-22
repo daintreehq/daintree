@@ -112,7 +112,7 @@ function TerminalRow({ term, listeners, onClick }: TerminalRowProps) {
             <span className="truncate text-xs font-medium text-text-secondary transition-colors group-hover/termrow:text-daintree-text">
               {term.title}
             </span>
-            {term.type === "terminal" && term.flowStatus === "running" && term.lastCommand && (
+            {term.type === "terminal" && term.activityStatus === "working" && term.lastCommand && (
               <Tooltip>
                 <TooltipTrigger asChild>
                   <span className="truncate text-[11px] font-mono text-text-muted">

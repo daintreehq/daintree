@@ -13,7 +13,7 @@ const WORKING_PULSE_INITIAL_DELAY_MS = 10_000;
 const WORKING_PULSE_MIN_INTERVAL_MS = 8_000;
 const WORKING_PULSE_MAX_INTERVAL_MS = 10_000;
 const ALL_CLEAR_DEBOUNCE_MS = 500;
-const ACTIVE_AGENT_STATES = new Set(["working", "running", "directing"]);
+const ACTIVE_AGENT_STATES = new Set(["working", "directing"]);
 
 /**
  * Grace period after spawn during which waiting sounds are suppressed.

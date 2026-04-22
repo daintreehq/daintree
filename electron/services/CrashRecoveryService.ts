@@ -8,6 +8,7 @@ import type {
   PanelSummary,
   PendingCrash,
 } from "../../shared/types/ipc/crashRecovery.js";
+import { coerceAgentState } from "../../shared/types/agent.js";
 import { store } from "../store.js";
 import { isGpuDisabledByFlag } from "./GpuCrashMonitorService.js";
 import { getActionBreadcrumbService } from "./ActionBreadcrumbService.js";
@@ -280,7 +281,7 @@ export class CrashRecoveryService {
           typeof t.createdAt === "number"
             ? Math.abs(crashTimestamp - t.createdAt) < SUSPECT_WINDOW_MS
             : false,
-        agentState: typeof t.agentState === "string" ? t.agentState : undefined,
+        agentState: coerceAgentState(t.agentState),
         lastStateChange: typeof t.lastStateChange === "number" ? t.lastStateChange : undefined,
       }));
     } catch {
