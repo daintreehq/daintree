@@ -5,9 +5,8 @@ import { useShallow } from "zustand/react/shallow";
 import { cn } from "@/lib/utils";
 import { isMac } from "@/lib/platform";
 import { useEscapeStack, useWorktreeColorMap } from "@/hooks";
-import { useFleetArmingStore, type FleetArmStatePreset } from "@/store/fleetArmingStore";
-import { useFleetFailureStore } from "@/store/fleetFailureStore";
-import { useWorktreeFilterStore } from "@/store/worktreeFilterStore";
+import { useFleetArmingStore } from "@/store/fleetArmingStore";
+import { useFleetBroadcastConfirmStore } from "@/store/fleetBroadcastConfirmStore";
 import {
   useFleetPendingActionStore,
   type FleetPendingActionKind,
@@ -25,11 +24,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { useNotificationStore } from "@/store/notificationStore";
-import { getFleetBroadcastWarnings, resolveFleetBroadcastTargetIds } from "./fleetBroadcast";
-import { broadcastFleetLiteralPaste } from "./fleetExecution";
 import { useFleetLiveBroadcast } from "./useFleetLiveBroadcast";
-import { logWarn } from "@/utils/logger";
 
 const DOUBLE_ESC_WINDOW_MS = 350;
 
@@ -65,50 +60,37 @@ function buildConfirmMessage(
   }
 }
 
-function describePasteWarnings(text: string): string[] {
-  const w = getFleetBroadcastWarnings(text);
-  const reasons: string[] = [];
-  if (w.destructive) reasons.push("destructive command detected");
-  if (w.overByteLimit) reasons.push("payload exceeds 512 bytes");
-  if (w.multiline) reasons.push("multi-line payload");
-  return reasons;
-}
-
 export function FleetArmingRibbon(): ReactElement | null {
   const armedCount = useFleetArmingStore((s) => s.armedIds.size);
   const clear = useFleetArmingStore((s) => s.clear);
   const armByState = useFleetArmingStore((s) => s.armByState);
   const armAll = useFleetArmingStore((s) => s.armAll);
-  const quickStateFilter = useWorktreeFilterStore((s) => s.quickStateFilter);
   const pending = useFleetPendingActionStore((s) => s.pending);
   const clearPending = useFleetPendingActionStore((s) => s.clear);
 
+  // Pending broadcast that needs user confirmation — fed by both the live
+  // paste handler and Enter-broadcast from a fleet primary's input bar.
+  const pendingBroadcast = useFleetBroadcastConfirmStore((s) => s.pending);
+  const clearPendingBroadcast = useFleetBroadcastConfirmStore((s) => s.clear);
+
   const [popoverOpen, setPopoverOpen] = useState(false);
-  const [pendingPaste, setPendingPaste] = useState<string | null>(null);
-  const [isSendingPaste, setIsSendingPaste] = useState(false);
+  const [isSendingBroadcast, setIsSendingBroadcast] = useState(false);
   const pasteCancelRef = useRef<HTMLButtonElement | null>(null);
   const reduceMotion = useReducedMotion();
 
-  const handlePasteConfirm = useCallback((text: string) => {
-    setPendingPaste(text);
-  }, []);
-
-  useFleetLiveBroadcast({
-    enabled: armedCount >= 2,
-    onPasteConfirm: handlePasteConfirm,
-  });
+  useFleetLiveBroadcast({ enabled: armedCount >= 2 });
 
   useEffect(() => {
-    if (pendingPaste !== null) {
+    if (pendingBroadcast !== null) {
       pasteCancelRef.current?.focus();
     }
-  }, [pendingPaste]);
+  }, [pendingBroadcast]);
 
   useEffect(() => {
-    if (armedCount < 2 && pendingPaste !== null) {
-      setPendingPaste(null);
+    if (armedCount < 2 && pendingBroadcast !== null) {
+      clearPendingBroadcast();
     }
-  }, [armedCount, pendingPaste]);
+  }, [armedCount, pendingBroadcast, clearPendingBroadcast]);
 
   useEffect(() => {
     if (armedCount < 2 && popoverOpen) {
@@ -119,15 +101,15 @@ export function FleetArmingRibbon(): ReactElement | null {
   // Escape stack: confirmation cancel is owned here so a pending confirm
   // absorbs bare Escape before it reaches the targets. The armed-list
   // popover gets its own entry so bare Escape closes the list without
-  // disarming the fleet. Paste confirmation also absorbs bare Escape so
-  // the user can cancel a queued destructive paste with a single tap.
+  // disarming the fleet. Broadcast confirmation also absorbs bare Escape so
+  // the user can cancel a queued destructive send with a single tap.
   // Bare Escape with focus inside the ribbon (Exit button, count chip,
   // selection-menu trigger) exits the fleet — see handleRibbonKeyDown
   // below. Bare Escape from anywhere else (xterm, hybrid input) still
   // belongs to the agents (#5750) — only the ⌘Esc chord exits globally.
   useEscapeStack(pending !== null, clearPending);
   useEscapeStack(popoverOpen, () => setPopoverOpen(false));
-  useEscapeStack(pendingPaste !== null, () => setPendingPaste(null));
+  useEscapeStack(pendingBroadcast !== null, clearPendingBroadcast);
 
   const exitFleet = useCallback(() => {
     const target = useFleetArmingStore.getState().lastArmedId;
@@ -264,98 +246,22 @@ export function FleetArmingRibbon(): ReactElement | null {
     };
   }, [armedCount]);
 
-  const filterPreset: FleetArmStatePreset | null =
-    quickStateFilter === "all" ? null : (quickStateFilter as FleetArmStatePreset);
-  const filterLabel = filterPreset
-    ? filterPreset === "working"
-      ? "Working"
-      : filterPreset === "waiting"
-        ? "Waiting"
-        : "Finished"
-    : null;
+  const cancelPendingBroadcast = useCallback(() => {
+    clearPendingBroadcast();
+  }, [clearPendingBroadcast]);
 
-  const pasteWarnings = useMemo(
-    () => (pendingPaste !== null ? describePasteWarnings(pendingPaste) : []),
-    [pendingPaste]
-  );
-
-  const cancelPendingPaste = useCallback(() => {
-    setPendingPaste(null);
-  }, []);
-
-  const confirmPendingPaste = useCallback(async () => {
-    const text = pendingPaste;
-    if (text == null || isSendingPaste) return;
-    setIsSendingPaste(true);
+  const confirmPendingBroadcast = useCallback(async () => {
+    if (pendingBroadcast == null || isSendingBroadcast) return;
+    const { onConfirm } = pendingBroadcast;
+    setIsSendingBroadcast(true);
     try {
-      const targets = resolveFleetBroadcastTargetIds();
-      if (targets.length === 0) {
-        useNotificationStore.getState().addNotification({
-          type: "warning",
-          priority: "low",
-          message: "No armed agents available to send to",
-        });
-        return;
-      }
-      const result = await broadcastFleetLiteralPaste(text, targets);
-      if (result.failureCount > 0) {
-        logWarn("[FleetArmingRibbon] paste broadcast had rejections", {
-          failureCount: result.failureCount,
-          failedIds: result.failedIds,
-        });
-        useFleetFailureStore.getState().recordFailure(text, result.failedIds);
-      } else {
-        // Successful resend clears any prior failure markers on the targets
-        // we just sent to — the partial-failure state is now resolved.
-        for (const id of targets) useFleetFailureStore.getState().dismissId(id);
-      }
-      useNotificationStore.getState().addNotification({
-        type: result.successCount > 0 ? "success" : "warning",
-        priority: "low",
-        message:
-          result.failureCount > 0
-            ? `Sent to ${result.successCount} agent${result.successCount === 1 ? "" : "s"} (${result.failureCount} failed)`
-            : `Sent to ${result.successCount} agent${result.successCount === 1 ? "" : "s"}`,
-      });
+      await onConfirm();
+      // Success/failure dots (per-pane red dots) carry the result; no toast.
     } finally {
-      setIsSendingPaste(false);
-      setPendingPaste(null);
+      setIsSendingBroadcast(false);
+      clearPendingBroadcast();
     }
-  }, [pendingPaste, isSendingPaste]);
-
-  const failedIds = useFleetFailureStore((s) => s.failedIds);
-  const failurePayload = useFleetFailureStore((s) => s.payload);
-  const clearFailures = useFleetFailureStore((s) => s.clear);
-  const dismissFailure = useFleetFailureStore((s) => s.dismissId);
-  const failureCount = failedIds.size;
-  const [isRetryingFailures, setIsRetryingFailures] = useState(false);
-
-  const retryFailures = useCallback(async () => {
-    if (failureCount === 0 || failurePayload == null || isRetryingFailures) return;
-    setIsRetryingFailures(true);
-    try {
-      // Snapshot once — `failedIds` mutates during the dispatch loop as
-      // dismissId fires, and we'd skip retries if we re-read mid-loop.
-      const targets = Array.from(failedIds);
-      const result = await broadcastFleetLiteralPaste(failurePayload, targets);
-      // Drop succeeded targets from the failure set; whatever remains stays
-      // visible until the next attempt or explicit acknowledge.
-      const stillFailed = new Set(result.failedIds);
-      for (const id of targets) {
-        if (!stillFailed.has(id)) dismissFailure(id);
-      }
-      useNotificationStore.getState().addNotification({
-        type: result.failureCount === 0 ? "success" : "warning",
-        priority: "low",
-        message:
-          result.failureCount === 0
-            ? `Retried — all ${result.successCount} succeeded`
-            : `Retried — ${result.successCount} ok, ${result.failureCount} still failing`,
-      });
-    } finally {
-      setIsRetryingFailures(false);
-    }
-  }, [failedIds, failureCount, failurePayload, dismissFailure, isRetryingFailures]);
+  }, [pendingBroadcast, isSendingBroadcast, clearPendingBroadcast]);
 
   const selectionMenuItems = (
     <>
@@ -396,16 +302,6 @@ export function FleetArmingRibbon(): ReactElement | null {
       >
         All in this worktree
       </DropdownMenuItem>
-      <DropdownMenuSeparator />
-      <DropdownMenuItem
-        disabled={filterPreset === null}
-        onSelect={() => {
-          if (filterPreset === null) return;
-          armByState(filterPreset, "current", false);
-        }}
-      >
-        {filterLabel ? `Match active filter (${filterLabel})` : "Match active filter"}
-      </DropdownMenuItem>
       {armedCount > 0 ? (
         <>
           <DropdownMenuSeparator />
@@ -437,12 +333,12 @@ export function FleetArmingRibbon(): ReactElement | null {
     (e: React.KeyboardEvent<HTMLDivElement>) => {
       if (e.key !== "Escape") return;
       if (e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
-      if (pendingPaste !== null || popoverOpen || pending !== null) return;
+      if (pendingBroadcast !== null || popoverOpen || pending !== null) return;
       e.preventDefault();
       e.stopPropagation();
       exitFleet();
     },
-    [exitFleet, pendingPaste, popoverOpen, pending]
+    [exitFleet, pendingBroadcast, popoverOpen, pending]
   );
 
   // Render confirmation before the armedCount<2 null guard so single-agent
@@ -508,13 +404,20 @@ export function FleetArmingRibbon(): ReactElement | null {
 
   const exitChordLabel = isMac() ? "⌘Esc" : "Ctrl+Esc";
 
+  // When a destructive broadcast (paste or Enter) is pending, the right-side
+  // controls collapse to the confirm question so we keep one ribbon row
+  // instead of stacking a second strip below. Per-pane red dots (PanelHeader)
+  // carry any post-broadcast failure state — no retry/dismiss buttons here.
+  const isBroadcastConfirmActive = pendingBroadcast !== null;
+
   return (
     <div data-testid="fleet-arming-ribbon-group">
       <AnimatePresence initial={false}>
         <motion.div
           key="fleet-arming-ribbon"
-          role="status"
-          aria-live="off"
+          role={isBroadcastConfirmActive ? "alertdialog" : "status"}
+          aria-live={isBroadcastConfirmActive ? "polite" : "off"}
+          aria-atomic={isBroadcastConfirmActive ? "true" : undefined}
           tabIndex={-1}
           onKeyDown={handleRibbonKeyDown}
           className={cn(
@@ -549,84 +452,54 @@ export function FleetArmingRibbon(): ReactElement | null {
               {selectionMenuItems}
             </DropdownMenuContent>
           </DropdownMenu>
-          <div className="ml-auto flex items-center gap-1.5">
-            {failureCount > 0 && failurePayload != null && (
-              <>
-                <button
-                  type="button"
-                  disabled={isRetryingFailures}
-                  onClick={() => void retryFailures()}
-                  data-testid="fleet-retry-failed"
-                  aria-label={`Retry failed broadcast on ${failureCount} agent${failureCount === 1 ? "" : "s"}`}
-                  className={cn(
-                    "inline-flex items-center gap-1 rounded px-2 py-0.5 text-[11px] transition-colors",
-                    "bg-status-error/15 text-status-error hover:bg-status-error/25",
-                    "disabled:cursor-not-allowed disabled:opacity-50"
-                  )}
-                >
-                  <span aria-hidden="true">⚠</span>
-                  <span>Retry failed ({failureCount})</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={clearFailures}
-                  data-testid="fleet-acknowledge-failed"
-                  aria-label="Acknowledge fleet broadcast failures"
-                  className="inline-flex items-center rounded px-2 py-0.5 text-[11px] text-daintree-text/60 transition-colors hover:bg-tint/[0.08] hover:text-daintree-text"
-                >
-                  Dismiss
-                </button>
-              </>
-            )}
-            <button
-              type="button"
-              onClick={exitFleet}
-              aria-label={`Exit fleet mode (${exitChordLabel})`}
-              data-testid="fleet-exit"
-              className={cn(
-                "inline-flex items-center gap-1.5 rounded px-2 py-0.5 text-[11px] transition-colors",
-                "bg-tint/[0.08] text-daintree-text/80 hover:bg-tint/[0.14] hover:text-daintree-text"
-              )}
+          {isBroadcastConfirmActive && pendingBroadcast ? (
+            <div
+              data-testid="fleet-paste-confirm"
+              className="ml-auto flex items-center gap-2 text-[11px] text-daintree-text"
             >
-              <span>Exit</span>
-              <kbd className="rounded border border-category-amber-border bg-amber-500/5 px-1 font-mono text-[10px] leading-tight text-category-amber-text">
-                {exitChordLabel}
-              </kbd>
-            </button>
-          </div>
+              <span className="text-daintree-text/85">
+                Send to {armedCount} — {pendingBroadcast.warningReasons.join(", ")}?
+              </span>
+              <button
+                type="button"
+                ref={pasteCancelRef}
+                onClick={cancelPendingBroadcast}
+                data-testid="fleet-paste-confirm-cancel"
+                className="rounded px-2 py-0.5 text-daintree-text/70 transition-colors hover:bg-tint/[0.08] hover:text-daintree-text"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={isSendingBroadcast}
+                onClick={() => void confirmPendingBroadcast()}
+                data-testid="fleet-paste-confirm-send"
+                className="rounded bg-amber-500/20 px-2 py-0.5 text-amber-100 transition-colors hover:bg-amber-500/30 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                Send anyway
+              </button>
+            </div>
+          ) : (
+            <div className="ml-auto flex items-center gap-1.5">
+              <button
+                type="button"
+                onClick={exitFleet}
+                aria-label={`Exit fleet mode (${exitChordLabel})`}
+                data-testid="fleet-exit"
+                className={cn(
+                  "inline-flex items-center gap-1.5 rounded px-2 py-0.5 text-[11px] transition-colors",
+                  "bg-tint/[0.08] text-daintree-text/80 hover:bg-tint/[0.14] hover:text-daintree-text"
+                )}
+              >
+                <span>Exit</span>
+                <kbd className="rounded border border-category-amber-border bg-amber-500/5 px-1 font-mono text-[10px] leading-tight text-category-amber-text">
+                  {exitChordLabel}
+                </kbd>
+              </button>
+            </div>
+          )}
         </motion.div>
       </AnimatePresence>
-      {pendingPaste !== null && (
-        <div
-          role="alertdialog"
-          aria-live="polite"
-          aria-atomic="true"
-          data-testid="fleet-paste-confirm"
-          className="flex items-center gap-2 border-b border-amber-500/40 bg-amber-500/10 px-3 py-1.5 text-[11px] text-amber-200"
-        >
-          <span className="flex-1">
-            Paste to {armedCount} agent{armedCount === 1 ? "" : "s"} — {pasteWarnings.join(", ")}?
-          </span>
-          <button
-            type="button"
-            ref={pasteCancelRef}
-            onClick={cancelPendingPaste}
-            data-testid="fleet-paste-confirm-cancel"
-            className="rounded px-2 py-0.5 text-daintree-text/70 transition-colors hover:bg-tint/[0.08] hover:text-daintree-text"
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            disabled={isSendingPaste}
-            onClick={() => void confirmPendingPaste()}
-            data-testid="fleet-paste-confirm-send"
-            className="rounded bg-amber-500/20 px-2 py-0.5 text-amber-100 transition-colors hover:bg-amber-500/30 disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            Send anyway
-          </button>
-        </div>
-      )}
     </div>
   );
 }
@@ -777,8 +650,9 @@ function useFleetWorktreeScope(): FleetWorktreeScope {
 function FleetWorktreeDots({ scope }: { scope: FleetWorktreeScope }): ReactElement | null {
   if (scope.colors.length === 0) return null;
 
+  // Cap at 3 — the dots are a glance signal, not an inventory. The chip's
+  // aria-label already carries the precise worktree count.
   const shown = scope.colors.slice(0, 3);
-  const overflow = scope.colors.length - shown.length;
 
   return (
     <span
@@ -793,11 +667,6 @@ function FleetWorktreeDots({ scope }: { scope: FleetWorktreeScope }): ReactEleme
           style={{ backgroundColor: color, zIndex: shown.length - i }}
         />
       ))}
-      {overflow > 0 ? (
-        <span className="ml-1 text-[10px] font-medium tabular-nums text-daintree-text/60">
-          +{overflow}
-        </span>
-      ) : null}
     </span>
   );
 }

@@ -299,7 +299,8 @@ export type BuiltInActionId =
   | "fleet.trash"
   | "fleet.scope.enter"
   | "fleet.scope.exit"
-  | "fleet.armMatchingFilter";
+  | "fleet.armMatchingFilter"
+  | "fleet.retryFailures";
 
 export type ActionId = BuiltInActionId | (string & {});
 

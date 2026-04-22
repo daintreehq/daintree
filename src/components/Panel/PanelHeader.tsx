@@ -798,8 +798,8 @@ function PanelHeaderComponent({
                   />
                 </TooltipTrigger>
                 <TooltipContent side="bottom">
-                  Last fleet broadcast failed here — click to dismiss, or use "Retry failed" in the
-                  fleet ribbon
+                  Last fleet broadcast failed here — click to dismiss. Run "Fleet: Retry failed
+                  broadcast" from the command palette to resend.
                 </TooltipContent>
               </Tooltip>
             </TooltipProvider>

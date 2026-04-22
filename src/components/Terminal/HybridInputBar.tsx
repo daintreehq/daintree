@@ -40,6 +40,7 @@ import { useProjectStore } from "@/store/projectStore";
 import { usePanelStore, useVoiceRecordingStore } from "@/store";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { FleetDraftingPill } from "@/components/Fleet/FleetDraftingPill";
+import { tryFleetBroadcastFromEditor } from "@/components/Fleet/fleetEnterBroadcast";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { VoiceInputButton } from "./VoiceInputButton";
 import { Archive, Loader2 } from "lucide-react";
@@ -643,12 +644,40 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
 
     useVoiceDecorations({ terminalId, editorViewRef, voiceDraftRevision });
 
+    // Reset the editor's CodeMirror doc to empty after a fleet broadcast
+    // — the persisted draft is wiped via clearDraftInput, but the local
+    // doc is owned by this view and must be cleared explicitly.
+    const resetEditorDoc = useCallback(() => {
+      applyEditorValue("", {
+        selection: EditorSelection.create([EditorSelection.cursor(0)]),
+      });
+    }, [applyEditorValue]);
+
     const sendFromEditor = useCallback(() => {
       const view = editorViewRef.current;
       const latest = latestRef.current;
       const text = view?.state.doc.toString() ?? latest?.value ?? "";
+
+      // Fleet primary: Enter broadcasts to every armed peer instead of doing
+      // a single-pane send. Followers (armed but not focused) stay on the
+      // single-pane path — typing in a follower's input bar is the
+      // deliberate "send only here" escape hatch.
+      if (
+        isFocusedTerminal &&
+        useFleetArmingStore.getState().armedIds.has(terminalId) &&
+        useFleetArmingStore.getState().armedIds.size >= 2
+      ) {
+        const intercepted = tryFleetBroadcastFromEditor(terminalId, text, () => {
+          // Clear local draft + editor on send. The mirror effect propagates
+          // the empty draft to follower bars so they clear in lockstep.
+          clearDraftInput(terminalId, projectId);
+          resetEditorDoc();
+        });
+        if (intercepted) return;
+      }
+
       sendText(text);
-    }, [sendText]);
+    }, [sendText, isFocusedTerminal, terminalId, projectId, clearDraftInput, resetEditorDoc]);
 
     const { startVoiceWaitSubmit, cancelVoiceWaitSubmit } = useVoiceWaitSubmit({
       terminalId,
@@ -658,15 +687,6 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     });
 
     const collapseEditor = useCallback(() => setIsExpanded(false), []);
-
-    // Reset the editor's CodeMirror doc to empty after a fleet "Send to all"
-    // — the persisted draft is wiped via clearDraftInput, but the local
-    // doc is owned by this view and must be cleared explicitly.
-    const resetEditorDoc = useCallback(() => {
-      applyEditorValue("", {
-        selection: EditorSelection.create([EditorSelection.cursor(0)]),
-      });
-    }, [applyEditorValue]);
 
     const focusEditor = useCallback(() => {
       const view = editorViewRef.current;
@@ -1255,14 +1275,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         className="group cursor-text px-3.5 pb-2.5 pt-2.5"
         style={{ backgroundColor: inputBarColors.background, ...shellVars }}
       >
-        {isFleetPrimary && (
-          <FleetDraftingPill
-            terminalId={terminalId}
-            draft={value}
-            projectId={projectId}
-            onResetEditor={resetEditorDoc}
-          />
-        )}
+        {isFleetPrimary && <FleetDraftingPill />}
         <div className="flex items-end gap-2">
           <div
             ref={inputShellRef}

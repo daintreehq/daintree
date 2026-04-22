@@ -1,21 +1,27 @@
-import { useEffect, useLayoutEffect, useRef } from "react";
+import { useEffect, useRef } from "react";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { useFleetFailureStore } from "@/store/fleetFailureStore";
-import { useNotificationStore } from "@/store/notificationStore";
+import { useFleetBroadcastConfirmStore } from "@/store/fleetBroadcastConfirmStore";
 import { logWarn } from "@/utils/logger";
 import {
+  getFleetBroadcastWarnings,
   needsFleetBroadcastConfirmation,
   resolveFleetBroadcastByOrigin,
   resolveFleetBroadcastTargetIds,
 } from "./fleetBroadcast";
 import { broadcastFleetKeySequence, broadcastFleetLiteralPaste } from "./fleetExecution";
 
-const FLEET_DIVERGENCE_CORRELATION = "fleet-broadcast-divergence";
-const FLEET_DIVERGENCE_NOTIFY_INTERVAL_MS = 2000;
-
 export interface FleetLiveBroadcastOptions {
   enabled: boolean;
-  onPasteConfirm: (text: string) => void;
+}
+
+function describeWarnings(text: string): string[] {
+  const w = getFleetBroadcastWarnings(text);
+  const reasons: string[] = [];
+  if (w.destructive) reasons.push("destructive command detected");
+  if (w.overByteLimit) reasons.push("payload exceeds 512 bytes");
+  if (w.multiline) reasons.push("multi-line payload");
+  return reasons;
 }
 
 /**
@@ -113,17 +119,8 @@ export function mapKeyToSequence(event: KeyboardEvent): string | null {
  * #5750) keep working. Cmd/Win keys are filtered by `mapKeyToSequence`
  * so app shortcuts still reach the keybinding service.
  */
-export function useFleetLiveBroadcast({
-  enabled,
-  onPasteConfirm,
-}: FleetLiveBroadcastOptions): void {
-  const onPasteConfirmRef = useRef(onPasteConfirm);
-  useLayoutEffect(() => {
-    onPasteConfirmRef.current = onPasteConfirm;
-  }, [onPasteConfirm]);
-
+export function useFleetLiveBroadcast({ enabled }: FleetLiveBroadcastOptions): void {
   const isComposingRef = useRef(false);
-  const lastDivergenceNotifyAtRef = useRef(0);
 
   useEffect(() => {
     if (!enabled) return;
@@ -150,42 +147,19 @@ export function useFleetLiveBroadcast({
     };
 
     /**
-     * Surface a coalesced "Sent to N/M — K in different state" pill when a
-     * keystroke fans out to fewer panes than the armed set. The notification
-     * store collapses by `correlationId`, so a typing burst against a divergent
-     * fleet shows one toast that updates in place rather than a fresh toast
-     * per keystroke. We additionally rate-limit to once per
-     * FLEET_DIVERGENCE_NOTIFY_INTERVAL_MS so a fast typist doesn't churn the
-     * store on every character.
-     */
-    const notifyDivergence = (matchedCount: number, divergedCount: number): void => {
-      const now = Date.now();
-      if (now - lastDivergenceNotifyAtRef.current < FLEET_DIVERGENCE_NOTIFY_INTERVAL_MS) return;
-      lastDivergenceNotifyAtRef.current = now;
-      const sentTo = matchedCount + 1; // +1 for the origin pane
-      const totalArmed = sentTo + divergedCount;
-      useNotificationStore.getState().addNotification({
-        type: "info",
-        priority: "low",
-        correlationId: FLEET_DIVERGENCE_CORRELATION,
-        message: `Sent to ${sentTo}/${totalArmed} — ${divergedCount} in different state`,
-      });
-    };
-
-    /**
      * Live keystroke fan-out with origin-state gating. The keystroke goes to
      * the origin pane plus every armed peer in a compatible state group
      * (working/running together, completed/exited together, otherwise exact
      * match). Peers in a divergent state are silently dropped — sending `y`
      * from a `[y/N]` waiting prompt should never accidentally inject a `y`
-     * into a peer's vim normal-mode buffer. `notifyDivergence` keeps the user
-     * aware without crowding the surface.
+     * into a peer's vim normal-mode buffer. The amber stripe on each follower
+     * already tells the user who's in the fleet; if a peer didn't echo the
+     * keystroke that's directly visible in their pane.
      */
     const fanOutKeystroke = (sequence: string, originId: string): void => {
-      const { matched, diverged } = resolveFleetBroadcastByOrigin(originId);
+      const { matched } = resolveFleetBroadcastByOrigin(originId);
       const targets = [originId, ...matched];
       broadcastFleetKeySequence(sequence, targets);
-      if (diverged.length > 0) notifyDivergence(matched.length, diverged.length);
     };
 
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -217,6 +191,24 @@ export function useFleetLiveBroadcast({
       fanOutKeystroke(data, surface.originId);
     };
 
+    const dispatchPaste = async (text: string): Promise<void> => {
+      const targets = resolveFleetBroadcastTargetIds();
+      if (targets.length === 0) return;
+      const result = await broadcastFleetLiteralPaste(text, targets);
+      if (result.failureCount === 0) {
+        // A successful broadcast clears any stale failure dot on these
+        // targets so the user isn't left with an out-of-date red dot from
+        // a prior partial failure that this paste implicitly retried.
+        for (const id of targets) useFleetFailureStore.getState().dismissId(id);
+        return;
+      }
+      logWarn("[FleetLiveBroadcast] paste broadcast had rejections", {
+        failureCount: result.failureCount,
+        failedIds: result.failedIds,
+      });
+      useFleetFailureStore.getState().recordFailure(text, result.failedIds);
+    };
+
     const handlePaste = (event: ClipboardEvent) => {
       if (classifyTarget(event.target).kind !== "armed-xterm") return;
       const text = event.clipboardData?.getData("text/plain") ?? "";
@@ -225,29 +217,20 @@ export function useFleetLiveBroadcast({
       if (!text) return;
 
       if (needsFleetBroadcastConfirmation(text)) {
-        onPasteConfirmRef.current(text);
+        // Same store path used by Enter-broadcast — the ribbon renders the
+        // confirm controls in-place regardless of which surface initiated it.
+        useFleetBroadcastConfirmStore.getState().request({
+          text,
+          warningReasons: describeWarnings(text),
+          onConfirm: () => dispatchPaste(text),
+        });
         return;
       }
 
       // Pastes ignore the state-divergence gate: a multi-line paste is an
       // intentional bulk action the user explicitly took, and bracketed-paste
       // semantics protect TUIs from interpreting the contents as keystrokes.
-      const targets = resolveFleetBroadcastTargetIds();
-      void (async () => {
-        const result = await broadcastFleetLiteralPaste(text, targets);
-        if (result.failureCount === 0) {
-          // A successful broadcast clears any stale failure dot on these
-          // targets so the user isn't left with an out-of-date red dot from
-          // a prior partial failure that this paste implicitly retried.
-          for (const id of targets) useFleetFailureStore.getState().dismissId(id);
-          return;
-        }
-        logWarn("[FleetLiveBroadcast] paste broadcast had rejections", {
-          failureCount: result.failureCount,
-          failedIds: result.failedIds,
-        });
-        useFleetFailureStore.getState().recordFailure(text, result.failedIds);
-      })();
+      void dispatchPaste(text);
     };
 
     document.addEventListener("keydown", handleKeyDown, true);

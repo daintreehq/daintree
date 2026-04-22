@@ -499,34 +499,6 @@ describe("FleetArmingRibbon", () => {
       expect([...armed].sort()).toEqual(["t1", "t2", "t3"]);
     });
 
-    it("disables 'Match active filter' when quickStateFilter is 'all'", () => {
-      useFleetArmingStore.getState().armIds(["t1", "t2"]);
-      useWorktreeFilterStore.setState({ quickStateFilter: "all" });
-      render(<FleetArmingRibbon />);
-      const item = findMenuItem(/Match active filter/);
-      expect(item.getAttribute("data-disabled")).toBe("true");
-      // Disabled item should not mutate the armed set.
-      fireEvent.click(item);
-      expect([...useFleetArmingStore.getState().armedIds].sort()).toEqual(["t1", "t2"]);
-    });
-
-    it("'Match active filter' uses the current filter preset at current scope", () => {
-      seed([
-        makeAgent("t1", "working"),
-        makeAgent("t2", "waiting"),
-        { ...makeAgent("t3", "waiting"), worktreeId: "wt-2" } as TerminalInstance,
-      ]);
-      useFleetArmingStore.getState().armIds(["t1", "t3"]);
-      useWorktreeFilterStore.setState({ quickStateFilter: "waiting" });
-      render(<FleetArmingRibbon />);
-      const item = findMenuItem(/Match active filter \(Waiting\)/);
-      expect(item.getAttribute("data-disabled")).toBeNull();
-      fireEvent.click(item);
-      const armed = useFleetArmingStore.getState().armedIds;
-      // Scope is 'current' — cross-worktree waiting agents are not armed.
-      expect([...armed]).toEqual(["t2"]);
-    });
-
     it("'Clear selection' clears the armed set", () => {
       useFleetArmingStore.getState().armIds(["a", "b", "c"]);
       render(<FleetArmingRibbon />);

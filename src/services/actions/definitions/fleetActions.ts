@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { ActionRegistry } from "../actionTypes";
 import { usePanelStore } from "@/store/panelStore";
 import { useFleetArmingStore, isFleetArmEligible } from "@/store/fleetArmingStore";
+import { useFleetFailureStore } from "@/store/fleetFailureStore";
 import {
   useFleetPendingActionStore,
   type FleetPendingActionKind,
@@ -9,6 +10,7 @@ import {
 import { useFleetScopeFlagStore } from "@/store/fleetScopeFlagStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { terminalClient } from "@/clients";
+import { broadcastFleetLiteralPaste } from "@/components/Fleet/fleetExecution";
 import type { TerminalInstance } from "@shared/types";
 
 interface ArmedSnapshot {
@@ -277,6 +279,28 @@ export function registerFleetActions(actions: ActionRegistry): void {
       const flag = useFleetScopeFlagStore.getState();
       if (!flag.isHydrated || flag.mode !== "scoped") return;
       useWorktreeSelectionStore.getState().exitFleetScope();
+    },
+  }));
+
+  actions.set("fleet.retryFailures", () => ({
+    id: "fleet.retryFailures",
+    title: "Fleet: Retry failed broadcast",
+    description:
+      "Re-fire the most recent broadcast against any panes that rejected it. No-op when no failures are recorded.",
+    category: "terminal",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    run: async () => {
+      const { failedIds, payload } = useFleetFailureStore.getState();
+      if (payload == null || failedIds.size === 0) return;
+      // Snapshot once — `failedIds` mutates as dismissId fires inside the loop.
+      const targets = Array.from(failedIds);
+      const result = await broadcastFleetLiteralPaste(payload, targets);
+      const stillFailed = new Set(result.failedIds);
+      for (const id of targets) {
+        if (!stillFailed.has(id)) useFleetFailureStore.getState().dismissId(id);
+      }
     },
   }));
 
