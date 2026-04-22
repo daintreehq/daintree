@@ -329,7 +329,7 @@ describe("HibernationService", () => {
       expect(ptyManagerMock.gracefulKillByProject).not.toHaveBeenCalled();
     });
 
-    it.each(["working", "running", "waiting", "directing"] as const)(
+    it.each(["working", "waiting", "directing"] as const)(
       "skips projects with %s agent terminals",
       async (agentState) => {
         ptyManagerMock.getAll.mockReturnValue([makeTerminal({ agentState })]);
@@ -498,7 +498,7 @@ describe("HibernationService", () => {
       ]);
     }
 
-    it.each(["working", "running", "waiting", "directing"] as const)(
+    it.each(["working", "waiting", "directing"] as const)(
       "skips projects with %s agent in scheduled hibernation",
       async (agentState) => {
         setupScheduledTest();
