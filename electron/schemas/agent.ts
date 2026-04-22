@@ -43,7 +43,10 @@ export const AgentSpawnedSchema = EventContextSchema.extend({
 });
 
 export const AgentStateChangedSchema = EventContextSchema.extend({
-  agentId: z.string().min(1),
+  // Optional: runtime-detected agents (no persisted launch-time agentId) identify
+  // themselves via terminal.detectedAgentType, which the state service maps into
+  // this field. Consumers should fall back to terminalId when agentId is absent.
+  agentId: z.string().min(1).optional(),
   state: AgentStateSchema,
   previousState: AgentStateSchema,
   timestamp: z.number().int().positive(),

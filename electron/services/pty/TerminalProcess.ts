@@ -1504,7 +1504,12 @@ export class TerminalProcess {
       });
     }
 
-    if (!terminal.agentId) {
+    // Route to shell-style headlines only when neither a persisted agent
+    // (terminal.agentId) nor a live runtime-detected agent
+    // (terminal.detectedAgentType) is present. By the time we reach here in
+    // the detection-cleared branch, detectedAgentType is already undefined,
+    // so post-exit shell activity resumes driving shell headlines. #5773
+    if (!terminal.agentId && !terminal.detectedAgentType) {
       const lastCommand = result.currentCommand || this.semanticBufferManager.getLastCommand();
 
       const { headline, status, type } = this.headlineGenerator.generate({

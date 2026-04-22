@@ -110,7 +110,11 @@ export class AgentStateService {
     sessionCost?: number,
     sessionTokens?: number
   ): boolean {
-    if (!terminal.agentId) {
+    // Runtime-detected agents (plain terminals where a CLI was detected at
+    // runtime, no persisted launch-time agentId) flow through the state machine
+    // using their detected type as the identity. #5773
+    const effectiveAgentId = terminal.agentId ?? terminal.detectedAgentType;
+    if (!effectiveAgentId) {
       return false;
     }
 
@@ -132,7 +136,7 @@ export class AgentStateService {
         );
 
         const stateChangePayload = {
-          agentId: terminal.agentId,
+          agentId: effectiveAgentId,
           state: newState,
           previousState,
           timestamp: getStateChangeTimestamp(),
@@ -172,7 +176,7 @@ export class AgentStateService {
 
     // Build and validate state change payload
     const stateChangePayload = {
-      agentId: terminal.agentId,
+      agentId: effectiveAgentId,
       state: newState,
       previousState,
       timestamp: terminal.lastStateChange,
@@ -297,7 +301,9 @@ export class AgentStateService {
       sessionTokens?: number;
     }
   ): void {
-    if (!terminal.agentId) {
+    // Runtime-detected agents without a persisted agentId still flow through
+    // the state machine via terminal.detectedAgentType. #5773
+    if (!terminal.agentId && !terminal.detectedAgentType) {
       return;
     }
 
@@ -336,7 +342,9 @@ export class AgentStateService {
     const { headline, status, type } = this.headlineGenerator.generate({
       terminalId: terminal.id,
       terminalType: terminal.type,
-      agentId: terminal.agentId,
+      // Runtime-detected agents identify via detectedAgentType; persisted
+      // agent panels via agentId. Both drive agent-style headlines. #5773
+      agentId: terminal.agentId ?? terminal.detectedAgentType,
       agentState: terminal.agentState,
       waitingReason: terminal.waitingReason,
     });

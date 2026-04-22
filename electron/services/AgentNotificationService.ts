@@ -102,7 +102,22 @@ class AgentNotificationService {
       }
     });
 
-    this.unsubscribers.push(unsubStateChanged, unsubSpawned);
+    // Runtime-detected agents (plain terminals where a CLI was detected) never
+    // fire agent:spawned — that event is only emitted for kind="agent" panels
+    // with a persisted launch-time agentId. Seed spawn grace from agent:detected
+    // so startup "waiting" states don't trigger immediate notification sounds
+    // for runtime-detected agents. #5773
+    const unsubDetected = events.on("agent:detected", (payload) => {
+      if (!payload.agentType) return;
+      if (payload.terminalId) {
+        this.agentSpawnTimestamps.set(payload.terminalId, Date.now());
+      }
+      // Also key by the detected agent identity so grace lookups that pass
+      // agentId (from agent:state-changed) find the entry.
+      this.agentSpawnTimestamps.set(payload.agentType, Date.now());
+    });
+
+    this.unsubscribers.push(unsubStateChanged, unsubSpawned, unsubDetected);
   }
 
   private isWithinBootGrace(): boolean {

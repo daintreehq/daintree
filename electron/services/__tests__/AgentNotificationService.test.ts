@@ -1077,6 +1077,118 @@ describe("AgentNotificationService", () => {
     });
   });
 
+  // #5773 — Runtime-detected agents (plain terminals where an agent CLI was
+  // detected at runtime, no persisted launch-time agentId) never fire
+  // agent:spawned. Spawn grace must be seeded from agent:detected so startup
+  // "waiting" states don't immediately produce notification sounds.
+  describe("agent:detected spawn grace (#5773)", () => {
+    it("seeds spawn grace from agent:detected so waiting sound is suppressed within grace window", () => {
+      mockStore({ waitingEnabled: true, soundEnabled: true });
+      // Advance past boot grace so only spawn grace matters
+      vi.advanceTimersByTime(10_000);
+
+      events.emit("agent:detected", {
+        terminalId: "term-1",
+        agentType: "claude",
+        processName: "claude",
+        timestamp: Date.now(),
+      });
+
+      // Within the 5s spawn grace window, a waiting event should not trigger sound
+      events.emit("agent:state-changed", {
+        state: "waiting" as const,
+        previousState: "working" as const,
+        terminalId: "term-1",
+        agentId: "claude",
+        timestamp: Date.now(),
+        trigger: "heuristic" as const,
+        confidence: 1,
+      });
+      vi.advanceTimersByTime(200);
+
+      expect(soundServiceMock.playFile).not.toHaveBeenCalled();
+    });
+
+    it("does not seed grace when agent:detected lacks agentType (non-agent process)", () => {
+      mockStore({ waitingEnabled: true, soundEnabled: true });
+      vi.advanceTimersByTime(10_000);
+
+      // Non-agent process detection (npm/docker/etc.) — no agentType
+      events.emit("agent:detected", {
+        terminalId: "term-1",
+        processIconId: "npm",
+        processName: "npm",
+        timestamp: Date.now(),
+      });
+
+      events.emit("agent:state-changed", {
+        state: "waiting" as const,
+        previousState: "working" as const,
+        terminalId: "term-1",
+        agentId: "agent-1",
+        timestamp: Date.now(),
+        trigger: "heuristic" as const,
+        confidence: 1,
+      });
+      vi.advanceTimersByTime(200);
+
+      // No grace was seeded; waiting sound fires normally
+      expect(soundServiceMock.playFile).toHaveBeenCalled();
+    });
+
+    it("spawn grace expires after SPAWN_GRACE_PERIOD_MS — waiting sound resumes", () => {
+      mockStore({ waitingEnabled: true, soundEnabled: true });
+      vi.advanceTimersByTime(10_000);
+
+      events.emit("agent:detected", {
+        terminalId: "term-1",
+        agentType: "claude",
+        processName: "claude",
+        timestamp: Date.now(),
+      });
+
+      // Advance past the 5s spawn grace
+      vi.advanceTimersByTime(6_000);
+
+      events.emit("agent:state-changed", {
+        state: "waiting" as const,
+        previousState: "working" as const,
+        terminalId: "term-1",
+        agentId: "claude",
+        timestamp: Date.now(),
+        trigger: "heuristic" as const,
+        confidence: 1,
+      });
+      vi.advanceTimersByTime(200);
+
+      expect(soundServiceMock.playFile).toHaveBeenCalled();
+    });
+
+    it("handles state-changed payload whose agentId is the detected type (no persisted agentId)", () => {
+      mockStore({ completedEnabled: true });
+
+      // Runtime-detected agent: agentId on the event carries detectedAgentType
+      events.emit("agent:state-changed", {
+        state: "completed" as const,
+        previousState: "working" as const,
+        terminalId: "term-1",
+        agentId: "claude",
+        timestamp: Date.now(),
+        trigger: "heuristic" as const,
+        confidence: 1,
+      });
+      vi.advanceTimersByTime(5000);
+
+      expect(notificationServiceMock.showWatchNotification).toHaveBeenCalledWith(
+        "Agent completed",
+        expect.stringContaining("claude"),
+        expect.objectContaining({ panelId: "term-1" }),
+        "notification:watch-navigate",
+        true
+      );
+    });
+  });
+
   describe("quiet hours suppression", () => {
     it("scheduled quiet hours suppresses completion watch notifications", () => {
       const realDate = global.Date;
