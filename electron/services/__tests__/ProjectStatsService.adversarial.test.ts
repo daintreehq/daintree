@@ -150,6 +150,55 @@ describe("ProjectStatsService adversarial", () => {
     svc.stop();
   });
 
+  it("counts plain terminals with a runtime-detected agent as active/waiting", async () => {
+    const ptyClient = makePtyClient();
+    projectStoreMock.getAllProjects.mockReturnValue([{ id: "p1" }]);
+    ptyClient.getAllTerminalsAsync.mockResolvedValue([
+      // Plain terminal, no stored agentId, runtime-detected — counts (active)
+      {
+        projectId: "p1",
+        kind: "terminal",
+        detectedAgentId: "claude",
+        agentState: "working",
+      },
+      // Plain terminal, no stored agentId, runtime-detected — counts (waiting)
+      {
+        projectId: "p1",
+        kind: "terminal",
+        detectedAgentId: "claude",
+        agentState: "waiting",
+      },
+      // Zombie guard: everDetectedAgent is set but the agent has exited
+      // (no detectedAgentId). Must NOT count — stats use LIVE signal only.
+      {
+        projectId: "p1",
+        kind: "terminal",
+        everDetectedAgent: true,
+        agentState: "working",
+      },
+      // Regression guard: plain terminal with neither agentId nor
+      // detectedAgentId is still excluded.
+      { projectId: "p1", kind: "terminal", agentState: "running" },
+    ]);
+    ptyClient.getProjectStats.mockResolvedValue({
+      projectId: "p1",
+      terminalCount: 4,
+    });
+
+    const svc = new ProjectStatsService(ptyClient as never);
+    svc.refresh();
+    await vi.runAllTimersAsync();
+
+    const lastCall = broadcastMock.mock.calls.at(-1);
+    const [, payload] = lastCall as [
+      string,
+      { p1: { activeAgentCount: number; waitingAgentCount: number } },
+    ];
+    expect(payload.p1.activeAgentCount).toBe(1);
+    expect(payload.p1.waitingAgentCount).toBe(1);
+    svc.stop();
+  });
+
   it("debounce coalesces a burst of agent:state-changed events into one compute", async () => {
     const ptyClient = makePtyClient();
     projectStoreMock.getAllProjects.mockReturnValue([{ id: "p1" }]);

@@ -42,9 +42,10 @@ function reconcileCurrentState(
   }
   if (
     !cl.items.launchedAgent &&
-    usePanelStore
-      .getState()
-      .panelIds.some((id) => usePanelStore.getState().panelsById[id]?.kind === "agent")
+    usePanelStore.getState().panelIds.some((id) => {
+      const p = usePanelStore.getState().panelsById[id];
+      return p?.kind === "agent" || p?.everDetectedAgent === true;
+    })
   ) {
     markItem("launchedAgent");
   }
@@ -173,7 +174,10 @@ export function useGettingStartedChecklist(isStateLoaded: boolean): GettingStart
         if (!cl || cl.dismissed) return;
         if (
           !cl.items.launchedAgent &&
-          state.panelIds.some((id) => state.panelsById[id]?.kind === "agent")
+          state.panelIds.some((id) => {
+            const p = state.panelsById[id];
+            return p?.kind === "agent" || p?.everDetectedAgent === true;
+          })
         ) {
           markItem("launchedAgent");
         }
