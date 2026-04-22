@@ -120,9 +120,10 @@ export function FleetArmingRibbon(): ReactElement | null {
   // popover gets its own entry so bare Escape closes the list without
   // disarming the fleet. Paste confirmation also absorbs bare Escape so
   // the user can cancel a queued destructive paste with a single tap.
-  // Plain Escape never disarms — the targets own it (see issue #5750:
-  // agents use Esc for menus/prompts). Exit requires the ⌘Esc chord or
-  // the visible ✕ chip.
+  // Bare Escape with focus inside the ribbon (Exit button, count chip,
+  // selection-menu trigger) exits the fleet — see handleRibbonKeyDown
+  // below. Bare Escape from anywhere else (xterm, hybrid input) still
+  // belongs to the agents (#5750) — only the ⌘Esc chord exits globally.
   useEscapeStack(pending !== null, clearPending);
   useEscapeStack(popoverOpen, () => setPopoverOpen(false));
   useEscapeStack(pendingPaste !== null, () => setPendingPaste(null));
@@ -388,6 +389,22 @@ export function FleetArmingRibbon(): ReactElement | null {
     </>
   );
 
+  // Bare Esc on the ribbon → exit the fleet. Scoped to ribbon-owned
+  // controls (the bar's own keydown handler) so terminals' Esc handling
+  // for menus / prompts under live echo (#5750) still wins everywhere
+  // else. Defined before the early returns to keep hook order stable.
+  const handleRibbonKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLDivElement>) => {
+      if (e.key !== "Escape") return;
+      if (e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
+      if (pendingPaste !== null || popoverOpen || pending !== null) return;
+      e.preventDefault();
+      e.stopPropagation();
+      exitFleet();
+    },
+    [exitFleet, pendingPaste, popoverOpen, pending]
+  );
+
   // Render confirmation before the armedCount<2 null guard so single-agent
   // keybindings (fleet.restart / fleet.kill always require confirmation)
   // stay reachable — and so draining 3→1 while a confirm is pending
@@ -454,8 +471,10 @@ export function FleetArmingRibbon(): ReactElement | null {
           key="fleet-arming-ribbon"
           role="status"
           aria-live="off"
+          tabIndex={-1}
+          onKeyDown={handleRibbonKeyDown}
           className={cn(
-            "surface-toolbar relative flex items-center gap-3 overflow-hidden border-b border-daintree-border px-3 py-2 text-[12px] text-daintree-text"
+            "surface-toolbar relative flex items-center gap-3 overflow-hidden border-b border-daintree-border px-3 py-2 text-[12px] text-daintree-text outline-none"
           )}
           data-testid="fleet-arming-ribbon"
           {...ribbonMotionProps}

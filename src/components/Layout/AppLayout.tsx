@@ -9,7 +9,7 @@ import { PortalDock, PortalVisibilityController } from "../Portal";
 import { HelpPanel } from "../HelpPanel";
 import { ThemeBrowser } from "../ThemeBrowser";
 import { ProjectSwitchOverlay } from "@/components/Project";
-import { FleetArmingRibbon, useFleetShiftAffordance } from "@/components/Fleet";
+import { FleetArmingRibbon } from "@/components/Fleet";
 import { ChordIndicator } from "./ChordIndicator";
 import { DemoCaptureBridge, DemoCursor, DemoOverlay } from "../Demo";
 
@@ -67,7 +67,6 @@ export function AppLayout({
 }: AppLayoutProps) {
   useCcrPresetsSubscription();
   useProjectPresetsSubscription();
-  useFleetShiftAffordance();
   const [sidebarWidth, setSidebarWidth] = useState(DEFAULT_SIDEBAR_WIDTH);
   const currentProject = useProjectStore((state) => state.currentProject);
   const layout = useLayoutState();

@@ -86,18 +86,24 @@ export function mapKeyToSequence(event: KeyboardEvent): string | null {
 }
 
 /**
- * Document-level capture: when a fleet of 2+ terminals is armed, keystrokes
- * and pastes that originate inside an armed pane fan out to every armed PTY.
+ * Document-level capture: when a fleet of 2+ terminals is armed, raw
+ * keystrokes and pastes that originate inside an armed pane's xterm body
+ * fan out to every armed PTY. Hybrid-input editor keystrokes are LEFT
+ * ALONE here — they stay in the local editor and are mirrored to follower
+ * drafts by `HybridInputBar` (per-pane lifecycle: tokens, history, etc).
  *
- * The origin pane's xterm (or HybridInputBar) never sees the event — we
- * `stopPropagation` at capture so the origin receives its copy via the
- * broadcast path only, not via its own input path. Keeps the "type into any
- * armed terminal to broadcast" model simple and symmetric.
+ * Surface classification:
+ *  - Inside an `[data-hybrid-input-editor]` element → skip; per-pane
+ *    editor handles the keystroke locally and the bar mirrors via
+ *    `terminalInputStore`.
+ *  - Inside an `[data-panel-id]` pane that is armed (xterm body) → raw
+ *    PTY broadcast. The origin pane's xterm never sees the event.
+ *  - Anywhere else → ignore.
  *
- * Escape is intentionally excluded so the ribbon's ⌘Esc chord and the
- * targets' own Esc handling (menus, prompts) keep working. Cmd/Win keys
- * are filtered by `mapKeyToSequence` so app shortcuts still reach the
- * keybinding service.
+ * Escape is intentionally excluded so the ribbon's ⌘Esc / bare-Esc exit
+ * and the targets' own Esc handling (menus, prompts under live echo —
+ * #5750) keep working. Cmd/Win keys are filtered by `mapKeyToSequence`
+ * so app shortcuts still reach the keybinding service.
  */
 export function useFleetLiveBroadcast({
   enabled,
@@ -113,19 +119,28 @@ export function useFleetLiveBroadcast({
   useEffect(() => {
     if (!enabled) return;
 
-    const targetIsInArmedPane = (target: EventTarget | null): boolean => {
-      if (!(target instanceof Element)) return false;
+    type Surface = "hybrid-input" | "armed-xterm" | "ignore";
+
+    const classifyTarget = (target: EventTarget | null): Surface => {
+      if (!(target instanceof Element)) return "ignore";
+      // Hybrid input takes priority — the editor handles its own
+      // keystrokes; mirroring to followers is done at the bar level via
+      // `terminalInputStore`, not here.
+      if (target.closest<HTMLElement>("[data-hybrid-input-editor]")) {
+        return "hybrid-input";
+      }
       const pane = target.closest<HTMLElement>("[data-panel-id]");
-      if (!pane) return false;
+      if (!pane) return "ignore";
       const id = pane.dataset.panelId;
-      if (!id) return false;
-      return useFleetArmingStore.getState().armedIds.has(id);
+      if (!id) return "ignore";
+      if (!useFleetArmingStore.getState().armedIds.has(id)) return "ignore";
+      return "armed-xterm";
     };
 
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") return;
       if (event.isComposing || event.keyCode === 229 || isComposingRef.current) return;
-      if (!targetIsInArmedPane(event.target)) return;
+      if (classifyTarget(event.target) !== "armed-xterm") return;
 
       const sequence = mapKeyToSequence(event);
       if (sequence == null) return;
@@ -138,12 +153,12 @@ export function useFleetLiveBroadcast({
     };
 
     const handleCompositionStart = (event: CompositionEvent) => {
-      if (!targetIsInArmedPane(event.target)) return;
+      if (classifyTarget(event.target) !== "armed-xterm") return;
       isComposingRef.current = true;
     };
 
     const handleCompositionEnd = (event: CompositionEvent) => {
-      if (!targetIsInArmedPane(event.target)) return;
+      if (classifyTarget(event.target) !== "armed-xterm") return;
       isComposingRef.current = false;
       const data = event.data ?? "";
       if (!data) return;
@@ -152,7 +167,7 @@ export function useFleetLiveBroadcast({
     };
 
     const handlePaste = (event: ClipboardEvent) => {
-      if (!targetIsInArmedPane(event.target)) return;
+      if (classifyTarget(event.target) !== "armed-xterm") return;
       const text = event.clipboardData?.getData("text/plain") ?? "";
       event.preventDefault();
       event.stopPropagation();

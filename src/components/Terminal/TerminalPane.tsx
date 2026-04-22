@@ -197,15 +197,15 @@ function TerminalPaneComponent({
   const lastCrashType = usePanelStore((state) => state.lastCrashType);
   const clearReconnectError = usePanelStore((state) => state.clearReconnectError);
 
-  // Fleet arming store for multi-select gestures. The title bar lifts on
-  // any pane that will receive keystrokes: the focused pane (always) plus
-  // every armed pane once the fleet is actively broadcasting (size >= 2).
-  // A single armed pane is a pre-fleet earmark; until a second pane joins,
-  // input still lands only in whatever is focused, so we leave the single
-  // armed pane visually indistinguishable from "not in fleet yet".
+  // Fleet arming store for multi-select gestures. Selection treatment is
+  // identical to focus: a pane is "selected" any time it's armed. A
+  // single-armed pane lights up the same way as a focused unarmed pane,
+  // so the visual rule is just "bright header = part of the active set".
+  // The fleet ribbon (which only mounts at size>=2) tells the user when
+  // typing actually broadcasts.
   const armedIds = useFleetArmingStore((state) => state.armedIds);
   const isArmed = armedIds.has(id);
-  const isSelected = isArmed && armedIds.size >= 2;
+  const isSelected = isArmed;
 
   // Consolidate terminal state selectors to avoid multiple scans and ensure consistent snapshots
   const terminalState = usePanelStore(
@@ -516,14 +516,18 @@ function TerminalPaneComponent({
       }
 
       // Chrome-level multi-select gestures only fire when the click
-      // originates inside pane chrome (the title bar). Clicks inside the
-      // xterm viewport or the HybridInputBar bypass fleet gestures entirely
-      // and just focus — so native text selection, shell prompts, and typing
-      // are never disturbed by fleet logic.
+      // originates inside pane chrome (the title bar) AND not on an
+      // interactive child of the chrome (overflow menu, close, restore,
+      // title input, etc). Without the interactive guard, clicking the
+      // overflow trigger of a pane while a fleet is armed would clear
+      // the fleet before the menu opens.
       const target = e?.target as HTMLElement | null;
       const isChromeClick = !!target?.closest("[data-pane-chrome]");
+      const isInteractiveChild = !!target?.closest(
+        "button, input, textarea, select, a, [role='button'], [role='menuitem']"
+      );
 
-      if (e && isChromeClick) {
+      if (e && isChromeClick && !isInteractiveChild) {
         const terminal = getTerminal(id);
         const isEligible = !!(terminal && isFleetArmEligible(terminal));
         const armingStore = useFleetArmingStore.getState();
@@ -537,14 +541,11 @@ function TerminalPaneComponent({
         );
 
         if (action.type === "toggle") {
-          armingStore.toggleId(id);
-          e.preventDefault();
-          return;
-        }
-        if (action.type === "extend") {
-          if (armingStore.armedIds.size === 0) {
-            // Empty armed set — the focused pane is the implicit anchor for
-            // the first shift-click. Arm it so extendTo has a pinned origin.
+          // Empty fleet + shift/cmd-click on an unarmed pane: the focused
+          // pane is the implicit "first member" so the user ends up with
+          // a 2-pane fleet rather than a lonely toggled pane. Mirrors the
+          // mental model of "I have one selected, now add another".
+          if (armingStore.armedIds.size === 0 && !armingStore.armedIds.has(id)) {
             const focusedId = usePanelStore.getState().focusedId;
             if (focusedId && focusedId !== id) {
               const focusedTerminal = usePanelStore.getState().panelsById[focusedId];
@@ -553,13 +554,12 @@ function TerminalPaneComponent({
               }
             }
           }
-          armingStore.extendTo(id);
+          armingStore.toggleId(id);
           e.preventDefault();
           return;
         }
         if (action.type === "clear") {
           armingStore.clear();
-          armingStore.setAnchor(id);
           // fall through — setFocused below makes the clicked pane the
           // new exclusive selection.
         }

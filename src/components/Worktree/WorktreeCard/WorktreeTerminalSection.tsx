@@ -67,7 +67,7 @@ interface MarqueeBox {
 interface TerminalRowProps {
   term: TerminalInstance;
   listeners: React.HTMLAttributes<HTMLElement> | undefined;
-  onClick: (term: TerminalInstance, e: React.MouseEvent) => void;
+  onClick: (term: TerminalInstance) => void;
 }
 
 function TerminalRow({ term, listeners, onClick }: TerminalRowProps) {
@@ -93,7 +93,7 @@ function TerminalRow({ term, listeners, onClick }: TerminalRowProps) {
           type="button"
           onClick={(e) => {
             e.stopPropagation();
-            onClick(term, e);
+            onClick(term);
           }}
           aria-selected={isArmed}
           className="flex items-center gap-2 min-w-0 flex-1 text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-[-2px] rounded"
@@ -232,24 +232,17 @@ export function WorktreeTerminalSection({
   );
 
   const handleTerminalClick = useCallback(
-    (term: TerminalInstance, e: React.MouseEvent) => {
+    (term: TerminalInstance) => {
       if (!isFleetArmEligible(term)) {
         onTerminalSelect(term);
         return;
       }
-      const store = useFleetArmingStore.getState();
-      if (e.shiftKey) {
-        // Sidebar list is 1-D — pass the ordered id list so extendTo uses
-        // the linear range path instead of DOM bounding-box geometry.
-        store.extendTo(
-          term.id,
-          eligibleTerminals.map((t) => t.id)
-        );
-      } else {
-        store.toggleId(term.id);
-      }
+      // Shift, Cmd, Ctrl, and unmodified clicks all toggle membership —
+      // the sidebar mirrors the grid's "Shift = single add" gesture so
+      // the model is consistent across surfaces.
+      useFleetArmingStore.getState().toggleId(term.id);
     },
-    [onTerminalSelect, eligibleTerminals]
+    [onTerminalSelect]
   );
 
   // Marquee starts potential on pointerdown (no capture yet). We only upgrade

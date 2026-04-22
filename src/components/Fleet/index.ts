@@ -1,5 +1,4 @@
 export { FleetArmingRibbon } from "./FleetArmingRibbon";
-export { useFleetShiftAffordance } from "./useFleetShiftAffordance";
 export {
   buildFleetTargetPreviews,
   executeFleetBroadcast,

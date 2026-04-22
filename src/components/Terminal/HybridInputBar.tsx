@@ -38,6 +38,7 @@ import { PromptHistoryPalette } from "./PromptHistoryPalette";
 import { useCommandStore } from "@/store/commandStore";
 import { useProjectStore } from "@/store/projectStore";
 import { usePanelStore, useVoiceRecordingStore } from "@/store";
+import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { VoiceInputButton } from "./VoiceInputButton";
 import { Archive, Loader2 } from "lucide-react";
@@ -344,6 +345,57 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     useEffect(() => {
       setDraftInput(terminalId, value, projectId);
     }, [terminalId, value, projectId, setDraftInput]);
+
+    // Fleet hybrid-input mirroring. The focused armed pane (the "primary")
+    // pushes its draft to every other armed pane's draft slot via the
+    // existing terminalInputStore. Followers render that mirrored text in
+    // their own editor and submit it independently on Enter via their own
+    // per-pane lifecycle (token resolution, history, draft cleanup).
+    //
+    // Clicking a follower promotes it to primary (existing onActivate /
+    // setFocused path), so mirror direction reverses naturally with focus.
+    const armedIds = useFleetArmingStore((s) => s.armedIds);
+    const isArmed = armedIds.has(terminalId);
+    const fleetSize = armedIds.size;
+    const isFleetPrimary = isFocusedTerminal && isArmed && fleetSize >= 2;
+    const isFleetFollower = !isFocusedTerminal && isArmed && fleetSize >= 2;
+
+    // Primary → followers: write our current draft to each other armed
+    // pane's draft slot. All armed panes live in the same project view
+    // (renderer scope), so we reuse our own projectId for the draft key.
+    // Followers' bars receive the update via their own getDraftInput
+    // subscription (effect below).
+    useEffect(() => {
+      if (!isFleetPrimary) return;
+      const setDraft = useTerminalInputStore.getState().setDraftInput;
+      for (const otherId of armedIds) {
+        if (otherId === terminalId) continue;
+        setDraft(otherId, value, projectId);
+      }
+    }, [isFleetPrimary, value, armedIds, terminalId, projectId]);
+
+    // Follower ← primary: when our own draft slot is updated externally
+    // (because the primary mirrored to us), pull that text into our local
+    // value + editor doc. Guarded against echoing back as a local edit.
+    const externalDraftKey = projectId ? `${projectId}:${terminalId}` : terminalId;
+    const externalDraft = useTerminalInputStore((s) => s.draftInputs.get(externalDraftKey) ?? "");
+    useEffect(() => {
+      if (!isFleetFollower) return;
+      if (externalDraft === value) return;
+      lastEmittedValueRef.current = externalDraft;
+      setValue(externalDraft);
+      const view = editorViewRef.current;
+      // Only set the external-value flag when we actually dispatch a
+      // doc-changing edit. Setting it unconditionally can leave it stuck
+      // `true` (no editor mounted yet, or doc already matches) and the
+      // next real user edit gets misclassified as programmatic.
+      if (view && view.state.doc.toString() !== externalDraft) {
+        isApplyingExternalValueRef.current = true;
+        view.dispatch({
+          changes: { from: 0, to: view.state.doc.length, insert: externalDraft },
+        });
+      }
+    }, [externalDraft, isFleetFollower, value]);
 
     const placeholder = useMemo(() => {
       const agentName = agentId ? getAgentConfig(agentId)?.name : null;

@@ -196,7 +196,10 @@ describe("WorktreeTerminalSection arming click handlers", () => {
     expect(onSelect).not.toHaveBeenCalled();
   });
 
-  it("shift-click extends the armed range from lastArmedId", () => {
+  it("shift-click on a sidebar entry toggles a single id (additive single add, no range extend)", () => {
+    // The grid uses Shift = single add; the sidebar mirrors the same model
+    // so the gesture is consistent across surfaces. There is no range
+    // extension on either surface.
     const t1 = makeTerminal({ id: "a1", agentId: "claude", kind: "agent", hasPty: true });
     const t2 = makeTerminal({ id: "a2", agentId: "claude", kind: "agent", hasPty: true });
     const t3 = makeTerminal({ id: "a3", agentId: "claude", kind: "agent", hasPty: true });
@@ -207,11 +210,11 @@ describe("WorktreeTerminalSection arming click handlers", () => {
     });
 
     const buttons = screen.getAllByRole("button", { name: /Test Terminal/i });
-    fireEvent.click(buttons[0]!); // arm a1 — becomes anchor
-    fireEvent.click(buttons[2]!, { shiftKey: true }); // extend to a3
+    fireEvent.click(buttons[0]!); // arm a1
+    fireEvent.click(buttons[2]!, { shiftKey: true }); // shift-click adds only a3
 
     const armed = useFleetArmingStore.getState().armedIds;
-    expect([...armed].sort()).toEqual(["a1", "a2", "a3"]);
+    expect([...armed].sort()).toEqual(["a1", "a3"]);
   });
 
   it("cmd-click (metaKey) toggles the armed state without clearing others", () => {

@@ -281,6 +281,26 @@ describe("FleetArmingRibbon", () => {
     );
   });
 
+  it("bare Escape with focus on a ribbon control exits the fleet", () => {
+    seed([makeAgent("t1"), makeAgent("t2")]);
+    useFleetArmingStore.getState().armIds(["t1", "t2"]);
+    render(<FleetArmingRibbon />);
+    const exit = screen.getByTestId("fleet-exit");
+    exit.focus();
+    fireEvent.keyDown(exit, { key: "Escape" });
+    expect(useFleetArmingStore.getState().armedIds.size).toBe(0);
+  });
+
+  it("bare Escape from outside the ribbon does NOT exit the fleet", () => {
+    seed([makeAgent("t1", "working"), makeAgent("t2", "working")]);
+    useFleetArmingStore.getState().armIds(["t1", "t2"]);
+    render(<FleetArmingRibbon />);
+    // No ribbon focus — Escape from the document body must not disarm
+    // (terminal apps own bare Esc under live echo, #5750).
+    fireEvent.keyDown(document.body, { key: "Escape" });
+    expect(useFleetArmingStore.getState().armedIds.size).toBe(2);
+  });
+
   it("Cmd+Esc pressed twice within 350ms dispatches fleet.interrupt", async () => {
     seed([makeAgent("t1", "working"), makeAgent("t2", "working")]);
     useFleetArmingStore.getState().armIds(["t1", "t2"]);

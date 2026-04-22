@@ -10,7 +10,6 @@ function resetStore() {
     armOrder: [],
     armOrderById: {},
     lastArmedId: null,
-    anchorId: null,
   });
 }
 
@@ -129,73 +128,6 @@ describe("fleetArmingStore", () => {
       useFleetArmingStore.getState().armIds([]);
       expect(useFleetArmingStore.getState().armedIds.size).toBe(0);
       expect(useFleetArmingStore.getState().lastArmedId).toBeNull();
-    });
-  });
-
-  describe("extendTo", () => {
-    // The bounding-box range logic lives in fleetSelectionGrid and is
-    // covered by its own tests (readEligiblePaneCoords + collectBoundingBoxIds).
-    // These tests exercise the store-level fallback path: when no DOM is
-    // mounted (as in this non-jsdom test file), extendTo cannot compute
-    // coords and must arm the target alone so the gesture isn't lost.
-
-    it("falls back to arming just the target when no anchor is set", () => {
-      // No prior armId — anchorId is null, so extendTo treats it as a
-      // fresh arm of the target.
-      useFleetArmingStore.getState().extendTo("b");
-      const s = useFleetArmingStore.getState();
-      expect([...s.armedIds]).toEqual(["b"]);
-      expect(s.anchorId).toBe("b");
-    });
-
-    it("falls back to arming just the target when DOM coords are unavailable", () => {
-      useFleetArmingStore.getState().armId("a");
-      useFleetArmingStore.getState().extendTo("c");
-      const s = useFleetArmingStore.getState();
-      // Anchor stayed pinned at the first plain-arm, lastArmedId walked.
-      expect([...s.armedIds].sort()).toEqual(["a", "c"]);
-      expect(s.anchorId).toBe("a");
-      expect(s.lastArmedId).toBe("c");
-    });
-  });
-
-  describe("anchor stability", () => {
-    it("plain arm sets the anchor to the armed id", () => {
-      useFleetArmingStore.getState().armId("a");
-      expect(useFleetArmingStore.getState().anchorId).toBe("a");
-    });
-
-    it("subsequent armId calls do not move the anchor", () => {
-      useFleetArmingStore.getState().armId("a");
-      useFleetArmingStore.getState().armId("b");
-      expect(useFleetArmingStore.getState().anchorId).toBe("a");
-      expect(useFleetArmingStore.getState().lastArmedId).toBe("b");
-    });
-
-    it("cmd-click toggle moves the anchor to the newly armed pane", () => {
-      useFleetArmingStore.getState().armId("a");
-      useFleetArmingStore.getState().toggleId("c");
-      expect(useFleetArmingStore.getState().anchorId).toBe("c");
-    });
-
-    it("clear() resets the anchor", () => {
-      useFleetArmingStore.getState().armId("a");
-      useFleetArmingStore.getState().clear();
-      expect(useFleetArmingStore.getState().anchorId).toBeNull();
-    });
-
-    it("setAnchor moves the anchor without changing the armed set", () => {
-      useFleetArmingStore.getState().armId("a");
-      useFleetArmingStore.getState().setAnchor("z");
-      expect(useFleetArmingStore.getState().anchorId).toBe("z");
-      expect([...useFleetArmingStore.getState().armedIds]).toEqual(["a"]);
-    });
-
-    it("disarming the anchor promotes the next armed pane to anchor", () => {
-      useFleetArmingStore.getState().armId("a");
-      useFleetArmingStore.getState().armId("b");
-      useFleetArmingStore.getState().disarmId("a");
-      expect(useFleetArmingStore.getState().anchorId).toBe("b");
     });
   });
 

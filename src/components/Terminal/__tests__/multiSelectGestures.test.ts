@@ -4,31 +4,22 @@ import { decideChromeAction } from "../multiSelectGestures";
 const noMods = { shiftKey: false, metaKey: false, ctrlKey: false };
 
 describe("decideChromeAction", () => {
-  it("shift-click on an eligible pane extends the selection", () => {
+  it("shift-click on an eligible pane toggles membership (additive single add)", () => {
     expect(
       decideChromeAction(
         { ...noMods, shiftKey: true },
         { isEligible: true, isArmed: false, armedSize: 0 }
       )
-    ).toEqual({ type: "extend" });
+    ).toEqual({ type: "toggle" });
     expect(
       decideChromeAction(
         { ...noMods, shiftKey: true },
         { isEligible: true, isArmed: true, armedSize: 2 }
       )
-    ).toEqual({ type: "extend" });
+    ).toEqual({ type: "toggle" });
   });
 
-  it("shift-click on an ineligible pane does nothing", () => {
-    expect(
-      decideChromeAction(
-        { ...noMods, shiftKey: true },
-        { isEligible: false, isArmed: false, armedSize: 2 }
-      )
-    ).toEqual({ type: "none" });
-  });
-
-  it("⌘-click on an eligible pane toggles fleet selection", () => {
+  it("⌘-click on an eligible pane toggles membership", () => {
     expect(
       decideChromeAction(
         { ...noMods, metaKey: true },
@@ -37,7 +28,7 @@ describe("decideChromeAction", () => {
     ).toEqual({ type: "toggle" });
   });
 
-  it("Ctrl-click on an eligible pane toggles fleet selection", () => {
+  it("Ctrl-click on an eligible pane toggles membership", () => {
     expect(
       decideChromeAction(
         { ...noMods, ctrlKey: true },
@@ -46,7 +37,13 @@ describe("decideChromeAction", () => {
     ).toEqual({ type: "toggle" });
   });
 
-  it("⌘-click on an ineligible pane does nothing", () => {
+  it("modifier-click on an ineligible pane does nothing", () => {
+    expect(
+      decideChromeAction(
+        { ...noMods, shiftKey: true },
+        { isEligible: false, isArmed: false, armedSize: 2 }
+      )
+    ).toEqual({ type: "none" });
     expect(
       decideChromeAction(
         { ...noMods, metaKey: true },
@@ -74,20 +71,5 @@ describe("decideChromeAction", () => {
     expect(decideChromeAction(noMods, { isEligible: true, isArmed: false, armedSize: 0 })).toEqual({
       type: "none",
     });
-  });
-
-  it("shift wins over ⌘/Ctrl when both are held (shift is the primary multi-select gesture)", () => {
-    expect(
-      decideChromeAction(
-        { shiftKey: true, metaKey: true, ctrlKey: false },
-        { isEligible: true, isArmed: false, armedSize: 1 }
-      )
-    ).toEqual({ type: "extend" });
-    expect(
-      decideChromeAction(
-        { shiftKey: true, metaKey: false, ctrlKey: true },
-        { isEligible: true, isArmed: true, armedSize: 1 }
-      )
-    ).toEqual({ type: "extend" });
   });
 });

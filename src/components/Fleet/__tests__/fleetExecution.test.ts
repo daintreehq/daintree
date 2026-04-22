@@ -72,7 +72,6 @@ function reset() {
     armOrder: [],
     armOrderById: {},
     lastArmedId: null,
-    anchorId: null,
   });
   usePanelStore.setState({ panelsById: {}, panelIds: [] });
 }

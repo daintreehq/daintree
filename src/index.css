@@ -1428,13 +1428,6 @@ body[data-reduce-animations="true"] :is(.terminal-restoring, .terminal-trashing)
   animation: none;
 }
 
-/* Fleet shift-key affordance: while the user holds Shift (outside any
-   editable surface), a cell cursor over a pane title bar hints that
-   shift-click will extend a fleet range. Zero resting chrome. */
-body[data-fleet-shift="on"] [data-pane-chrome] {
-  cursor: cell;
-}
-
 /* Terminal Selection State */
 .terminal-selected {
   border-color: color-mix(in oklab, var(--theme-border-strong) 92%, var(--theme-text-primary));
