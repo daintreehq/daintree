@@ -5,6 +5,7 @@ import type { SpawnContext } from "../terminalSpawn.js";
 import type { TerminalType } from "../../../../shared/types/panel.js";
 
 let ptyWriteMock: ReturnType<typeof vi.fn<(data: string) => void>>;
+let emitDataMock: ReturnType<typeof vi.fn<(id: string, data: string | Uint8Array) => void>>;
 let ptyOnDataCallback: ((data: string) => void) | null = null;
 
 vi.mock("node-pty", () => {
@@ -61,7 +62,12 @@ function createAgentTerminal(
       agentId,
       ...options,
     },
-    { emitData: () => {}, onExit: () => {} },
+    {
+      emitData: (id, data) => {
+        emitDataMock(id, data);
+      },
+      onExit: () => {},
+    },
     {
       agentStateService: {
         handleActivityState: () => {},
@@ -85,7 +91,12 @@ function createPlainTerminal(): TerminalProcess {
       kind: "terminal",
       type: "terminal",
     },
-    { emitData: () => {}, onExit: () => {} },
+    {
+      emitData: (id, data) => {
+        emitDataMock(id, data);
+      },
+      onExit: () => {},
+    },
     {
       agentStateService: {
         handleActivityState: () => {},
@@ -101,6 +112,7 @@ function createPlainTerminal(): TerminalProcess {
 describe("TerminalProcess OSC color query responder", () => {
   beforeEach(() => {
     ptyWriteMock = vi.fn<(data: string) => void>();
+    emitDataMock = vi.fn<(id: string, data: string | Uint8Array) => void>();
     ptyOnDataCallback = null;
   });
 
@@ -154,5 +166,81 @@ describe("TerminalProcess OSC color query responder", () => {
     ptyOnDataCallback!("\x1b]11;?\x07");
 
     expect(ptyWriteMock).toHaveBeenCalledWith("\x1b]11;rgb:0000/0000/0000\x1b\\");
+  });
+
+  it("strips handled OSC queries from renderer-forwarded data for spawn-time agents", () => {
+    createAgentTerminal("opencode");
+
+    ptyOnDataCallback!("before\x1b]10;?\x1b\\middle\x1b]11;?\x07after");
+
+    expect(ptyWriteMock).toHaveBeenCalledWith("\x1b]10;rgb:cccc/cccc/cccc\x1b\\");
+    expect(ptyWriteMock).toHaveBeenCalledWith("\x1b]11;rgb:0000/0000/0000\x1b\\");
+    expect(emitDataMock).toHaveBeenCalledWith("t1", "beforemiddleafter");
+  });
+
+  it("forwards OSC queries unchanged to renderer for plain terminals", () => {
+    createPlainTerminal();
+
+    const payload = "\x1b]11;?\x1b\\";
+    ptyOnDataCallback!(payload);
+
+    expect(ptyWriteMock).not.toHaveBeenCalled();
+    expect(emitDataMock).toHaveBeenCalledWith("t1", payload);
+  });
+
+  it("responds and strips queries after runtime promotion via detectedAgentType", () => {
+    const proc = createPlainTerminal();
+
+    // Pre-promotion: backend does not respond; renderer receives query.
+    ptyOnDataCallback!("\x1b]11;?\x1b\\");
+    expect(ptyWriteMock).not.toHaveBeenCalled();
+    expect(emitDataMock).toHaveBeenLastCalledWith("t1", "\x1b]11;?\x1b\\");
+
+    // Simulate promotion: ProcessDetector would call handleAgentDetection,
+    // which sets detectedAgentType on terminalInfo. Mutate directly to isolate
+    // the OSC responder behavior.
+    proc.getInfo().detectedAgentType = "claude";
+
+    ptyOnDataCallback!("\x1b]11;?\x1b\\");
+    expect(ptyWriteMock).toHaveBeenCalledWith("\x1b]11;rgb:0000/0000/0000\x1b\\");
+    // Promoted terminal: renderer receives the query stripped.
+    expect(emitDataMock).toHaveBeenLastCalledWith("t1", "");
+  });
+
+  it("stops responding after demotion when detectedAgentType clears", () => {
+    const proc = createPlainTerminal();
+    proc.getInfo().detectedAgentType = "claude";
+
+    ptyOnDataCallback!("\x1b]10;?\x1b\\");
+    expect(ptyWriteMock).toHaveBeenCalledWith("\x1b]10;rgb:cccc/cccc/cccc\x1b\\");
+    ptyWriteMock.mockClear();
+
+    // Demotion: clear detectedAgentType as handleAgentDetection does on agent exit.
+    proc.getInfo().detectedAgentType = undefined;
+
+    ptyOnDataCallback!("\x1b]10;?\x1b\\");
+    expect(ptyWriteMock).not.toHaveBeenCalled();
+    expect(emitDataMock).toHaveBeenLastCalledWith("t1", "\x1b]10;?\x1b\\");
+  });
+
+  it("does not strip unrelated OSC sequences (e.g. OSC 52 clipboard)", () => {
+    createAgentTerminal("opencode");
+
+    const payload = "\x1b]52;c;SGVsbG8=\x07";
+    ptyOnDataCallback!(payload);
+
+    expect(ptyWriteMock).not.toHaveBeenCalled();
+    expect(emitDataMock).toHaveBeenCalledWith("t1", payload);
+  });
+
+  it("does not strip OSC 10/11 set requests (no '?'), only queries", () => {
+    createAgentTerminal("opencode");
+
+    // Setting the color (not querying) should pass through untouched.
+    const payload = "\x1b]10;rgb:ffff/ffff/ffff\x07";
+    ptyOnDataCallback!(payload);
+
+    expect(ptyWriteMock).not.toHaveBeenCalled();
+    expect(emitDataMock).toHaveBeenCalledWith("t1", payload);
   });
 });

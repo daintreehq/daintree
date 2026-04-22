@@ -74,6 +74,17 @@ type CursorBuffer = {
 
 const EVENT_DRIVEN_SNAPSHOT_THROTTLE_MS = 2000;
 
+// Matches OSC 10/11 "?" queries terminated by BEL (\x07) or ST (\x1b\\).
+// Used to strip handled queries from data forwarded to the renderer so that
+// the frontend xterm.js does not also respond (which would double-reply and
+// corrupt TUI agents that consume only the first response).
+// eslint-disable-next-line no-control-regex
+const OSC_COLOR_QUERY_RE = /\x1b\]1[01];\?(?:\x07|\x1b\\)/g;
+
+function stripHandledOscColorQueries(data: string): string {
+  return data.replace(OSC_COLOR_QUERY_RE, "");
+}
+
 export interface TerminalProcessCallbacks {
   emitData: (id: string, data: string | Uint8Array) => void;
   onExit: (id: string, exitCode: number) => void;
@@ -112,6 +123,13 @@ export class TerminalProcess {
 
   private readonly terminalInfo: TerminalInfo;
   private readonly isAgentTerminal: boolean;
+  // Live identity check for OSC 10/11 color-query responder ownership.
+  // Spawn-time agents (kind="agent") own the responder from construction;
+  // plain terminals promoted at runtime via handleAgentDetection own it while
+  // detectedAgentType is set and release it on demotion.
+  private get shouldHandleOscColorQueries(): boolean {
+    return this.isAgentTerminal || this.terminalInfo.detectedAgentType !== undefined;
+  }
   private forensicsBuffer = new TerminalForensicsBuffer();
   private _activityTier: "active" | "background" = "active";
   private _restoreBannerStart: IMarker | null = null;
@@ -1218,11 +1236,15 @@ export class TerminalProcess {
         this.ensureHeadlessResponder();
       }
 
-      // Respond to OSC 10/11 (foreground/background color queries) for agent terminals.
-      // xterm.js does not respond to these OSC queries, so there is no double-response
-      // risk with the frontend. Without this, termenv (used by Bubble Tea / OpenCode)
+      // Respond to OSC 10/11 (foreground/background color queries) whenever the
+      // terminal is agent-owned — spawn-time agent panel OR runtime-promoted
+      // plain terminal. Without this, termenv (Bubble Tea / OpenCode / Gemini CLI)
       // blocks for 5 seconds PER query waiting for responses that never come.
-      if (this.isAgentTerminal && data.includes("\x1b]1")) {
+      // The renderer's xterm.js (@xterm/xterm BrowserTerminal) also replies to
+      // OSC 10/11 by default; to keep exactly one responder active, we strip
+      // handled queries out of the data forwarded to the renderer below.
+      let rendererData = data;
+      if (this.shouldHandleOscColorQueries && data.includes("\x1b]1")) {
         try {
           if (data.includes("\x1b]10;?")) {
             terminal.ptyProcess.write("\x1b]10;rgb:cccc/cccc/cccc\x1b\\");
@@ -1233,12 +1255,13 @@ export class TerminalProcess {
         } catch (error) {
           this.logWriteError(error, { operation: "write(osc-color-response)" });
         }
+        rendererData = stripHandledOscColorQueries(data);
       }
 
       terminal.headlessTerminal?.write(data);
       this.scheduleSessionPersist();
 
-      this.emitData(data);
+      this.emitData(rendererData);
       this.forensicsBuffer.capture(data);
       this.semanticBufferManager.onData(data);
 
