@@ -234,11 +234,6 @@ export class ProcessDetector {
       const busyChanged = result.isBusy !== undefined && result.isBusy !== this.lastBusyState;
       const commandChanged = result.currentCommand !== this.lastCurrentCommand;
 
-      if (result.isBusy !== undefined) {
-        this.lastBusyState = result.isBusy;
-      }
-      this.lastCurrentCommand = result.currentCommand;
-
       // Suppress busy/command emissions while a gated transition is pending —
       // otherwise a one-poll blip would leak through the side-channel and undo
       // the hysteresis gate. Once the gated streak commits (or the raw state
@@ -246,6 +241,10 @@ export class ProcessDetector {
       const shouldEmitImmediate = (busyChanged || commandChanged) && !inPendingTransition;
 
       if (gatedCommitted || shouldEmitImmediate) {
+        if (result.isBusy !== undefined) {
+          this.lastBusyState = result.isBusy;
+        }
+        this.lastCurrentCommand = result.currentCommand;
         this.callback(result, this.spawnedAt);
       }
     } catch (_error) {

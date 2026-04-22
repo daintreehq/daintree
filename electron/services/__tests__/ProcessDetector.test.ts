@@ -450,6 +450,64 @@ describe("ProcessDetector", () => {
       expect(callback).not.toHaveBeenCalled();
     });
 
+    it("does not emit a spurious idle callback after a one-poll blip on an idle terminal", () => {
+      const cache = createCacheMock();
+      const callback = vi.fn();
+
+      const detector = new ProcessDetector(
+        "terminal-hys-blip",
+        Date.now(),
+        100,
+        callback,
+        cache as never
+      );
+
+      // Idle start: emits the baseline { detected:false, isBusy:false } once.
+      detector.start();
+      const baseline = callback.mock.calls.length;
+
+      // One-poll blip of a short-lived agent process.
+      cache.setChildren(100, [{ pid: 200, comm: "claude", command: "claude --version" }]);
+      cache.emitRefresh();
+
+      // Back to idle — side-channel state must not have been mutated during the
+      // suppressed on-streak, so no spurious callback fires here.
+      cache.setChildren(100, []);
+      cache.emitRefresh();
+
+      expect(callback).toHaveBeenCalledTimes(baseline);
+    });
+
+    it("does not emit a spurious command-change callback after an aborted agent swap", () => {
+      const cache = createCacheMock();
+      cache.setChildren(100, [{ pid: 200, comm: "claude", command: "claude --resume" }]);
+      const callback = vi.fn();
+
+      const detector = new ProcessDetector(
+        "terminal-hys-swap-abort",
+        Date.now(),
+        100,
+        callback,
+        cache as never
+      );
+
+      // Commit claude.
+      detector.start();
+      cache.emitRefresh();
+      expect(callback).toHaveBeenCalledTimes(1);
+
+      // One-poll blip of codex (swap candidate).
+      cache.setChildren(100, [{ pid: 201, comm: "codex", command: "codex --version" }]);
+      cache.emitRefresh();
+
+      // Back to claude — committed state matches raw again, and side-channel
+      // state was not overwritten by the aborted swap, so no callback fires.
+      cache.setChildren(100, [{ pid: 200, comm: "claude", command: "claude --resume" }]);
+      cache.emitRefresh();
+
+      expect(callback).toHaveBeenCalledTimes(1);
+    });
+
     it("does not emit a second off flush on repeated stop() calls", () => {
       const cache = createCacheMock();
       cache.setChildren(100, [{ pid: 200, comm: "claude", command: "claude --resume" }]);
