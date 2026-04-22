@@ -466,6 +466,7 @@ export const createCorePanelActions = (
         agentLaunchFlags: options.agentLaunchFlags,
         agentModelId: options.agentModelId,
         everDetectedAgent: options.everDetectedAgent,
+        detectedAgentId: options.detectedAgentId,
         agentPresetId: options.agentPresetId,
         agentPresetColor: options.agentPresetColor,
         originalPresetId: options.originalPresetId ?? options.agentPresetId,
@@ -497,6 +498,9 @@ export const createCorePanelActions = (
                   extensionState: terminal.extensionState ?? existing.extensionState,
                   // Sticky: once detected, never downgrade on a partial reconnect payload.
                   everDetectedAgent: terminal.everDetectedAgent || existing.everDetectedAgent,
+                  // Prefer the fresh reconnect value if present; otherwise keep an existing
+                  // live detection (live IPC event may have landed before reconnect flush).
+                  detectedAgentId: terminal.detectedAgentId ?? existing.detectedAgentId,
                 }
               : terminal;
           return { panelsById: { ...state.panelsById, [id]: preservedTerminal } };
@@ -518,6 +522,9 @@ export const createCorePanelActions = (
                   extensionState: terminal.extensionState ?? existing.extensionState,
                   // Sticky: once detected, never downgrade on a partial reconnect payload.
                   everDetectedAgent: terminal.everDetectedAgent || existing.everDetectedAgent,
+                  // Prefer the fresh reconnect value if present; otherwise keep an existing
+                  // live detection (live IPC event may have landed before reconnect flush).
+                  detectedAgentId: terminal.detectedAgentId ?? existing.detectedAgentId,
                 }
               : terminal;
             const newById = { ...state.panelsById, [id]: preservedTerminal };

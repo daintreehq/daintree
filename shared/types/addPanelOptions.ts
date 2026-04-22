@@ -8,6 +8,7 @@ import type {
 import type { BrowserHistory } from "./browser.js";
 import type { AgentState } from "./agent.js";
 import type { TerminalSpawnSource } from "./panel.js";
+import type { BuiltInAgentId } from "../config/agentIds.js";
 
 /** Fields shared by all panel creation requests */
 export interface AddPanelOptionsBase {
@@ -58,6 +59,8 @@ export interface AddPanelOptionsBase {
   agentModelId?: string;
   /** Sticky "runtime agent ever detected" flag, rehydrated from backend during reconnect. */
   everDetectedAgent?: boolean;
+  /** Runtime-detected agent identity at hydration time; cleared when the agent exits. Rehydrated from backend reconnect payload. */
+  detectedAgentId?: BuiltInAgentId;
   /** Preset ID selected at launch time for per-panel preset selection */
   agentPresetId?: string;
   /** Preset brand color (hex) captured at launch time for per-panel icon tinting */

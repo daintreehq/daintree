@@ -111,3 +111,13 @@ describe("serializePtyPanel — agentPresetColor (Bug: not serialized)", () => {
     expect("agentFlavorColor" in snapshot).toBe(false);
   });
 });
+
+// Runtime detection identity (#5768) is recomputed by the backend detector on
+// every PTY attach — it must not be persisted into project JSON.
+describe("serializePtyPanel — detectedAgentId is never persisted", () => {
+  it("omits detectedAgentId even when the panel currently carries one", () => {
+    const panel = makePanel({ detectedAgentId: "claude" });
+    const snapshot = serializePtyPanel(panel) as Record<string, unknown>;
+    expect("detectedAgentId" in snapshot).toBe(false);
+  });
+});

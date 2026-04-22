@@ -10,6 +10,7 @@
 import type { AgentState, AgentId, WaitingReason } from "./agent.js";
 import type { TerminalType, PanelKind, TerminalFlowStatus } from "./panel.js";
 import type { ResourceProfile } from "./resourceProfile.js";
+import type { BuiltInAgentId } from "../config/agentIds.js";
 
 export type { TerminalFlowStatus };
 
@@ -287,6 +288,8 @@ export interface PtyHostTerminalInfo {
   originalAgentPresetId?: string;
   /** Set once on first runtime agent detection; never cleared. Sticky across agent exit/re-enter within session. */
   everDetectedAgent?: boolean;
+  /** Runtime-detected agent identity (cleared when the agent exits). */
+  detectedAgentId?: BuiltInAgentId;
 }
 
 /** Payload for agent:spawned event */

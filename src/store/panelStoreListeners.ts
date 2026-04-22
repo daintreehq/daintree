@@ -19,6 +19,7 @@ import { getMergedPresets } from "@/config/agents";
 import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { useNotificationStore } from "@/store/notificationStore";
+import { isBuiltInAgentId } from "@shared/config/agentIds";
 
 function normalizeCrashType(value: unknown): CrashType | null {
   const validTypes: CrashType[] = [
@@ -270,7 +271,8 @@ export function setupTerminalStoreListeners() {
         // preservation guard in the renderer survives even if the snapshot IPC is
         // reordered relative to the exit event.
         const nextEverDetectedAgent = agentType ? true : undefined;
-        if (!processIconId && !nextEverDetectedAgent) return;
+        const nextDetectedAgentId = isBuiltInAgentId(agentType) ? agentType : undefined;
+        if (!processIconId && !nextEverDetectedAgent && !nextDetectedAgentId) return;
 
         usePanelStore.setState((state) => {
           const terminal = state.panelsById[terminalId];
@@ -280,8 +282,10 @@ export function setupTerminalStoreListeners() {
             processIconId !== undefined && terminal.detectedProcessId !== processIconId;
           const needsStickyUpdate =
             nextEverDetectedAgent === true && terminal.everDetectedAgent !== true;
+          const needsAgentIdUpdate =
+            nextDetectedAgentId !== undefined && terminal.detectedAgentId !== nextDetectedAgentId;
 
-          if (!needsIconUpdate && !needsStickyUpdate) return state;
+          if (!needsIconUpdate && !needsStickyUpdate && !needsAgentIdUpdate) return state;
 
           return {
             panelsById: {
@@ -290,6 +294,7 @@ export function setupTerminalStoreListeners() {
                 ...terminal,
                 ...(needsIconUpdate && { detectedProcessId: processIconId }),
                 ...(needsStickyUpdate && { everDetectedAgent: true }),
+                ...(needsAgentIdUpdate && { detectedAgentId: nextDetectedAgentId }),
               },
             },
           };
@@ -306,11 +311,18 @@ export function setupTerminalStoreListeners() {
 
         usePanelStore.setState((state) => {
           const terminal = state.panelsById[terminalId];
-          if (!terminal || !terminal.detectedProcessId) return state;
+          if (!terminal) return state;
+          if (terminal.detectedProcessId === undefined && terminal.detectedAgentId === undefined) {
+            return state;
+          }
           return {
             panelsById: {
               ...state.panelsById,
-              [terminalId]: { ...terminal, detectedProcessId: undefined },
+              [terminalId]: {
+                ...terminal,
+                detectedProcessId: undefined,
+                detectedAgentId: undefined,
+              },
             },
           };
         });

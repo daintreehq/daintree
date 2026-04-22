@@ -318,6 +318,72 @@ describe("terminalStore process detection listeners", () => {
     cleanup();
   });
 
+  it("stores detectedAgentId when agent:detected carries a BuiltInAgentId", () => {
+    const cleanup = setupTerminalStoreListeners();
+    const detected = handlers.agentDetected;
+
+    detected?.({
+      terminalId: "term-1",
+      agentType: "claude",
+      processIconId: "claude",
+      processName: "claude",
+      timestamp: Date.now(),
+    });
+
+    expect(usePanelStore.getState().panelsById["term-1"]?.detectedAgentId).toBe("claude");
+    cleanup();
+  });
+
+  it("ignores unknown agentType values for detectedAgentId", () => {
+    const cleanup = setupTerminalStoreListeners();
+    const detected = handlers.agentDetected;
+
+    detected?.({
+      terminalId: "term-1",
+      agentType: "not-a-real-agent",
+      processIconId: "mystery",
+      processName: "mystery",
+      timestamp: Date.now(),
+    });
+
+    expect(usePanelStore.getState().panelsById["term-1"]?.detectedAgentId).toBeUndefined();
+    cleanup();
+  });
+
+  it("does not set detectedAgentId for non-agent detections", () => {
+    const cleanup = setupTerminalStoreListeners();
+    const detected = handlers.agentDetected;
+
+    detected?.({
+      terminalId: "term-1",
+      processIconId: "npm",
+      processName: "npm",
+      timestamp: Date.now(),
+    });
+
+    expect(usePanelStore.getState().panelsById["term-1"]?.detectedAgentId).toBeUndefined();
+    cleanup();
+  });
+
+  it("clears detectedAgentId when agent:exited fires", () => {
+    const cleanup = setupTerminalStoreListeners();
+    const detected = handlers.agentDetected;
+    const exited = handlers.agentExited;
+
+    detected?.({
+      terminalId: "term-1",
+      agentType: "gemini",
+      processIconId: "gemini",
+      processName: "gemini",
+      timestamp: Date.now(),
+    });
+    expect(usePanelStore.getState().panelsById["term-1"]?.detectedAgentId).toBe("gemini");
+
+    exited?.({ terminalId: "term-1", timestamp: Date.now() });
+    expect(usePanelStore.getState().panelsById["term-1"]?.detectedAgentId).toBeUndefined();
+    cleanup();
+  });
+
   it("keeps everDetectedAgent true after agent:exited fires (sticky flag)", () => {
     const cleanup = setupTerminalStoreListeners();
     const detected = handlers.agentDetected;

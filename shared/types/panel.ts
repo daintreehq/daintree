@@ -252,6 +252,12 @@ export interface PtyPanelData extends BasePanelData {
    * (not persisted); rehydrated from backend reconnect payload.
    */
   everDetectedAgent?: boolean;
+  /**
+   * Runtime-detected agent identity. Reflects the agent currently running in this terminal as
+   * identified by the backend process detector. Cleared on agent exit. Live-session-only
+   * (not persisted); rehydrated from backend reconnect payload.
+   */
+  detectedAgentId?: BuiltInAgentId;
   /** Captured agent session ID from graceful shutdown (used for session resume) */
   agentSessionId?: string;
   /** Process-level flags captured at launch time, persisted for session resume */
@@ -425,6 +431,12 @@ export interface TerminalInstance {
    * (not persisted); rehydrated from backend reconnect payload.
    */
   everDetectedAgent?: boolean;
+  /**
+   * Runtime-detected agent identity. Reflects the agent currently running in this terminal as
+   * identified by the backend process detector. Cleared on agent exit. Live-session-only
+   * (not persisted); rehydrated from backend reconnect payload.
+   */
+  detectedAgentId?: BuiltInAgentId;
   /** Captured agent session ID from graceful shutdown (used for session resume) */
   agentSessionId?: string;
   /** Process-level flags captured at launch time, persisted for session resume */

@@ -1,6 +1,7 @@
 import type { TerminalType, PanelKind, PanelLocation } from "../panel.js";
 import type { AgentId } from "../agent.js";
 import type { AgentState } from "../agent.js";
+import type { BuiltInAgentId } from "../../config/agentIds.js";
 
 /** Terminal spawn options */
 export interface TerminalSpawnOptions {
@@ -161,6 +162,8 @@ export interface BackendTerminalInfo {
   agentModelId?: string;
   /** Set once on first runtime agent detection; never cleared. Sticky across agent exit/re-enter within session. */
   everDetectedAgent?: boolean;
+  /** Runtime-detected agent identity (cleared when the agent exits). */
+  detectedAgentId?: BuiltInAgentId;
 }
 
 /** Result from terminal reconnect operation */
@@ -182,6 +185,8 @@ export interface TerminalReconnectResult {
   agentLaunchFlags?: string[];
   agentModelId?: string;
   everDetectedAgent?: boolean;
+  /** Runtime-detected agent identity (cleared when the agent exits). */
+  detectedAgentId?: BuiltInAgentId;
 }
 
 /** Terminal information payload for diagnostic display */

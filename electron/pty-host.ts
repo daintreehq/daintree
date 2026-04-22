@@ -38,6 +38,7 @@ import { setLogLevelOverrides } from "./utils/logger.js";
 import type { AgentEvent } from "./services/AgentStateMachine.js";
 import type { PtyHostEvent, SpawnResult } from "../shared/types/pty-host.js";
 import { normalizeScrollbackLines } from "../shared/config/scrollback.js";
+import { isBuiltInAgentId, type BuiltInAgentId } from "../shared/config/agentIds.js";
 import { setSessionPersistSuppressed } from "./services/pty/terminalSessionPersistence.js";
 import {
   appendEmergencyLog,
@@ -235,6 +236,11 @@ const resourceGovernor = new ResourceGovernor({
 // Helper to convert data to string for IPC fallback (IPC events expect string)
 function toStringForIpc(data: string | Uint8Array): string {
   return typeof data === "string" ? data : textDecoder.decode(data);
+}
+
+/** Narrow a backend TerminalType-valued detection field to BuiltInAgentId for IPC. */
+function narrowDetectedAgentId(value: unknown): BuiltInAgentId | undefined {
+  return isBuiltInAgentId(value) ? value : undefined;
 }
 
 // Wire up PtyManager events
@@ -1318,6 +1324,7 @@ port.on("message", async (rawMsg: any) => {
                 agentLaunchFlags: terminal.agentLaunchFlags,
                 agentModelId: terminal.agentModelId,
                 everDetectedAgent: terminal.everDetectedAgent,
+                detectedAgentId: narrowDetectedAgentId(terminal.detectedAgentType),
               }
             : null,
         });
@@ -1440,6 +1447,7 @@ port.on("message", async (rawMsg: any) => {
             agentLaunchFlags: t.agentLaunchFlags,
             agentModelId: t.agentModelId,
             everDetectedAgent: t.everDetectedAgent,
+            detectedAgentId: narrowDetectedAgentId(t.detectedAgentType),
           })),
         });
         break;
@@ -1470,6 +1478,7 @@ port.on("message", async (rawMsg: any) => {
             agentLaunchFlags: t.agentLaunchFlags,
             agentModelId: t.agentModelId,
             everDetectedAgent: t.everDetectedAgent,
+            detectedAgentId: narrowDetectedAgentId(t.detectedAgentType),
           })),
         });
         break;
@@ -1500,6 +1509,7 @@ port.on("message", async (rawMsg: any) => {
             agentLaunchFlags: t.agentLaunchFlags,
             agentModelId: t.agentModelId,
             everDetectedAgent: t.everDetectedAgent,
+            detectedAgentId: narrowDetectedAgentId(t.detectedAgentType),
           })),
         });
         break;

@@ -2,6 +2,7 @@ import type { PanelKind, TerminalType, AgentState } from "@/types";
 import type { BrowserHistory } from "@shared/types/browser";
 import type { PanelExitBehavior } from "@shared/types/panel";
 import type { AddPanelOptionsBase } from "@shared/types/addPanelOptions";
+import type { BuiltInAgentId } from "@shared/config/agentIds";
 import {
   isRegisteredAgent,
   getAgentConfig,
@@ -96,6 +97,7 @@ interface BackendTerminalData {
   agentLaunchFlags?: string[];
   agentModelId?: string;
   everDetectedAgent?: boolean;
+  detectedAgentId?: BuiltInAgentId;
 }
 
 interface ReconnectedTerminalData {
@@ -112,6 +114,7 @@ interface ReconnectedTerminalData {
   agentLaunchFlags?: string[];
   agentModelId?: string;
   everDetectedAgent?: boolean;
+  detectedAgentId?: BuiltInAgentId;
 }
 
 interface AgentSettingsData {
@@ -195,6 +198,7 @@ export function buildArgsForBackendTerminal(
     agentLaunchFlags: backendTerminal.agentLaunchFlags ?? saved.agentLaunchFlags,
     agentModelId: backendTerminal.agentModelId ?? saved.agentModelId,
     everDetectedAgent: backendTerminal.everDetectedAgent,
+    detectedAgentId: backendTerminal.detectedAgentId,
     agentPresetId: readPresetId(saved),
     agentPresetColor: readPresetColor(saved),
     extensionState: saved.extensionState,
@@ -249,6 +253,7 @@ export function buildArgsForReconnectedFallback(
     agentLaunchFlags: reconnectedTerminal.agentLaunchFlags ?? saved.agentLaunchFlags,
     agentModelId: reconnectedTerminal.agentModelId ?? saved.agentModelId,
     everDetectedAgent: reconnectedTerminal.everDetectedAgent,
+    detectedAgentId: reconnectedTerminal.detectedAgentId,
     agentPresetId: readPresetId(saved),
     agentPresetColor: readPresetColor(saved),
     extensionState: saved.extensionState,
@@ -461,5 +466,6 @@ export function buildArgsForOrphanedTerminal(
     agentLaunchFlags: terminal.agentLaunchFlags,
     agentModelId: terminal.agentModelId,
     everDetectedAgent: terminal.everDetectedAgent,
+    detectedAgentId: terminal.detectedAgentId,
   };
 }
