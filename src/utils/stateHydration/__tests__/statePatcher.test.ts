@@ -298,6 +298,21 @@ describe("buildArgsForBackendTerminal", () => {
     );
     expect(result.worktreeId).toBeUndefined();
   });
+
+  it('remaps the retired agentState "running" to "working" (issue #5810)', () => {
+    const result = buildArgsForBackendTerminal(
+      {
+        id: "t1",
+        cwd: "/p",
+        kind: "terminal",
+        title: "Shell",
+        agentState: "running" as never,
+      },
+      { id: "t1", location: "grid" },
+      "/p"
+    );
+    expect(result.agentState).toBe("working");
+  });
 });
 
 describe("buildArgsForReconnectedFallback", () => {

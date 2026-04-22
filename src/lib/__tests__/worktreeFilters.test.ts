@@ -39,7 +39,6 @@ const createEmptyFilters = (): FilterState => ({
 const createEmptyMeta = (): DerivedWorktreeMeta => ({
   terminalCount: 0,
   hasWorkingAgent: false,
-  hasRunningAgent: false,
   hasWaitingAgent: false,
   hasCompletedAgent: false,
   hasExitedAgent: false,
@@ -1220,11 +1219,6 @@ describe("matchesQuickStateFilter", () => {
 
   it('"working" matches when hasWorkingAgent and chipState is null', () => {
     const meta = { ...createEmptyMeta(), hasWorkingAgent: true, chipState: null };
-    expect(matchesQuickStateFilter("working", meta)).toBe(true);
-  });
-
-  it('"working" matches when hasRunningAgent and chipState is null', () => {
-    const meta = { ...createEmptyMeta(), hasRunningAgent: true, chipState: null };
     expect(matchesQuickStateFilter("working", meta)).toBe(true);
   });
 

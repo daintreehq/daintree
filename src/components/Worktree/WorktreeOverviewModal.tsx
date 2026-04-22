@@ -218,7 +218,6 @@ export function WorktreeOverviewModal({
     for (const worktree of worktrees) {
       let terminalCount = 0;
       let hasWorkingAgent = false;
-      let hasRunningAgent = false;
       let hasWaitingAgent = false;
       let hasCompletedAgent = false;
       let hasExitedAgent = false;
@@ -227,7 +226,6 @@ export function WorktreeOverviewModal({
         if (!t || t.worktreeId !== worktree.id || t.location === "trash") continue;
         terminalCount++;
         if (t.agentState === "working") hasWorkingAgent = true;
-        if (t.agentState === "running") hasRunningAgent = true;
         if (t.agentState === "waiting") hasWaitingAgent = true;
         if (t.agentState === "completed") hasCompletedAgent = true;
         if (t.agentState === "exited") hasExitedAgent = true;
@@ -235,7 +233,6 @@ export function WorktreeOverviewModal({
       map.set(worktree.id, {
         terminalCount,
         hasWorkingAgent,
-        hasRunningAgent,
         hasWaitingAgent,
         hasCompletedAgent,
         hasExitedAgent,
@@ -263,7 +260,7 @@ export function WorktreeOverviewModal({
         continue;
       }
 
-      if (derived.hasWorkingAgent || derived.hasRunningAgent) workingCount++;
+      if (derived.hasWorkingAgent) workingCount++;
       if (derived.hasWaitingAgent) waitingCount++;
     }
 
@@ -296,7 +293,6 @@ export function WorktreeOverviewModal({
       const derived = derivedMetaMap.get(worktree.id) ?? {
         terminalCount: 0,
         hasWorkingAgent: false,
-        hasRunningAgent: false,
         hasWaitingAgent: false,
         hasCompletedAgent: false,
         hasExitedAgent: false,

@@ -14,7 +14,6 @@ import type { ChipState } from "@/components/Worktree/utils/computeChipState";
 export interface DerivedWorktreeMeta {
   terminalCount: number;
   hasWorkingAgent: boolean;
-  hasRunningAgent: boolean;
   hasWaitingAgent: boolean;
   hasCompletedAgent: boolean;
   hasExitedAgent: boolean;
@@ -32,7 +31,7 @@ export function matchesQuickStateFilter(
     case "all":
       return true;
     case "working":
-      return (meta.hasWorkingAgent || meta.hasRunningAgent) && meta.chipState === null;
+      return meta.hasWorkingAgent && meta.chipState === null;
     case "waiting":
       return meta.chipState === "waiting";
     case "finished":
@@ -192,7 +191,6 @@ export function matchesFilters(
 
     if (filters.sessionFilters.has("hasTerminals") && derived.terminalCount > 0) hasMatch = true;
     if (filters.sessionFilters.has("working") && derived.hasWorkingAgent) hasMatch = true;
-    if (filters.sessionFilters.has("running") && derived.hasRunningAgent) hasMatch = true;
     if (filters.sessionFilters.has("waiting") && derived.hasWaitingAgent) hasMatch = true;
     if (filters.sessionFilters.has("completed") && derived.hasCompletedAgent) hasMatch = true;
     if (filters.sessionFilters.has("exited") && derived.hasExitedAgent) hasMatch = true;

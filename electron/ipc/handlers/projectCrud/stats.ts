@@ -79,7 +79,7 @@ export function registerProjectStatsHandlers(deps: HandlerDependencies): () => v
 
       if (terminal.agentState === "waiting") {
         counts.waiting += 1;
-      } else if (terminal.agentState === "working" || terminal.agentState === "running") {
+      } else if (terminal.agentState === "working") {
         counts.active += 1;
       }
     }

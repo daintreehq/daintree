@@ -519,8 +519,8 @@ describe("FleetArmingRibbon", () => {
       dispatchSpy.mockRestore();
     });
 
-    it("'All working' arms agents in 'running' state alongside 'working'", () => {
-      seed([makeAgent("t1", "working"), makeAgent("t2", "running")]);
+    it("'All working' arms agents in 'working' state", () => {
+      seed([makeAgent("t1", "working"), makeAgent("t2", "working")]);
       useFleetArmingStore.getState().armIds(["t1", "t2"]);
       render(<FleetArmingRibbon />);
       fireEvent.click(findMenuItem(/All working — this worktree/));

@@ -28,7 +28,6 @@ vi.mock("@/components/Worktree/terminalStateConfig", () => {
   const STATE_ICONS: Record<string, typeof mockIcon> = {
     working: mockIcon,
     waiting: mockIcon,
-    running: mockIcon,
     directing: mockIcon,
     idle: mockIcon,
     completed: mockIcon,
@@ -36,7 +35,6 @@ vi.mock("@/components/Worktree/terminalStateConfig", () => {
   const STATE_COLORS: Record<string, string> = {
     working: "text-working",
     waiting: "text-waiting",
-    running: "text-running",
     directing: "text-directing",
     idle: "text-idle",
     completed: "text-completed",
@@ -44,7 +42,6 @@ vi.mock("@/components/Worktree/terminalStateConfig", () => {
   const STATE_LABELS: Record<string, string> = {
     working: "working",
     waiting: "waiting",
-    running: "running",
     directing: "directing",
     idle: "idle",
     completed: "done",

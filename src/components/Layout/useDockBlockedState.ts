@@ -64,7 +64,7 @@ export function getGroupAmbientAgentState(
 
   for (const panel of panels) {
     if (panel.agentState === "waiting") hasWaiting = true;
-    else if (panel.agentState === "working" || panel.agentState === "running") hasWorking = true;
+    else if (panel.agentState === "working") hasWorking = true;
   }
 
   if (hasWaiting) return "waiting";

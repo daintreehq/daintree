@@ -135,7 +135,7 @@ describe("fleetArmingStore", () => {
     beforeEach(() => {
       seedPanels([
         makeAgentTerminal("t1", { agentState: "working" }),
-        makeAgentTerminal("t2", { agentState: "running" }),
+        makeAgentTerminal("t2", { agentState: "working" }),
         makeAgentTerminal("t3", { agentState: "waiting" }),
         makeAgentTerminal("t4", { agentState: "completed" }),
         makeAgentTerminal("t5", { agentState: "exited" }),
@@ -145,7 +145,7 @@ describe("fleetArmingStore", () => {
       useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-1" });
     });
 
-    it("arms working+running for 'working' preset in current scope", () => {
+    it("arms only 'working' agents for 'working' preset in current scope", () => {
       useFleetArmingStore.getState().armByState("working", "current", false);
       const s = useFleetArmingStore.getState();
       expect([...s.armedIds].sort()).toEqual(["t1", "t2"]);

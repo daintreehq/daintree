@@ -20,7 +20,6 @@ describe("AgentStatusIndicator", () => {
 
   it.each([
     ["working", "⟳"],
-    ["running", "▶"],
     ["completed", "✓"],
     ["exited", "–"],
     ["directing", "✎"],
@@ -84,7 +83,7 @@ describe("AgentStatusIndicator", () => {
     vi.useFakeTimers();
     try {
       const { container, rerender } = render(<AgentStatusIndicator state="working" />);
-      rerender(<AgentStatusIndicator state="running" />);
+      rerender(<AgentStatusIndicator state="directing" />);
       let el = container.querySelector('[role="img"]') as HTMLElement;
       expect(el.className).toContain("animate-agent-pulse");
 
@@ -114,10 +113,10 @@ describe("getDominantAgentState", () => {
   });
 
   it("prefers working over lower-priority states", () => {
-    expect(getDominantAgentState(["idle", "running", "working"])).toBe("working");
+    expect(getDominantAgentState(["idle", "completed", "working"])).toBe("working");
   });
 
-  it("prefers directing over running", () => {
-    expect(getDominantAgentState(["running", "directing"])).toBe("directing");
+  it("prefers directing over completed", () => {
+    expect(getDominantAgentState(["completed", "directing"])).toBe("directing");
   });
 });

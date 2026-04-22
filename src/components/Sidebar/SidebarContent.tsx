@@ -430,7 +430,6 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
       let terminalCount = 0;
       let waitingTerminalCount = 0;
       let hasWorkingAgent = false;
-      let hasRunningAgent = false;
       let hasWaitingAgent = false;
       let hasCompletedAgent = false;
       let hasExitedAgent = false;
@@ -440,7 +439,6 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
         if (!t || t.worktreeId !== worktree.id || t.location === "trash") continue;
         terminalCount++;
         if (t.agentState === "working") hasWorkingAgent = true;
-        if (t.agentState === "running") hasRunningAgent = true;
         if (t.agentState === "waiting") {
           hasWaitingAgent = true;
           waitingTerminalCount++;
@@ -470,13 +468,12 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
         waitingTerminalCount,
         lifecycleStage,
         isComplete,
-        hasActiveAgent: hasWorkingAgent || hasRunningAgent,
+        hasActiveAgent: hasWorkingAgent,
       });
 
       map.set(worktree.id, {
         terminalCount,
         hasWorkingAgent,
-        hasRunningAgent,
         hasWaitingAgent,
         hasCompletedAgent,
         hasExitedAgent,
@@ -548,7 +545,6 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
       const derived = derivedMetaMap.get(worktree.id) ?? {
         terminalCount: 0,
         hasWorkingAgent: false,
-        hasRunningAgent: false,
         hasWaitingAgent: false,
         hasCompletedAgent: false,
         hasExitedAgent: false,

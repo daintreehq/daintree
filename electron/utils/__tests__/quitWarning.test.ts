@@ -37,21 +37,12 @@ describe("getActiveAgentCount", () => {
     expect(getActiveAgentCount(store)).toBe(1);
   });
 
-  it("counts running agents", () => {
+  it("ignores legacy running agents (retired state)", () => {
     const store = mockStore([
       { agentId: "a1", state: "running" },
       { agentId: "a2", state: "idle" },
     ]);
-    expect(getActiveAgentCount(store)).toBe(1);
-  });
-
-  it("counts both working and running agents", () => {
-    const store = mockStore([
-      { agentId: "a1", state: "working" },
-      { agentId: "a2", state: "running" },
-      { agentId: "a3", state: "idle" },
-    ]);
-    expect(getActiveAgentCount(store)).toBe(2);
+    expect(getActiveAgentCount(store)).toBe(0);
   });
 });
 

@@ -385,9 +385,8 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
   }
 
   const isWorking = activePanel.agentState === "working";
-  const isRunning = activePanel.agentState === "running";
   const isWaiting = activePanel.agentState === "waiting";
-  const isActive = isWorking || isRunning || isWaiting;
+  const isActive = isWorking || isWaiting;
   const commandText = activePanel.activityHeadline || activePanel.lastCommand;
   const brandColor =
     panelPresetColors.get(activePanel.id) ??

@@ -249,7 +249,7 @@ describe("ProjectViewManager — eviction safety", () => {
     // (proj-a) and emit a telemetry event rather than let the pool grow unbounded.
     mockGetAll.mockReturnValue([
       { projectId: "proj-a", agentState: "directing" },
-      { projectId: "proj-b", agentState: "running" },
+      { projectId: "proj-b", agentState: "working" },
     ]);
 
     await managerWithLimit.switchTo("proj-c", "/path/c");

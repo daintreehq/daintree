@@ -13,9 +13,8 @@ export type AgentEvent =
   | { type: "respawn" }; // New agent session detected in same PTY after a prior exit
 
 const VALID_TRANSITIONS: Record<AgentState, AgentState[]> = {
-  idle: ["working", "running", "exited"],
+  idle: ["working", "exited"],
   working: ["waiting", "completed", "exited"],
-  running: ["idle"], // Shell process state - managed by TerminalProcess, not this state machine
   waiting: ["working", "completed", "exited"],
   directing: [], // Renderer-only state, never produced by main process
   completed: ["working", "waiting", "exited"],

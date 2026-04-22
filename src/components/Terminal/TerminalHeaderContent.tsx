@@ -130,7 +130,7 @@ function TerminalHeaderContentComponent({
   // Show command pill only for plain terminals (not agent terminals)
   // Use kind to distinguish - agent panels have kind="agent"
   const isPlainTerminal = kind === "terminal" || (!kind && type === "terminal");
-  const showCommandPill = isPlainTerminal && agentState === "running" && !!lastCommand;
+  const showCommandPill = isPlainTerminal && flowStatus === "running" && !!lastCommand;
 
   const renderAgentStateChip = () => {
     if (!agentState || agentState === "idle") {
@@ -152,15 +152,13 @@ function TerminalHeaderContentComponent({
         ? "bg-[color-mix(in_oklab,var(--color-state-working)_15%,transparent)] border-state-working/40"
         : agentState === "directing"
           ? "bg-[color-mix(in_oklab,var(--color-category-blue)_15%,transparent)] border-category-blue/40"
-          : agentState === "running"
-            ? "bg-[color-mix(in_oklab,var(--color-status-info)_15%,transparent)] border-status-info/40"
-            : agentState === "completed"
-              ? "bg-[color-mix(in_oklab,var(--color-status-success)_15%,transparent)] border-status-success/40"
-              : agentState === "exited"
-                ? "bg-overlay-soft border-divider"
-                : agentState === "waiting" && waitingReason === "prompt"
-                  ? "bg-[color-mix(in_oklab,var(--color-status-warning)_15%,transparent)] border-status-warning/40"
-                  : "bg-[color-mix(in_oklab,var(--color-state-waiting)_15%,transparent)] border-state-waiting/40";
+          : agentState === "completed"
+            ? "bg-[color-mix(in_oklab,var(--color-status-success)_15%,transparent)] border-status-success/40"
+            : agentState === "exited"
+              ? "bg-overlay-soft border-divider"
+              : agentState === "waiting" && waitingReason === "prompt"
+                ? "bg-[color-mix(in_oklab,var(--color-status-warning)_15%,transparent)] border-status-warning/40"
+                : "bg-[color-mix(in_oklab,var(--color-state-waiting)_15%,transparent)] border-state-waiting/40";
 
     const headline = activity?.headline?.trim() || `Agent ${agentState}`;
     const showConfidence = stateChangeConfidence != null && stateChangeConfidence < 1;

@@ -1,20 +1,32 @@
-/** Agent lifecycle state: idle | working | running | waiting | directing | completed | exited */
-export type AgentState =
-  | "idle"
-  | "working"
-  | "running"
-  | "waiting"
-  | "directing"
-  | "completed"
-  | "exited";
+/** Agent lifecycle state: idle | working | waiting | directing | completed | exited */
+export type AgentState = "idle" | "working" | "waiting" | "directing" | "completed" | "exited";
 
 /** Agent states that indicate in-flight work — used to protect against eviction/hibernation */
 export const ACTIVE_AGENT_STATES: ReadonlySet<AgentState> = new Set([
   "working",
-  "running",
   "waiting",
   "directing",
 ]);
+
+const CANONICAL_AGENT_STATES: ReadonlySet<AgentState> = new Set([
+  "idle",
+  "working",
+  "waiting",
+  "directing",
+  "completed",
+  "exited",
+]);
+
+/**
+ * Normalise a possibly-legacy agent state value. The retired "running" state
+ * (a pre-state-machine shell-process signal) collapses to "working"; unknown
+ * values return undefined so callers can decide on a default.
+ */
+export function coerceAgentState(value: unknown): AgentState | undefined {
+  if (typeof value !== "string") return undefined;
+  if (value === "running") return "working";
+  return CANONICAL_AGENT_STATES.has(value as AgentState) ? (value as AgentState) : undefined;
+}
 
 /** Classification of why an agent is in the "waiting" state */
 export type WaitingReason = "prompt" | "question";

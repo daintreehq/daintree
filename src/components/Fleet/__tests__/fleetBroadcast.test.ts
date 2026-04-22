@@ -258,10 +258,6 @@ describe("resolveFleetBroadcastTargetIds", () => {
 });
 
 describe("areAgentStatesBroadcastCompatible", () => {
-  it("treats working and running as one group", () => {
-    expect(areAgentStatesBroadcastCompatible("working", "running")).toBe(true);
-    expect(areAgentStatesBroadcastCompatible("running", "working")).toBe(true);
-  });
   it("treats completed and exited as one group", () => {
     expect(areAgentStatesBroadcastCompatible("completed", "exited")).toBe(true);
   });
@@ -305,26 +301,23 @@ describe("resolveFleetBroadcastByOrigin", () => {
       makeAgent("origin", { agentState: "waiting" }),
       makeAgent("peer-waiting", { agentState: "waiting" }),
       makeAgent("peer-working", { agentState: "working" }),
-      makeAgent("peer-running", { agentState: "running" }),
       makeAgent("peer-idle", { agentState: "idle" }),
     ]);
-    useFleetArmingStore
-      .getState()
-      .armIds(["origin", "peer-waiting", "peer-working", "peer-running", "peer-idle"]);
+    useFleetArmingStore.getState().armIds(["origin", "peer-waiting", "peer-working", "peer-idle"]);
     const result = resolveFleetBroadcastByOrigin("origin");
     expect(result.matched).toEqual(["peer-waiting"]);
-    expect(result.diverged.sort()).toEqual(["peer-idle", "peer-running", "peer-working"]);
+    expect(result.diverged.sort()).toEqual(["peer-idle", "peer-working"]);
   });
 
-  it("groups working and running peers when origin is working", () => {
+  it("groups completed and exited peers when origin is completed", () => {
     seedPanels([
-      makeAgent("origin", { agentState: "working" }),
-      makeAgent("peer-running", { agentState: "running" }),
+      makeAgent("origin", { agentState: "completed" }),
+      makeAgent("peer-exited", { agentState: "exited" }),
       makeAgent("peer-waiting", { agentState: "waiting" }),
     ]);
-    useFleetArmingStore.getState().armIds(["origin", "peer-running", "peer-waiting"]);
+    useFleetArmingStore.getState().armIds(["origin", "peer-exited", "peer-waiting"]);
     const result = resolveFleetBroadcastByOrigin("origin");
-    expect(result.matched).toEqual(["peer-running"]);
+    expect(result.matched).toEqual(["peer-exited"]);
     expect(result.diverged).toEqual(["peer-waiting"]);
   });
 

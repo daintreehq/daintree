@@ -244,11 +244,11 @@ describe("fleet actions — threshold confirmation", () => {
     dispatchSpy.mockRestore();
   });
 
-  it("fleet.interrupt only targets working/waiting/running agents", async () => {
+  it("fleet.interrupt only targets working/waiting agents", async () => {
     seedPanels([
       makeAgent("a", { agentState: "working" }),
       makeAgent("b", { agentState: "waiting" }),
-      makeAgent("c", { agentState: "running" }),
+      makeAgent("c", { agentState: "working" }),
       makeAgent("d", { agentState: "completed" }),
       makeAgent("e", { agentState: "idle" }),
     ]);

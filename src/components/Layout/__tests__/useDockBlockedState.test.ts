@@ -139,11 +139,6 @@ describe("getGroupAmbientAgentState", () => {
     expect(getGroupAmbientAgentState(panels)).toBe("working");
   });
 
-  it("returns 'working' for running state (treated as working tier)", () => {
-    const panels = [{ agentState: "idle" as const }, { agentState: "running" as const }];
-    expect(getGroupAmbientAgentState(panels)).toBe("working");
-  });
-
   it("returns 'waiting' when waiting outranks working", () => {
     const panels = [{ agentState: "waiting" as const }, { agentState: "working" as const }];
     expect(getGroupAmbientAgentState(panels)).toBe("waiting");
@@ -191,11 +186,6 @@ describe("isGroupDeprioritized", () => {
 
   it("returns false when any panel is working", () => {
     const panels = [{ agentState: "idle" as const }, { agentState: "working" as const }];
-    expect(isGroupDeprioritized(panels)).toBe(false);
-  });
-
-  it("returns false when any panel is running", () => {
-    const panels = [{ agentState: "idle" as const }, { agentState: "running" as const }];
     expect(isGroupDeprioritized(panels)).toBe(false);
   });
 

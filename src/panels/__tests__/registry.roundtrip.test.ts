@@ -68,7 +68,6 @@ const exitBehaviorArb = fc.constantFrom(
 const agentStateArb = fc.constantFrom(
   "idle" as const,
   "working" as const,
-  "running" as const,
   "waiting" as const,
   "directing" as const,
   "completed" as const,
