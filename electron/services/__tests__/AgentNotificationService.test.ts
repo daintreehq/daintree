@@ -1174,6 +1174,7 @@ describe("AgentNotificationService", () => {
           {
             id: "term-1",
             kind: "terminal",
+            agentId: "claude",
             title: "Terminal 1",
             location: "dock",
             worktreeId: "wt-1",
@@ -1181,6 +1182,7 @@ describe("AgentNotificationService", () => {
           {
             id: "term-2",
             kind: "terminal",
+            agentId: "claude",
             title: "Terminal 2",
             location: "dock",
             worktreeId: "wt-1",
@@ -1230,6 +1232,7 @@ describe("AgentNotificationService", () => {
           {
             id: "term-1",
             kind: "terminal",
+            agentId: "claude",
             title: "Terminal 1",
             location: "dock",
             worktreeId: "wt-1",
@@ -1237,6 +1240,7 @@ describe("AgentNotificationService", () => {
           {
             id: "term-2",
             kind: "terminal",
+            agentId: "claude",
             title: "Terminal 2",
             location: "dock",
             worktreeId: "wt-1",
