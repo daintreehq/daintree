@@ -61,6 +61,7 @@ import {
 import {
   createProcessStateValidator,
   buildActivityMonitorOptions,
+  buildPatternConfig,
 } from "./terminalActivityPatterns.js";
 import { TerminalForensicsBuffer } from "./TerminalForensicsBuffer.js";
 import { SemanticBufferManager } from "./SemanticBufferManager.js";
@@ -1441,7 +1442,9 @@ export class TerminalProcess {
         terminal.detectedAgentType = result.agentType;
         terminal.type = result.agentType;
 
-        this.activityMonitor?.reconfigure(result.agentType);
+        const detection = getEffectiveAgentConfig(result.agentType)?.detection;
+        const patternConfig = buildPatternConfig(detection, result.agentType);
+        this.activityMonitor?.reconfigure(result.agentType, patternConfig);
 
         if (!terminal.title || terminal.title === previousType || terminal.title === "Terminal") {
           const config = AGENT_REGISTRY[result.agentType];
