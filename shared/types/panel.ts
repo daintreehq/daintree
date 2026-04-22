@@ -453,6 +453,13 @@ export interface TerminalInstance {
   startedAt?: number;
   /** Exit code from the last process exit */
   exitCode?: number;
+  /**
+   * Live-only spawn lifecycle state. "spawning" from the moment the optimistic
+   * placeholder lands in `panelsById` until the PTY IPC round-trip resolves;
+   * then "ready". Absent (undefined) on hydrated panels — treat as "ready".
+   * Never serialized — see `serializePtyPanel`.
+   */
+  spawnStatus?: "spawning" | "ready";
   /** Original user-selected preset ID; immutable across fallback hops. */
   originalPresetId?: string;
   /** Whether this panel is currently running on a fallback preset. */

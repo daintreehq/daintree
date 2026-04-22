@@ -324,10 +324,12 @@ describe("hydration batch (#5196)", () => {
     expect(after?.activityHeadline).toBe("writing code");
   });
 
-  it("does not append ids whose addPanel failed before reaching panelsById", async () => {
+  it("removes the optimistic placeholder when the background spawn rejects", async () => {
+    // #5789: addPanel is optimistic — the panel lands in panelsById before spawn
+    // resolves. If spawn rejects, the placeholder must be cleaned up so the grid
+    // doesn't end up with a zombie panel that has no live PTY.
     const { beginHydrationBatch, flushHydrationBatch, addPanel } = usePanelStore.getState();
 
-    // Make spawn reject for one id, succeed for the next.
     const { terminalClient } = (await import("@/clients")) as unknown as {
       terminalClient: { spawn: ReturnType<typeof vi.fn> };
     };
@@ -338,17 +340,13 @@ describe("hydration batch (#5196)", () => {
       .mockImplementationOnce(async ({ id }: { id?: string }) => id ?? "ok");
 
     const token = beginHydrationBatch();
-    // First addPanel: spawn throws, caught by addPanel's outer try/catch and re-thrown.
-    await expect(
-      addPanel({
-        kind: "terminal",
-        type: "terminal",
-        requestedId: "fail-1",
-        cwd: "/",
-        bypassLimits: true,
-      })
-    ).rejects.toThrow("spawn failed");
-    // Second addPanel succeeds.
+    await addPanel({
+      kind: "terminal",
+      type: "terminal",
+      requestedId: "fail-1",
+      cwd: "/",
+      bypassLimits: true,
+    });
     await addPanel({
       kind: "terminal",
       type: "terminal",
@@ -357,17 +355,22 @@ describe("hydration batch (#5196)", () => {
       bypassLimits: true,
     });
 
+    // Drain microtasks so the failed spawn's rejection handler runs removePanel.
+    // The background spawn promise chains through Promise.all(env) → spawn → .then,
+    // which takes several ticks.
+    for (let i = 0; i < 20; i++) await Promise.resolve();
+
     saveNormalizedMock.mockClear();
     flushHydrationBatch(token);
 
-    // Only the successful id lands in panelIds.
+    // The failed id is evicted from panelsById by removePanel; the flush filter
+    // only appends ids that still exist in panelsById, so panelIds gets just ok-1.
     expect(usePanelStore.getState().panelIds).toEqual(["ok-1"]);
     expect(usePanelStore.getState().panelsById["fail-1"]).toBeUndefined();
 
-    // saveNormalized fired once with the correct id list.
-    expect(saveNormalizedMock).toHaveBeenCalledTimes(1);
-    const [, savedIds] = saveNormalizedMock.mock.calls[0] as [Record<string, unknown>, string[]];
-    expect(savedIds).toEqual(["ok-1"]);
+    expect(saveNormalizedMock).toHaveBeenCalled();
+    const lastCall = saveNormalizedMock.mock.calls.at(-1) as [Record<string, unknown>, string[]];
+    expect(lastCall[1]).toEqual(["ok-1"]);
   });
 
   it("collapses N panel additions into a single panelIds render", async () => {
