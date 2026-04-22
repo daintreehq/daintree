@@ -165,7 +165,15 @@ export interface TerminalSnapshot {
   lastOutputTime: number;
   lastCheckTime: number;
   kind?: PanelKind;
+  /**
+   * @deprecated Legacy terminal classification. See
+   * `docs/architecture/terminal-identity.md`. Prefer `agentId` (launch intent).
+   */
   type?: TerminalType;
+  /**
+   * Launch intent — the agent identity this terminal was spawned as.
+   * See `docs/architecture/terminal-identity.md`.
+   */
   agentId?: AgentId;
   agentState?: AgentState;
   lastStateChange?: number;
