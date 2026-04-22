@@ -555,6 +555,38 @@ describe("TerminalProcess shell-command identity fallback", () => {
     }
   });
 
+  // #5813 regression: when the PTY exits on the non-preserved path,
+  // `disposeHeadless()` nulls the headless terminal but neither `isExited`
+  // nor `wasKilled` is set — so the fallback watcher, which had
+  // `!headlessTerminal` removed from its stop guard, must instead be stopped
+  // explicitly in the `onExit` handler. Otherwise the interval runs forever
+  // and keeps the TerminalProcess alive past registry deletion.
+  it("stops the fallback watcher on non-preserved PTY exit (no orphan timer)", async () => {
+    const terminal = createPlainTerminal("t-fallback-exit");
+    const pty = getMockPty(terminal);
+    const emittedEventsAfterExit: string[] = [];
+
+    try {
+      terminal.write("npm run dev\r");
+      pty.__emitData("npm run dev\r\n");
+      pty.__emitData("> canopy-app@1.0.0 dev\r\n");
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(terminal.getInfo().detectedProcessIconId).toBe("npm");
+
+      const unsub = events.on("agent:detected", (payload) => {
+        emittedEventsAfterExit.push(payload.terminalId);
+      });
+      pty.__emitExit(0);
+      await vi.advanceTimersByTimeAsync(30_000);
+
+      // No post-exit detection events; watcher is gone.
+      expect(emittedEventsAfterExit).toHaveLength(0);
+      unsub();
+    } finally {
+      terminal.dispose();
+    }
+  });
+
   // #5813: user runs a plain-process command, the badge appears via the
   // fallback, they Ctrl+C, then run a DIFFERENT plain-process command. The
   // second command must re-arm the fallback even though lastDetectedProcessIconId

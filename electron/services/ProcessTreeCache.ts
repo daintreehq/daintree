@@ -1,6 +1,7 @@
 import { exec } from "child_process";
 import os from "node:os";
 import { promisify } from "util";
+import { logDebug } from "../utils/logger.js";
 
 const execAsync = promisify(exec);
 
@@ -120,10 +121,12 @@ export class ProcessTreeCache {
     if (this.refreshCallbacks.size === 0) {
       // Log once per lifecycle when we skip due to no subscribers. If
       // ProcessDetector instances aren't registering, detection goes silent —
-      // this surfaces the cause instead of failing silently (#5813).
+      // this surfaces the cause instead of failing silently (#5813). Verbose-gated
+      // because normal startup briefly has no subscribers between cache.start()
+      // and the first ProcessDetector attaching.
       if (!this.loggedZeroSubscriberSkip) {
         this.loggedZeroSubscriberSkip = true;
-        console.log(
+        logDebug(
           "[ProcessTreeCache] refresh skipped — no subscribers (ProcessDetector not attached?)"
         );
       }

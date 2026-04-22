@@ -1586,6 +1586,7 @@ export class TerminalProcess {
 
       this.stopProcessDetector();
       this.stopActivityMonitor();
+      this.stopShellIdentityFallbackWatcher();
       this.semanticBufferManager.flush();
 
       if (this.inputWriteTimeout) {

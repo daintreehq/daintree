@@ -218,11 +218,6 @@ export class ProcessDetector {
 
     logDebug(`Starting ProcessDetector for terminal ${this.terminalId}, PID ${this.ptyPid}`);
 
-    // Always-on startup log — lets us see in logs whether the detector was
-    // attached at all for this terminal. Silent failures in this path have
-    // previously masked badge-pipeline regressions (#5813).
-    console.log(`[ProcessDetector ${this.terminalId.slice(0, 8)}] start pid=${this.ptyPid}`);
-
     this.isStarted = true;
     this.detect();
 
@@ -230,11 +225,12 @@ export class ProcessDetector {
     this.unsubscribe = this.cache.onRefresh(() => {
       if (firstRefresh) {
         firstRefresh = false;
-        // One-shot log on first cache refresh callback — confirms the detector
-        // is actually being ticked by the cache, independent of whether any
-        // state transitions are committed by the hysteresis gate.
-        console.log(
-          `[ProcessDetector ${this.terminalId.slice(0, 8)}] first refresh pid=${this.ptyPid} children=${this.cache.getChildren(this.ptyPid).length}`
+        // One-shot verbose-gated log on first cache refresh callback —
+        // confirms the detector is actually being ticked by the cache,
+        // independent of whether any state transitions are committed by the
+        // hysteresis gate. Gated so normal runs stay quiet. #5813
+        logDebug(
+          `ProcessDetector ${this.terminalId.slice(0, 8)} first refresh pid=${this.ptyPid} children=${this.cache.getChildren(this.ptyPid).length}`
         );
       }
       this.detect();
