@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { coerceAgentState, ACTIVE_AGENT_STATES } from "../agent";
-import type { AgentState } from "../agent";
+import { coerceAgentState, ACTIVE_AGENT_STATES } from "../agent.js";
+import type { AgentState } from "../agent.js";
 
 describe("coerceAgentState", () => {
   it("maps the retired 'running' state to 'working'", () => {

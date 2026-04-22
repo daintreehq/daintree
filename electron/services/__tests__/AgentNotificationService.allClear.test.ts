@@ -302,19 +302,19 @@ describe("AgentNotificationService – all-clear", () => {
     expect(soundServiceMock.play).not.toHaveBeenCalledWith("all-clear");
   });
 
-  it("fires for running and directing agent states", () => {
+  it("fires for working and directing agent states", () => {
     mockTerminals([
-      { id: "term-1", agentState: "running" },
+      { id: "term-1", agentState: "working" },
       { id: "term-2", agentState: "directing" },
     ]);
-    emitStateChange("running", "idle", "term-1");
+    emitStateChange("working", "idle", "term-1");
     emitStateChange("directing", "idle", "term-2");
 
     mockTerminals([
       { id: "term-1", agentState: "completed" },
       { id: "term-2", agentState: "completed" },
     ]);
-    emitStateChange("completed", "running", "term-1");
+    emitStateChange("completed", "working", "term-1");
     emitStateChange("completed", "directing", "term-2");
 
     vi.advanceTimersByTime(600);
