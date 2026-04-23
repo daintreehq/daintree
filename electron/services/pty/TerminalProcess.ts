@@ -12,6 +12,7 @@ import {
   detectCommandIdentity,
   type CommandIdentity,
   type DetectionResult,
+  type DetectionState,
 } from "../ProcessDetector.js";
 import type { ProcessTreeCache } from "../ProcessTreeCache.js";
 import { ActivityMonitor } from "../ActivityMonitor.js";
@@ -1252,17 +1253,32 @@ export class TerminalProcess {
         return;
       }
 
-      this.handleAgentDetection(
-        {
-          detected: true,
-          agentType: this.shellIdentityFallbackIdentity.agentType,
-          processIconId: this.shellIdentityFallbackIdentity.processIconId,
-          processName: this.shellIdentityFallbackIdentity.processName,
-          isBusy: true,
-          currentCommand: this.shellIdentityFallbackCommandText,
-        },
-        this.terminalInfo.spawnedAt
-      );
+      // Route shell-command evidence through ProcessDetector so the merge with
+      // process-tree evidence lives in one place. The detector applies the
+      // sticky TTL (~12 s) which anchors this commit through blind-`ps`
+      // cycles and short-lived subprocess thrash. If no detector exists
+      // (null cache path), fall back to the legacy direct emission so a
+      // degraded terminal still surfaces shell-command identity. #5809
+      if (this.processDetector) {
+        this.processDetector.injectShellCommandEvidence(
+          this.shellIdentityFallbackIdentity,
+          this.shellIdentityFallbackCommandText
+        );
+      } else {
+        this.handleAgentDetection(
+          {
+            detectionState: "agent",
+            detected: true,
+            agentType: this.shellIdentityFallbackIdentity.agentType,
+            processIconId: this.shellIdentityFallbackIdentity.processIconId,
+            processName: this.shellIdentityFallbackIdentity.processName,
+            isBusy: true,
+            currentCommand: this.shellIdentityFallbackCommandText,
+            evidenceSource: "shell_command",
+          },
+          this.terminalInfo.spawnedAt
+        );
+      }
       this.shellIdentityFallbackCommitted = true;
       return;
     }
@@ -1277,14 +1293,25 @@ export class TerminalProcess {
       return;
     }
 
-    this.handleAgentDetection(
-      {
-        detected: false,
-        isBusy: false,
-        currentCommand: undefined,
-      },
-      this.terminalInfo.spawnedAt
-    );
+    // Prompt has returned — the command has finished. Clear the injected
+    // shell evidence so the next detector pass no longer overrides a blind
+    // process tree with a stale shell identity. The process-tree path then
+    // takes over and emits the demotion naturally via hysteresis. When no
+    // detector is attached, fall back to the legacy direct emission so the
+    // UI still demotes promptly.
+    if (this.processDetector) {
+      this.processDetector.clearShellCommandEvidence();
+    } else {
+      this.handleAgentDetection(
+        {
+          detectionState: "no_agent",
+          detected: false,
+          isBusy: false,
+          currentCommand: undefined,
+        },
+        this.terminalInfo.spawnedAt
+      );
+    }
     this.stopShellIdentityFallbackWatcher();
   }
 
@@ -1710,6 +1737,23 @@ export class TerminalProcess {
       return;
     }
 
+    // Normalize legacy callers that only set `detected`. Callers that set
+    // `detectionState` win; fall back to mapping `detected: boolean` onto
+    // the four-state enum. This preserves existing test call sites while
+    // new code branches on the richer enum. #5809
+    const state: DetectionState = result.detectionState ?? (result.detected ? "agent" : "no_agent");
+
+    // `unknown` and `ambiguous` are HOLD states — no evidence change, no
+    // committed-state transition. Skip all branches so a blind `ps` cycle
+    // doesn't silently demote a confirmed agent every HYSTERESIS window,
+    // and a two-source conflict holds rather than flips. Precedent:
+    // #4153 — make uncertain events no-ops in the state machine. #5809
+    if (state === "unknown" || state === "ambiguous") {
+      return;
+    }
+
+    const isDetected = state === "agent";
+
     // Set when we clear a runtime agent detection on this tick so the block
     // below can suppress a same-tick shell-headline emission that would
     // otherwise overwrite the "Exited" completion cue emitted by
@@ -1717,7 +1761,7 @@ export class TerminalProcess {
     // instead. #5773
     let justClearedDetection = false;
 
-    if (result.detected && result.agentType) {
+    if (isDetected && result.agentType) {
       const previousType = terminal.detectedAgentType;
       terminal.everDetectedAgent = true;
 
@@ -1776,7 +1820,7 @@ export class TerminalProcess {
           timestamp: Date.now(),
         });
       }
-    } else if (result.detected && !result.agentType && result.processIconId) {
+    } else if (isDetected && !result.agentType && result.processIconId) {
       // Non-agent process detected (npm, python, docker, etc.)
       // If we're transitioning directly from an agent, clear agent state first
       if (terminal.detectedAgentType) {
@@ -1809,7 +1853,7 @@ export class TerminalProcess {
           timestamp: Date.now(),
         });
       }
-    } else if (!result.detected && (terminal.detectedAgentType || this.lastDetectedProcessIconId)) {
+    } else if (!isDetected && (terminal.detectedAgentType || this.lastDetectedProcessIconId)) {
       const previousType = terminal.detectedAgentType;
       if (previousType) {
         this.deps.agentStateService.updateAgentState(terminal, { type: "exit", code: 0 });

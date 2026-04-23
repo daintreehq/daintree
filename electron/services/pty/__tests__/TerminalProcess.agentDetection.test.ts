@@ -899,3 +899,83 @@ describe("TerminalProcess — capabilityAgentId sealed at spawn (#5804)", () => 
     }
   });
 });
+
+// #5809: unknown/ambiguous are first-class HOLD states. handleAgentDetection
+// must no-op on both so a blind `ps` cycle or a two-source conflict does not
+// silently demote a confirmed agent every HYSTERESIS window.
+describe("TerminalProcess.handleAgentDetection — unknown/ambiguous hold state (#5809)", () => {
+  it("no-ops on detectionState=unknown — keeps committed agent identity", () => {
+    const terminal = createAgentTerminal();
+    let exitedEvents = 0;
+    const unsubscribe = events.on("agent:exited", () => {
+      exitedEvents += 1;
+    });
+
+    try {
+      callHandleAgentDetection(
+        terminal,
+        { detectionState: "agent", detected: true, agentType: "claude", processIconId: "claude" },
+        getSpawnedAt(terminal)
+      );
+      expect(terminal.getInfo().detectedAgentType).toBe("claude");
+
+      callHandleAgentDetection(
+        terminal,
+        { detectionState: "unknown", detected: false },
+        getSpawnedAt(terminal)
+      );
+
+      expect(terminal.getInfo().detectedAgentType).toBe("claude");
+      expect(terminal.getInfo().type).toBe("claude");
+      expect(exitedEvents).toBe(0);
+    } finally {
+      unsubscribe();
+      terminal.dispose();
+    }
+  });
+
+  it("no-ops on detectionState=ambiguous — keeps committed agent identity", () => {
+    const terminal = createAgentTerminal();
+    let exitedEvents = 0;
+    const unsubscribe = events.on("agent:exited", () => {
+      exitedEvents += 1;
+    });
+
+    try {
+      callHandleAgentDetection(
+        terminal,
+        { detectionState: "agent", detected: true, agentType: "claude", processIconId: "claude" },
+        getSpawnedAt(terminal)
+      );
+      expect(terminal.getInfo().detectedAgentType).toBe("claude");
+
+      callHandleAgentDetection(
+        terminal,
+        { detectionState: "ambiguous", detected: false },
+        getSpawnedAt(terminal)
+      );
+
+      expect(terminal.getInfo().detectedAgentType).toBe("claude");
+      expect(terminal.getInfo().type).toBe("claude");
+      expect(exitedEvents).toBe(0);
+    } finally {
+      unsubscribe();
+      terminal.dispose();
+    }
+  });
+
+  it("normalizes legacy callers missing detectionState — detected=true maps to agent state", () => {
+    const terminal = createPlainTerminal("t-normalize");
+    try {
+      // Legacy caller (no detectionState) — must be treated as agent.
+      callHandleAgentDetection(
+        terminal,
+        { detected: true, agentType: "claude", processIconId: "claude" } as never,
+        getSpawnedAt(terminal)
+      );
+      expect(terminal.getInfo().detectedAgentType).toBe("claude");
+    } finally {
+      terminal.dispose();
+    }
+  });
+});
