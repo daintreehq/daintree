@@ -55,9 +55,17 @@ export interface PanelSnapshot {
   id: string;
   /** Terminal category */
   kind?: PanelKind;
-  /** Terminal type */
+  /**
+   * @deprecated Legacy terminal classification retained for snapshot
+   * compatibility. See `docs/architecture/terminal-identity.md`. Prefer
+   * `agentId` (launch intent).
+   */
   type?: TerminalType;
-  /** Agent ID when kind is an agent - enables extensibility */
+  /**
+   * Launch intent — the agent identity this terminal was spawned as. Persisted
+   * so crash recovery respawns the terminal as the same agent. See
+   * `docs/architecture/terminal-identity.md`.
+   */
   agentId?: AgentId;
   /** Display title */
   title: string;
