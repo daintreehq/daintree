@@ -188,7 +188,7 @@ export interface DetectionResult {
 
 export type DetectionCallback = (result: DetectionResult, spawnedAt: number) => void;
 
-function makeAgentResult(params: {
+export function makeAgentResult(params: {
   agentType?: TerminalType;
   processIconId?: string;
   processName?: string;
@@ -208,7 +208,10 @@ function makeAgentResult(params: {
   };
 }
 
-function makeNoAgentResult(params: { isBusy?: boolean; currentCommand?: string }): DetectionResult {
+export function makeNoAgentResult(params: {
+  isBusy?: boolean;
+  currentCommand?: string;
+}): DetectionResult {
   return {
     detectionState: "no_agent",
     detected: false,
@@ -217,7 +220,7 @@ function makeNoAgentResult(params: { isBusy?: boolean; currentCommand?: string }
   };
 }
 
-function makeUnknownResult(params?: {
+export function makeUnknownResult(params?: {
   isBusy?: boolean;
   currentCommand?: string;
 }): DetectionResult {
@@ -229,7 +232,7 @@ function makeUnknownResult(params?: {
   };
 }
 
-function makeAmbiguousResult(params: {
+export function makeAmbiguousResult(params: {
   isBusy?: boolean;
   currentCommand?: string;
   evidenceSource?: DetectionEvidenceSource;
@@ -281,7 +284,6 @@ export class ProcessDetector {
   // detectAgent() so the two signals arrive at a single committed result.
   private shellCommandIdentity: CommandIdentity | null = null;
   private shellCommandText: string | undefined;
-  private shellCommandObservedAt: number = 0;
   private shellCommandStickyUntil: number = 0;
   private shellCommandExpiresAt: number = 0;
 
@@ -315,7 +317,6 @@ export class ProcessDetector {
   ): void {
     this.shellCommandIdentity = identity;
     this.shellCommandText = commandText;
-    this.shellCommandObservedAt = observedAt;
     this.shellCommandStickyUntil = observedAt + ProcessDetector.SHELL_COMMAND_STICKY_MS;
     this.shellCommandExpiresAt = observedAt + ProcessDetector.SHELL_COMMAND_EXPIRY_MS;
 
@@ -348,7 +349,6 @@ export class ProcessDetector {
 
     this.shellCommandIdentity = null;
     this.shellCommandText = undefined;
-    this.shellCommandObservedAt = 0;
     this.shellCommandStickyUntil = 0;
     this.shellCommandExpiresAt = 0;
 
