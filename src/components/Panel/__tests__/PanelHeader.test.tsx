@@ -591,6 +591,36 @@ describe("PanelHeader", () => {
       expect(chip.className).not.toContain("bg-status-danger");
       expect(chip.className).not.toContain("text-accent-primary");
     });
+
+    it("threads the detected agent id through label and dispatch (not hardcoded to claude)", () => {
+      render(<PanelHeader {...makeProps({ detectedAgentId: "gemini" })} />);
+      const chip = screen.getByTestId("panel-observational-chip");
+      expect(chip.getAttribute("aria-label")).toBe("Restart as gemini agent terminal");
+
+      chip.click();
+      expect(mockDispatch).toHaveBeenCalledWith(
+        "terminal.convertType",
+        { terminalId: "test-panel", type: "gemini" },
+        { source: "menu" }
+      );
+    });
+
+    it("does not render the chip when capability is sealed for a different agent", () => {
+      // Any seal suppresses observational mode — we trust capabilityAgentId
+      // as the authoritative full-mode predicate, even if detection sees a
+      // different live process.
+      render(
+        <PanelHeader {...makeProps({ detectedAgentId: "gemini", capabilityAgentId: "claude" })} />
+      );
+      expect(screen.queryByTestId("panel-observational-chip")).toBeNull();
+    });
+
+    it("does not bubble to the header double-click handler when the chip is clicked", () => {
+      render(<PanelHeader {...makeProps({ detectedAgentId: "claude" })} />);
+      const chip = screen.getByTestId("panel-observational-chip");
+      chip.click();
+      expect(mockDispatch).not.toHaveBeenCalledWith("nav.toggleFocusMode");
+    });
   });
 
   describe("dangerous flags indicator", () => {
