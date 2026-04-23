@@ -2931,6 +2931,71 @@ describe("hydrateAppState", () => {
       );
     });
 
+    it("carries full identity payload through the orphaned-backend path (backend terminal not in saved state)", async () => {
+      // Third propagation route: a live backend terminal that hydrate() does
+      // not know about (saved state stripped, new window discovers it from
+      // getForProject). Routes through buildArgsForOrphanedTerminal instead
+      // of the primary or reconnect builders. Must carry the four identity
+      // dimensions just like the other two paths.
+      appClientMock.hydrate.mockResolvedValue({
+        appState: {
+          // At least one saved panel so the orphan filter does not treat the
+          // orphan as a cross-project "default-" bootstrap leftover.
+          terminals: [
+            {
+              id: "other-1",
+              kind: "terminal",
+              type: "terminal",
+              title: "Other Terminal",
+              cwd: "/project",
+              location: "grid",
+            },
+          ],
+          sidebarWidth: 350,
+        },
+        terminalConfig,
+        project,
+        agentSettings,
+      });
+
+      terminalClientMock.getForProject.mockResolvedValue([
+        {
+          id: "other-1",
+          hasPty: true,
+          cwd: "/project",
+          kind: "terminal",
+          type: "terminal",
+          title: "Other Terminal",
+        },
+        makeBackendAgentEntry({ id: "orphan-agent-1" }),
+      ]);
+
+      const addPanel = vi.fn(async (opts: { existingId?: string; requestedId?: string }) => {
+        return opts.existingId ?? opts.requestedId ?? "id";
+      });
+
+      await hydrateAppState({
+        addPanel,
+        setActiveWorktree: vi.fn(),
+        loadRecipes: vi.fn().mockResolvedValue(undefined),
+        openDiagnosticsDock: vi.fn(),
+      });
+
+      // One addPanel for the matched saved terminal, one for the orphan
+      expect(addPanel).toHaveBeenCalledTimes(2);
+      expect(addPanel).toHaveBeenCalledWith(
+        expect.objectContaining({
+          existingId: "orphan-agent-1",
+          agentId: "claude",
+          agentState: "working",
+          everDetectedAgent: true,
+          detectedAgentId: "claude",
+          detectedProcessId: "claude-12345",
+          capabilityAgentId: "claude",
+        })
+      );
+    });
+
     it("does not invent detected identity on reconnect fallback when the backend reports none", async () => {
       // Cold-launched agent whose detection has not yet fired (or fired and
       // then reset). The renderer must not fabricate a detectedAgentId or
