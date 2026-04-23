@@ -1160,6 +1160,16 @@ export class TerminalProcess {
       : null;
     this.shellIdentityFallbackCommitted = false;
     this.shellIdentityFallbackPromptStreak = 0;
+
+    // If the new command has no recognizable identity (e.g. `echo hi` after a
+    // prior `npm run dev` that committed `npm`), clear any stale shell
+    // evidence on the detector so it doesn't keep the prior identity sticky
+    // for the full TTL. Identity-carrying commands overwrite via the
+    // watcher's later inject call. #5809
+    if (!this.shellIdentityFallbackIdentity) {
+      this.processDetector?.clearShellCommandEvidence();
+    }
+
     this.startShellIdentityFallbackWatcher();
   }
 

@@ -552,6 +552,20 @@ export class ProcessDetector {
         this.onStreak = 0;
         this.offStreak = 0;
         this.pendingDetected = null;
+
+        // Upgrade evidence source when the process tree later corroborates a
+        // shell-only commit. Without this, `lastEvidenceSource` remains
+        // `"shell_command"` forever, and a subsequent `clearShellCommandEvidence()`
+        // call (e.g. on prompt-return) would mistakenly compute the shell as
+        // the sole support and emit a spurious demotion — even though the
+        // process tree still shows the agent running. #5809
+        if (
+          rawDetected &&
+          result.evidenceSource &&
+          result.evidenceSource !== this.lastEvidenceSource
+        ) {
+          this.lastEvidenceSource = result.evidenceSource;
+        }
       }
 
       const inPendingTransition = this.onStreak > 0 || this.offStreak > 0;
@@ -604,8 +618,18 @@ export class ProcessDetector {
     // agent every OFF hysteresis window; returning `unknown` holds state
     // until the cache recovers. Precedent: #4973 (distinguish contexts so
     // a guard correct in one doesn't silently break another). #5809
+    //
+    // EXCEPTION: if fresh shell-command evidence exists, let the merge path
+    // promote from it. Blind-`ps` + typed `claude` is the PRIMARY case this
+    // feature exists for — holding `unknown` here would silently discard the
+    // shell signal. Only when both signals are absent do we hold `unknown`.
     const cacheError = this.cache.getLastError();
     if (!isBusy && cacheError !== null) {
+      const shellEvidenceValid =
+        this.shellCommandIdentity !== null && Date.now() < this.shellCommandExpiresAt;
+      if (shellEvidenceValid) {
+        return this.mergeWithShellEvidence(null, { isBusy: false, currentCommand: undefined });
+      }
       return makeUnknownResult({ isBusy: false });
     }
 
@@ -710,11 +734,15 @@ export class ProcessDetector {
     ctx: { isBusy: boolean; currentCommand?: string }
   ): DetectionResult {
     const shellIdentity = this.shellCommandIdentity;
-    const shellStickyActive = shellIdentity !== null && Date.now() < this.shellCommandStickyUntil;
+    // Merge uses the wider expiry window (30 s) — shell evidence stays valid
+    // for merging even after the 12 s sticky window closes. Sticky governs
+    // off-streak suppression in detect(); merge governs whether the shell
+    // signal can promote (no tree) or disagree (tree shows different agent).
+    const shellEvidenceValid = shellIdentity !== null && Date.now() < this.shellCommandExpiresAt;
 
     // Case A — tree has a positive agent match.
     if (treeMatch?.agentType) {
-      if (shellStickyActive && shellIdentity?.agentType) {
+      if (shellEvidenceValid && shellIdentity?.agentType) {
         if (shellIdentity.agentType === treeMatch.agentType) {
           return makeAgentResult({
             agentType: treeMatch.agentType,
@@ -741,9 +769,9 @@ export class ProcessDetector {
       });
     }
 
-    // Case B — no tree agent match, but shell is fresh with an agent. The
+    // Case B — no tree agent match, but shell is valid with an agent. The
     // title-rewriting CLI and blind-`ps` cases both land here.
-    if (shellStickyActive && shellIdentity?.agentType) {
+    if (shellEvidenceValid && shellIdentity?.agentType) {
       return makeAgentResult({
         agentType: shellIdentity.agentType,
         processIconId: shellIdentity.processIconId ?? treeMatch?.processIconId,
@@ -767,8 +795,8 @@ export class ProcessDetector {
     }
 
     // Case D — no tree evidence. If shell has a non-agent icon and is still
-    // fresh, surface it the same way a tree icon would be surfaced.
-    if (shellStickyActive && shellIdentity?.processIconId) {
+    // valid, surface it the same way a tree icon would be surfaced.
+    if (shellEvidenceValid && shellIdentity?.processIconId) {
       return makeAgentResult({
         processIconId: shellIdentity.processIconId,
         processName: shellIdentity.processName,
