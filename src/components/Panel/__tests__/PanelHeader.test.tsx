@@ -532,6 +532,67 @@ describe("PanelHeader", () => {
     });
   });
 
+  describe("observational agent chip", () => {
+    it("renders the chip when an agent is detected without capability seal", () => {
+      render(<PanelHeader {...makeProps({ detectedAgentId: "claude" })} />);
+      const chip = screen.getByTestId("panel-observational-chip");
+      expect(chip).toBeDefined();
+      expect(chip.textContent).toContain("Observing");
+      expect(chip.textContent).toContain("Restart as agent");
+      expect(chip.getAttribute("aria-label")).toBe("Restart as claude agent terminal");
+    });
+
+    it("does not render the chip when capabilityAgentId is set (full-mode terminal)", () => {
+      render(
+        <PanelHeader {...makeProps({ detectedAgentId: "claude", capabilityAgentId: "claude" })} />
+      );
+      expect(screen.queryByTestId("panel-observational-chip")).toBeNull();
+    });
+
+    it("does not render the chip when no agent is detected", () => {
+      render(<PanelHeader {...makeProps()} />);
+      expect(screen.queryByTestId("panel-observational-chip")).toBeNull();
+    });
+
+    it("does not render the chip while the terminal is restarting", () => {
+      mockStoreState = {
+        ...mockStoreState,
+        panelsById: { "test-panel": { id: "test-panel", isRestarting: true } },
+        panelIds: ["test-panel"],
+      };
+      render(<PanelHeader {...makeProps({ detectedAgentId: "claude" })} />);
+      expect(screen.queryByTestId("panel-observational-chip")).toBeNull();
+    });
+
+    it("does not render the chip for an unregistered detected agent id", () => {
+      render(<PanelHeader {...makeProps({ detectedAgentId: "not-a-real-agent" })} />);
+      expect(screen.queryByTestId("panel-observational-chip")).toBeNull();
+    });
+
+    it("dispatches terminal.convertType with the detected agent id when clicked", () => {
+      render(<PanelHeader {...makeProps({ detectedAgentId: "claude" })} />);
+      const chip = screen.getByTestId("panel-observational-chip");
+      chip.click();
+      expect(mockDispatch).toHaveBeenCalledWith(
+        "terminal.convertType",
+        { terminalId: "test-panel", type: "claude" },
+        { source: "menu" }
+      );
+    });
+
+    it("uses neutral surface tokens, not warning or accent colors", () => {
+      render(<PanelHeader {...makeProps({ detectedAgentId: "claude" })} />);
+      const chip = screen.getByTestId("panel-observational-chip");
+      // Honest UX: chip is informational, not alarming. No warning orange,
+      // no accent on the resting surface — accent is reserved for one
+      // load-bearing signal per view (per CLAUDE.md).
+      expect(chip.className).toContain("bg-overlay-subtle");
+      expect(chip.className).not.toContain("bg-status-warning");
+      expect(chip.className).not.toContain("bg-status-danger");
+      expect(chip.className).not.toContain("text-accent-primary");
+    });
+  });
+
   describe("dangerous flags indicator", () => {
     it("shows red dot indicator when agentLaunchFlags contain dangerous flag", () => {
       render(

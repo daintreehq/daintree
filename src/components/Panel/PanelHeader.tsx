@@ -20,6 +20,7 @@ import {
   ChevronRight,
   CopyPlus,
   Ellipsis,
+  Eye,
   Info,
   Lock,
   Pencil,
@@ -65,6 +66,8 @@ import { TabButton, type TabInfo } from "./TabButton";
 import { SortableTabButton } from "./SortableTabButton";
 import { useShallow } from "zustand/react/shallow";
 import { panelKindCanRestart, panelKindHasPty } from "@shared/config/panelKindRegistry";
+import { isRegisteredAgent } from "@shared/config/agentRegistry";
+import type { BuiltInAgentId } from "@shared/config/agentIds";
 import { actionService } from "@/services/ActionService";
 import { fireWatchNotification } from "@/lib/watchNotification";
 import { useFleetFailureStore } from "@/store/fleetFailureStore";
@@ -77,6 +80,12 @@ export interface PanelHeaderProps {
   agentId?: string;
   /** Runtime-detected agent identity (cleared when the agent exits). Drives icons and the watch button. */
   detectedAgentId?: string;
+  /**
+   * Agent identity sealed at spawn for full-mode terminals. Absent when an
+   * agent was started inside a plain shell — the chip uses this gap to offer
+   * a one-click respawn into a proper agent terminal.
+   */
+  capabilityAgentId?: BuiltInAgentId;
   detectedProcessId?: string;
   presetColor?: string;
   worktreeAccentColor?: string;
@@ -143,6 +152,7 @@ function PanelHeaderComponent({
   type,
   agentId,
   detectedAgentId,
+  capabilityAgentId,
   detectedProcessId,
   presetColor,
   worktreeAccentColor,
@@ -266,6 +276,17 @@ function PanelHeaderComponent({
   const terminal = usePanelStore(useShallow((state) => state.panelsById[id]));
   const isInputLocked = terminal?.isInputLocked ?? false;
   const hasPty = panelKindHasPty(kind);
+
+  // Observational mode: an agent is running inside a plain shell that wasn't
+  // launched as an agent terminal. `capabilityAgentId` is sealed at spawn for
+  // full-mode terminals; its absence alongside a live `detectedAgentId` is the
+  // gap we surface — calmly, with a one-click respawn into the proper agent
+  // terminal. We only show the CTA for agents the registry can spawn.
+  const isObservationalAgent =
+    !!detectedAgentId &&
+    !capabilityAgentId &&
+    isRegisteredAgent(detectedAgentId) &&
+    !terminal?.isRestarting;
 
   // Whether the overflow "..." menu has any items to show
   const showMoveToDock = !!onMinimize && !isMaximized && location !== "dock";
@@ -809,6 +830,36 @@ function PanelHeaderComponent({
                 <TooltipContent side="bottom">
                   Last fleet broadcast failed here — click to dismiss. Run "Fleet: Retry failed
                   broadcast" from the command palette to resend.
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+          )}
+
+          {isObservationalAgent && (
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void actionService.dispatch(
+                        "terminal.convertType",
+                        { terminalId: id, type: detectedAgentId },
+                        { source: "menu" }
+                      );
+                    }}
+                    onPointerDown={(e) => e.stopPropagation()}
+                    aria-label={`Restart as ${detectedAgentId} agent terminal`}
+                    data-testid="panel-observational-chip"
+                    className="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium leading-none select-none bg-overlay-subtle text-daintree-text/70 hover:text-daintree-text hover:bg-daintree-text/10 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-1"
+                  >
+                    <Eye className="w-3 h-3" aria-hidden="true" />
+                    <span>Observing · Restart as agent</span>
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">
+                  {`${detectedAgentId} is running inside a plain shell. Restart to give it the full agent terminal — managed environment, scrollback, and fleet membership.`}
                 </TooltipContent>
               </Tooltip>
             </TooltipProvider>

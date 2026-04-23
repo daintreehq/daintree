@@ -763,6 +763,7 @@ function TerminalPaneComponent({
       type={type}
       agentId={agentId}
       detectedAgentId={detectedAgentId}
+      capabilityAgentId={capabilityAgentId}
       presetColor={livePresetColor}
       isFocused={isFocused}
       isMaximized={isMaximized}
