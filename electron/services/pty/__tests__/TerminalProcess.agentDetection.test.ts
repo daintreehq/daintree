@@ -478,7 +478,9 @@ describe("TerminalProcess shell-command identity fallback", () => {
 
       const info = terminal.getInfo();
       expect(info.detectedAgentType).toBe("claude");
-      expect(info.agentId).toBe("claude");
+      // Launch identity is sealed at spawn — runtime detection must not
+      // rewrite `agentId`. Runtime identity flows via `detectedAgentType`. #5803
+      expect(info.agentId).toBeUndefined();
       expect(info.analysisEnabled).toBe(true);
       expect(info.type).toBe("claude");
       expect(info.everDetectedAgent).toBe(true);
@@ -504,7 +506,9 @@ describe("TerminalProcess shell-command identity fallback", () => {
 
       const info = terminal.getInfo();
       expect(info.detectedAgentType).toBeUndefined();
-      expect(info.agentId).toBeUndefined();
+      // Launch identity survives demotion — the PTY was born as claude, and
+      // that historical fact must persist across the agent exiting. #5803
+      expect(info.agentId).toBe("claude");
       expect(info.analysisEnabled).toBe(false);
       expect(info.type).toBe("terminal");
     } finally {
@@ -680,6 +684,134 @@ describe("TerminalProcess.handleAgentDetection — plain process icon badge emis
       expect(exitedEvents[0].agentType).toBeUndefined();
     } finally {
       unsub();
+      terminal.dispose();
+    }
+  });
+});
+
+// #5803: launch identity (`terminal.agentId`) is sealed at spawn time and must
+// never be rewritten by runtime process detection. Runtime-detected identity
+// flows through `detectedAgentType`; consumers observe the live agent via
+// `agentId ?? detectedAgentType`. See `docs/architecture/terminal-identity.md`.
+describe("TerminalProcess.handleAgentDetection — launch identity immutability (#5803)", () => {
+  it("plain terminal promotion does not mutate agentId", () => {
+    const terminal = createPlainTerminal("t-immut-promote");
+    try {
+      expect(terminal.getInfo().agentId).toBeUndefined();
+
+      callHandleAgentDetection(
+        terminal,
+        { detected: true, agentType: "claude", processIconId: "claude" },
+        getSpawnedAt(terminal)
+      );
+
+      const info = terminal.getInfo();
+      expect(info.agentId).toBeUndefined();
+      expect(info.detectedAgentType).toBe("claude");
+    } finally {
+      terminal.dispose();
+    }
+  });
+
+  it("plain terminal demotion does not clear or rewrite agentId", () => {
+    const terminal = createPlainTerminal("t-immut-demote-plain");
+    try {
+      callHandleAgentDetection(
+        terminal,
+        { detected: true, agentType: "claude", processIconId: "claude" },
+        getSpawnedAt(terminal)
+      );
+      expect(terminal.getInfo().agentId).toBeUndefined();
+
+      // Demotion via non-agent icon.
+      callHandleAgentDetection(
+        terminal,
+        { detected: true, processIconId: "npm", processName: "npm" },
+        getSpawnedAt(terminal)
+      );
+      expect(terminal.getInfo().agentId).toBeUndefined();
+      expect(terminal.getInfo().detectedAgentType).toBeUndefined();
+
+      // Demotion via no-detection.
+      callHandleAgentDetection(terminal, { detected: false }, getSpawnedAt(terminal));
+      expect(terminal.getInfo().agentId).toBeUndefined();
+    } finally {
+      terminal.dispose();
+    }
+  });
+
+  it("spawn-sealed agent preserves agentId across a non-agent-icon demotion", () => {
+    const terminal = createAgentTerminal();
+    try {
+      callHandleAgentDetection(
+        terminal,
+        { detected: true, agentType: "claude", processIconId: "claude" },
+        getSpawnedAt(terminal)
+      );
+      expect(terminal.getInfo().agentId).toBe("claude");
+
+      callHandleAgentDetection(
+        terminal,
+        { detected: true, processIconId: "npm", processName: "npm" },
+        getSpawnedAt(terminal)
+      );
+
+      const info = terminal.getInfo();
+      expect(info.agentId).toBe("claude");
+      expect(info.detectedAgentType).toBeUndefined();
+    } finally {
+      terminal.dispose();
+    }
+  });
+
+  it("spawn-sealed agent preserves agentId across a no-detection demotion", () => {
+    const terminal = createAgentTerminal();
+    try {
+      callHandleAgentDetection(
+        terminal,
+        { detected: true, agentType: "claude", processIconId: "claude" },
+        getSpawnedAt(terminal)
+      );
+      expect(terminal.getInfo().agentId).toBe("claude");
+
+      callHandleAgentDetection(terminal, { detected: false }, getSpawnedAt(terminal));
+
+      const info = terminal.getInfo();
+      expect(info.agentId).toBe("claude");
+      expect(info.detectedAgentType).toBeUndefined();
+    } finally {
+      terminal.dispose();
+    }
+  });
+
+  it("detection events still flow for a runtime-promoted plain shell", () => {
+    const terminal = createPlainTerminal("t-immut-events");
+    const detectedEvents: Array<{ agentType?: string }> = [];
+    const exitedEvents: Array<{ agentType?: string }> = [];
+    const unsubDetected = events.on("agent:detected", (payload) => {
+      detectedEvents.push({ agentType: payload.agentType });
+    });
+    const unsubExited = events.on("agent:exited", (payload) => {
+      exitedEvents.push({ agentType: payload.agentType });
+    });
+
+    try {
+      callHandleAgentDetection(
+        terminal,
+        { detected: true, agentType: "claude", processIconId: "claude" },
+        getSpawnedAt(terminal)
+      );
+      expect(detectedEvents).toHaveLength(1);
+      expect(detectedEvents[0].agentType).toBe("claude");
+      expect(terminal.getInfo().agentId).toBeUndefined();
+
+      callHandleAgentDetection(terminal, { detected: false }, getSpawnedAt(terminal));
+      expect(exitedEvents).toHaveLength(1);
+      expect(exitedEvents[0].agentType).toBe("claude");
+      expect(terminal.getInfo().agentId).toBeUndefined();
+    } finally {
+      unsubDetected();
+      unsubExited();
       terminal.dispose();
     }
   });

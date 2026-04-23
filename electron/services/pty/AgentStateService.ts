@@ -11,6 +11,14 @@ import type { TerminalInfo } from "./types.js";
 import { ActivityHeadlineGenerator } from "../ActivityHeadlineGenerator.js";
 import type { WaitingReason } from "../../../shared/types/agent.js";
 
+// Live agent identity — launch intent (`agentId`) takes precedence; runtime
+// detection (`detectedAgentType`) backs it. Matches the helper in
+// `TerminalProcess.ts` so lifecycle events observe the running agent without
+// `handleAgentDetection()` having to mutate the sealed `agentId` field. #5803
+function getLiveAgentId(terminal: TerminalInfo): string | undefined {
+  return terminal.agentId ?? terminal.detectedAgentType;
+}
+
 /**
  * Service responsible for agent state machine logic and event emission.
  * Handles state transitions, trigger inference, and emits validated agent events.
@@ -236,7 +244,8 @@ export class AgentStateService {
   }
 
   emitAgentCompleted(terminal: TerminalInfo, exitCode: number): void {
-    if (!terminal.agentId) {
+    const liveAgentId = getLiveAgentId(terminal);
+    if (!liveAgentId) {
       return;
     }
 
@@ -244,7 +253,7 @@ export class AgentStateService {
     const duration = Math.max(0, completedAt - terminal.spawnedAt);
 
     const completedPayload = {
-      agentId: terminal.agentId,
+      agentId: liveAgentId,
       exitCode,
       duration,
       timestamp: completedAt,
@@ -264,12 +273,13 @@ export class AgentStateService {
   }
 
   emitAgentKilled(terminal: TerminalInfo, reason?: string): void {
-    if (!terminal.agentId) {
+    const liveAgentId = getLiveAgentId(terminal);
+    if (!liveAgentId) {
       return;
     }
 
     const killedPayload = {
-      agentId: terminal.agentId,
+      agentId: liveAgentId,
       reason,
       timestamp: Date.now(),
       traceId: terminal.traceId,

@@ -390,4 +390,102 @@ describe("AgentStateService", () => {
     expect(completedPayloads[0]?.duration).toBe(0);
     expect(completedPayloads[0]?.exitCode).toBe(0);
   });
+
+  // #5803: Runtime-detected agents have no launch-time agentId; lifecycle
+  // events must still fire using detectedAgentType as the live identity.
+  describe("lifecycle events use live identity (#5803)", () => {
+    it("emitAgentCompleted uses detectedAgentType when agentId is absent", () => {
+      const service = new AgentStateService();
+      const terminal = createTerminal({
+        agentId: undefined,
+        detectedAgentType: "claude",
+        agentState: "working",
+      });
+      const payloads: Array<{ agentId: string }> = [];
+
+      events.on("agent:completed", (payload) => {
+        payloads.push({ agentId: payload.agentId });
+      });
+
+      service.emitAgentCompleted(terminal, 0);
+
+      expect(payloads).toHaveLength(1);
+      expect(payloads[0]?.agentId).toBe("claude");
+    });
+
+    it("emitAgentKilled uses detectedAgentType when agentId is absent", () => {
+      const service = new AgentStateService();
+      const terminal = createTerminal({
+        agentId: undefined,
+        detectedAgentType: "gemini",
+        agentState: "working",
+      });
+      const payloads: Array<{ agentId: string; reason?: string }> = [];
+
+      events.on("agent:killed", (payload) => {
+        payloads.push({ agentId: payload.agentId, reason: payload.reason });
+      });
+
+      service.emitAgentKilled(terminal, "manual");
+
+      expect(payloads).toHaveLength(1);
+      expect(payloads[0]?.agentId).toBe("gemini");
+      expect(payloads[0]?.reason).toBe("manual");
+    });
+
+    it("emitAgentCompleted prefers spawn-sealed agentId over detectedAgentType", () => {
+      const service = new AgentStateService();
+      const terminal = createTerminal({
+        agentId: "claude",
+        detectedAgentType: "gemini",
+        agentState: "working",
+      });
+      const payloads: Array<{ agentId: string }> = [];
+
+      events.on("agent:completed", (payload) => {
+        payloads.push({ agentId: payload.agentId });
+      });
+
+      service.emitAgentCompleted(terminal, 0);
+
+      expect(payloads).toHaveLength(1);
+      expect(payloads[0]?.agentId).toBe("claude");
+    });
+
+    it("emitAgentCompleted is a no-op when both agentId and detectedAgentType are absent", () => {
+      const service = new AgentStateService();
+      const terminal = createTerminal({
+        agentId: undefined,
+        detectedAgentType: undefined,
+        agentState: "idle",
+      });
+      const payloads: unknown[] = [];
+
+      events.on("agent:completed", (payload) => {
+        payloads.push(payload);
+      });
+
+      service.emitAgentCompleted(terminal, 0);
+
+      expect(payloads).toHaveLength(0);
+    });
+
+    it("emitAgentKilled is a no-op when both agentId and detectedAgentType are absent", () => {
+      const service = new AgentStateService();
+      const terminal = createTerminal({
+        agentId: undefined,
+        detectedAgentType: undefined,
+        agentState: "idle",
+      });
+      const payloads: unknown[] = [];
+
+      events.on("agent:killed", (payload) => {
+        payloads.push(payload);
+      });
+
+      service.emitAgentKilled(terminal, "manual");
+
+      expect(payloads).toHaveLength(0);
+    });
+  });
 });

@@ -106,6 +106,15 @@ const OSC_10_QUERY_STRIP_RE = /\x1b\]10;\?(?:\x07|\x1b\\)/g;
 // eslint-disable-next-line no-control-regex
 const OSC_11_QUERY_STRIP_RE = /\x1b\]11;\?(?:\x07|\x1b\\)/g;
 
+// Live agent identity — prefers launch intent (`agentId`) but falls back to
+// runtime-detected identity (`detectedAgentType`) so consumers observe the
+// agent that is currently running in this PTY without forcing the detection
+// code to mutate the sealed `agentId` field. See #5803 and
+// `docs/architecture/terminal-identity.md`.
+function getLiveAgentId(terminal: TerminalInfo): string | undefined {
+  return terminal.agentId ?? terminal.detectedAgentType;
+}
+
 export interface TerminalProcessCallbacks {
   emitData: (id: string, data: string | Uint8Array) => void;
   onExit: (id: string, exitCode: number) => void;
@@ -517,7 +526,7 @@ export class TerminalProcess {
   }
 
   getResizeStrategy(): "default" | "settled" {
-    const agentId = this.terminalInfo.agentId;
+    const agentId = getLiveAgentId(this.terminalInfo);
     if (!agentId) return "default";
     const config = getEffectiveAgentConfig(agentId);
     return config?.capabilities?.resizeStrategy ?? "default";
@@ -795,7 +804,8 @@ export class TerminalProcess {
       return null;
     }
 
-    const agentConfig = terminal.agentId ? getEffectiveAgentConfig(terminal.agentId) : undefined;
+    const liveAgentId = getLiveAgentId(terminal);
+    const agentConfig = liveAgentId ? getEffectiveAgentConfig(liveAgentId) : undefined;
 
     if (!agentConfig?.shutdown) {
       return null;
@@ -1004,7 +1014,7 @@ export class TerminalProcess {
     terminal.wasKilled = true;
     this.clearSessionPersistTimer();
 
-    if (terminal.agentId) {
+    if (getLiveAgentId(terminal)) {
       this.deps.agentStateService.updateAgentState(terminal, {
         type: "kill",
       });
@@ -1567,9 +1577,10 @@ export class TerminalProcess {
           terminal.outputBuffer = terminal.outputBuffer.slice(-OUTPUT_BUFFER_SIZE);
         }
 
-        if (terminal.agentId) {
+        const liveId = getLiveAgentId(terminal);
+        if (liveId) {
           events.emit("agent:output", {
-            agentId: terminal.agentId,
+            agentId: liveId,
             data,
             timestamp: Date.now(),
             traceId: terminal.traceId,
@@ -1620,7 +1631,7 @@ export class TerminalProcess {
         });
       }
 
-      if (this.isAgentTerminal && terminal.agentId && !terminal.wasKilled) {
+      if (this.isAgentTerminal && getLiveAgentId(terminal) && !terminal.wasKilled) {
         this.deps.agentStateService.emitAgentCompleted(terminal, exitCode ?? 0);
       }
 
@@ -1725,17 +1736,14 @@ export class TerminalProcess {
           // Seed agent state before startPolling() fires its initial tick,
           // then start the monitor BEFORE emitting "agent:detected" so the
           // main-process monitor is live before the renderer IPC arrives.
+          //
+          // Launch identity (`terminal.agentId`) is sealed at spawn and is
+          // NOT rewritten here — runtime detection lives on
+          // `detectedAgentType`. AgentStateService and lifecycle event guards
+          // observe the live agent via `agentId ?? detectedAgentType`. #5803
           if (terminal.agentState === undefined) {
             terminal.agentState = "idle";
             terminal.lastStateChange = Date.now();
-          }
-          // Without agentId, AgentStateService.updateAgentState and
-          // handleActivityState drop every event — state transitions would
-          // never reach the renderer. Mirror spawn-time semantics by using
-          // the detected agent type as the agent id for runtime-promoted
-          // terminals. Leave spawn-time agentId untouched if already set.
-          if (!terminal.agentId) {
-            terminal.agentId = result.agentType;
           }
           terminal.analysisEnabled = true;
           this.startActivityMonitor();
@@ -1767,13 +1775,12 @@ export class TerminalProcess {
         terminal.type = "terminal";
         terminal.title = "Terminal";
         this.stopActivityMonitor();
-        // "Terminals are the unit": clear live agent identity regardless of
-        // spawn-sealed status. The shell is still alive (it wrapped the agent),
-        // and the panel should demote to a plain terminal now that the agent
-        // has exited. `this.isAgentTerminal` remains a historical fact about
-        // how the PTY was born but no longer gates user-visible identity.
+        // "Terminals are the unit": the live agent surface demotes to a plain
+        // terminal now that the detected agent has exited. `this.isAgentTerminal`
+        // remains a historical fact about how the PTY was born, and
+        // `terminal.agentId` remains sealed at its launch-intent value — runtime
+        // detection no longer mutates it. #5803
         terminal.analysisEnabled = false;
-        terminal.agentId = undefined;
         events.emit("agent:exited", {
           terminalId: this.id,
           agentType: previousType,
@@ -1804,13 +1811,12 @@ export class TerminalProcess {
       this.lastDetectedProcessIconId = undefined;
       terminal.detectedProcessIconId = undefined;
       this.stopActivityMonitor();
-      // Only clear agent identity when an AGENT exited. This branch also
-      // fires for plain process-icon exits (npm/vite/etc.) where previousType
-      // is undefined; clearing agentId there would wipe the Claude badge
-      // after any short-lived shell command ran inside a Claude terminal.
+      // Only disable analysis when an AGENT exited. This branch also fires for
+      // plain process-icon exits (npm/vite/etc.) where previousType is
+      // undefined. `terminal.agentId` is never mutated here — launch identity
+      // is sealed at spawn. #5803
       if (previousType) {
         terminal.analysisEnabled = false;
-        terminal.agentId = undefined;
       }
       events.emit("agent:exited", {
         terminalId: this.id,
