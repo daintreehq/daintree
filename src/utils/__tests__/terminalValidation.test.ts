@@ -54,7 +54,7 @@ describe("terminalValidation", () => {
     const result = await validateTerminalConfig(
       makeTerminal({
         cwd: "/repo",
-        type: "claude",
+        agentId: "claude",
       }) as never
     );
 
@@ -70,7 +70,7 @@ describe("terminalValidation", () => {
     const result = await validateTerminalConfig(
       makeTerminal({
         cwd: "/missing",
-        type: "codex",
+        agentId: "codex",
       }) as never
     );
 
@@ -123,7 +123,7 @@ describe("terminalValidation", () => {
 
     const result = await validateTerminalConfig(
       makeTerminal({
-        type: "gemini",
+        agentId: "gemini",
       }) as never
     );
 
@@ -150,7 +150,7 @@ describe("terminalValidation", () => {
   it("falls back to agentId when agent is not in registry", async () => {
     const result = await validateTerminalConfig(
       makeTerminal({
-        type: "unknown-agent",
+        agentId: "unknown-agent",
       }) as never
     );
 
@@ -165,7 +165,7 @@ describe("terminalValidation", () => {
     const results = await validateTerminals([
       makeTerminal({ id: "ok", cwd: "/repo", type: "terminal" }) as never,
       makeTerminal({ id: "bad-cwd", cwd: "/missing", type: "terminal" }) as never,
-      makeTerminal({ id: "bad-cli", type: "broken-agent" }) as never,
+      makeTerminal({ id: "bad-cli", agentId: "broken-agent" }) as never,
     ]);
 
     expect(results.has("ok")).toBe(false);
