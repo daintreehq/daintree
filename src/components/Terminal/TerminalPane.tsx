@@ -58,6 +58,7 @@ const LazyHybridInputBar = lazy(() =>
 import { getTerminalFocusTarget, shouldSuppressUnfocusedClick } from "./terminalFocus";
 import { decideChromeAction } from "./multiSelectGestures";
 import { registerPanelFocusHandler } from "./terminalFocusRegistry";
+import { resolveEffectiveAgentId } from "@/utils/agentIdentity";
 
 import { DropdownMenuItem } from "@/components/ui/dropdown-menu";
 
@@ -258,13 +259,8 @@ function TerminalPaneComponent({
   }, [isRestartingService]);
   const hybridInputEnabled = useTerminalInputStore((state) => state.hybridInputEnabled);
   const hybridInputAutoFocus = useTerminalInputStore((state) => state.hybridInputAutoFocus);
-  const effectiveAgentId = (
-    agentId && isRegisteredAgent(agentId)
-      ? agentId
-      : type && isRegisteredAgent(type)
-        ? type
-        : undefined
-  ) as BuiltInAgentId | undefined;
+  const effectiveAgentId = (resolveEffectiveAgentId(detectedAgentId, agentId) ??
+    (type && isRegisteredAgent(type) ? type : undefined)) as BuiltInAgentId | undefined;
   const isAgentTerminal = effectiveAgentId !== undefined;
   const showHybridInputBar = isAgentTerminal && hybridInputEnabled;
 
