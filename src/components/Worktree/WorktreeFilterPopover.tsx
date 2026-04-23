@@ -106,7 +106,6 @@ const GITHUB_OPTIONS: { value: GitHubFilter; label: string }[] = [
 const SESSION_OPTIONS: { value: SessionFilter; label: string }[] = [
   { value: "hasTerminals", label: "Has Terminals" },
   { value: "working", label: "Working" },
-  { value: "running", label: "Running" },
   { value: "waiting", label: "Waiting" },
   { value: "completed", label: "Completed" },
   { value: "exited", label: "Exited" },

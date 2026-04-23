@@ -45,7 +45,7 @@ function snapshotArmed(): ArmedSnapshot {
     // Interrupt only makes sense for agents that are actually doing
     // something — sending ESC ESC to a completed/idle/exited agent is
     // either a no-op or a spurious keystroke.
-    if (t.agentState === "working" || t.agentState === "running" || t.agentState === "waiting") {
+    if (t.agentState === "working" || t.agentState === "waiting") {
       interruptCandidates.push(t);
     }
     if (t.agentSessionId) sessionLossCount++;

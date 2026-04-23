@@ -1,4 +1,5 @@
 import type { PanelKind, TerminalType, AgentState } from "@/types";
+import { coerceAgentState } from "@shared/types/agent";
 import type { BrowserHistory } from "@shared/types/browser";
 import type { PanelExitBehavior } from "@shared/types/panel";
 import type { AddPanelOptionsBase } from "@shared/types/addPanelOptions";
@@ -200,7 +201,7 @@ export function buildArgsForBackendTerminal(
     worktreeId: saved.worktreeId,
     location,
     existingId: backendTerminal.id,
-    agentState: backendTerminal.agentState,
+    agentState: coerceAgentState(backendTerminal.agentState),
     lastStateChange: backendTerminal.lastStateChange,
     devCommand,
     browserUrl: isDevPreview ? saved.browserUrl : undefined,
@@ -256,7 +257,7 @@ export function buildArgsForReconnectedFallback(
     worktreeId: saved.worktreeId,
     location,
     existingId: reconnectedTerminal.id,
-    agentState: reconnectedTerminal.agentState,
+    agentState: coerceAgentState(reconnectedTerminal.agentState),
     lastStateChange: reconnectedTerminal.lastStateChange,
     devCommand,
     browserUrl: isDevPreview ? saved.browserUrl : undefined,
@@ -476,7 +477,7 @@ export function buildArgsForOrphanedTerminal(
     cwd,
     location: "grid",
     existingId: terminal.id,
-    agentState: terminal.agentState,
+    agentState: coerceAgentState(terminal.agentState),
     lastStateChange: terminal.lastStateChange,
     agentSessionId: terminal.agentSessionId,
     agentLaunchFlags: terminal.agentLaunchFlags,

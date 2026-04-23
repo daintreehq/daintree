@@ -15,7 +15,6 @@ function getAgentStateMessage(
 ): { msg: string; priority: "polite" | "assertive" } | null {
   switch (newState) {
     case "working":
-    case "running":
       return { msg: `${title} is working`, priority: "polite" };
     case "waiting":
       return { msg: `${title} is waiting for input`, priority: "polite" };

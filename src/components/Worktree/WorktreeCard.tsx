@@ -324,8 +324,7 @@ export const WorktreeCard = React.memo(function WorktreeCard({
   // same `isFleetArmEligible` subset (has PTY, not trash/background) that
   // `armAll`/`armByState` actually arm — otherwise the menu could show an
   // enabled item that silently no-ops (e.g. a background-located waiting
-  // terminal). `working` includes both "working" and "running" to match
-  // `matchesPreset("working")`.
+  // terminal).
   const eligibleAgents = useMemo(
     () => worktreeTerminals.filter(isFleetArmEligible),
     [worktreeTerminals]
@@ -336,8 +335,7 @@ export const WorktreeCard = React.memo(function WorktreeCard({
     [eligibleAgents]
   );
   const workingAgentCount = useMemo(
-    () =>
-      eligibleAgents.filter((t) => t.agentState === "working" || t.agentState === "running").length,
+    () => eligibleAgents.filter((t) => t.agentState === "working").length,
     [eligibleAgents]
   );
 
@@ -638,15 +636,9 @@ export const WorktreeCard = React.memo(function WorktreeCard({
         waitingTerminalCount: terminalCounts.byState.waiting,
         lifecycleStage,
         isComplete,
-        hasActiveAgent: terminalCounts.byState.working > 0 || terminalCounts.byState.running > 0,
+        hasActiveAgent: terminalCounts.byState.working > 0,
       }),
-    [
-      terminalCounts.byState.waiting,
-      terminalCounts.byState.working,
-      terminalCounts.byState.running,
-      lifecycleStage,
-      isComplete,
-    ]
+    [terminalCounts.byState.waiting, terminalCounts.byState.working, lifecycleStage, isComplete]
   );
 
   const { setNodeRef, isOver } = useDroppable({

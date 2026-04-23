@@ -28,13 +28,7 @@ export type TypeFilter =
   | "detached"
   | "other";
 export type GitHubFilter = "hasIssue" | "hasPR" | "prOpen" | "prMerged" | "prClosed";
-export type SessionFilter =
-  | "hasTerminals"
-  | "working"
-  | "running"
-  | "waiting"
-  | "completed"
-  | "exited";
+export type SessionFilter = "hasTerminals" | "working" | "waiting" | "completed" | "exited";
 export type ActivityFilter = "last15m" | "last1h" | "last24h" | "last7d";
 
 interface WorktreeFilterState {
@@ -179,6 +173,18 @@ function arrayOrUndefined<T>(value: unknown): T[] | undefined {
 }
 
 /**
+ * Strip the retired "running" session filter from a persisted list. The
+ * adjacent "working" option semantically covers its former intent — see
+ * issue #5810.
+ */
+function stripLegacySessionFilters(
+  values: SessionFilter[] | undefined
+): SessionFilter[] | undefined {
+  if (!values) return undefined;
+  return values.filter((v) => (v as string) !== "running");
+}
+
+/**
  * One-time migration seed: when the per-project key does not yet exist (or is
  * unparseable), but a legacy combined blob is present under the global key,
  * copy the per-project fields out of it so existing pins/order survive the
@@ -219,7 +225,9 @@ function loadLegacySeedForProject(): Partial<ProjectPersistedShape> {
     statusFilters: arrayOrUndefined<StatusFilter>(state.statusFilters),
     typeFilters: arrayOrUndefined<TypeFilter>(state.typeFilters),
     githubFilters: arrayOrUndefined<GitHubFilter>(state.githubFilters),
-    sessionFilters: arrayOrUndefined<SessionFilter>(state.sessionFilters),
+    sessionFilters: stripLegacySessionFilters(
+      arrayOrUndefined<SessionFilter>(state.sessionFilters)
+    ),
     activityFilters: arrayOrUndefined<ActivityFilter>(state.activityFilters),
     pinnedWorktrees: arrayOrUndefined<string>(state.pinnedWorktrees),
     collapsedWorktrees: arrayOrUndefined<string>(state.collapsedWorktrees),
@@ -299,6 +307,7 @@ const _projectStore = create<ProjectScopedState>()(
     }),
     {
       name: PROJECT_KEY,
+      version: 1,
       storage: createSafeJSONStorage(),
       partialize: (state): ProjectPersistedShape => ({
         query: state.query,
@@ -311,15 +320,27 @@ const _projectStore = create<ProjectScopedState>()(
         collapsedWorktrees: state.collapsedWorktrees,
         manualOrder: state.manualOrder,
       }),
+      migrate: (persistedState, version) => {
+        // v1 retires the "running" SessionFilter (#5810). Strip any stale
+        // entries from pre-v1 blobs so the Set coercion in `merge` doesn't
+        // restore a filter the UI no longer exposes.
+        if (version < 1) {
+          const legacy = (persistedState ?? {}) as Partial<ProjectPersistedShape>;
+          const cleaned = stripLegacySessionFilters(legacy.sessionFilters);
+          return { ...legacy, sessionFilters: cleaned } as ProjectPersistedShape;
+        }
+        return persistedState as ProjectPersistedShape;
+      },
       merge: (persisted, current) => {
         const p = persisted as Partial<ProjectPersistedShape> | undefined;
+        const persistedSessionFilters = stripLegacySessionFilters(p?.sessionFilters);
         return {
           ...current,
           query: p?.query ?? current.query,
           statusFilters: new Set(p?.statusFilters ?? Array.from(current.statusFilters)),
           typeFilters: new Set(p?.typeFilters ?? Array.from(current.typeFilters)),
           githubFilters: new Set(p?.githubFilters ?? Array.from(current.githubFilters)),
-          sessionFilters: new Set(p?.sessionFilters ?? Array.from(current.sessionFilters)),
+          sessionFilters: new Set(persistedSessionFilters ?? Array.from(current.sessionFilters)),
           activityFilters: new Set(p?.activityFilters ?? Array.from(current.activityFilters)),
           pinnedWorktrees: p?.pinnedWorktrees ?? current.pinnedWorktrees,
           collapsedWorktrees: p?.collapsedWorktrees ?? current.collapsedWorktrees,

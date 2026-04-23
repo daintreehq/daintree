@@ -123,12 +123,12 @@ describe("ProjectStatsService adversarial", () => {
     projectStoreMock.getAllProjects.mockReturnValue([{ id: "p1" }]);
     ptyClient.getAllTerminalsAsync.mockResolvedValue([
       { projectId: "p1", isTrashed: true, kind: "terminal", agentState: "working" },
-      { projectId: "p1", kind: "dev-preview", agentState: "running" },
+      { projectId: "p1", kind: "dev-preview", agentState: "working" },
       { projectId: "p1", hasPty: false, kind: "terminal", agentState: "working" },
-      { projectId: "p1", kind: "terminal", agentState: "running" }, // no agentId, not "agent" kind → skip
+      { projectId: "p1", kind: "terminal", agentState: "working" }, // no agentId, not "agent" kind → skip
       { projectId: "p1", kind: "terminal", agentId: "x", agentState: "waiting" }, // counts (waiting)
       { projectId: "p1", kind: "terminal", agentId: "x", agentState: "working" }, // counts (active)
-      { projectId: "p1", kind: "terminal", agentId: "x", agentState: "running" }, // counts (active)
+      { projectId: "p1", kind: "terminal", agentId: "x", agentState: "working" }, // counts (active)
       { projectId: "p1", kind: "terminal", agentId: "x", agentState: "idle" }, // counts neither
     ]);
     ptyClient.getProjectStats.mockResolvedValue({
@@ -178,7 +178,7 @@ describe("ProjectStatsService adversarial", () => {
       },
       // Regression guard: plain terminal with neither agentId nor
       // detectedAgentId is still excluded.
-      { projectId: "p1", kind: "terminal", agentState: "running" },
+      { projectId: "p1", kind: "terminal", agentState: "working" },
     ]);
     ptyClient.getProjectStats.mockResolvedValue({
       projectId: "p1",

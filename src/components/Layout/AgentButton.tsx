@@ -47,7 +47,6 @@ type AgentType = BuiltInAgentId;
 const ACTIVE_AGENT_STATES: ReadonlySet<AgentState | undefined> = new Set<AgentState | undefined>([
   "idle",
   "working",
-  "running",
   "waiting",
   "directing",
 ]);

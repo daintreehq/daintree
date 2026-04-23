@@ -91,12 +91,11 @@ export function resolveFleetBroadcastTargetIds(): string[] {
 
 /**
  * Group AgentStates that should accept the same keystroke. Mirrors the
- * grouping in `fleetArmingStore.matchesPreset`: working/running act together,
- * completed/exited as "finished", everything else stays in its own group.
+ * grouping in `fleetArmingStore.matchesPreset`: completed/exited collapse to
+ * "finished", everything else stays in its own group.
  */
 function agentStateGroup(state: AgentState | null | undefined): string {
   if (state == null) return "unknown";
-  if (state === "working" || state === "running") return "active";
   if (state === "completed" || state === "exited") return "finished";
   return state;
 }
@@ -105,9 +104,7 @@ function agentStateGroup(state: AgentState | null | undefined): string {
  * Two states are broadcast-compatible when they sit in the same group. A
  * keystroke typed at a `[y/N]` prompt (waiting) should only fan out to other
  * waiting agents — sending `y` to a vim pane would yank a line, sending it to
- * an active task would inject a stray character. The grouping rule lets a
- * "working" origin still target a "running" peer because their input semantics
- * are identical.
+ * an active task would inject a stray character.
  */
 export function areAgentStatesBroadcastCompatible(
   origin: AgentState | null | undefined,

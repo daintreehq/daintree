@@ -218,9 +218,8 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
   ]);
 
   const isWorking = terminal.agentState === "working";
-  const isRunning = terminal.agentState === "running";
   const isWaiting = terminal.agentState === "waiting";
-  const isActive = isWorking || isRunning || isWaiting;
+  const isActive = isWorking || isWaiting;
   const commandText = terminal.activityHeadline || terminal.lastCommand;
   const agentState = terminal.agentState;
   const blockedState = useDockBlockedState(terminal.agentState);

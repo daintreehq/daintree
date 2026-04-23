@@ -56,7 +56,6 @@ export function useWorktreeTerminals(worktreeId: string): UseWorktreeTerminalsRe
     const byState: Record<AgentState, number> = {
       idle: 0,
       working: 0,
-      running: 0,
       waiting: 0,
       directing: 0,
       completed: 0,

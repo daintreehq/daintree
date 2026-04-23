@@ -406,6 +406,53 @@ describe("worktreeFilterStore persistence scoping", () => {
     expect(parsed.state.hideMainWorktree).toBe(true);
   });
 
+  it('strips retired "running" session filter from pre-v1 scoped blobs (issue #5810)', async () => {
+    const scopedBlob = JSON.stringify({
+      state: {
+        query: "",
+        statusFilters: [],
+        typeFilters: [],
+        githubFilters: [],
+        sessionFilters: ["running", "waiting"],
+        activityFilters: [],
+        pinnedWorktrees: [],
+        collapsedWorktrees: [],
+        manualOrder: [],
+      },
+      version: 0,
+    });
+
+    installLocalStorage({
+      getItem: (key) => (key === PROJECT_KEY ? scopedBlob : null),
+      setItem: () => {},
+      removeItem: () => {},
+    });
+
+    const { useWorktreeFilterStore: store } = await import("../worktreeFilterStore");
+
+    expect([...store.getState().sessionFilters]).toEqual(["waiting"]);
+  });
+
+  it('strips retired "running" from sessionFilters recovered from the legacy global seed', async () => {
+    const legacyBlob = JSON.stringify({
+      state: {
+        sessionFilters: ["running", "working"],
+        pinnedWorktrees: ["wt-pin"],
+      },
+    });
+
+    installLocalStorage({
+      getItem: (key) => (key === GLOBAL_KEY ? legacyBlob : null),
+      setItem: () => {},
+      removeItem: () => {},
+    });
+
+    const { useWorktreeFilterStore: store } = await import("../worktreeFilterStore");
+
+    expect([...store.getState().sessionFilters].sort()).toEqual(["working"]);
+    expect(store.getState().pinnedWorktrees).toEqual(["wt-pin"]);
+  });
+
   it("isolates per-project pins across different projectIds in the URL", async () => {
     // Shared localStorage across both project loads — backing key-value store
     // persists through module resets, just like real localStorage does.

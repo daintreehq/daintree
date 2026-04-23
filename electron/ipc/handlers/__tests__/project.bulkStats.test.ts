@@ -189,7 +189,7 @@ describe("handleProjectGetBulkStats", () => {
           projectId: "proj-a",
           kind: "terminal",
           agentId: "claude",
-          agentState: "running",
+          agentState: "working",
           hasPty: true,
           cwd: "/tmp",
           spawnedAt: 3,
@@ -214,7 +214,7 @@ describe("handleProjectGetBulkStats", () => {
       { activeAgentCount: number; waitingAgentCount: number }
     >;
 
-    expect(result["proj-a"].activeAgentCount).toBe(2); // working + running
+    expect(result["proj-a"].activeAgentCount).toBe(2); // working only
     expect(result["proj-a"].waitingAgentCount).toBe(1); // waiting only
   });
 
@@ -346,7 +346,7 @@ describe("handleProjectGetBulkStats", () => {
           projectId: "proj-b",
           kind: "terminal",
           agentId: "claude",
-          agentState: "running",
+          agentState: "working",
           hasPty: true,
           cwd: "/tmp",
           spawnedAt: 3,

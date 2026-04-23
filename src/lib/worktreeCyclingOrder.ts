@@ -33,7 +33,6 @@ function buildDerivedMeta(
   let terminalCount = 0;
   let waitingTerminalCount = 0;
   let hasWorkingAgent = false;
-  let hasRunningAgent = false;
   let hasWaitingAgent = false;
   let hasCompletedAgent = false;
   let hasExitedAgent = false;
@@ -43,7 +42,6 @@ function buildDerivedMeta(
     if (!t || t.worktreeId !== worktree.id || t.location === "trash") continue;
     terminalCount++;
     if (t.agentState === "working") hasWorkingAgent = true;
-    if (t.agentState === "running") hasRunningAgent = true;
     if (t.agentState === "waiting") {
       hasWaitingAgent = true;
       waitingTerminalCount++;
@@ -72,13 +70,12 @@ function buildDerivedMeta(
     waitingTerminalCount,
     lifecycleStage,
     isComplete,
-    hasActiveAgent: hasWorkingAgent || hasRunningAgent,
+    hasActiveAgent: hasWorkingAgent,
   });
 
   return {
     terminalCount,
     hasWorkingAgent,
-    hasRunningAgent,
     hasWaitingAgent,
     hasCompletedAgent,
     hasExitedAgent,

@@ -185,7 +185,7 @@ describe("AgentNotificationService adversarial", () => {
 
     events.emit("agent:state-changed", makePayload("completed", "working"));
     vi.advanceTimersByTime(1000);
-    events.emit("agent:state-changed", makePayload("completed", "running"));
+    events.emit("agent:state-changed", makePayload("completed", "directing"));
     vi.advanceTimersByTime(2001);
 
     expect(notificationServiceMock.showWatchNotification).toHaveBeenCalledTimes(1);

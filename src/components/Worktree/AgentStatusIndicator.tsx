@@ -26,13 +26,6 @@ const STATE_CONFIG: Record<
     label: "working",
     tooltip: "Agent is working on your request",
   },
-  running: {
-    icon: "▶",
-    color: "text-status-info",
-    borderColor: "border-status-info",
-    label: "running",
-    tooltip: "Process is running",
-  },
   waiting: {
     icon: "?",
     color: "text-daintree-bg",
@@ -125,7 +118,6 @@ export function AgentStatusIndicator({ state, className }: AgentStatusIndicatorP
 const STATE_PRIORITY: Record<AgentState, number> = {
   working: 7,
   directing: 6,
-  running: 5,
   completed: 4,
   waiting: 3,
   exited: 2,
@@ -156,7 +148,6 @@ export function getDominantAgentState(states: (AgentState | undefined)[]): Agent
 export function agentStateDotColor(state: AgentState): string {
   switch (state) {
     case "working":
-    case "running":
     case "directing":
       return "bg-state-working";
     case "waiting":

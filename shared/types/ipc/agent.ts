@@ -28,7 +28,7 @@ export type AgentStateChangeTrigger =
   | "title";
 
 /** Agent state */
-export type AgentState = "idle" | "working" | "running" | "waiting" | "completed" | "exited";
+export type AgentState = "idle" | "working" | "waiting" | "directing" | "completed" | "exited";
 
 /** Payload for agent state change events */
 export interface AgentStateChangePayload {

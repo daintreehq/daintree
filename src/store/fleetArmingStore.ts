@@ -40,7 +40,7 @@ function rebuildOrderById(order: string[]): Record<string, number> {
 function matchesPreset(state: AgentState | null | undefined, preset: FleetArmStatePreset): boolean {
   switch (preset) {
     case "working":
-      return state === "working" || state === "running";
+      return state === "working";
     case "waiting":
       return state === "waiting";
     case "finished":

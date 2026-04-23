@@ -122,10 +122,10 @@ export const createTerminalCommandQueueSlice =
  * IMPORTANT: This function gates automation input (context injection, scripted commands)
  * to avoid interleaving with active TUI redraws. User input (keystrokes, Ctrl+C, prompt
  * responses) must NEVER be gated by agent state - it should always write immediately
- * via terminalClient.write(), regardless of working/running/waiting states.
+ * via terminalClient.write(), regardless of working/waiting states.
  *
  * User input invariant: terminal.onData → terminalClient.write (unconditional)
- * Automation input: may queue during working/running, flushes on idle/waiting
+ * Automation input: may queue during working, flushes on idle/waiting
  */
 export function isAgentReady(state: AgentState | undefined): boolean {
   return state === "idle" || state === "waiting";
