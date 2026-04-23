@@ -41,7 +41,11 @@ export async function validateTerminalConfig(
     }
   }
 
-  // Check agent CLI availability
+  // Check agent CLI availability.
+  // Launch-intent only: this runs before (or just after) launch to verify the CLI
+  // the user asked for is on PATH. `detectedAgentId` doesn't exist yet at that
+  // point, and using it later would validate the wrong binary for runtime-morphed
+  // sessions (e.g., a plain shell that started a different agent).
   const agentId = terminal.agentId ?? terminal.type;
   if (agentId && agentId !== "terminal") {
     try {

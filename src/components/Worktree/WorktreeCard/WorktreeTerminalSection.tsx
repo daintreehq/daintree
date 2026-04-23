@@ -6,7 +6,8 @@ import type { TerminalInstance } from "@/store/panelStore";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { cn } from "@/lib/utils";
 import type { WorktreeTerminalCounts } from "@/hooks/useWorktreeTerminals";
-import { getAgentConfig, isRegisteredAgent } from "@/config/agents";
+import { getAgentConfig } from "@/config/agents";
+import { resolveEffectiveAgentId } from "@/utils/agentIdentity";
 import {
   STATE_LABELS,
   STATE_PRIORITY,
@@ -217,7 +218,7 @@ export function WorktreeTerminalSection({
     if (terminals.length === 0) return null;
     let commonId: string | null = null;
     for (const t of terminals) {
-      const effectiveId = t.agentId ?? (t.type && isRegisteredAgent(t.type) ? t.type : undefined);
+      const effectiveId = resolveEffectiveAgentId(t.detectedAgentId, t.agentId);
       if (!effectiveId) return null;
       if (commonId === null) commonId = effectiveId;
       else if (effectiveId !== commonId) return null;

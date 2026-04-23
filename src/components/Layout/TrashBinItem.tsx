@@ -58,6 +58,8 @@ export function TrashBinItem({ terminal, trashedInfo, worktreeName }: TrashBinIt
   const terminalName = (() => {
     const observed = terminal.lastObservedTitle;
     if (observed && !isUselessTitle(observed)) return observed;
+    // Launch-intent only: trash labels should read the stable launch identity
+    // so a terminal's name doesn't change as runtime detection flips after trashing.
     if (terminal.agentId) {
       if (terminal.title && !isUselessTitle(terminal.title)) return terminal.title;
       const agentConfig = terminal.agentId ? getEffectiveAgentConfig(terminal.agentId) : undefined;

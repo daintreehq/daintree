@@ -30,6 +30,7 @@ import { getMergedPresets } from "@/config/agents";
 import { TerminalContextMenu } from "@/components/Terminal/TerminalContextMenu";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { getTerminalFocusTarget } from "@/components/Terminal/terminalFocus";
+import { resolveEffectiveAgentId } from "@/utils/agentIdentity";
 import {
   getEffectiveStateIcon,
   getEffectiveStateColor,
@@ -365,7 +366,9 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
   const panelPresetColors = useMemo(() => {
     return new Map(
       panels.map((p) => {
-        const fallbackColor = getBrandColorHex(p.detectedAgentId ?? p.agentId ?? p.type);
+        const fallbackColor = getBrandColorHex(
+          resolveEffectiveAgentId(p.detectedAgentId, p.agentId) ?? p.type
+        );
         if (!p.agentPresetId || !p.agentId) return [p.id, fallbackColor] as const;
         const presets = getMergedPresets(
           p.agentId,
@@ -389,7 +392,9 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
   const commandText = activePanel.activityHeadline || activePanel.lastCommand;
   const brandColor =
     panelPresetColors.get(activePanel.id) ??
-    getBrandColorHex(activePanel.detectedAgentId ?? activePanel.agentId ?? activePanel.type);
+    getBrandColorHex(
+      resolveEffectiveAgentId(activePanel.detectedAgentId, activePanel.agentId) ?? activePanel.type
+    );
   const agentState = activePanel.agentState;
   const displayTitle = getBaseTitle(activePanel.title);
   const showStateIcon = agentState && agentState !== "idle" && agentState !== "completed";

@@ -9,6 +9,7 @@ import { terminalClient } from "@/clients";
 import { formatWithBracketedPaste } from "@shared/utils/terminalInputProtocol";
 import { usePaletteStore } from "@/store/paletteStore";
 import { getAgentConfig } from "@/config/agents";
+import { resolveEffectiveAgentId } from "@/utils/agentIdentity";
 
 export interface SendToAgentItem {
   id: string;
@@ -98,7 +99,7 @@ export function useSendToAgentPalette() {
       if (t.kind && !panelKindHasPty(t.kind)) continue;
       if (t.hasPty === false) continue;
 
-      const effectiveAgentId = t.detectedAgentId ?? t.agentId;
+      const effectiveAgentId = resolveEffectiveAgentId(t.detectedAgentId, t.agentId);
       const agentConfig = effectiveAgentId ? getAgentConfig(effectiveAgentId) : null;
       const subtitle = agentConfig ? agentConfig.name : t.type !== "terminal" ? t.type : "Terminal";
 

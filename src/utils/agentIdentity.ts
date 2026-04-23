@@ -6,9 +6,12 @@ type MaybeAgentId = BuiltInAgentId | AgentId | string | undefined;
 /**
  * Resolve the effective agent identity for panel chrome (icons, badges, labels).
  *
- * Prefers the runtime-detected agent (`detectedAgentId`) over the launch-time
- * intent (`agentId`). Used so chrome stops claiming an agent is live once the
- * process exits — the launch-time field remains for session-capability gates.
+ * Prefers the runtime-detected agent (`detectedAgentId`) so chrome follows
+ * mid-session agent switches (e.g., plain shell starts Claude) and, when
+ * detection clears on exit, falls back to the launch-time `agentId`. This
+ * helper resolves identity only — it does not claim the session is live. Use
+ * `isRuntimeAgentTerminal` (in `terminalType.ts`) when the decision depends on
+ * whether the agent is currently running.
  */
 export function resolveEffectiveAgentId(
   detectedAgentId: MaybeAgentId,

@@ -66,7 +66,10 @@ function sanitizeRecipeTerminal(terminal: RecipeTerminal): RecipeTerminal {
 }
 
 function terminalToRecipeTerminal(terminal: TerminalInstance): RecipeTerminal {
-  // Map kind to RecipeTerminalType
+  // Map kind to RecipeTerminalType.
+  // Launch-intent only: recipes encode what the terminal was launched as, not
+  // what runtime detection observed. Persisting `detectedAgentId` would corrupt
+  // a recipe by baking ephemeral session state into a reusable template.
   const type: RecipeTerminalType =
     terminal.kind === "dev-preview"
       ? "dev-preview"

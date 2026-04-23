@@ -37,15 +37,17 @@ vi.mock("@/components/Terminal/TerminalIcon", () => ({
   ),
 }));
 
-const MockAgentIcon = ({ className }: { className?: string }) => (
-  <svg data-testid="agent-icon" className={className} />
+const MockClaudeIcon = ({ className }: { className?: string }) => (
+  <svg data-testid="agent-icon" data-agent="claude" className={className} />
+);
+const MockGeminiIcon = ({ className }: { className?: string }) => (
+  <svg data-testid="agent-icon" data-agent="gemini" className={className} />
 );
 
 vi.mock("@/config/agents", () => ({
   getAgentConfig: (agentId: string) => {
-    if (agentId === "claude" || agentId === "gemini") {
-      return { icon: MockAgentIcon, color: "#ff0000" };
-    }
+    if (agentId === "claude") return { icon: MockClaudeIcon, color: "#ff0000" };
+    if (agentId === "gemini") return { icon: MockGeminiIcon, color: "#00aaff" };
     return undefined;
   },
   isRegisteredAgent: (id: string) => id === "claude" || id === "gemini",
@@ -147,12 +149,40 @@ describe("WorktreeTerminalSection summary icon", () => {
     expect(screen.queryByTestId("agent-icon")).toBeNull();
   });
 
-  it("resolves agent from type when agentId is absent (legacy compat)", () => {
-    renderSection({
+  it("does not resolve agent from type alone (identity requires agentId or detectedAgentId)", () => {
+    // Post-#5805 sweep: the summary icon reads through `resolveEffectiveAgentId`,
+    // which looks at `detectedAgentId` and `agentId` only. A terminal whose only
+    // agent signal is a legacy `type: "claude"` (no `agentId`, no detection) no
+    // longer claims an agent identity here — the panel-creation path now
+    // normalizes `type` → `agentId` at launch, so this arrangement shouldn't
+    // occur in live data anyway.
+    const { container } = renderSection({
       terminals: [
         makeTerminal({ agentId: undefined, type: "claude" as TerminalInstance["type"] }),
         makeTerminal({ agentId: undefined, type: "claude" as TerminalInstance["type"] }),
       ],
+    });
+    expect(screen.queryByTestId("agent-icon")).toBeNull();
+    expect(container.querySelector("svg.lucide-square-terminal")).toBeTruthy();
+  });
+
+  it("prefers detectedAgentId over agentId when both are set", () => {
+    renderSection({
+      terminals: [
+        makeTerminal({ agentId: "claude", detectedAgentId: "gemini" }),
+        makeTerminal({ agentId: "claude", detectedAgentId: "gemini" }),
+      ],
+    });
+    // Distinct mock icons per agent lock in precedence: a swapped-arg regression
+    // (agentId-wins) would surface the Claude icon instead.
+    const icon = screen.getByTestId("agent-icon");
+    expect(icon.getAttribute("data-agent")).toBe("gemini");
+  });
+
+  it("uses detectedAgentId to classify a plain shell that entered agent mode", () => {
+    renderSection({
+      terminals: [makeTerminal({ agentId: undefined, detectedAgentId: "claude" })],
+      counts: { ...baseCounts, total: 1 },
     });
     expect(screen.getByTestId("agent-icon")).toBeDefined();
   });

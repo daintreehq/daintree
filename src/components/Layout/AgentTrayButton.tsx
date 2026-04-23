@@ -327,6 +327,11 @@ export function AgentTrayButton({
     const statesPerAgent = new Map<string, (AgentState | undefined)[]>();
     for (const pid of panelIds) {
       const p = panelsById[pid];
+      // Launch-intent only: the tray aggregates sessions by the agent they were
+      // launched as, so pre-detection panels still appear under their tray entry.
+      // Using `isRuntimeAgentTerminal` here would silently exclude freshly-spawned
+      // agents during the boot window and demote ex-agents that outlived their
+      // process — neither matches the tray's "sessions grouped by launch agent" model.
       if (!p || !p.agentId || p.location === "trash" || p.location === "background") continue;
       if (activeWorktreeId && p.worktreeId !== activeWorktreeId) continue;
       if (!ACTIVE_AGENT_STATES.has(p.agentState)) continue;

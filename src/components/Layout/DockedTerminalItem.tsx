@@ -18,6 +18,7 @@ import { getMergedPresets } from "@/config/agents";
 import { TerminalContextMenu } from "@/components/Terminal/TerminalContextMenu";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { getTerminalFocusTarget } from "@/components/Terminal/terminalFocus";
+import { resolveEffectiveAgentId } from "@/utils/agentIdentity";
 import {
   getEffectiveStateIcon,
   getEffectiveStateColor,
@@ -195,7 +196,7 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
   );
   const brandColor = useMemo(() => {
     const fallbackColor = getBrandColorHex(
-      terminal.detectedAgentId ?? terminal.agentId ?? terminal.type
+      resolveEffectiveAgentId(terminal.detectedAgentId, terminal.agentId) ?? terminal.type
     );
     if (!terminal.agentPresetId || !terminal.agentId) return fallbackColor;
     const preset = getMergedPresets(
