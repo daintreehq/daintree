@@ -10,6 +10,7 @@ import { terminalClient, projectClient } from "@/clients";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { TerminalRefreshTier } from "@/types";
 import { isRegisteredAgent } from "@/config/agents";
+import { isBuiltInAgentId } from "@shared/config/agentIds";
 import {
   panelKindHasPty,
   panelKindUsesTerminalUi,
@@ -410,6 +411,14 @@ export const createCorePanelActions = (
       everDetectedAgent: options.everDetectedAgent,
       detectedAgentId: options.detectedAgentId,
       detectedProcessId: options.detectedProcessId,
+      // Capability mode (#5804). For reconnects/hydration the value comes from
+      // the backend payload via `options.capabilityAgentId`. For fresh agent
+      // spawns, mirror the backend's spawn-time derivation so the renderer can
+      // gate features (HybridInputBar, fleet membership) immediately, before
+      // the post-spawn snapshot lands. The backend writes the same value into
+      // its `TerminalPublicState` from the same launch intent.
+      capabilityAgentId:
+        options.capabilityAgentId ?? (isAgent && isBuiltInAgentId(agentId) ? agentId : undefined),
       agentPresetId: options.agentPresetId,
       agentPresetColor: options.agentPresetColor,
       originalPresetId: options.originalPresetId ?? options.agentPresetId,
@@ -444,6 +453,9 @@ export const createCorePanelActions = (
                 // live detection (live IPC event may have landed before reconnect flush).
                 detectedAgentId: terminal.detectedAgentId ?? existing.detectedAgentId,
                 detectedProcessId: terminal.detectedProcessId ?? existing.detectedProcessId,
+                // Capability is sealed at spawn — values should match — but
+                // preserve the existing entry if a partial reconnect omits it.
+                capabilityAgentId: terminal.capabilityAgentId ?? existing.capabilityAgentId,
               }
             : terminal;
         return { panelsById: { ...state.panelsById, [id]: preservedTerminal } };
@@ -469,6 +481,9 @@ export const createCorePanelActions = (
                 // live detection (live IPC event may have landed before reconnect flush).
                 detectedAgentId: terminal.detectedAgentId ?? existing.detectedAgentId,
                 detectedProcessId: terminal.detectedProcessId ?? existing.detectedProcessId,
+                // Capability is sealed at spawn — values should match — but
+                // preserve the existing entry if a partial reconnect omits it.
+                capabilityAgentId: terminal.capabilityAgentId ?? existing.capabilityAgentId,
               }
             : terminal;
           const newById = { ...state.panelsById, [id]: preservedTerminal };

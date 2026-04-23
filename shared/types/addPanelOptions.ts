@@ -63,6 +63,13 @@ export interface AddPanelOptionsBase {
   detectedAgentId?: BuiltInAgentId;
   /** Runtime-detected non-agent process icon id (npm, yarn, etc.) at hydration time; cleared when the process exits. */
   detectedProcessId?: string;
+  /**
+   * Capability mode — sealed-at-spawn agent capability surface. See
+   * `PtyPanelData.capabilityAgentId` for the full contract. Carried here so
+   * hydration paths (project switch, reconnect, orphaned terminal recovery) can
+   * preserve the backend-written value without re-deriving it from `agentId`.
+   */
+  capabilityAgentId?: BuiltInAgentId;
   /** Preset ID selected at launch time for per-panel preset selection */
   agentPresetId?: string;
   /** Preset brand color (hex) captured at launch time for per-panel icon tinting */

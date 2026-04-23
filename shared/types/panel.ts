@@ -281,12 +281,12 @@ export interface PtyPanelData extends BasePanelData {
   detectedAgentId?: BuiltInAgentId;
   /**
    * Capability mode — the agent capability surface this terminal is allowed to
-   * participate in (fleet membership, orchestration, hybrid input).
-   *
-   * Currently expected to follow launch intent (`agentId`). Derived at read
-   * time; not persisted; reserved for future consumers. No production code
-   * writes this field yet — the slot exists so consumers can migrate without
-   * further IPC contract churn.
+   * participate in (fleet membership, orchestration, hybrid input). Sealed at
+   * spawn time from launch intent (`agentId` narrowed to `BuiltInAgentId`);
+   * never touched by runtime detection. Absent on plain shells and on
+   * terminals where an agent was only runtime-detected. Not persisted —
+   * re-derived on every spawn from the same launch context. See
+   * `docs/architecture/terminal-identity.md`.
    */
   capabilityAgentId?: BuiltInAgentId;
   /** Captured agent session ID from graceful shutdown (used for session resume) */
@@ -476,8 +476,8 @@ export interface TerminalInstance {
    */
   detectedAgentId?: BuiltInAgentId;
   /**
-   * Capability mode slot. See `PtyPanelData.capabilityAgentId` for full contract.
-   * Not yet populated by any writer.
+   * Capability mode — sealed-at-spawn agent capability surface. See
+   * `PtyPanelData.capabilityAgentId` for the full contract.
    */
   capabilityAgentId?: BuiltInAgentId;
   /** Captured agent session ID from graceful shutdown (used for session resume) */

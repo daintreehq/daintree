@@ -78,6 +78,14 @@ export interface TerminalPaneProps {
   agentId?: string;
   /** Runtime-detected agent identity (cleared on agent exit). Drives panel chrome (icons, badges). */
   detectedAgentId?: BuiltInAgentId;
+  /**
+   * Sealed-at-spawn capability mode (#5804). Set when the terminal was
+   * cold-launched as a built-in agent; absent on plain shells and on terminals
+   * where an agent was only runtime-detected. Drives session-capability gates
+   * (HybridInputBar, fleet membership) — distinct from `detectedAgentId`,
+   * which only drives chrome.
+   */
+  capabilityAgentId?: BuiltInAgentId;
   agentPresetId?: string;
   presetColor?: string;
   worktreeId?: string;
@@ -121,6 +129,7 @@ function TerminalPaneComponent({
   type,
   agentId,
   detectedAgentId,
+  capabilityAgentId,
   agentPresetId,
   presetColor,
   worktreeId,
@@ -262,7 +271,13 @@ function TerminalPaneComponent({
   const effectiveAgentId = (resolveEffectiveAgentId(detectedAgentId, agentId) ??
     (type && isRegisteredAgent(type) ? type : undefined)) as BuiltInAgentId | undefined;
   const isAgentTerminal = effectiveAgentId !== undefined;
-  const showHybridInputBar = isAgentTerminal && hybridInputEnabled;
+  // HybridInputBar is gated on capability mode (#5804), not on
+  // `effectiveAgentId`. Cold-launched agent terminals get the bar; plain shells
+  // where an agent was merely detected at runtime do not — those terminals lack
+  // the spawn-time env/pool/scrollback shaping the bar's submit semantics
+  // assume. Chrome (icons/badges) still uses `effectiveAgentId` so live
+  // detection drives visual feedback.
+  const showHybridInputBar = capabilityAgentId !== undefined && hybridInputEnabled;
 
   const queueCount = usePanelStore((state) => state.commandQueueCountById[id] ?? 0);
 

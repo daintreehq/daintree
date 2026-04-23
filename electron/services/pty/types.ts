@@ -74,9 +74,12 @@ export interface TerminalPublicState {
   everDetectedAgent?: boolean;
   /**
    * Capability mode — the agent capability surface this terminal is allowed to
-   * participate in. Currently expected to follow launch intent (`agentId`);
-   * derived at read time; not persisted; not written by any production code
-   * yet. See `docs/architecture/terminal-identity.md`.
+   * participate in (fleet membership, hybrid input, orchestration). Sealed at
+   * spawn time from launch intent (`agentId` narrowed to `BuiltInAgentId`);
+   * never written by runtime detection. Absent on plain shells and on agent
+   * terminals launched with a non-built-in `agentId`. Not persisted — re-derived
+   * on every spawn from the same launch context. See
+   * `docs/architecture/terminal-identity.md`.
    */
   capabilityAgentId?: BuiltInAgentId;
   restartCount: number;

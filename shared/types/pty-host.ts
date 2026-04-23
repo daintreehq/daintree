@@ -300,6 +300,15 @@ export interface PtyHostTerminalInfo {
   detectedAgentId?: BuiltInAgentId;
   /** Runtime-detected non-agent process icon id (npm, yarn, etc.). Cleared when the process exits. */
   detectedProcessId?: string;
+  /**
+   * Capability mode — the agent capability surface this terminal is allowed to
+   * participate in (fleet membership, hybrid input, orchestration). Sealed at
+   * spawn time from launch intent (`agentId` narrowed to `BuiltInAgentId`); never
+   * touched by runtime detection. Absent on plain shells and on agent terminals
+   * launched with a non-built-in `agentId`. See
+   * `docs/architecture/terminal-identity.md`.
+   */
+  capabilityAgentId?: BuiltInAgentId;
 }
 
 /** Payload for agent:spawned event */

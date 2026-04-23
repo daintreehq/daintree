@@ -1331,6 +1331,7 @@ port.on("message", async (rawMsg: any) => {
                 everDetectedAgent: terminal.everDetectedAgent,
                 detectedAgentId: narrowDetectedAgentId(terminal.detectedAgentType),
                 detectedProcessId: terminal.detectedProcessIconId,
+                capabilityAgentId: terminal.capabilityAgentId,
               }
             : null,
         });
@@ -1455,6 +1456,7 @@ port.on("message", async (rawMsg: any) => {
             everDetectedAgent: t.everDetectedAgent,
             detectedAgentId: narrowDetectedAgentId(t.detectedAgentType),
             detectedProcessId: t.detectedProcessIconId,
+            capabilityAgentId: t.capabilityAgentId,
           })),
         });
         break;
@@ -1487,6 +1489,7 @@ port.on("message", async (rawMsg: any) => {
             everDetectedAgent: t.everDetectedAgent,
             detectedAgentId: narrowDetectedAgentId(t.detectedAgentType),
             detectedProcessId: t.detectedProcessIconId,
+            capabilityAgentId: t.capabilityAgentId,
           })),
         });
         break;
@@ -1519,6 +1522,7 @@ port.on("message", async (rawMsg: any) => {
             everDetectedAgent: t.everDetectedAgent,
             detectedAgentId: narrowDetectedAgentId(t.detectedAgentType),
             detectedProcessId: t.detectedProcessIconId,
+            capabilityAgentId: t.capabilityAgentId,
           })),
         });
         break;

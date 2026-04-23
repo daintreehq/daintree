@@ -18,8 +18,10 @@ export function isTerminalFleetEligible(t: TerminalInstance | undefined): t is T
 
 /**
  * Agent capability for Fleet actions that depend on a full agent session
- * (accept/reject/interrupt/restart). Until #5804 installs a real writer,
- * launch-time built-in agent identity is the compatibility fallback.
+ * (accept/reject/interrupt/restart). Prefers the sealed-at-spawn
+ * `capabilityAgentId` (#5804); falls back to launch-time built-in `agentId`
+ * for terminals reconnected from older backend payloads that predate the
+ * writer.
  */
 export function resolveFleetAgentCapabilityId(
   t: TerminalInstance | undefined

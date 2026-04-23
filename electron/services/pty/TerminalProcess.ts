@@ -6,6 +6,7 @@ const { Terminal: HeadlessTerminal } = headless;
 import serialize, { type SerializeAddon as SerializeAddonType } from "@xterm/addon-serialize";
 const { SerializeAddon } = serialize;
 import { AGENT_REGISTRY, getEffectiveAgentConfig } from "../../../shared/config/agentRegistry.js";
+import { isBuiltInAgentId } from "../../../shared/config/agentIds.js";
 import {
   ProcessDetector,
   detectCommandIdentity,
@@ -331,6 +332,14 @@ export class TerminalProcess {
     headlessTerminal.loadAddon(serializeAddon);
     this.restoreSessionIfPresent(headlessTerminal);
 
+    // Sealed-at-spawn capability mode (#5804). Derived from launch intent: a
+    // cold-launched agent terminal whose `agentId` is a built-in agent gets
+    // `full` capability; plain shells and non-built-in agents do not. Never
+    // mutated by runtime process detection — `handleAgentDetection` may flip
+    // chrome-facing fields like `detectedAgentType`, but this stays sealed.
+    const capabilityAgentId =
+      this.isAgentTerminal && isBuiltInAgentId(agentId) ? agentId : undefined;
+
     this.terminalInfo = {
       id,
       projectId: options.projectId,
@@ -341,6 +350,7 @@ export class TerminalProcess {
       type: options.type,
       title: options.title,
       agentId,
+      capabilityAgentId,
       spawnedAt,
       agentState: this.isAgentTerminal ? "idle" : undefined,
       lastStateChange: this.isAgentTerminal ? spawnedAt : undefined,

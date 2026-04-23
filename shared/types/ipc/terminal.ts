@@ -209,9 +209,9 @@ export interface BackendTerminalInfo {
    */
   detectedAgentId?: BuiltInAgentId;
   /**
-   * Capability mode — the agent capability surface this terminal is allowed
-   * to participate in. Currently expected to follow launch intent; reserved
-   * for future consumers. Not populated by any writer yet.
+   * Capability mode — sealed-at-spawn agent capability surface. Set when the
+   * terminal was cold-launched as a built-in agent. See
+   * `docs/architecture/terminal-identity.md`.
    */
   capabilityAgentId?: BuiltInAgentId;
   /** Runtime-detected non-agent process icon id (npm, yarn, etc.). Cleared when the process exits. */
@@ -258,8 +258,10 @@ export interface TerminalReconnectResult {
    */
   detectedAgentId?: BuiltInAgentId;
   /**
-   * Capability mode — reserved for future consumers. Currently expected to
-   * follow launch intent; no production writer exists yet.
+   * Capability mode — sealed-at-spawn agent capability surface. Carried on
+   * reconnect so the renderer can re-derive session-capability gates without
+   * waiting for a fresh snapshot. See
+   * `docs/architecture/terminal-identity.md`.
    */
   capabilityAgentId?: BuiltInAgentId;
   /** Runtime-detected non-agent process icon id (npm, yarn, etc.). Cleared when the process exits. */
@@ -270,8 +272,10 @@ export interface TerminalReconnectResult {
  * Terminal information payload for diagnostic display.
  *
  * Consumed exclusively by `TerminalInfoDialog.tsx`. Intentionally omits
- * `capabilityAgentId` — no runtime writer exists yet, and adding a third
- * identity field with no value to display would only confuse diagnostics.
+ * `capabilityAgentId` — capability mode is sealed-at-spawn from `agentId`
+ * (narrowed to `BuiltInAgentId`), so the dialog does not need to render it
+ * separately. Diagnostic readers that need the value should consume it via
+ * `BackendTerminalInfo` / `TerminalReconnectResult`.
  * See `docs/architecture/terminal-identity.md`.
  */
 export interface TerminalInfoPayload {

@@ -816,3 +816,74 @@ describe("TerminalProcess.handleAgentDetection — launch identity immutability 
     }
   });
 });
+
+// #5804: capability mode is sealed at spawn time from launch intent. Cold-launched
+// built-in agents get `capabilityAgentId`; plain shells do not, even when an agent
+// is later detected at runtime. Runtime detection (and the bridge-write violation
+// in `handleAgentDetection` that mutates `agentId`) must never touch this field.
+describe("TerminalProcess — capabilityAgentId sealed at spawn (#5804)", () => {
+  it("cold-launched built-in agent terminal has capabilityAgentId set to its agentId", () => {
+    const terminal = createAgentTerminal();
+    try {
+      expect(terminal.getInfo().capabilityAgentId).toBe("claude");
+    } finally {
+      terminal.dispose();
+    }
+  });
+
+  it("plain terminal has no capabilityAgentId at construction", () => {
+    const terminal = createPlainTerminal("t-cap-plain");
+    try {
+      expect(terminal.getInfo().capabilityAgentId).toBeUndefined();
+    } finally {
+      terminal.dispose();
+    }
+  });
+
+  it("runtime promotion to a detected agent does not set capabilityAgentId on a plain shell", () => {
+    const terminal = createPlainTerminal("t-cap-promotion");
+    try {
+      callHandleAgentDetection(
+        terminal,
+        { detected: true, agentType: "claude", processIconId: "claude" },
+        getSpawnedAt(terminal)
+      );
+
+      const info = terminal.getInfo();
+      // Live identity flows through detectedAgentType. Capability mode does not.
+      expect(info.detectedAgentType).toBe("claude");
+      expect(info.capabilityAgentId).toBeUndefined();
+    } finally {
+      terminal.dispose();
+    }
+  });
+
+  it("runtime detection events on a cold-launched agent do not change capabilityAgentId", () => {
+    const terminal = createAgentTerminal();
+    try {
+      expect(terminal.getInfo().capabilityAgentId).toBe("claude");
+
+      // Spurious re-detection of the same agent.
+      callHandleAgentDetection(
+        terminal,
+        { detected: true, agentType: "claude", processIconId: "claude" },
+        getSpawnedAt(terminal)
+      );
+      expect(terminal.getInfo().capabilityAgentId).toBe("claude");
+
+      // Demotion to a non-agent process.
+      callHandleAgentDetection(
+        terminal,
+        { detected: true, processIconId: "npm", processName: "npm" },
+        getSpawnedAt(terminal)
+      );
+      expect(terminal.getInfo().capabilityAgentId).toBe("claude");
+
+      // Full demotion.
+      callHandleAgentDetection(terminal, { detected: false }, getSpawnedAt(terminal));
+      expect(terminal.getInfo().capabilityAgentId).toBe("claude");
+    } finally {
+      terminal.dispose();
+    }
+  });
+});
