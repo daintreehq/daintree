@@ -94,6 +94,7 @@ export function bridgePtyEvent(event: PtyHostEvent, config?: PtyEventsBridgeConf
         terminalId: event.terminalId,
         agentType: event.agentType,
         timestamp: event.timestamp,
+        exitKind: event.exitKind,
       });
       return true;
 

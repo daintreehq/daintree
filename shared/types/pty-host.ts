@@ -197,6 +197,7 @@ export type PtyHostEvent =
       terminalId: string;
       agentType?: string;
       timestamp: number;
+      exitKind?: "subcommand";
     }
   | { type: "agent-spawned"; payload: AgentSpawnedPayload }
   | { type: "agent-output"; payload: AgentOutputPayload }

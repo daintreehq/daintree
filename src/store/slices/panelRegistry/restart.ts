@@ -206,11 +206,16 @@ export const createRestartActions = (
       (currentTerminal.type && isRegisteredAgent(currentTerminal.type)
         ? currentTerminal.type
         : undefined);
-    // When the agent has exited (user quit to shell) or the PTY has exited
-    // from a state the FSM does not transition out of (`idle`), treat the
-    // restart as a plain shell restart. `exitCode` is the conclusive signal
-    // that the PTY is dead; `agentState === "exited"` is preserved across
-    // demoted restarts so subsequent restarts stay demoted (issue #5764).
+    // Gate on launch intent (`effectiveAgentId`, derived from the sealed
+    // `agentId` from #5803 with a legacy `type` fallback) plus two demotion
+    // signals:
+    //   - `exitCode !== undefined` — the PTY has truly exited (onExit path).
+    //   - `agentState === "exited"` — the FSM saw the detected agent quit
+    //     to shell; this state is preserved across demoted restarts so
+    //     subsequent restarts stay demoted (issue #5764).
+    // `panelStoreListeners.onAgentExited` must NOT clear `agentId` — if it
+    // did, a cold-launched agent that `/quit`s into its shell would lose its
+    // launch identity and relaunch decisions would misclassify. #5807
     const isAgent =
       !!effectiveAgentId &&
       currentTerminal.agentState !== "exited" &&

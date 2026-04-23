@@ -1796,6 +1796,7 @@ export class TerminalProcess {
           terminalId: this.id,
           agentType: previousType,
           timestamp: Date.now(),
+          exitKind: "subcommand",
         });
         justClearedDetection = true;
       }
@@ -1829,10 +1830,16 @@ export class TerminalProcess {
       if (previousType) {
         terminal.analysisEnabled = false;
       }
+      // Emit `agent:exited` to clear the renderer's live-detection fields
+      // (`detectedAgentId`, `detectedProcessId`). Only stamp
+      // `exitKind: "subcommand"` when an actual agent process exited —
+      // plain process-icon clearings (npm/vite/etc.) go out without it so
+      // downstream consumers can distinguish the two cases. #5807
       events.emit("agent:exited", {
         terminalId: this.id,
         agentType: previousType,
         timestamp: Date.now(),
+        ...(previousType ? { exitKind: "subcommand" as const } : {}),
       });
     }
 

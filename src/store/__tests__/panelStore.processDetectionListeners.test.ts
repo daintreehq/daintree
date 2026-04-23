@@ -15,7 +15,12 @@ type AgentDetectedHandler = (data: {
   processName: string;
   timestamp: number;
 }) => void;
-type AgentExitedHandler = (data: { terminalId: string; timestamp: number }) => void;
+type AgentExitedHandler = (data: {
+  terminalId: string;
+  agentType?: string;
+  timestamp: number;
+  exitKind?: "subcommand";
+}) => void;
 type ActivityHandler = (data: {
   terminalId: string;
   headline: string;
@@ -448,6 +453,51 @@ describe("terminalStore process detection listeners", () => {
     });
 
     expect(applyAgentPromotionMock).not.toHaveBeenCalled();
+    cleanup();
+  });
+
+  // Regression for #5807: agent:exited is a subcommand/demotion signal, not
+  // a PTY exit. The sealed launch-intent `agentId` (#5803) must survive so
+  // that restart decisions correctly relaunch a cold-launched agent terminal
+  // after the user types `/quit`.
+  it("preserves agentId on agent:exited for cold-launched agent panels", () => {
+    usePanelStore.setState((s) => ({
+      panelsById: {
+        ...s.panelsById,
+        "term-1": { ...s.panelsById["term-1"]!, agentId: "claude", detectedAgentId: "claude" },
+      },
+    }));
+
+    const cleanup = setupTerminalStoreListeners();
+    const exited = handlers.agentExited;
+
+    exited?.({ terminalId: "term-1", agentType: "claude", timestamp: Date.now() });
+
+    const panel = usePanelStore.getState().panelsById["term-1"];
+    expect(panel?.agentId).toBe("claude");
+    expect(panel?.detectedAgentId).toBeUndefined();
+    cleanup();
+  });
+
+  // Regression for #5807: a non-agent process exit (e.g., npm) in a plain
+  // shell with no agentId must leave agentId untouched.
+  it("leaves agentId untouched on non-agent process exit in a plain shell", () => {
+    const cleanup = setupTerminalStoreListeners();
+    const detected = handlers.agentDetected;
+    const exited = handlers.agentExited;
+
+    detected?.({
+      terminalId: "term-1",
+      processIconId: "npm",
+      processName: "npm",
+      timestamp: Date.now(),
+    });
+
+    exited?.({ terminalId: "term-1", timestamp: Date.now() });
+
+    const panel = usePanelStore.getState().panelsById["term-1"];
+    expect(panel?.agentId).toBeUndefined();
+    expect(panel?.detectedProcessId).toBeUndefined();
     cleanup();
   });
 

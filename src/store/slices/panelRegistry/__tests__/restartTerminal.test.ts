@@ -241,3 +241,132 @@ describe("restartTerminal agent-exited demotion (#5764)", () => {
     expect(after?.command).toBeUndefined();
   });
 });
+
+describe("restartTerminal exit/demotion semantics (#5807)", () => {
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    const { reset } = usePanelStore.getState();
+    await reset();
+    usePanelStore.setState({
+      panelsById: {},
+      panelIds: [],
+      tabGroups: new Map(),
+      trashedTerminals: new Map(),
+      backgroundedTerminals: new Map(),
+      focusedId: null,
+      maximizedId: null,
+      commandQueue: [],
+    });
+  });
+
+  // Scenario 1: user ran `claude` inside a plain shell, then `/quit`ed. No
+  // launch-intent agentId was ever set. Restart must spawn a plain shell.
+  it("does not relaunch agent when quitting an agent in a plain shell", async () => {
+    const plainShellWithDetectedAgent = {
+      id: "test-1",
+      type: "terminal" as const,
+      kind: "terminal" as const,
+      title: "Terminal",
+      cwd: "/some/path",
+      command: "/bin/zsh",
+      cols: 80,
+      rows: 24,
+      location: "grid" as const,
+      // Live detection fields cleared by onAgentExited listener; sticky flag
+      // remains set. `agentId` was never sealed at spawn.
+      everDetectedAgent: true,
+      agentState: "exited" as const,
+    };
+    usePanelStore.setState({
+      panelsById: { [plainShellWithDetectedAgent.id]: plainShellWithDetectedAgent },
+      panelIds: [plainShellWithDetectedAgent.id],
+    });
+
+    await usePanelStore.getState().restartTerminal("test-1");
+
+    expect(mockSpawn).toHaveBeenCalledTimes(1);
+    const payload = mockSpawn.mock.calls[0]![0];
+    expect(payload.kind).toBe("terminal");
+    expect(payload.type).toBe("terminal");
+    expect(payload.agentId).toBeUndefined();
+    expect(payload.command).toBeUndefined();
+  });
+
+  // Scenario 2: cold-launched agent terminal (`agentId: "claude"` sealed at
+  // spawn). User typed `/quit` and the shell survived. onAgentExited must
+  // preserve agentId; the FSM-set `agentState: "exited"` drives the demoted
+  // restart. Restart is a plain shell (user explicitly quit the agent), but
+  // the panel's launch identity is preserved so that a subsequent deliberate
+  // restart-as-agent is still possible.
+  it("restarts cold-launched agent terminal as plain shell after subcommand exit, preserving launch identity", async () => {
+    const coldLaunchedQuit = {
+      id: "test-1",
+      type: "claude" as const,
+      kind: "terminal" as const,
+      agentId: "claude",
+      agentLaunchFlags: ["--persisted-flag"],
+      title: "Claude",
+      cwd: "/some/path",
+      command: "claude",
+      cols: 80,
+      rows: 24,
+      location: "grid" as const,
+      // Demotion state: FSM saw the agent quit; PTY is still alive.
+      agentState: "exited" as const,
+      // `exitCode` is undefined — PTY did NOT exit, only the subcommand did.
+    };
+    usePanelStore.setState({
+      panelsById: { [coldLaunchedQuit.id]: coldLaunchedQuit },
+      panelIds: [coldLaunchedQuit.id],
+    });
+
+    await usePanelStore.getState().restartTerminal("test-1");
+
+    expect(mockSpawn).toHaveBeenCalledTimes(1);
+    const payload = mockSpawn.mock.calls[0]![0];
+    expect(payload.agentId).toBeUndefined();
+    expect(payload.command).toBeUndefined();
+
+    // Launch identity on the panel is preserved for future deliberate
+    // restart-as-agent flows; agentState stays "exited" to keep demotion
+    // sticky across repeat restarts (#5764).
+    const after = usePanelStore.getState().panelsById["test-1"];
+    expect(after?.agentId).toBe("claude");
+    expect(after?.agentState).toBe("exited");
+  });
+
+  // Scenario 3: "shell survives agent exit" remains holds — a cold-launched
+  // agent terminal whose agent is still actively working (no demotion signal)
+  // relaunches as the agent on restart.
+  it("relaunches cold-launched agent terminal as agent when still active (shell-survives invariant)", async () => {
+    const active = {
+      id: "test-1",
+      type: "claude" as const,
+      kind: "terminal" as const,
+      agentId: "claude",
+      agentLaunchFlags: ["--persisted-flag"],
+      title: "Claude",
+      cwd: "/some/path",
+      command: "claude",
+      cols: 80,
+      rows: 24,
+      location: "grid" as const,
+      agentState: "working" as const,
+      // No exitCode, no "exited" state — the invariant from #5807 (iii):
+      // shell survives agent exit means demotion state is respected; while
+      // the agent is live, restart still relaunches it.
+    };
+    usePanelStore.setState({
+      panelsById: { [active.id]: active },
+      panelIds: [active.id],
+    });
+
+    await usePanelStore.getState().restartTerminal("test-1");
+
+    expect(mockSpawn).toHaveBeenCalledTimes(1);
+    const payload = mockSpawn.mock.calls[0]![0];
+    expect(payload.type).toBe("claude");
+    expect(payload.agentId).toBe("claude");
+    expect(payload.command).toBeDefined();
+  });
+});

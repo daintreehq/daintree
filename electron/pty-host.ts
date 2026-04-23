@@ -542,6 +542,7 @@ events.on("agent:exited", (payload) => {
     terminalId: payload.terminalId,
     agentType: payload.agentType,
     timestamp: payload.timestamp,
+    exitKind: payload.exitKind,
   });
 });
 

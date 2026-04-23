@@ -319,25 +319,21 @@ export function setupTerminalStoreListeners() {
   disposables.add(
     toDisposable(
       terminalRegistryController.onAgentExited((data) => {
-        const { terminalId, agentType } = data;
+        const { terminalId } = data;
         if (!terminalId) return;
 
-        // `agent:exited` fires for TWO different transitions:
-        //   1. An agent exited (data.agentType is set) — e.g. claude quit.
-        //   2. A non-agent process exited (data.agentType is undefined) —
-        //      e.g. `npm run build` finished.
-        // Only case (1) should clear the launch-time `agentId`. Clearing
-        // `agentId` on case (2) would wipe the Claude badge every time the
-        // user ran a brief shell command inside a Claude terminal.
-        const isAgentExit = agentType !== undefined;
-
+        // `agent:exited` is a subcommand/demotion signal — the shell PTY is
+        // still alive. Clear only the LIVE detection fields. `agentId` is
+        // sealed launch intent (#5803) and must never be cleared here:
+        // restart decisions read it to decide whether to relaunch as agent
+        // vs plain shell, and clearing it would corrupt that decision on a
+        // cold-launched agent terminal whose user typed `/quit`. #5807
         usePanelStore.setState((state) => {
           const terminal = state.panelsById[terminalId];
           if (!terminal) return state;
           const clearProcess = terminal.detectedProcessId !== undefined;
           const clearDetectedAgent = terminal.detectedAgentId !== undefined;
-          const clearAgentId = isAgentExit && terminal.agentId !== undefined;
-          if (!clearProcess && !clearDetectedAgent && !clearAgentId) return state;
+          if (!clearProcess && !clearDetectedAgent) return state;
 
           return {
             panelsById: {
@@ -346,7 +342,6 @@ export function setupTerminalStoreListeners() {
                 ...terminal,
                 ...(clearProcess && { detectedProcessId: undefined }),
                 ...(clearDetectedAgent && { detectedAgentId: undefined }),
-                ...(clearAgentId && { agentId: undefined }),
               },
             },
           };
