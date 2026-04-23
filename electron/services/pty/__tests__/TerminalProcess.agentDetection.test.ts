@@ -4,6 +4,7 @@ import { TerminalProcess } from "../TerminalProcess.js";
 import type { SpawnContext } from "../terminalSpawn.js";
 import type { ProcessTreeCache } from "../../ProcessTreeCache.js";
 import type { DetectionResult } from "../../ProcessDetector.js";
+import { makeAgentResult, makeNoAgentResult } from "../../ProcessDetector.js";
 import { events } from "../../events.js";
 
 vi.mock("node-pty", () => {
@@ -199,7 +200,7 @@ describe("TerminalProcess.handleAgentDetection — disposes ActivityMonitor on a
     // Seed initial agent detection so subsequent transitions hit the exit branches.
     callHandleAgentDetection(
       terminal,
-      { detected: true, agentType: "claude", processIconId: "claude" },
+      makeAgentResult({ agentType: "claude" as const, processIconId: "claude" }),
       getSpawnedAt(terminal)
     );
   });
@@ -214,7 +215,7 @@ describe("TerminalProcess.handleAgentDetection — disposes ActivityMonitor on a
 
     callHandleAgentDetection(
       terminal,
-      { detected: true, processIconId: "npm", processName: "npm" },
+      makeAgentResult({ processIconId: "npm", processName: "npm" }),
       getSpawnedAt(terminal)
     );
 
@@ -226,7 +227,7 @@ describe("TerminalProcess.handleAgentDetection — disposes ActivityMonitor on a
   it("Branch B — disposes monitor when no process is detected after the agent", () => {
     expect(getActivityMonitor(terminal)).not.toBeNull();
 
-    callHandleAgentDetection(terminal, { detected: false }, getSpawnedAt(terminal));
+    callHandleAgentDetection(terminal, makeNoAgentResult({}), getSpawnedAt(terminal));
 
     expect(getActivityMonitor(terminal)).toBeNull();
     expect(exitedEvents).toHaveLength(1);
@@ -247,14 +248,18 @@ describe("TerminalProcess.handleAgentDetection — disposes ActivityMonitor on a
       // Seed agent detection.
       callHandleAgentDetection(
         trackedTerminal,
-        { detected: true, agentType: "claude", processIconId: "claude" },
+        makeAgentResult({ agentType: "claude" as const, processIconId: "claude" }),
         getSpawnedAt(trackedTerminal)
       );
       const monitorBefore = getActivityMonitor(trackedTerminal);
       expect(monitorBefore).not.toBeNull();
 
       // Demote: agent gone.
-      callHandleAgentDetection(trackedTerminal, { detected: false }, getSpawnedAt(trackedTerminal));
+      callHandleAgentDetection(
+        trackedTerminal,
+        makeNoAgentResult({}),
+        getSpawnedAt(trackedTerminal)
+      );
       expect(getActivityMonitor(trackedTerminal)).toBeNull();
 
       handleActivityState.mockClear();
@@ -270,7 +275,7 @@ describe("TerminalProcess.handleAgentDetection — disposes ActivityMonitor on a
   it("Branch A → Branch B sequence — only one agent:exited with the original agentType", () => {
     callHandleAgentDetection(
       terminal,
-      { detected: true, processIconId: "npm", processName: "npm" },
+      makeAgentResult({ processIconId: "npm", processName: "npm" }),
       getSpawnedAt(terminal)
     );
     expect(getActivityMonitor(terminal)).toBeNull();
@@ -278,7 +283,7 @@ describe("TerminalProcess.handleAgentDetection — disposes ActivityMonitor on a
     expect(exitedEvents[0]).toEqual({ terminalId: "t-agent", agentType: "claude" });
 
     // Subsequent Branch B fires because lastDetectedProcessIconId is still set.
-    callHandleAgentDetection(terminal, { detected: false }, getSpawnedAt(terminal));
+    callHandleAgentDetection(terminal, makeNoAgentResult({}), getSpawnedAt(terminal));
     expect(getActivityMonitor(terminal)).toBeNull();
     // Branch B emits a second exit (with undefined agentType) by existing contract;
     // the load-bearing assertion is no monitor leak across the sequence.
@@ -298,14 +303,18 @@ describe("TerminalProcess.handleAgentDetection — disposes monitor without prio
       // No initial agent detection: only a non-agent process icon is set.
       callHandleAgentDetection(
         trackedTerminal,
-        { detected: true, processIconId: "npm", processName: "npm" },
+        makeAgentResult({ processIconId: "npm", processName: "npm" }),
         getSpawnedAt(trackedTerminal)
       );
       // Monitor was created in the constructor for this isAgentTerminal=true terminal.
       expect(getActivityMonitor(trackedTerminal)).not.toBeNull();
 
       // Now everything goes away — Branch B with previousType undefined.
-      callHandleAgentDetection(trackedTerminal, { detected: false }, getSpawnedAt(trackedTerminal));
+      callHandleAgentDetection(
+        trackedTerminal,
+        makeNoAgentResult({}),
+        getSpawnedAt(trackedTerminal)
+      );
 
       expect(getActivityMonitor(trackedTerminal)).toBeNull();
       expect(exitedEvents).toHaveLength(1);
@@ -339,12 +348,16 @@ describe("TerminalProcess.handleAgentDetection — polling loop teardown", () =>
     try {
       callHandleAgentDetection(
         trackedTerminal,
-        { detected: true, agentType: "claude", processIconId: "claude" },
+        makeAgentResult({ agentType: "claude" as const, processIconId: "claude" }),
         getSpawnedAt(trackedTerminal)
       );
       expect(getActivityMonitor(trackedTerminal)).not.toBeNull();
 
-      callHandleAgentDetection(trackedTerminal, { detected: false }, getSpawnedAt(trackedTerminal));
+      callHandleAgentDetection(
+        trackedTerminal,
+        makeNoAgentResult({}),
+        getSpawnedAt(trackedTerminal)
+      );
       expect(getActivityMonitor(trackedTerminal)).toBeNull();
 
       handleActivityState.mockClear();
@@ -374,7 +387,7 @@ describe("TerminalProcess.handleAgentDetection — runtime promotion scrollback"
 
       callHandleAgentDetection(
         terminal,
-        { detected: true, agentType: "claude", processIconId: "claude" },
+        makeAgentResult({ agentType: "claude" as const, processIconId: "claude" }),
         getSpawnedAt(terminal)
       );
 
@@ -389,14 +402,14 @@ describe("TerminalProcess.handleAgentDetection — runtime promotion scrollback"
     try {
       callHandleAgentDetection(
         terminal,
-        { detected: true, agentType: "claude", processIconId: "claude" },
+        makeAgentResult({ agentType: "claude" as const, processIconId: "claude" }),
         getSpawnedAt(terminal)
       );
       expect(getScrollback(terminal)).toBe(10000);
 
       callHandleAgentDetection(
         terminal,
-        { detected: true, agentType: "claude", processIconId: "claude" },
+        makeAgentResult({ agentType: "claude" as const, processIconId: "claude" }),
         getSpawnedAt(terminal)
       );
       expect(getScrollback(terminal)).toBe(10000);
@@ -413,7 +426,7 @@ describe("TerminalProcess.handleAgentDetection — runtime promotion scrollback"
 
       callHandleAgentDetection(
         terminal,
-        { detected: true, agentType: "claude", processIconId: "claude" },
+        makeAgentResult({ agentType: "claude" as const, processIconId: "claude" }),
         getSpawnedAt(terminal)
       );
 
@@ -439,14 +452,14 @@ describe("TerminalProcess.handleAgentDetection — runtime promotion scrollback"
     try {
       callHandleAgentDetection(
         terminal,
-        { detected: true, agentType: "claude", processIconId: "claude" },
+        makeAgentResult({ agentType: "claude" as const, processIconId: "claude" }),
         getSpawnedAt(terminal)
       );
       expect(getScrollback(terminal)).toBe(10000);
 
       callHandleAgentDetection(
         terminal,
-        { detected: true, agentType: "gemini", processIconId: "gemini" },
+        makeAgentResult({ agentType: "gemini" as const, processIconId: "gemini" }),
         getSpawnedAt(terminal)
       );
       expect(getScrollback(terminal)).toBe(10000);
@@ -645,7 +658,7 @@ describe("TerminalProcess.handleAgentDetection — plain process icon badge emis
     try {
       callHandleAgentDetection(
         terminal,
-        { detected: true, processIconId: "npm", processName: "npm" },
+        makeAgentResult({ processIconId: "npm", processName: "npm" }),
         getSpawnedAt(terminal)
       );
 
@@ -671,12 +684,12 @@ describe("TerminalProcess.handleAgentDetection — plain process icon badge emis
     try {
       callHandleAgentDetection(
         terminal,
-        { detected: true, processIconId: "npm", processName: "npm" },
+        makeAgentResult({ processIconId: "npm", processName: "npm" }),
         getSpawnedAt(terminal)
       );
       expect(terminal.getInfo().detectedProcessIconId).toBe("npm");
 
-      callHandleAgentDetection(terminal, { detected: false }, getSpawnedAt(terminal));
+      callHandleAgentDetection(terminal, makeNoAgentResult({}), getSpawnedAt(terminal));
 
       expect(terminal.getInfo().detectedProcessIconId).toBeUndefined();
       expect(exitedEvents).toHaveLength(1);
@@ -701,7 +714,7 @@ describe("TerminalProcess.handleAgentDetection — launch identity immutability 
 
       callHandleAgentDetection(
         terminal,
-        { detected: true, agentType: "claude", processIconId: "claude" },
+        makeAgentResult({ agentType: "claude" as const, processIconId: "claude" }),
         getSpawnedAt(terminal)
       );
 
@@ -718,7 +731,7 @@ describe("TerminalProcess.handleAgentDetection — launch identity immutability 
     try {
       callHandleAgentDetection(
         terminal,
-        { detected: true, agentType: "claude", processIconId: "claude" },
+        makeAgentResult({ agentType: "claude" as const, processIconId: "claude" }),
         getSpawnedAt(terminal)
       );
       expect(terminal.getInfo().agentId).toBeUndefined();
@@ -726,14 +739,14 @@ describe("TerminalProcess.handleAgentDetection — launch identity immutability 
       // Demotion via non-agent icon.
       callHandleAgentDetection(
         terminal,
-        { detected: true, processIconId: "npm", processName: "npm" },
+        makeAgentResult({ processIconId: "npm", processName: "npm" }),
         getSpawnedAt(terminal)
       );
       expect(terminal.getInfo().agentId).toBeUndefined();
       expect(terminal.getInfo().detectedAgentType).toBeUndefined();
 
       // Demotion via no-detection.
-      callHandleAgentDetection(terminal, { detected: false }, getSpawnedAt(terminal));
+      callHandleAgentDetection(terminal, makeNoAgentResult({}), getSpawnedAt(terminal));
       expect(terminal.getInfo().agentId).toBeUndefined();
     } finally {
       terminal.dispose();
@@ -745,14 +758,14 @@ describe("TerminalProcess.handleAgentDetection — launch identity immutability 
     try {
       callHandleAgentDetection(
         terminal,
-        { detected: true, agentType: "claude", processIconId: "claude" },
+        makeAgentResult({ agentType: "claude" as const, processIconId: "claude" }),
         getSpawnedAt(terminal)
       );
       expect(terminal.getInfo().agentId).toBe("claude");
 
       callHandleAgentDetection(
         terminal,
-        { detected: true, processIconId: "npm", processName: "npm" },
+        makeAgentResult({ processIconId: "npm", processName: "npm" }),
         getSpawnedAt(terminal)
       );
 
@@ -769,12 +782,12 @@ describe("TerminalProcess.handleAgentDetection — launch identity immutability 
     try {
       callHandleAgentDetection(
         terminal,
-        { detected: true, agentType: "claude", processIconId: "claude" },
+        makeAgentResult({ agentType: "claude" as const, processIconId: "claude" }),
         getSpawnedAt(terminal)
       );
       expect(terminal.getInfo().agentId).toBe("claude");
 
-      callHandleAgentDetection(terminal, { detected: false }, getSpawnedAt(terminal));
+      callHandleAgentDetection(terminal, makeNoAgentResult({}), getSpawnedAt(terminal));
 
       const info = terminal.getInfo();
       expect(info.agentId).toBe("claude");
@@ -798,14 +811,14 @@ describe("TerminalProcess.handleAgentDetection — launch identity immutability 
     try {
       callHandleAgentDetection(
         terminal,
-        { detected: true, agentType: "claude", processIconId: "claude" },
+        makeAgentResult({ agentType: "claude" as const, processIconId: "claude" }),
         getSpawnedAt(terminal)
       );
       expect(detectedEvents).toHaveLength(1);
       expect(detectedEvents[0].agentType).toBe("claude");
       expect(terminal.getInfo().agentId).toBeUndefined();
 
-      callHandleAgentDetection(terminal, { detected: false }, getSpawnedAt(terminal));
+      callHandleAgentDetection(terminal, makeNoAgentResult({}), getSpawnedAt(terminal));
       expect(exitedEvents).toHaveLength(1);
       expect(exitedEvents[0].agentType).toBe("claude");
       expect(terminal.getInfo().agentId).toBeUndefined();
@@ -845,7 +858,7 @@ describe("TerminalProcess — capabilityAgentId sealed at spawn (#5804)", () => 
     try {
       callHandleAgentDetection(
         terminal,
-        { detected: true, agentType: "claude", processIconId: "claude" },
+        makeAgentResult({ agentType: "claude" as const, processIconId: "claude" }),
         getSpawnedAt(terminal)
       );
 
@@ -866,7 +879,7 @@ describe("TerminalProcess — capabilityAgentId sealed at spawn (#5804)", () => 
       // Spurious re-detection of the same agent.
       callHandleAgentDetection(
         terminal,
-        { detected: true, agentType: "claude", processIconId: "claude" },
+        makeAgentResult({ agentType: "claude" as const, processIconId: "claude" }),
         getSpawnedAt(terminal)
       );
       expect(terminal.getInfo().capabilityAgentId).toBe("claude");
@@ -874,13 +887,13 @@ describe("TerminalProcess — capabilityAgentId sealed at spawn (#5804)", () => 
       // Demotion to a non-agent process.
       callHandleAgentDetection(
         terminal,
-        { detected: true, processIconId: "npm", processName: "npm" },
+        makeAgentResult({ processIconId: "npm", processName: "npm" }),
         getSpawnedAt(terminal)
       );
       expect(terminal.getInfo().capabilityAgentId).toBe("claude");
 
       // Full demotion.
-      callHandleAgentDetection(terminal, { detected: false }, getSpawnedAt(terminal));
+      callHandleAgentDetection(terminal, makeNoAgentResult({}), getSpawnedAt(terminal));
       expect(terminal.getInfo().capabilityAgentId).toBe("claude");
     } finally {
       terminal.dispose();
@@ -896,6 +909,86 @@ describe("TerminalProcess — capabilityAgentId sealed at spawn (#5804)", () => 
     } finally {
       agent.dispose();
       plain.dispose();
+    }
+  });
+});
+
+// #5809: unknown/ambiguous are first-class HOLD states. handleAgentDetection
+// must no-op on both so a blind `ps` cycle or a two-source conflict does not
+// silently demote a confirmed agent every HYSTERESIS window.
+describe("TerminalProcess.handleAgentDetection — unknown/ambiguous hold state (#5809)", () => {
+  it("no-ops on detectionState=unknown — keeps committed agent identity", () => {
+    const terminal = createAgentTerminal();
+    let exitedEvents = 0;
+    const unsubscribe = events.on("agent:exited", () => {
+      exitedEvents += 1;
+    });
+
+    try {
+      callHandleAgentDetection(
+        terminal,
+        { detectionState: "agent", detected: true, agentType: "claude", processIconId: "claude" },
+        getSpawnedAt(terminal)
+      );
+      expect(terminal.getInfo().detectedAgentType).toBe("claude");
+
+      callHandleAgentDetection(
+        terminal,
+        { detectionState: "unknown", detected: false },
+        getSpawnedAt(terminal)
+      );
+
+      expect(terminal.getInfo().detectedAgentType).toBe("claude");
+      expect(terminal.getInfo().type).toBe("claude");
+      expect(exitedEvents).toBe(0);
+    } finally {
+      unsubscribe();
+      terminal.dispose();
+    }
+  });
+
+  it("no-ops on detectionState=ambiguous — keeps committed agent identity", () => {
+    const terminal = createAgentTerminal();
+    let exitedEvents = 0;
+    const unsubscribe = events.on("agent:exited", () => {
+      exitedEvents += 1;
+    });
+
+    try {
+      callHandleAgentDetection(
+        terminal,
+        { detectionState: "agent", detected: true, agentType: "claude", processIconId: "claude" },
+        getSpawnedAt(terminal)
+      );
+      expect(terminal.getInfo().detectedAgentType).toBe("claude");
+
+      callHandleAgentDetection(
+        terminal,
+        { detectionState: "ambiguous", detected: false },
+        getSpawnedAt(terminal)
+      );
+
+      expect(terminal.getInfo().detectedAgentType).toBe("claude");
+      expect(terminal.getInfo().type).toBe("claude");
+      expect(exitedEvents).toBe(0);
+    } finally {
+      unsubscribe();
+      terminal.dispose();
+    }
+  });
+
+  it("normalizes legacy callers missing detectionState — detected=true maps to agent state", () => {
+    const terminal = createPlainTerminal("t-normalize");
+    try {
+      // Legacy caller (no detectionState) — must be treated as agent.
+      callHandleAgentDetection(
+        terminal,
+        { detected: true, agentType: "claude", processIconId: "claude" } as never,
+        getSpawnedAt(terminal)
+      );
+      expect(terminal.getInfo().detectedAgentType).toBe("claude");
+    } finally {
+      terminal.dispose();
     }
   });
 });

@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { randomUUID } from "crypto";
 import { PtyManager } from "../PtyManager.js";
 import { cleanupPtyManager, sleep } from "./helpers/ptyTestUtils.js";
+import { makeAgentResult, makeNoAgentResult } from "../ProcessDetector.js";
 import type { TerminalType, PanelKind } from "../../../shared/types/panel.js";
 
 describe("Agent Classification Matrix", () => {
@@ -283,11 +284,13 @@ describe("Agent Classification Matrix", () => {
       expect(before?.agentState).toBeUndefined();
       expect(before?.detectedAgentType).toBeUndefined();
 
-      const simulated = manager.simulateAgentDetection(id, {
-        detected: true,
-        agentType: "claude" as TerminalType,
-        processName: "claude",
-      });
+      const simulated = manager.simulateAgentDetection(
+        id,
+        makeAgentResult({
+          agentType: "claude" as TerminalType,
+          processName: "claude",
+        })
+      );
       expect(simulated).toBe(true);
 
       const after = manager.getTerminal(id);
@@ -308,19 +311,19 @@ describe("Agent Classification Matrix", () => {
 
       await sleep(100);
 
-      manager.simulateAgentDetection(id, {
-        detected: true,
-        agentType: "claude" as TerminalType,
-        processName: "claude",
-      });
+      manager.simulateAgentDetection(
+        id,
+        makeAgentResult({
+          agentType: "claude" as TerminalType,
+          processName: "claude",
+        })
+      );
 
       const promoted = manager.getTerminal(id);
       expect(promoted?.analysisEnabled).toBe(true);
       expect(promoted?.detectedAgentType).toBe("claude");
 
-      manager.simulateAgentDetection(id, {
-        detected: false,
-      });
+      manager.simulateAgentDetection(id, makeNoAgentResult({}));
 
       const demoted = manager.getTerminal(id);
       expect(demoted?.analysisEnabled).toBe(false);
@@ -339,18 +342,22 @@ describe("Agent Classification Matrix", () => {
 
       await sleep(100);
 
-      manager.simulateAgentDetection(id, {
-        detected: true,
-        agentType: "claude" as TerminalType,
-        processName: "claude",
-      });
+      manager.simulateAgentDetection(
+        id,
+        makeAgentResult({
+          agentType: "claude" as TerminalType,
+          processName: "claude",
+        })
+      );
       expect(manager.getTerminal(id)?.analysisEnabled).toBe(true);
 
-      manager.simulateAgentDetection(id, {
-        detected: true,
-        processIconId: "npm",
-        processName: "npm",
-      });
+      manager.simulateAgentDetection(
+        id,
+        makeAgentResult({
+          processIconId: "npm",
+          processName: "npm",
+        })
+      );
 
       const demoted = manager.getTerminal(id);
       expect(demoted?.analysisEnabled).toBe(false);
@@ -372,9 +379,7 @@ describe("Agent Classification Matrix", () => {
       // Spawn-time agent panels keep analysisEnabled=true even after the live
       // agent exits — lifecycle unification here is runtime-only, and these
       // panels remain classified as agent panels for the whole session.
-      manager.simulateAgentDetection(id, {
-        detected: false,
-      });
+      manager.simulateAgentDetection(id, makeNoAgentResult({}));
 
       const info = manager.getTerminal(id);
       expect(info?.analysisEnabled).toBe(true);
@@ -392,11 +397,13 @@ describe("Agent Classification Matrix", () => {
       await sleep(100);
       expect(manager.getTerminal(id)?.agentId).toBeUndefined();
 
-      manager.simulateAgentDetection(id, {
-        detected: true,
-        agentType: "claude" as TerminalType,
-        processName: "claude",
-      });
+      manager.simulateAgentDetection(
+        id,
+        makeAgentResult({
+          agentType: "claude" as TerminalType,
+          processName: "claude",
+        })
+      );
 
       const promoted = manager.getTerminal(id);
       // Without agentId, AgentStateService.updateAgentState() and
@@ -407,7 +414,7 @@ describe("Agent Classification Matrix", () => {
       expect(promoted?.agentState).toBe("working");
 
       // Demotion clears agentId back to undefined for runtime-promoted terminals.
-      manager.simulateAgentDetection(id, { detected: false });
+      manager.simulateAgentDetection(id, makeNoAgentResult({}));
       expect(manager.getTerminal(id)?.agentId).toBeUndefined();
     }, 10000);
 
@@ -422,18 +429,22 @@ describe("Agent Classification Matrix", () => {
 
       await sleep(100);
 
-      manager.simulateAgentDetection(id, {
-        detected: true,
-        agentType: "claude" as TerminalType,
-        processName: "claude",
-      });
+      manager.simulateAgentDetection(
+        id,
+        makeAgentResult({
+          agentType: "claude" as TerminalType,
+          processName: "claude",
+        })
+      );
       expect(manager.getTerminal(id)?.type).toBe("claude");
 
-      manager.simulateAgentDetection(id, {
-        detected: true,
-        agentType: "gemini" as TerminalType,
-        processName: "gemini",
-      });
+      manager.simulateAgentDetection(
+        id,
+        makeAgentResult({
+          agentType: "gemini" as TerminalType,
+          processName: "gemini",
+        })
+      );
 
       const info = manager.getTerminal(id);
       expect(info?.analysisEnabled).toBe(true);

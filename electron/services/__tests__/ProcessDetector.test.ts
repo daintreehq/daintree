@@ -6,15 +6,20 @@ type ProcessNode = { pid: number; comm: string; command?: string };
 function createCacheMock() {
   const listeners = new Set<() => void>();
   const children = new Map<number, ProcessNode[]>();
+  let lastError: Error | null = null;
 
   return {
     getChildren: vi.fn((pid: number) => children.get(pid) ?? []),
+    getLastError: vi.fn(() => lastError),
     onRefresh: vi.fn((callback: () => void) => {
       listeners.add(callback);
       return () => listeners.delete(callback);
     }),
     setChildren(pid: number, nodes: ProcessNode[]) {
       children.set(pid, nodes);
+    },
+    setLastError(err: Error | null) {
+      lastError = err;
     },
     emitRefresh() {
       for (const callback of listeners) {
@@ -664,6 +669,384 @@ describe("ProcessDetector", () => {
 
       detector.stop();
       expect(callback).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  // Four-state detection: unknown / no_agent / agent / ambiguous. These tests
+  // cover the specific failure modes called out in #5809 — blind ps, title-
+  // rewriting CLIs, short-lived subprocess thrash under sticky TTL, utility-
+  // process fd starvation — and guard against silent regressions where a
+  // blind signal would demote a confident detection.
+  describe("detection state (first-class ambiguity)", () => {
+    it("returns unknown (not no_agent) when ps cache is in error state with empty children", () => {
+      const cache = createCacheMock();
+      cache.setLastError(new Error("ps: spawn EMFILE"));
+      // Children is empty AND cache has live error → this is blindness, not
+      // negative evidence. Detector must hold committed state rather than
+      // emit a demotion. Unknown states are held, so no callback fires.
+      const callback = vi.fn();
+      const detector = new ProcessDetector(
+        "terminal-blind-ps",
+        Date.now(),
+        100,
+        callback,
+        cache as never
+      );
+      detector.start();
+      cache.emitRefresh();
+
+      const detectedCalls = callback.mock.calls.filter(([r]) => r.detected === true);
+      const demoteCalls = callback.mock.calls.filter(([r]) => r.detectionState === "no_agent");
+      expect(detectedCalls).toHaveLength(0);
+      expect(demoteCalls).toHaveLength(0);
+    });
+
+    it("holds committed agent through a blind-ps cycle (no demotion when lastError set)", () => {
+      const cache = createCacheMock();
+      cache.setChildren(100, [{ pid: 200, comm: "claude", command: "claude --resume" }]);
+      const callback = vi.fn();
+      const detector = new ProcessDetector(
+        "terminal-blind-ps-hold",
+        Date.now(),
+        100,
+        callback,
+        cache as never
+      );
+      detector.start();
+      cache.emitRefresh();
+      expect(callback).toHaveBeenCalledTimes(1);
+      expect(callback).toHaveBeenLastCalledWith(
+        expect.objectContaining({ detectionState: "agent", agentType: "claude" }),
+        expect.any(Number)
+      );
+
+      // ps goes blind — empty children with live error. Two more refreshes
+      // must NOT demote; legacy behaviour would have committed no_agent after
+      // two empty polls.
+      cache.setChildren(100, []);
+      cache.setLastError(new Error("ps: I/O error"));
+      cache.emitRefresh();
+      cache.emitRefresh();
+
+      expect(callback).toHaveBeenCalledTimes(1);
+      expect(detector.getLastDetected()).toBe("claude");
+    });
+
+    it("resolves to agent with evidenceSource 'shell_command' when tree is blind", () => {
+      // Title-rewriting / blind-`ps` case: process tree has nothing, shell
+      // evidence says `claude`. Must commit agent immediately (fast-commit
+      // path) with evidenceSource 'shell_command'.
+      const cache = createCacheMock();
+      const callback = vi.fn();
+      const detector = new ProcessDetector(
+        "terminal-shell-only",
+        Date.now(),
+        100,
+        callback,
+        cache as never
+      );
+      detector.start();
+
+      detector.injectShellCommandEvidence(
+        { agentType: "claude", processIconId: "claude", processName: "claude" },
+        "claude --resume"
+      );
+
+      expect(callback).toHaveBeenCalledWith(
+        expect.objectContaining({
+          detectionState: "agent",
+          agentType: "claude",
+          evidenceSource: "shell_command",
+        }),
+        expect.any(Number)
+      );
+    });
+
+    it("resolves to agent with evidenceSource 'both' when tree and shell agree", () => {
+      const cache = createCacheMock();
+      cache.setChildren(100, [{ pid: 200, comm: "claude", command: "claude --resume" }]);
+      const callback = vi.fn();
+      const detector = new ProcessDetector(
+        "terminal-both",
+        Date.now(),
+        100,
+        callback,
+        cache as never
+      );
+      // Inject before start so the first detect() sees both signals and
+      // commits with evidenceSource 'both' on the first pass.
+      detector.injectShellCommandEvidence(
+        { agentType: "claude", processIconId: "claude", processName: "claude" },
+        "claude --resume"
+      );
+      detector.start();
+
+      expect(callback).toHaveBeenCalledWith(
+        expect.objectContaining({
+          detectionState: "agent",
+          agentType: "claude",
+          evidenceSource: "both",
+        }),
+        expect.any(Number)
+      );
+    });
+
+    it("returns ambiguous when tree and shell report different agent identities", () => {
+      // Genuine two-positive-signals conflict: tree says codex, shell says
+      // claude. Must hold in ambiguous rather than pick one. No callback
+      // fires for ambiguous (it's a HOLD state, no committed change).
+      const cache = createCacheMock();
+      cache.setChildren(100, [{ pid: 200, comm: "codex", command: "codex --model gpt-5" }]);
+      const callback = vi.fn();
+      const detector = new ProcessDetector(
+        "terminal-ambiguous",
+        Date.now(),
+        100,
+        callback,
+        cache as never
+      );
+      detector.injectShellCommandEvidence(
+        { agentType: "claude", processIconId: "claude", processName: "claude" },
+        "claude"
+      );
+      detector.start();
+
+      // With conflict, nothing should commit.
+      expect(callback.mock.calls.filter(([r]) => r.detectionState === "agent")).toHaveLength(0);
+      expect(detector.getLastDetected()).toBeNull();
+    });
+
+    it("holds committed state through short-lived subprocess thrash within sticky TTL", () => {
+      // User ran `claude --resume` — shell evidence injected. A short-lived
+      // subprocess (e.g. a grep the user ran mid-session) appears and exits
+      // between cache polls. The sticky TTL must suppress off-streak counting
+      // so the detector holds `claude`.
+      const base = Date.now();
+      vi.setSystemTime(base);
+      const cache = createCacheMock();
+      const callback = vi.fn();
+      const detector = new ProcessDetector("terminal-thrash", base, 100, callback, cache as never);
+      detector.start();
+
+      detector.injectShellCommandEvidence(
+        { agentType: "claude", processIconId: "claude", processName: "claude" },
+        "claude --resume",
+        base
+      );
+      expect(detector.getLastDetected()).toBe("claude");
+      // Reset call history so only post-inject emissions are counted against
+      // the demote assertion. Initial start() may have emitted a no_agent
+      // baseline when no children existed, which is not a demotion.
+      callback.mockClear();
+
+      // Half a second later, children are empty (subprocess thrash). Must not
+      // demote because sticky TTL (~12 s) is still active.
+      vi.setSystemTime(base + 500);
+      cache.setChildren(100, []);
+      cache.emitRefresh();
+      cache.emitRefresh();
+
+      expect(detector.getLastDetected()).toBe("claude");
+      const demoteCalls = callback.mock.calls.filter(([r]) => r.detectionState === "no_agent");
+      expect(demoteCalls).toHaveLength(0);
+      vi.useRealTimers();
+    });
+
+    it("allows demotion after shell evidence expires past the upper bound", () => {
+      // Absolute upper bound (~30 s) guards against a synthetic shell identity
+      // holding `agent` forever when the process never actually started.
+      const base = Date.now();
+      vi.setSystemTime(base);
+      const cache = createCacheMock();
+      const callback = vi.fn();
+      const detector = new ProcessDetector("terminal-expiry", base, 100, callback, cache as never);
+      detector.start();
+
+      detector.injectShellCommandEvidence(
+        { agentType: "claude", processIconId: "claude", processName: "claude" },
+        "claude --resume",
+        base
+      );
+      expect(detector.getLastDetected()).toBe("claude");
+
+      // Advance past expiry (30 s upper bound) — shell evidence should now be
+      // expired and a blind tree can demote the commit via normal hysteresis.
+      vi.setSystemTime(base + 31_000);
+      cache.setChildren(100, []);
+      cache.emitRefresh();
+      cache.emitRefresh();
+
+      expect(detector.getLastDetected()).toBeNull();
+      vi.useRealTimers();
+    });
+
+    it("clearShellCommandEvidence releases the TTL so the tree path can demote", () => {
+      // On prompt-return, TerminalProcess clears shell evidence. The next
+      // detector pass with empty tree then moves through normal off-streak
+      // hysteresis and commits no_agent after two confirmations.
+      const base = Date.now();
+      vi.setSystemTime(base);
+      const cache = createCacheMock();
+      const callback = vi.fn();
+      const detector = new ProcessDetector("terminal-cleared", base, 100, callback, cache as never);
+      detector.start();
+
+      detector.injectShellCommandEvidence(
+        { agentType: "claude", processIconId: "claude", processName: "claude" },
+        "claude --resume",
+        base
+      );
+      expect(detector.getLastDetected()).toBe("claude");
+
+      detector.clearShellCommandEvidence();
+      cache.setChildren(100, []);
+      cache.emitRefresh();
+      cache.emitRefresh();
+
+      expect(detector.getLastDetected()).toBeNull();
+      vi.useRealTimers();
+    });
+
+    it("promotes shell-command evidence even when ps is in error state with empty children", () => {
+      // Primary regression guard for #5809: when the cache is BLIND (ps
+      // failed) AND the user just typed `claude`, the shell evidence must
+      // promote the committed state. The earlier "tree is blind" test used
+      // a healthy-empty cache; this test uses an error-state cache, which
+      // is the actual failure mode the feature targets. A naive `unknown`
+      // early-return would discard shell evidence here.
+      const cache = createCacheMock();
+      cache.setLastError(new Error("ps: spawn EMFILE"));
+      const callback = vi.fn();
+      const detector = new ProcessDetector(
+        "terminal-blind-plus-shell",
+        Date.now(),
+        100,
+        callback,
+        cache as never
+      );
+      detector.start();
+
+      detector.injectShellCommandEvidence(
+        { agentType: "claude", processIconId: "claude", processName: "claude" },
+        "claude --resume"
+      );
+
+      const agentCalls = callback.mock.calls.filter(([r]) => r.detectionState === "agent");
+      expect(agentCalls.length).toBeGreaterThan(0);
+      expect(agentCalls[agentCalls.length - 1][0]).toMatchObject({
+        detectionState: "agent",
+        agentType: "claude",
+        evidenceSource: "shell_command",
+      });
+      expect(detector.getLastDetected()).toBe("claude");
+    });
+
+    it("upgrades committed evidence source when tree later corroborates a shell-only commit", () => {
+      // Regression guard for #5809: after shell commits `claude`, a
+      // subsequent cache refresh with the tree also showing `claude` must
+      // upgrade lastEvidenceSource to "both". If it stays "shell_command",
+      // clearShellCommandEvidence would then emit a spurious synchronous
+      // demotion on prompt-return even though the tree still has the agent.
+      const cache = createCacheMock();
+      const callback = vi.fn();
+      const detector = new ProcessDetector(
+        "terminal-upgrade-source",
+        Date.now(),
+        100,
+        callback,
+        cache as never
+      );
+      detector.start();
+
+      // Step 1: shell-only commit (tree empty, healthy cache).
+      detector.injectShellCommandEvidence(
+        { agentType: "claude", processIconId: "claude", processName: "claude" },
+        "claude --resume"
+      );
+      expect(detector.getLastDetected()).toBe("claude");
+
+      // Step 2: tree refresh now shows claude — committed state unchanged,
+      // but evidence source should upgrade to "both".
+      cache.setChildren(100, [{ pid: 200, comm: "claude", command: "claude --resume" }]);
+      cache.emitRefresh();
+
+      // Step 3: clear shell evidence (simulates prompt-return). The committed
+      // state must PERSIST because the tree still supports it.
+      callback.mockClear();
+      detector.clearShellCommandEvidence();
+
+      const demoteCalls = callback.mock.calls.filter(([r]) => r.detectionState === "no_agent");
+      expect(demoteCalls).toHaveLength(0);
+      expect(detector.getLastDetected()).toBe("claude");
+    });
+
+    it("holds agent identity at 12s sticky boundary but demotes past 30s expiry", () => {
+      // The sticky TTL (12 s) and expiry TTL (30 s) must be distinct — at
+      // the sticky boundary the badge persists, only at the absolute expiry
+      // can the tree path demote.
+      const base = Date.now();
+      vi.setSystemTime(base);
+      const cache = createCacheMock();
+      const callback = vi.fn();
+      const detector = new ProcessDetector(
+        "terminal-ttl-boundary",
+        base,
+        100,
+        callback,
+        cache as never
+      );
+      detector.start();
+
+      detector.injectShellCommandEvidence(
+        { agentType: "claude", processIconId: "claude", processName: "claude" },
+        "claude --resume",
+        base
+      );
+      expect(detector.getLastDetected()).toBe("claude");
+
+      // Just past the sticky boundary but well before expiry — shell
+      // evidence still present, just not anchoring off-streak anymore. An
+      // empty tree would demote after hysteresis, but shell is still fresh
+      // in merge logic, so tree sees "agent shell_command" and no demote
+      // fires.
+      vi.setSystemTime(base + 12_001);
+      cache.setChildren(100, []);
+      cache.emitRefresh();
+      cache.emitRefresh();
+      expect(detector.getLastDetected()).toBe("claude");
+
+      // Past absolute expiry — shell evidence cleared on next detect, tree
+      // is empty and healthy, normal off-streak hysteresis runs and commits
+      // no_agent.
+      vi.setSystemTime(base + 30_001);
+      cache.emitRefresh();
+      cache.emitRefresh();
+      expect(detector.getLastDetected()).toBeNull();
+      vi.useRealTimers();
+    });
+
+    it("emits detectionState on the legacy committed callback", () => {
+      const cache = createCacheMock();
+      cache.setChildren(100, [{ pid: 200, comm: "claude", command: "claude --resume" }]);
+      const callback = vi.fn();
+      const detector = new ProcessDetector(
+        "terminal-state-field",
+        Date.now(),
+        100,
+        callback,
+        cache as never
+      );
+      detector.start();
+      cache.emitRefresh();
+
+      expect(callback).toHaveBeenCalledWith(
+        expect.objectContaining({
+          detectionState: "agent",
+          detected: true,
+          evidenceSource: "process_tree",
+        }),
+        expect.any(Number)
+      );
     });
   });
 });
