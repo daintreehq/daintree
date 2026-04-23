@@ -14,8 +14,7 @@ import {
   listAgentSessions,
   clearAgentSessions,
 } from "../../../services/pty/agentSessionHistory.js";
-
-export const COMMAND_DELAY_MS = 100;
+import { waitForShellReady } from "./shellReady.js";
 
 export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): () => void {
   const { ptyClient } = deps;
@@ -186,12 +185,12 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       });
 
       if (safeCommand.length > 0) {
-        // Write the command to stdin after a short delay so the shell has
-        // had time to source its rc files and print the initial prompt.
-        // Short enough that the user doesn't notice; long enough that the
-        // input lands in the shell's line editor rather than being swallowed
-        // by init-time prompts.
-        setTimeout(() => {
+        // Wait for the shell to print its first prompt and go quiet before
+        // injecting the command — a fixed delay races with slow RC files
+        // (oh-my-zsh, p10k, nvm, direnv). Fire-and-forget so the IPC
+        // response returns immediately; `hasTerminal` guards against the
+        // terminal being killed mid-wait.
+        void waitForShellReady(ptyClient, id).then(() => {
           if (!ptyClient.hasTerminal(id)) return;
           if (isAgent && process.platform !== "win32") {
             // Clear any shell init noise so the agent opens to a clean
@@ -201,7 +200,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
             ptyClient.write(id, "printf '\\x1b[H\\x1b[2J\\x1b[3J'\r");
           }
           ptyClient.write(id, `${safeCommand}\r`);
-        }, COMMAND_DELAY_MS);
+        });
       }
 
       return id;

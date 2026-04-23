@@ -85,12 +85,20 @@ function createEmitterPtyClient() {
   });
 }
 
+/**
+ * Drain pending microtasks interleaved with fake-timer advances. Resolving a
+ * Promise from a timer callback queues a microtask that cannot be flushed by
+ * `vi.advanceTimersByTimeAsync` alone, so `.then(...)` bodies (the command
+ * write) may still be pending after the last timer fires. Alternating timer
+ * advances with `await Promise.resolve()` flushes them deterministically.
+ */
+async function flush(ms = 0) {
+  await vi.advanceTimersByTimeAsync(ms);
+  await Promise.resolve();
+  await Promise.resolve();
+}
+
 describe("agent command injection via stdin write", () => {
-  // Under the new "terminals are the unit" model, agent terminals spawn a
-  // plain interactive shell and the agent command is written to stdin after
-  // a short delay — identical to non-agent terminals. This keeps the shell
-  // alive after the agent exits, so Ctrl+C Ctrl+C out of claude no longer
-  // kills the PTY; the shell reclaims the foreground instead.
   const project = { id: "proj-id", name: "Project", path: process.cwd() };
   const originalPlatform = process.platform;
 
@@ -98,7 +106,7 @@ describe("agent command injection via stdin write", () => {
   let cleanup: (() => void) | undefined;
 
   beforeEach(() => {
-    vi.useRealTimers();
+    vi.useFakeTimers();
     vi.clearAllMocks();
     Object.defineProperty(process, "platform", { value: "linux" });
     ptyClient = createEmitterPtyClient();
@@ -112,9 +120,10 @@ describe("agent command injection via stdin write", () => {
     Object.defineProperty(process, "platform", { value: originalPlatform });
     cleanup?.();
     ptyClient.removeAllListeners();
+    vi.useRealTimers();
   });
 
-  it("spawns agent terminal as plain interactive shell and writes command to stdin", async () => {
+  it("waits for a prompt before injecting the agent command", async () => {
     const deps = { ptyClient } as unknown as HandlerDependencies;
     cleanup = registerTerminalLifecycleHandlers(deps);
     const handler = getSpawnHandler();
@@ -129,24 +138,25 @@ describe("agent command injection via stdin write", () => {
 
     expect(ptyClient.spawn).toHaveBeenCalledTimes(1);
     const spawnArgs = ptyClient.spawn.mock.calls[0][1];
-    // No more -lic "exec ..." — the shell is spawned with default args so
-    // it survives the agent exit.
     expect(spawnArgs.args).toBeUndefined();
+    const id = ptyClient.spawn.mock.calls[0][0];
 
-    // After the settle delay, a clear-screen preamble + the agent command
-    // land on stdin. The shell forks the agent as a child process.
-    await vi.waitFor(
-      () => {
-        expect(ptyClient.write).toHaveBeenCalledTimes(2);
-      },
-      { timeout: 500 }
-    );
+    // No prompt yet → no write.
+    await flush(50);
+    expect(ptyClient.write).not.toHaveBeenCalled();
+
+    ptyClient.emit("data", id, "$ ");
+    await flush(199);
+    expect(ptyClient.write).not.toHaveBeenCalled();
+
+    await flush(1);
+    expect(ptyClient.write).toHaveBeenCalledTimes(2);
     const writes = ptyClient.write.mock.calls.map((c) => c[1] as string);
-    expect(writes[0]).toContain("\\x1b[2J"); // clear-screen preamble
+    expect(writes[0]).toContain("\\x1b[2J");
     expect(writes[1]).toBe("claude --dangerously-skip-permissions\r");
   });
 
-  it("non-agent terminal with command uses delayed stdin write (no clear preamble)", async () => {
+  it("tolerates a slow shell (1200ms RC delay) before the first prompt", async () => {
     const deps = { ptyClient } as unknown as HandlerDependencies;
     cleanup = registerTerminalLifecycleHandlers(deps);
     const handler = getSpawnHandler();
@@ -157,18 +167,45 @@ describe("agent command injection via stdin write", () => {
       command: "ls -la",
     });
 
+    const id = ptyClient.spawn.mock.calls[0][0];
+
+    ptyClient.emit("data", id, "loading nvm...\r\n");
+    await flush(600);
+    ptyClient.emit("data", id, "sourcing ~/.zshrc...\r\n");
+    await flush(600);
     expect(ptyClient.write).not.toHaveBeenCalled();
 
-    await vi.waitFor(
-      () => {
-        expect(ptyClient.write).toHaveBeenCalledTimes(1);
-      },
-      { timeout: 500 }
-    );
+    ptyClient.emit("data", id, "$ ");
+    await flush(200);
+    expect(ptyClient.write).toHaveBeenCalledTimes(1);
     expect(ptyClient.write.mock.calls[0][1]).toBe("ls -la\r");
   });
 
-  it("Windows agent terminal writes command to stdin without clear preamble", async () => {
+  it("handles p10k-style two-phase prompt by resetting quiescence", async () => {
+    const deps = { ptyClient } as unknown as HandlerDependencies;
+    cleanup = registerTerminalLifecycleHandlers(deps);
+    const handler = getSpawnHandler();
+
+    await handler({} as Electron.IpcMainInvokeEvent, {
+      cols: 80,
+      rows: 24,
+      command: "echo hi",
+    });
+
+    const id = ptyClient.spawn.mock.calls[0][0];
+
+    ptyClient.emit("data", id, "❯ "); // instant prompt
+    await flush(100);
+    ptyClient.emit("data", id, "\r\n❯ "); // real prompt redraw
+    await flush(100);
+    expect(ptyClient.write).not.toHaveBeenCalled();
+
+    await flush(100);
+    expect(ptyClient.write).toHaveBeenCalledTimes(1);
+    expect(ptyClient.write.mock.calls[0][1]).toBe("echo hi\r");
+  });
+
+  it("Windows agent terminal writes command without clear preamble once shell is ready", async () => {
     Object.defineProperty(process, "platform", { value: "win32" });
 
     const deps = { ptyClient } as unknown as HandlerDependencies;
@@ -183,17 +220,52 @@ describe("agent command injection via stdin write", () => {
       command: "claude",
     });
 
-    const spawnArgs = ptyClient.spawn.mock.calls[0][1];
-    expect(spawnArgs.args).toBeUndefined();
+    const id = ptyClient.spawn.mock.calls[0][0];
 
-    await vi.waitFor(
-      () => {
-        expect(ptyClient.write).toHaveBeenCalledTimes(1);
-      },
-      { timeout: 500 }
-    );
-    // No `; exit` suffix anymore — we want the shell to survive the agent.
+    ptyClient.emit("data", id, "> ");
+    await flush(200);
+    expect(ptyClient.write).toHaveBeenCalledTimes(1);
     expect(ptyClient.write.mock.calls[0][1]).toBe("claude\r");
+  });
+
+  it("skips write when terminal is killed mid-wait", async () => {
+    const deps = { ptyClient } as unknown as HandlerDependencies;
+    cleanup = registerTerminalLifecycleHandlers(deps);
+    const handler = getSpawnHandler();
+
+    await handler({} as Electron.IpcMainInvokeEvent, {
+      cols: 80,
+      rows: 24,
+      kind: "terminal",
+      agentId: "claude",
+      command: "claude",
+    });
+
+    const id = ptyClient.spawn.mock.calls[0][0];
+
+    ptyClient.hasTerminal.mockReturnValue(false);
+    ptyClient.emit("exit", id, 0);
+    await flush(0);
+
+    expect(ptyClient.write).not.toHaveBeenCalled();
+    expect(ptyClient.listenerCount("data")).toBe(0);
+    expect(ptyClient.listenerCount("exit")).toBe(0);
+  });
+
+  it("injects the command via timeout fallback when no prompt ever appears", async () => {
+    const deps = { ptyClient } as unknown as HandlerDependencies;
+    cleanup = registerTerminalLifecycleHandlers(deps);
+    const handler = getSpawnHandler();
+
+    await handler({} as Electron.IpcMainInvokeEvent, {
+      cols: 80,
+      rows: 24,
+      command: "ls",
+    });
+
+    await flush(10_000);
+    expect(ptyClient.write).toHaveBeenCalledTimes(1);
+    expect(ptyClient.write.mock.calls[0][1]).toBe("ls\r");
   });
 
   it("rejects multi-line commands for agent terminals", async () => {
@@ -214,12 +286,16 @@ describe("agent command injection via stdin write", () => {
     expect(ptyClient.spawn).toHaveBeenCalledTimes(1);
     const spawnArgs = ptyClient.spawn.mock.calls[0][1];
     expect(spawnArgs.args).toBeUndefined();
-    // Multi-line commands don't get written to stdin either.
+
+    // Multi-line commands don't get written to stdin; no listeners registered.
+    await flush(10_000);
     expect(ptyClient.write).not.toHaveBeenCalled();
+    expect(ptyClient.listenerCount("data")).toBe(0);
+    expect(ptyClient.listenerCount("exit")).toBe(0);
     consoleSpy.mockRestore();
   });
 
-  it("does not register data/exit listeners for agent terminals", async () => {
+  it("does not register listeners for terminals spawned without a command", async () => {
     const deps = { ptyClient } as unknown as HandlerDependencies;
     cleanup = registerTerminalLifecycleHandlers(deps);
     const handler = getSpawnHandler();
@@ -227,12 +303,10 @@ describe("agent command injection via stdin write", () => {
     await handler({} as Electron.IpcMainInvokeEvent, {
       cols: 80,
       rows: 24,
-      kind: "terminal",
-      agentId: "gemini",
-      command: "gemini chat",
     });
 
     expect(ptyClient.listenerCount("data")).toBe(0);
     expect(ptyClient.listenerCount("exit")).toBe(0);
+    expect(ptyClient.write).not.toHaveBeenCalled();
   });
 });
