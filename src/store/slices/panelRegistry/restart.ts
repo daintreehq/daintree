@@ -742,6 +742,22 @@ export const createRestartActions = (
       }
     }
 
+    // Snapshot pre-mutation identity for rollback on spawn failure. If the
+    // spawn rejects after we kill the old PTY, leaving the optimistic write
+    // in place would falsely mark the panel as fleet-eligible (via the
+    // capability-id fallback to `agentId`) while the PTY is actually dead.
+    const previousIdentity = {
+      kind: terminal.kind,
+      type: terminal.type,
+      agentId: terminal.agentId,
+      title: terminal.title,
+      agentState: terminal.agentState,
+      lastStateChange: terminal.lastStateChange,
+      stateChangeTrigger: terminal.stateChangeTrigger,
+      stateChangeConfidence: terminal.stateChangeConfidence,
+      command: terminal.command,
+    };
+
     try {
       const managedInstance = terminalInstanceService.get(id);
       let spawnCols = terminal.cols || 80;
@@ -846,6 +862,7 @@ export const createRestartActions = (
       set((state) =>
         updateTerminal(state, id, (t) => ({
           ...t,
+          ...previousIdentity,
           isRestarting: false,
           restartError,
         }))

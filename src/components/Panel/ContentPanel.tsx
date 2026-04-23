@@ -6,6 +6,7 @@ import { TitleEditingProvider, useTitleEditing } from "./TitleEditingContext";
 import { TerminalHeaderContent } from "@/components/Terminal/TerminalHeaderContent";
 import { TerminalContextMenu } from "@/components/Terminal/TerminalContextMenu";
 import type { PanelKind, TerminalType, AgentState } from "@/types";
+import type { BuiltInAgentId } from "@shared/config/agentIds";
 import type { ActivityState } from "@/components/Terminal/TerminalPane";
 import type { TabInfo } from "./TabButton";
 import { useDockBlockedState } from "@/components/Layout/useDockBlockedState";
@@ -57,6 +58,8 @@ export interface ContentPanelProps extends BasePanelProps {
   agentId?: string;
   /** Runtime-detected agent identity (cleared on agent exit). Drives panel chrome. */
   detectedAgentId?: string;
+  /** Sealed at spawn for full-mode agent terminals. Absent for runtime-detected agents in plain shells. */
+  capabilityAgentId?: BuiltInAgentId;
   detectedProcessId?: string;
   presetColor?: string;
   agentLaunchFlags?: string[];
@@ -131,6 +134,7 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
     type,
     agentId,
     detectedAgentId,
+    capabilityAgentId,
     detectedProcessId,
     presetColor,
     agentLaunchFlags,
@@ -333,6 +337,7 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
           type={type}
           agentId={agentId}
           detectedAgentId={detectedAgentId}
+          capabilityAgentId={capabilityAgentId}
           detectedProcessId={detectedProcessId}
           presetColor={presetColor}
           agentLaunchFlags={agentLaunchFlags}
