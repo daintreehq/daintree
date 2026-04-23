@@ -12,6 +12,7 @@ import { actionService } from "@/services/ActionService";
 import { isRegisteredPanelKind, panelKindHasPty } from "@shared/config/panelKindRegistry";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
+import { resolveEffectiveAgentId } from "@/utils/agentIdentity";
 import { computeGridSelectedAgentIds } from "./contentGridAgentFilter";
 import {
   ArrowDownFromLine,
@@ -314,9 +315,12 @@ export function TerminalContextMenu({
     [terminal, terminalId]
   );
 
+  // Runtime-detected identity wins over launch-time `agentId`; legacy
+  // `type: "<agent>"` with no `agentId` is kept as a final tail so the
+  // "Convert to" submenu can still highlight the current agent for panels
+  // that predate the identity-normalization pass.
   const currentAgentId =
-    terminal?.detectedAgentId ??
-    terminal?.agentId ??
+    resolveEffectiveAgentId(terminal?.detectedAgentId, terminal?.agentId) ??
     (terminal?.type !== "terminal" ? terminal?.type : null);
   const isPlainTerminal = terminal?.type === "terminal" || terminal?.kind === "terminal";
 

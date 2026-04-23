@@ -37,15 +37,17 @@ vi.mock("@/components/Terminal/TerminalIcon", () => ({
   ),
 }));
 
-const MockAgentIcon = ({ className }: { className?: string }) => (
-  <svg data-testid="agent-icon" className={className} />
+const MockClaudeIcon = ({ className }: { className?: string }) => (
+  <svg data-testid="agent-icon" data-agent="claude" className={className} />
+);
+const MockGeminiIcon = ({ className }: { className?: string }) => (
+  <svg data-testid="agent-icon" data-agent="gemini" className={className} />
 );
 
 vi.mock("@/config/agents", () => ({
   getAgentConfig: (agentId: string) => {
-    if (agentId === "claude" || agentId === "gemini") {
-      return { icon: MockAgentIcon, color: "#ff0000" };
-    }
+    if (agentId === "claude") return { icon: MockClaudeIcon, color: "#ff0000" };
+    if (agentId === "gemini") return { icon: MockGeminiIcon, color: "#00aaff" };
     return undefined;
   },
   isRegisteredAgent: (id: string) => id === "claude" || id === "gemini",
@@ -171,9 +173,10 @@ describe("WorktreeTerminalSection summary icon", () => {
         makeTerminal({ agentId: "claude", detectedAgentId: "gemini" }),
       ],
     });
-    // Both terminals resolve to "gemini" via detectedAgentId, so the shared
-    // icon renders.
-    expect(screen.getByTestId("agent-icon")).toBeDefined();
+    // Distinct mock icons per agent lock in precedence: a swapped-arg regression
+    // (agentId-wins) would surface the Claude icon instead.
+    const icon = screen.getByTestId("agent-icon");
+    expect(icon.getAttribute("data-agent")).toBe("gemini");
   });
 
   it("uses detectedAgentId to classify a plain shell that entered agent mode", () => {
