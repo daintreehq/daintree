@@ -16,6 +16,9 @@ vi.mock("@/clients", () => ({
     onAgentStateChanged: vi.fn(),
     flush: vi.fn().mockResolvedValue(undefined),
   },
+  appClient: {
+    setState: vi.fn().mockResolvedValue(undefined),
+  },
   agentSettingsClient: {
     get: vi.fn().mockResolvedValue(null),
   },
@@ -147,6 +150,24 @@ describe("fleet actions — threshold confirmation", () => {
     expect(pending?.kind).toBe("restart");
   });
 
+  it("fleet.restart and trash ignore observational shells even if stale-armed", async () => {
+    const observedShell = makeAgent("observed", {
+      agentId: undefined,
+      detectedAgentId: "claude",
+      everDetectedAgent: true,
+      agentState: "working",
+    });
+    seedPanels([observedShell]);
+    useFleetArmingStore.getState().armIds(["observed"]);
+    const registry = await buildRegistry();
+
+    await run(registry, "fleet.restart");
+    expect(useFleetPendingActionStore.getState().pending).toBeNull();
+
+    await run(registry, "fleet.trash");
+    expect(usePanelStore.getState().panelsById["observed"]?.location).toBe("grid");
+  });
+
   it("fleet.trash dispatches immediately below the 5-target threshold", async () => {
     const agents = Array.from({ length: 4 }, (_, i) => makeAgent(`a${i}`));
     seedPanels(agents);
@@ -185,6 +206,23 @@ describe("fleet actions — threshold confirmation", () => {
     const calls = write.mock.calls;
     expect(calls.map((c) => c[0]).sort()).toEqual(["a", "c"]);
     for (const c of calls) expect(c[1]).toBe("y\r");
+  });
+
+  it("fleet.accept skips waiting observational shells even if stale-armed", async () => {
+    seedPanels([
+      makeAgent("full", { agentState: "waiting" }),
+      makeAgent("observed", {
+        agentId: undefined,
+        detectedAgentId: "claude",
+        everDetectedAgent: true,
+        agentState: "waiting",
+      }),
+    ]);
+    useFleetArmingStore.getState().armIds(["full", "observed"]);
+    const registry = await buildRegistry();
+    await run(registry, "fleet.accept");
+    const write = terminalClient.write as ReturnType<typeof vi.fn>;
+    expect(write.mock.calls.map((c) => c[0])).toEqual(["full"]);
   });
 
   it("fleet.accept drops terminals that are no longer eligible at dispatch time", async () => {
@@ -263,6 +301,22 @@ describe("fleet actions — threshold confirmation", () => {
     // Confirm and verify only the right subset is interrupted
     await run(registry, "fleet.interrupt", { confirmed: true });
     expect(terminalClient.batchDoubleEscape).toHaveBeenCalledWith(["a", "b", "c"]);
+  });
+
+  it("fleet.interrupt skips working observational shells", async () => {
+    seedPanels([
+      makeAgent("full", { agentState: "working" }),
+      makeAgent("observed", {
+        agentId: undefined,
+        detectedAgentId: "claude",
+        everDetectedAgent: true,
+        agentState: "working",
+      }),
+    ]);
+    useFleetArmingStore.getState().armIds(["full", "observed"]);
+    const registry = await buildRegistry();
+    await run(registry, "fleet.interrupt");
+    expect(terminalClient.batchDoubleEscape).toHaveBeenCalledWith(["full"]);
   });
 });
 

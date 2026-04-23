@@ -1,7 +1,13 @@
 import { z } from "zod";
 import type { ActionRegistry } from "../actionTypes";
 import { usePanelStore } from "@/store/panelStore";
-import { useFleetArmingStore, isFleetArmEligible } from "@/store/fleetArmingStore";
+import {
+  useFleetArmingStore,
+  isFleetArmEligible,
+  isFleetInterruptAgentEligible,
+  isFleetRestartAgentEligible,
+  isFleetWaitingAgentEligible,
+} from "@/store/fleetArmingStore";
 import { useFleetFailureStore } from "@/store/fleetFailureStore";
 import {
   useFleetPendingActionStore,
@@ -14,10 +20,10 @@ import { broadcastFleetLiteralPaste } from "@/components/Fleet/fleetExecution";
 import type { TerminalInstance } from "@shared/types";
 
 interface ArmedSnapshot {
-  liveTerminals: TerminalInstance[];
-  waitingTerminals: TerminalInstance[];
-  interruptCandidates: TerminalInstance[];
-  sessionLossCount: number;
+  terminalTargets: TerminalInstance[];
+  waitingAgentTargets: TerminalInstance[];
+  interruptAgentTargets: TerminalInstance[];
+  restartAgentTargets: TerminalInstance[];
 }
 
 /**
@@ -29,28 +35,23 @@ interface ArmedSnapshot {
  */
 function snapshotArmed(): ArmedSnapshot {
   const armedIds = useFleetArmingStore.getState().armedIds;
-  const liveTerminals: TerminalInstance[] = [];
-  const waitingTerminals: TerminalInstance[] = [];
-  const interruptCandidates: TerminalInstance[] = [];
-  let sessionLossCount = 0;
+  const terminalTargets: TerminalInstance[] = [];
+  const waitingAgentTargets: TerminalInstance[] = [];
+  const interruptAgentTargets: TerminalInstance[] = [];
+  const restartAgentTargets: TerminalInstance[] = [];
   if (armedIds.size === 0) {
-    return { liveTerminals, waitingTerminals, interruptCandidates, sessionLossCount };
+    return { terminalTargets, waitingAgentTargets, interruptAgentTargets, restartAgentTargets };
   }
   const { panelsById } = usePanelStore.getState();
   for (const id of armedIds) {
     const t = panelsById[id];
     if (!isFleetArmEligible(t)) continue;
-    liveTerminals.push(t);
-    if (t.agentState === "waiting") waitingTerminals.push(t);
-    // Interrupt only makes sense for agents that are actually doing
-    // something — sending ESC ESC to a completed/idle/exited agent is
-    // either a no-op or a spurious keystroke.
-    if (t.agentState === "working" || t.agentState === "waiting") {
-      interruptCandidates.push(t);
-    }
-    if (t.agentSessionId) sessionLossCount++;
+    terminalTargets.push(t);
+    if (isFleetWaitingAgentEligible(t)) waitingAgentTargets.push(t);
+    if (isFleetInterruptAgentEligible(t)) interruptAgentTargets.push(t);
+    if (isFleetRestartAgentEligible(t)) restartAgentTargets.push(t);
   }
-  return { liveTerminals, waitingTerminals, interruptCandidates, sessionLossCount };
+  return { terminalTargets, waitingAgentTargets, interruptAgentTargets, restartAgentTargets };
 }
 
 const confirmedArgsSchema = z.object({ confirmed: z.boolean().optional() }).optional();
@@ -61,11 +62,15 @@ function parseConfirmed(args: unknown): boolean {
   return confirmed === true;
 }
 
-function requestConfirmation(kind: FleetPendingActionKind, snapshot: ArmedSnapshot): void {
+function countSessionLoss(targets: TerminalInstance[]): number {
+  return targets.filter((t) => Boolean(t.agentSessionId)).length;
+}
+
+function requestConfirmation(kind: FleetPendingActionKind, targets: TerminalInstance[]): void {
   useFleetPendingActionStore.getState().request({
     kind,
-    targetCount: snapshot.liveTerminals.length,
-    sessionLossCount: snapshot.sessionLossCount,
+    targetCount: targets.length,
+    sessionLossCount: countSessionLoss(targets),
   });
 }
 
@@ -88,9 +93,9 @@ export function registerFleetActions(actions: ActionRegistry): void {
     scope: "renderer",
     run: async () => {
       const snap = snapshotArmed();
-      if (snap.waitingTerminals.length === 0) return;
+      if (snap.waitingAgentTargets.length === 0) return;
       await Promise.allSettled(
-        snap.waitingTerminals.map((t) => {
+        snap.waitingAgentTargets.map((t) => {
           try {
             // Write literal "y\r" so CLI prompts like "Continue? [y/N]"
             // receive an explicit affirmative rather than the default.
@@ -120,23 +125,23 @@ export function registerFleetActions(actions: ActionRegistry): void {
       // reject — we fall through so the global shortcut still opens the
       // palette; otherwise this hotkey would silently swallow Cmd+N.
       const snap = snapshotArmed();
-      if (snap.waitingTerminals.length === 0) {
+      if (snap.waitingAgentTargets.length === 0) {
         const { actionService } = await import("@/services/ActionService");
         await actionService.dispatch("panel.palette", undefined, { source: "keybinding" });
         return;
       }
       const confirmed = parseConfirmed(args);
-      if (!confirmed && snap.waitingTerminals.length >= 5) {
+      if (!confirmed && snap.waitingAgentTargets.length >= 5) {
         useFleetPendingActionStore.getState().request({
           kind: "reject",
-          targetCount: snap.waitingTerminals.length,
-          sessionLossCount: snap.sessionLossCount,
+          targetCount: snap.waitingAgentTargets.length,
+          sessionLossCount: countSessionLoss(snap.waitingAgentTargets),
         });
         return;
       }
       clearPendingIf("reject");
       await Promise.allSettled(
-        snap.waitingTerminals.map((t) => {
+        snap.waitingAgentTargets.map((t) => {
           try {
             terminalClient.write(t.id, "n\r");
             return Promise.resolve();
@@ -152,7 +157,7 @@ export function registerFleetActions(actions: ActionRegistry): void {
     id: "fleet.interrupt",
     title: "Fleet: Interrupt",
     description:
-      "Send double-Escape to armed working/waiting/running agents. Confirms when 3+ targets.",
+      "Send double-Escape to armed working/waiting full agent terminals. Confirms when 3+ targets.",
     category: "terminal",
     kind: "command",
     danger: "safe",
@@ -162,14 +167,14 @@ export function registerFleetActions(actions: ActionRegistry): void {
       const snap = snapshotArmed();
       // Double-Escape is only meaningful for agents that are actually
       // mid-work — completed/exited/idle get filtered out at dispatch.
-      const targets = snap.interruptCandidates;
+      const targets = snap.interruptAgentTargets;
       if (targets.length === 0) return;
       const confirmed = parseConfirmed(args);
       if (!confirmed && targets.length >= 3) {
         useFleetPendingActionStore.getState().request({
           kind: "interrupt",
           targetCount: targets.length,
-          sessionLossCount: snap.sessionLossCount,
+          sessionLossCount: countSessionLoss(targets),
         });
         return;
       }
@@ -189,14 +194,15 @@ export function registerFleetActions(actions: ActionRegistry): void {
     argsSchema: confirmedArgsSchema,
     run: async (args: unknown) => {
       const snap = snapshotArmed();
-      if (snap.liveTerminals.length === 0) return;
+      const targets = snap.restartAgentTargets;
+      if (targets.length === 0) return;
       const confirmed = parseConfirmed(args);
       if (!confirmed) {
-        requestConfirmation("restart", snap);
+        requestConfirmation("restart", targets);
         return;
       }
       clearPendingIf("restart");
-      const ids = new Set(snap.liveTerminals.map((t) => t.id));
+      const ids = new Set(targets.map((t) => t.id));
       await usePanelStore.getState().bulkRestartSet(ids);
     },
   }));
@@ -213,14 +219,15 @@ export function registerFleetActions(actions: ActionRegistry): void {
     argsSchema: confirmedArgsSchema,
     run: async (args: unknown) => {
       const snap = snapshotArmed();
-      if (snap.liveTerminals.length === 0) return;
+      const targets = snap.terminalTargets;
+      if (targets.length === 0) return;
       const confirmed = parseConfirmed(args);
       if (!confirmed) {
-        requestConfirmation("kill", snap);
+        requestConfirmation("kill", targets);
         return;
       }
       clearPendingIf("kill");
-      const ids = new Set(snap.liveTerminals.map((t) => t.id));
+      const ids = new Set(targets.map((t) => t.id));
       usePanelStore.getState().bulkKillSet(ids);
       useFleetArmingStore.getState().clear();
     },
@@ -237,14 +244,15 @@ export function registerFleetActions(actions: ActionRegistry): void {
     argsSchema: confirmedArgsSchema,
     run: async (args: unknown) => {
       const snap = snapshotArmed();
-      if (snap.liveTerminals.length === 0) return;
+      const targets = snap.terminalTargets;
+      if (targets.length === 0) return;
       const confirmed = parseConfirmed(args);
-      if (!confirmed && snap.liveTerminals.length >= 5) {
-        requestConfirmation("trash", snap);
+      if (!confirmed && targets.length >= 5) {
+        requestConfirmation("trash", targets);
         return;
       }
       clearPendingIf("trash");
-      const ids = new Set(snap.liveTerminals.map((t) => t.id));
+      const ids = new Set(targets.map((t) => t.id));
       usePanelStore.getState().bulkTrashSet(ids);
       useFleetArmingStore.getState().clear();
     },
@@ -308,7 +316,7 @@ export function registerFleetActions(actions: ActionRegistry): void {
     id: "fleet.armMatchingFilter",
     title: "Fleet: Arm Agents Matching Filter",
     description:
-      "Arm all eligible agent terminals whose worktree is in the provided set — drives the sidebar 'Arm N matching' affordance",
+      "Arm all eligible full agent terminals whose worktree is in the provided set — drives the sidebar 'Arm N matching' affordance",
     category: "terminal",
     kind: "command",
     danger: "safe",
@@ -324,7 +332,7 @@ export function registerFleetActions(actions: ActionRegistry): void {
     id: "fleet.armFocused",
     title: "Fleet: Toggle Arm Focused Pane",
     description:
-      "Toggle fleet membership on the focused agent terminal — keyboard equivalent of ⌘/⇧-clicking pane chrome",
+      "Toggle fleet membership on the focused full agent terminal — keyboard equivalent of ⌘/⇧-clicking pane chrome",
     category: "terminal",
     kind: "command",
     danger: "safe",

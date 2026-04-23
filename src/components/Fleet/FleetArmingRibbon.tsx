@@ -24,7 +24,6 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { useFleetLiveBroadcast } from "./useFleetLiveBroadcast";
 
 const DOUBLE_ESC_WINDOW_MS = 350;
 
@@ -68,8 +67,8 @@ export function FleetArmingRibbon(): ReactElement | null {
   const pending = useFleetPendingActionStore((s) => s.pending);
   const clearPending = useFleetPendingActionStore((s) => s.clear);
 
-  // Pending broadcast that needs user confirmation — fed by both the live
-  // paste handler and Enter-broadcast from a fleet primary's input bar.
+  // Pending broadcast that needs user confirmation — fed by Enter-broadcast
+  // from a fleet primary's hybrid input bar.
   const pendingBroadcast = useFleetBroadcastConfirmStore((s) => s.pending);
   const clearPendingBroadcast = useFleetBroadcastConfirmStore((s) => s.clear);
 
@@ -77,8 +76,6 @@ export function FleetArmingRibbon(): ReactElement | null {
   const [isSendingBroadcast, setIsSendingBroadcast] = useState(false);
   const pasteCancelRef = useRef<HTMLButtonElement | null>(null);
   const reduceMotion = useReducedMotion();
-
-  useFleetLiveBroadcast({ enabled: armedCount >= 2 });
 
   useEffect(() => {
     if (pendingBroadcast !== null) {

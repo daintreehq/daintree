@@ -199,25 +199,6 @@ export async function executeFleetBroadcast(
 }
 
 /**
- * Fire-and-forget fan-out of a raw terminal byte sequence to each target.
- * One renderer→main IPC message; the pty-host fans out to every PTY in a
- * tight loop. Cuts fan-out latency on large fleets (10+ panes) where the
- * per-keystroke N×IPC cost starts to be felt.
- *
- * Used by the live keystroke capture — keys like Enter (`\r`), Backspace
- * (`\x7f`), or arrow-key CSI sequences go straight to the PTY without
- * recipe-variable substitution or bracketed-paste wrapping.
- *
- * Targets are re-resolved fresh when omitted so trashed/exited terminals
- * drop out silently between keystrokes.
- */
-export function broadcastFleetKeySequence(sequence: string, targetIds?: string[]): void {
-  const ids = targetIds ?? resolveFleetBroadcastTargetIds();
-  if (ids.length === 0) return;
-  terminalClient.broadcast(ids, sequence);
-}
-
-/**
  * Literal broadcast for pasted text — routes each target through
  * `terminalClient.submit` so the backend wraps the payload in bracketed paste
  * (`\e[200~…\e[201~`) when the PTY supports it. Skips recipe-variable

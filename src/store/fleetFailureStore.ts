@@ -12,14 +12,10 @@ import { useFleetArmingStore } from "@/store/fleetArmingStore";
  * about a single in-flight broadcast; carrying them across reloads would
  * surface stale state for an action the user already moved past.
  *
- * Two callers populate this store:
- *   - `confirmPendingPaste` in FleetArmingRibbon (destructive paste path)
- *   - `useFleetLiveBroadcast.handlePaste` (live paste path)
- *
- * Raw keystroke fan-out (`broadcastFleetKeySequence`) is intentionally NOT
- * tracked: it uses a one-shot IPC fire-and-forget, and per-keystroke
- * EPIPE/EBADF surface naturally via the panel-state subscription that
- * prunes ineligible terminals.
+ * `confirmPendingPaste` in FleetArmingRibbon is the active caller. Fleet
+ * input is routed through hybrid-input broadcast; the old direct xterm live
+ * broadcast path is intentionally not mounted because Fleet does not treat
+ * every live agent PTY as a peer terminal.
  */
 export interface FleetFailureSnapshot {
   /** Per-target ids that rejected the broadcast. */

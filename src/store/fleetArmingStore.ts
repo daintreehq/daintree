@@ -8,6 +8,16 @@ import {
 import { setFleetArmingClear } from "@/store/projectStore";
 import type { TerminalInstance } from "@shared/types";
 import type { AgentState } from "@/types";
+import { isAgentFleetActionEligible } from "./fleetEligibility";
+
+export {
+  isAgentFleetActionEligible,
+  isFleetInterruptAgentEligible,
+  isFleetRestartAgentEligible,
+  isFleetWaitingAgentEligible,
+  isTerminalFleetEligible,
+  resolveFleetAgentCapabilityId,
+} from "./fleetEligibility";
 
 export type FleetArmStatePreset = "working" | "waiting" | "finished";
 export type FleetArmScope = "current" | "all";
@@ -49,15 +59,7 @@ function matchesPreset(state: AgentState | null | undefined, preset: FleetArmSta
 }
 
 export function isFleetArmEligible(t: TerminalInstance | undefined): t is TerminalInstance {
-  if (!t) return false;
-  if (t.location === "trash" || t.location === "background") return false;
-  if (t.hasPty === false) return false;
-  // `runtimeStatus` is the authoritative liveness signal on the renderer
-  // (`hasPty` is only set by backend snapshots/reconnect and can lag for
-  // exited panels that are kept for review). Exclude terminals whose PTY
-  // has already died so bulk Fleet actions don't target dead shells.
-  if (t.runtimeStatus === "exited" || t.runtimeStatus === "error") return false;
-  return true;
+  return isAgentFleetActionEligible(t);
 }
 
 /**

@@ -1,5 +1,13 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { useFleetArmingStore, isFleetArmEligible } from "../fleetArmingStore";
+import {
+  useFleetArmingStore,
+  isFleetArmEligible,
+  isAgentFleetActionEligible,
+  isFleetInterruptAgentEligible,
+  isFleetRestartAgentEligible,
+  isFleetWaitingAgentEligible,
+  resolveFleetAgentCapabilityId,
+} from "../fleetArmingStore";
 import { usePanelStore } from "../panelStore";
 import { useWorktreeSelectionStore } from "../worktreeStore";
 import type { TerminalInstance } from "@shared/types";
@@ -193,16 +201,15 @@ describe("fleetArmingStore", () => {
       expect([...useFleetArmingStore.getState().armedIds]).toEqual(["t1"]);
     });
 
-    it("includes plain terminals whose agentState matches the preset", () => {
-      // Terminals are the unit: plain terminals with a matching agentState
-      // (e.g. a shell command that set an ambient working state) arm like
-      // any other terminal. Agent provenance is no longer a gate.
+    it("excludes plain terminals whose agentState matches the preset", () => {
+      // Fleet is hybrid-input based. A plain shell can report an ambient state,
+      // but it is not a full agent terminal and must not enter the fleet.
       seedPanels([
         makeAgentTerminal("a1", { agentState: "working" }),
         makeAgentTerminal("p1", { agentState: "working", kind: "terminal", agentId: undefined }),
       ]);
       useFleetArmingStore.getState().armByState("working", "current", false);
-      expect([...useFleetArmingStore.getState().armedIds].sort()).toEqual(["a1", "p1"]);
+      expect([...useFleetArmingStore.getState().armedIds]).toEqual(["a1"]);
     });
   });
 
@@ -223,9 +230,9 @@ describe("fleetArmingStore", () => {
       expect([...useFleetArmingStore.getState().armedIds].sort()).toEqual(["a1", "a2"]);
     });
 
-    it("includes every live terminal — agents, detected agents, and plain shells", () => {
-      // "Terminals are the unit": a plain terminal with no agent provenance is
-      // still fleet-eligible. Only trash/background/no-PTY filter out.
+    it("arms full agent terminals and excludes observed/plain shells", () => {
+      // Fleet broadcasts through HybridInputBar. Runtime-observed shells and
+      // plain shells have live PTYs, but they are not full agent terminals.
       seedPanels([
         makeAgentTerminal("a1"),
         makeAgentTerminal("p1", {
@@ -241,7 +248,7 @@ describe("fleetArmingStore", () => {
         makeAgentTerminal("p3", { kind: "terminal", agentId: undefined }),
       ]);
       useFleetArmingStore.getState().armAll("current");
-      expect([...useFleetArmingStore.getState().armedIds].sort()).toEqual(["a1", "p1", "p2", "p3"]);
+      expect([...useFleetArmingStore.getState().armedIds]).toEqual(["a1"]);
     });
   });
 
@@ -257,8 +264,6 @@ describe("fleetArmingStore", () => {
     });
 
     it("skips ineligible panels even when worktree matches", () => {
-      // Ineligibility is now purely structural: trash, background, or no PTY.
-      // Plain terminals (a5) are eligible and must be included.
       seedPanels([
         makeAgentTerminal("a1", { worktreeId: "wt-1" }),
         makeAgentTerminal("a2", { worktreeId: "wt-1", location: "trash" }),
@@ -271,7 +276,7 @@ describe("fleetArmingStore", () => {
         }),
       ]);
       useFleetArmingStore.getState().armMatchingFilter(["wt-1"]);
-      expect([...useFleetArmingStore.getState().armedIds].sort()).toEqual(["a1", "a5"]);
+      expect([...useFleetArmingStore.getState().armedIds]).toEqual(["a1"]);
     });
 
     it("empty worktreeIds is a no-op and preserves any prior armed set", () => {
@@ -332,7 +337,7 @@ describe("fleetArmingStore", () => {
       expect(useFleetArmingStore.getState().armOrder).toEqual(["a1", "a2"]);
     });
 
-    it("includes plain terminals with runtime-detected agent identity", () => {
+    it("excludes plain terminals with runtime-detected agent identity", () => {
       seedPanels([
         makeAgentTerminal("a1", { worktreeId: "wt-1" }),
         makeAgentTerminal("p1", {
@@ -349,7 +354,7 @@ describe("fleetArmingStore", () => {
         }),
       ]);
       useFleetArmingStore.getState().armMatchingFilter(["wt-1"]);
-      expect([...useFleetArmingStore.getState().armedIds].sort()).toEqual(["a1", "p1", "p2"]);
+      expect([...useFleetArmingStore.getState().armedIds]).toEqual(["a1"]);
     });
 
     it("is fully idempotent — repeated calls preserve armOrder, armOrderById, and lastArmedId", () => {
@@ -443,18 +448,19 @@ describe("fleetArmingStore", () => {
       expect(isFleetArmEligible(makeAgentTerminal("a", { runtimeStatus: "error" }))).toBe(false);
     });
 
-    it("accepts plain terminals with no agent provenance", () => {
-      // "Terminals are the unit": a shell is a first-class fleet member.
+    it("rejects plain terminals with no agent provenance", () => {
+      // Fleet peers are full agent terminals because broadcast happens through
+      // the hybrid-input surface, not arbitrary shell PTYs.
       expect(
         isFleetArmEligible(makeAgentTerminal("a", { kind: "terminal", agentId: undefined }))
-      ).toBe(true);
+      ).toBe(false);
     });
 
     it("rejects undefined", () => {
       expect(isFleetArmEligible(undefined)).toBe(false);
     });
 
-    it("accepts a plain terminal currently running a detected agent", () => {
+    it("rejects a plain terminal currently running a detected agent", () => {
       expect(
         isFleetArmEligible(
           makeAgentTerminal("a", {
@@ -463,10 +469,10 @@ describe("fleetArmingStore", () => {
             detectedAgentId: "claude",
           })
         )
-      ).toBe(true);
+      ).toBe(false);
     });
 
-    it("accepts a plain terminal that has ever run an agent this session", () => {
+    it("rejects a plain terminal that has ever run an agent this session", () => {
       expect(
         isFleetArmEligible(
           makeAgentTerminal("a", {
@@ -475,13 +481,10 @@ describe("fleetArmingStore", () => {
             everDetectedAgent: true,
           })
         )
-      ).toBe(true);
+      ).toBe(false);
     });
 
-    it("remains eligible after detectedAgentId clears when everDetectedAgent is sticky", () => {
-      // Sticky rule: once a panel has ever run an agent, it stays fleet-eligible
-      // even after the live process exits. Prevents the armed set from collapsing
-      // mid-operation when agents bounce.
+    it("stays ineligible after detectedAgentId clears when everDetectedAgent is sticky", () => {
       expect(
         isFleetArmEligible(
           makeAgentTerminal("a", {
@@ -491,7 +494,7 @@ describe("fleetArmingStore", () => {
             everDetectedAgent: true,
           })
         )
-      ).toBe(true);
+      ).toBe(false);
     });
 
     it("trash guard beats runtime-detected identity", () => {
@@ -519,6 +522,65 @@ describe("fleetArmingStore", () => {
           })
         )
       ).toBe(false);
+    });
+  });
+
+  describe("agent Fleet action eligibility", () => {
+    it("treats launch-time built-in agent identity as full agent capability", () => {
+      const terminal = makeAgentTerminal("a", { agentId: "claude" });
+      expect(resolveFleetAgentCapabilityId(terminal)).toBe("claude");
+      expect(isAgentFleetActionEligible(terminal)).toBe(true);
+      expect(isFleetRestartAgentEligible(terminal)).toBe(true);
+    });
+
+    it("uses explicit capabilityAgentId when #5804 starts writing it", () => {
+      const terminal = makeAgentTerminal("a", {
+        agentId: undefined,
+        capabilityAgentId: "codex",
+      });
+      expect(resolveFleetAgentCapabilityId(terminal)).toBe("codex");
+      expect(isAgentFleetActionEligible(terminal)).toBe(true);
+    });
+
+    it("keeps runtime-detected plain shells out of Fleet membership and actions", () => {
+      const observedShell = makeAgentTerminal("a", {
+        agentId: undefined,
+        detectedAgentId: "claude",
+        everDetectedAgent: true,
+      });
+      expect(isFleetArmEligible(observedShell)).toBe(false);
+      expect(resolveFleetAgentCapabilityId(observedShell)).toBeUndefined();
+      expect(isAgentFleetActionEligible(observedShell)).toBe(false);
+      expect(isFleetWaitingAgentEligible({ ...observedShell, agentState: "waiting" })).toBe(false);
+      expect(isFleetInterruptAgentEligible({ ...observedShell, agentState: "working" })).toBe(
+        false
+      );
+    });
+
+    it("does not treat plugin or unknown launch identity as built-in agent capability", () => {
+      const pluginTerminal = makeAgentTerminal("a", { agentId: "custom-agent" });
+      expect(isFleetArmEligible(pluginTerminal)).toBe(false);
+      expect(resolveFleetAgentCapabilityId(pluginTerminal)).toBeUndefined();
+      expect(isAgentFleetActionEligible(pluginTerminal)).toBe(false);
+    });
+
+    it("still applies structural liveness guards to agent-capable terminals", () => {
+      expect(isAgentFleetActionEligible(makeAgentTerminal("a", { location: "trash" }))).toBe(false);
+      expect(isAgentFleetActionEligible(makeAgentTerminal("a", { hasPty: false }))).toBe(false);
+      expect(isAgentFleetActionEligible(makeAgentTerminal("a", { runtimeStatus: "exited" }))).toBe(
+        false
+      );
+    });
+
+    it("classifies waiting and interrupt candidates only for full agent terminals", () => {
+      const waiting = makeAgentTerminal("a", { agentState: "waiting" });
+      const working = makeAgentTerminal("b", { agentState: "working" });
+      const idle = makeAgentTerminal("c", { agentState: "idle" });
+      expect(isFleetWaitingAgentEligible(waiting)).toBe(true);
+      expect(isFleetInterruptAgentEligible(waiting)).toBe(true);
+      expect(isFleetInterruptAgentEligible(working)).toBe(true);
+      expect(isFleetWaitingAgentEligible(working)).toBe(false);
+      expect(isFleetInterruptAgentEligible(idle)).toBe(false);
     });
   });
 

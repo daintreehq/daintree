@@ -7,12 +7,10 @@ import {
   FLEET_DESTRUCTIVE_RE,
   FLEET_LARGE_PASTE_BATCH_SIZE,
   FLEET_LARGE_PASTE_BYTE_THRESHOLD,
-  areAgentStatesBroadcastCompatible,
   buildFleetBroadcastRecipeContext,
   getFleetBroadcastByteLength,
   getFleetBroadcastWarnings,
   needsFleetBroadcastConfirmation,
-  resolveFleetBroadcastByOrigin,
   resolveFleetBroadcastTargetIds,
 } from "../fleetBroadcast";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
@@ -229,7 +227,7 @@ describe("resolveFleetBroadcastTargetIds", () => {
     expect(resolveFleetBroadcastTargetIds()).toEqual(["a"]);
   });
 
-  it("includes a plain terminal running a detected agent", () => {
+  it("excludes a plain terminal running a detected agent", () => {
     seedPanels([
       makeAgent("a"),
       makeAgent("p", {
@@ -239,10 +237,10 @@ describe("resolveFleetBroadcastTargetIds", () => {
       }),
     ]);
     useFleetArmingStore.getState().armIds(["a", "p"]);
-    expect(resolveFleetBroadcastTargetIds()).toEqual(["a", "p"]);
+    expect(resolveFleetBroadcastTargetIds()).toEqual(["a"]);
   });
 
-  it("keeps a plain terminal armed after detected agent exits (sticky everDetectedAgent)", () => {
+  it("excludes a plain terminal after detected agent exits", () => {
     seedPanels([
       makeAgent("a"),
       makeAgent("p", {
@@ -253,96 +251,7 @@ describe("resolveFleetBroadcastTargetIds", () => {
       }),
     ]);
     useFleetArmingStore.getState().armIds(["a", "p"]);
-    expect(resolveFleetBroadcastTargetIds()).toEqual(["a", "p"]);
-  });
-});
-
-describe("areAgentStatesBroadcastCompatible", () => {
-  it("treats completed and exited as one group", () => {
-    expect(areAgentStatesBroadcastCompatible("completed", "exited")).toBe(true);
-  });
-  it("keeps waiting and idle distinct", () => {
-    expect(areAgentStatesBroadcastCompatible("waiting", "idle")).toBe(false);
-    expect(areAgentStatesBroadcastCompatible("waiting", "waiting")).toBe(true);
-  });
-  it("keeps waiting distinct from working", () => {
-    expect(areAgentStatesBroadcastCompatible("waiting", "working")).toBe(false);
-  });
-  it("treats two unknown states as compatible (non-agent panes)", () => {
-    expect(areAgentStatesBroadcastCompatible(null, undefined)).toBe(true);
-  });
-  it("treats unknown vs known as incompatible", () => {
-    expect(areAgentStatesBroadcastCompatible(null, "waiting")).toBe(false);
-  });
-});
-
-describe("resolveFleetBroadcastByOrigin", () => {
-  beforeEach(() => {
-    resetStores();
-  });
-
-  it("returns empty matched and diverged when nothing armed", () => {
-    expect(resolveFleetBroadcastByOrigin("anything")).toEqual({ matched: [], diverged: [] });
-  });
-
-  it("excludes the origin pane from matched", () => {
-    seedPanels([
-      makeAgent("a", { agentState: "waiting" }),
-      makeAgent("b", { agentState: "waiting" }),
-    ]);
-    useFleetArmingStore.getState().armIds(["a", "b"]);
-    const result = resolveFleetBroadcastByOrigin("a");
-    expect(result.matched).toEqual(["b"]);
-    expect(result.diverged).toEqual([]);
-  });
-
-  it("partitions peers by state-group compatibility against the origin", () => {
-    seedPanels([
-      makeAgent("origin", { agentState: "waiting" }),
-      makeAgent("peer-waiting", { agentState: "waiting" }),
-      makeAgent("peer-working", { agentState: "working" }),
-      makeAgent("peer-idle", { agentState: "idle" }),
-    ]);
-    useFleetArmingStore.getState().armIds(["origin", "peer-waiting", "peer-working", "peer-idle"]);
-    const result = resolveFleetBroadcastByOrigin("origin");
-    expect(result.matched).toEqual(["peer-waiting"]);
-    expect(result.diverged.sort()).toEqual(["peer-idle", "peer-working"]);
-  });
-
-  it("groups completed and exited peers when origin is completed", () => {
-    seedPanels([
-      makeAgent("origin", { agentState: "completed" }),
-      makeAgent("peer-exited", { agentState: "exited" }),
-      makeAgent("peer-waiting", { agentState: "waiting" }),
-    ]);
-    useFleetArmingStore.getState().armIds(["origin", "peer-exited", "peer-waiting"]);
-    const result = resolveFleetBroadcastByOrigin("origin");
-    expect(result.matched).toEqual(["peer-exited"]);
-    expect(result.diverged).toEqual(["peer-waiting"]);
-  });
-
-  it("drops trashed/background peers from both matched and diverged", () => {
-    seedPanels([
-      makeAgent("origin", { agentState: "waiting" }),
-      makeAgent("ok", { agentState: "waiting" }),
-      makeAgent("trashed", { agentState: "waiting", location: "trash" }),
-      makeAgent("noPty", { agentState: "waiting", hasPty: false }),
-    ]);
-    useFleetArmingStore.getState().armIds(["origin", "ok", "trashed", "noPty"]);
-    const result = resolveFleetBroadcastByOrigin("origin");
-    expect(result.matched).toEqual(["ok"]);
-    expect(result.diverged).toEqual([]);
-  });
-
-  it("preserves armOrder ordering for matched peers", () => {
-    seedPanels([
-      makeAgent("a", { agentState: "waiting" }),
-      makeAgent("b", { agentState: "waiting" }),
-      makeAgent("c", { agentState: "waiting" }),
-    ]);
-    useFleetArmingStore.getState().armIds(["c", "a", "b"]);
-    const result = resolveFleetBroadcastByOrigin("a");
-    expect(result.matched).toEqual(["c", "b"]);
+    expect(resolveFleetBroadcastTargetIds()).toEqual(["a"]);
   });
 });
 
