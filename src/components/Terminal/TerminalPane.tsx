@@ -268,10 +268,12 @@ function TerminalPaneComponent({
   }, [isRestartingService]);
   const hybridInputEnabled = useTerminalInputStore((state) => state.hybridInputEnabled);
   const hybridInputAutoFocus = useTerminalInputStore((state) => state.hybridInputAutoFocus);
+  // Effective agent identity for chrome (icons, badges, presets) — prefers
+  // runtime-detected over launch-intent so chrome reflects what's actually
+  // running. Distinct from `capabilityAgentId`, which gates session-only
+  // features and never includes runtime-detected agents.
   const effectiveAgentId = (resolveEffectiveAgentId(detectedAgentId, agentId) ??
     (type && isRegisteredAgent(type) ? type : undefined)) as BuiltInAgentId | undefined;
-  // @ts-expect-error kept for clarity about capability mode logic (#5804)
-  const isAgentTerminal = effectiveAgentId !== undefined;
   // HybridInputBar is gated on capability mode (#5804), not on
   // `effectiveAgentId`. Cold-launched agent terminals get the bar; plain shells
   // where an agent was merely detected at runtime do not — those terminals lack

@@ -164,7 +164,9 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
   };
   handlers.push(typedHandle(CHANNELS.TERMINAL_REPLAY_HISTORY, handleTerminalReplayHistory));
 
-  const handleTerminalGetForProject = async (projectId: string) => {
+  const handleTerminalGetForProject = async (
+    projectId: string
+  ): Promise<import("../../../../shared/types/ipc.js").BackendTerminalInfo[]> => {
     try {
       if (typeof projectId !== "string" || !projectId) {
         throw new Error("Invalid project ID: must be a non-empty string");
@@ -172,7 +174,7 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
 
       const terminalIds = await ptyClient.getTerminalsForProjectAsync(projectId);
 
-      const terminals = [];
+      const terminals: import("../../../../shared/types/ipc.js").BackendTerminalInfo[] = [];
       for (const id of terminalIds) {
         const terminal = await ptyClient.getTerminalAsync(id);
         // Dev preview and help PTYs should not be rehydrated as generic terminal
@@ -190,9 +192,7 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
             agentId: terminal.agentId,
             title: terminal.title,
             cwd: terminal.cwd,
-            worktreeId: terminal.worktreeId,
             agentState: terminal.agentState,
-            waitingReason: terminal.waitingReason,
             lastStateChange: terminal.lastStateChange,
             spawnedAt: terminal.spawnedAt,
             isTrashed: terminal.isTrashed,
@@ -228,7 +228,9 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
   };
   handlers.push(typedHandle(CHANNELS.TERMINAL_GET_FOR_PROJECT, handleTerminalGetForProject));
 
-  const handleTerminalGetAvailable = async () => {
+  const handleTerminalGetAvailable = async (): Promise<
+    import("../../../../shared/types/ipc.js").BackendTerminalInfo[]
+  > => {
     try {
       const terminals = await ptyClient.getAvailableTerminalsAsync();
 
@@ -268,7 +270,9 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
   };
   handlers.push(typedHandle(CHANNELS.TERMINAL_GET_AVAILABLE, handleTerminalGetAvailable));
 
-  const handleTerminalGetByState = async (state: string) => {
+  const handleTerminalGetByState = async (
+    state: string
+  ): Promise<import("../../../../shared/types/ipc.js").BackendTerminalInfo[]> => {
     try {
       if (typeof state !== "string" || !state) {
         throw new Error("Invalid state: must be a non-empty string");
@@ -319,7 +323,9 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
   };
   handlers.push(typedHandle(CHANNELS.TERMINAL_GET_BY_STATE, handleTerminalGetByState));
 
-  const handleTerminalGetAll = async () => {
+  const handleTerminalGetAll = async (): Promise<
+    import("../../../../shared/types/ipc.js").BackendTerminalInfo[]
+  > => {
     try {
       const terminals = await ptyClient.getAllTerminalsAsync();
 
@@ -359,7 +365,9 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
   };
   handlers.push(typedHandle(CHANNELS.TERMINAL_GET_ALL, handleTerminalGetAll));
 
-  const handleTerminalReconnect = async (terminalId: string) => {
+  const handleTerminalReconnect = async (
+    terminalId: string
+  ): Promise<import("../../../../shared/types/ipc.js").TerminalReconnectResult> => {
     try {
       if (typeof terminalId !== "string" || !terminalId) {
         throw new Error("Invalid terminal ID: must be a non-empty string");
@@ -369,12 +377,12 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
 
       if (!terminal) {
         logWarn(`terminal:reconnect: Terminal ${terminalId} not found`);
-        return { exists: false, error: "Terminal not found in backend" };
+        return { exists: false };
       }
 
       if (getAgentAvailabilityStore().isHelpTerminal(terminal.id)) {
         logInfo(`terminal:reconnect: Skipping help terminal ${terminalId}`);
-        return { exists: false, error: "Terminal is a help terminal" };
+        return { exists: false };
       }
 
       logInfo(`terminal:reconnect: Reconnecting to ${terminalId}`);
@@ -388,9 +396,7 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
         agentId: terminal.agentId,
         title: terminal.title,
         cwd: terminal.cwd,
-        worktreeId: terminal.worktreeId,
         agentState: terminal.agentState,
-        waitingReason: terminal.waitingReason,
         lastStateChange: terminal.lastStateChange,
         spawnedAt: terminal.spawnedAt,
         activityTier: terminal.activityTier,

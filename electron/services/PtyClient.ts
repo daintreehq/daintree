@@ -91,6 +91,8 @@ interface TerminalInfoResponse {
   detectedAgentId?: BuiltInAgentId;
   /** Runtime-detected non-agent process icon id (npm, yarn, etc.). Cleared when the process exits. */
   detectedProcessId?: string;
+  /** Capability mode — sealed-at-spawn agent capability surface. Set when the terminal was cold-launched as a built-in agent. */
+  capabilityAgentId?: BuiltInAgentId;
 }
 
 export interface PtyClientConfig {
