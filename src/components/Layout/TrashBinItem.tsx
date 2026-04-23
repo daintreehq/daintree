@@ -62,17 +62,16 @@ export function TrashBinItem({ terminal, trashedInfo, worktreeName }: TrashBinIt
     // so a terminal's name doesn't change as runtime detection flips after trashing.
     if (terminal.agentId) {
       if (terminal.title && !isUselessTitle(terminal.title)) return terminal.title;
-      const agentConfig = terminal.agentId ? getEffectiveAgentConfig(terminal.agentId) : undefined;
-      return agentConfig?.name ?? terminal.agentId ?? terminal.type ?? "Agent";
+      const agentConfig = getEffectiveAgentConfig(terminal.agentId);
+      return agentConfig?.name ?? terminal.agentId;
     }
-    return terminal.title || terminal.type || "Terminal";
+    return terminal.title || "Terminal";
   })();
 
   return (
     <div className="flex items-center gap-2 px-2.5 py-1.5 rounded-[var(--radius-sm)] bg-transparent hover:bg-tint/5 transition-colors group">
       <div className="shrink-0 opacity-60 group-hover:opacity-100 transition-opacity">
         <TerminalIcon
-          type={terminal.type}
           kind={terminal.kind}
           agentId={terminal.agentId}
           detectedAgentId={terminal.detectedAgentId}

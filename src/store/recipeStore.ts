@@ -71,9 +71,7 @@ function terminalToRecipeTerminal(terminal: TerminalInstance): RecipeTerminal {
   // what runtime detection observed. Persisting `detectedAgentId` would corrupt
   // a recipe by baking ephemeral session state into a reusable template.
   const type: RecipeTerminalType =
-    terminal.kind === "dev-preview"
-      ? "dev-preview"
-      : (terminal.agentId ?? terminal.type ?? "terminal");
+    terminal.kind === "dev-preview" ? "dev-preview" : (terminal.agentId ?? "terminal");
 
   const isAgent = isAgentRecipeType(type);
 

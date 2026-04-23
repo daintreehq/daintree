@@ -38,7 +38,7 @@ export function splitTrailingNewlines(text: string): { body: string; enterCount:
 }
 
 function getEffectiveAgentId(terminal: TerminalInfo): string | undefined {
-  return terminal.detectedAgentType ?? terminal.agentId ?? terminal.type;
+  return terminal.detectedAgentType ?? terminal.agentId;
 }
 
 export function supportsBracketedPaste(terminal: TerminalInfo): boolean {

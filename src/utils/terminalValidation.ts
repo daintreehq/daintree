@@ -46,7 +46,7 @@ export async function validateTerminalConfig(
   // the user asked for is on PATH. `detectedAgentId` doesn't exist yet at that
   // point, and using it later would validate the wrong binary for runtime-morphed
   // sessions (e.g., a plain shell that started a different agent).
-  const agentId = terminal.agentId ?? terminal.type;
+  const agentId = terminal.agentId;
   if (agentId && agentId !== "terminal") {
     try {
       const agentConfig = getAgentConfig(agentId);

@@ -264,7 +264,6 @@ const TabButtonComponent = forwardRef<HTMLDivElement, TabButtonProps>(function T
             )}
             <span className="shrink-0 flex items-center justify-center w-3.5 h-3.5">
               <TerminalIcon
-                type={type}
                 kind={kind}
                 agentId={agentId}
                 detectedAgentId={detectedAgentId}

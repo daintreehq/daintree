@@ -294,6 +294,7 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
         data-panel-id={id}
         data-panel-location={location}
         data-detected-process-id={detectedProcessId || undefined}
+        data-capability-agent-id={capabilityAgentId || undefined}
         data-selected={isSelected || undefined}
         style={{
           contain: "content",

@@ -4,12 +4,7 @@ import type { BrowserHistory } from "@shared/types/browser";
 import type { PanelExitBehavior } from "@shared/types/panel";
 import type { AddPanelOptionsBase } from "@shared/types/addPanelOptions";
 import type { BuiltInAgentId } from "@shared/config/agentIds";
-import {
-  isRegisteredAgent,
-  getAgentConfig,
-  getMergedPreset,
-  sanitizeAgentEnv,
-} from "@/config/agents";
+import { getAgentConfig, getMergedPreset, sanitizeAgentEnv } from "@/config/agents";
 import {
   generateAgentCommand,
   buildResumeCommand,
@@ -151,14 +146,10 @@ export function inferAgentIdFromTitle(
 
 export function resolveAgentId(
   primaryAgentId: string | undefined,
-  primaryType: TerminalType | undefined,
-  fallbackAgentId?: string | undefined,
-  fallbackType?: TerminalType | undefined
+  fallbackAgentId?: string | undefined
 ): string | undefined {
   if (primaryAgentId) return primaryAgentId;
-  if (primaryType && isRegisteredAgent(primaryType)) return primaryType;
   if (fallbackAgentId) return fallbackAgentId;
-  if (fallbackType && isRegisteredAgent(fallbackType)) return fallbackType;
   return undefined;
 }
 
@@ -181,7 +172,7 @@ export function buildArgsForBackendTerminal(
   projectRoot: string
 ): AddTerminalArgs {
   const cwd = backendTerminal.cwd || projectRoot || "";
-  let agentId = resolveAgentId(backendTerminal.agentId, backendTerminal.type);
+  let agentId = resolveAgentId(backendTerminal.agentId);
   agentId = inferAgentIdFromTitle(
     backendTerminal.title,
     backendTerminal.kind,
@@ -231,12 +222,7 @@ export function buildArgsForReconnectedFallback(
   projectRoot: string
 ): AddTerminalArgs {
   const cwd = reconnectedTerminal.cwd || saved.cwd || projectRoot || "";
-  let agentId = resolveAgentId(
-    reconnectedTerminal.agentId,
-    reconnectedTerminal.type,
-    saved.agentId,
-    saved.type
-  );
+  let agentId = resolveAgentId(reconnectedTerminal.agentId, saved.agentId);
 
   const reconnectedKind = reconnectedTerminal.kind ?? saved.kind;
   agentId = inferAgentIdFromTitle(
@@ -290,7 +276,7 @@ export function buildArgsForRespawn(
   reconnectTimedOut: boolean,
   clipboardDirectory: string | undefined
 ): AddTerminalArgs {
-  let effectiveAgentId = resolveAgentId(saved.agentId, saved.type);
+  let effectiveAgentId = resolveAgentId(saved.agentId);
   effectiveAgentId = inferAgentIdFromTitle(
     saved.title,
     kind,
@@ -470,7 +456,7 @@ export function buildArgsForOrphanedTerminal(
   projectRoot: string
 ): AddTerminalArgs {
   const cwd = terminal.cwd || projectRoot || "";
-  let agentId = resolveAgentId(terminal.agentId, terminal.type);
+  let agentId = resolveAgentId(terminal.agentId);
   agentId = inferAgentIdFromTitle(terminal.title, terminal.kind, agentId, terminal.id, "Orphaned");
 
   return {

@@ -441,7 +441,6 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
           >
             <div className="flex items-center justify-center shrink-0">
               <TerminalIcon
-                type={activePanel.type}
                 kind={activePanel.kind}
                 agentId={activePanel.agentId}
                 detectedAgentId={activePanel.detectedAgentId}

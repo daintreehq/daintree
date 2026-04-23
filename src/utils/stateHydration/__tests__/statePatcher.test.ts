@@ -155,23 +155,19 @@ describe("inferAgentIdFromTitle", () => {
 
 describe("resolveAgentId", () => {
   it("returns primary agentId", () => {
-    expect(resolveAgentId("claude", undefined)).toBe("claude");
+    expect(resolveAgentId("claude")).toBe("claude");
   });
 
-  it("returns primary type when registered", () => {
-    expect(resolveAgentId(undefined, "claude")).toBe("claude");
+  it("returns fallback agentId when primary is undefined", () => {
+    expect(resolveAgentId(undefined, "gemini")).toBe("gemini");
   });
 
-  it("returns fallback agentId", () => {
-    expect(resolveAgentId(undefined, undefined, "gemini")).toBe("gemini");
+  it("prefers primary over fallback", () => {
+    expect(resolveAgentId("claude", "gemini")).toBe("claude");
   });
 
-  it("returns fallback type when registered", () => {
-    expect(resolveAgentId(undefined, undefined, undefined, "codex")).toBe("codex");
-  });
-
-  it("returns undefined when nothing matches", () => {
-    expect(resolveAgentId(undefined, "bash" as never, undefined, "zsh" as never)).toBeUndefined();
+  it("returns undefined when both are undefined", () => {
+    expect(resolveAgentId(undefined, undefined)).toBeUndefined();
   });
 });
 

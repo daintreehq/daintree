@@ -17,7 +17,7 @@ export function GridPlaceholder({ className }: GridPlaceholderProps) {
     return <div className={cn("h-full rounded-[var(--radius-lg)] bg-daintree-bg/50", className)} />;
   }
 
-  const { title, type, kind, agentId, detectedAgentId, detectedProcessId } = activeTerminal;
+  const { title, kind, agentId, detectedAgentId, detectedProcessId } = activeTerminal;
 
   return (
     <div
@@ -38,7 +38,6 @@ export function GridPlaceholder({ className }: GridPlaceholderProps) {
       >
         <span className="shrink-0 flex items-center justify-center text-daintree-accent/80">
           <TerminalIcon
-            type={type}
             kind={kind}
             agentId={agentId}
             detectedAgentId={detectedAgentId}

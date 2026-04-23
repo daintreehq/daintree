@@ -55,7 +55,6 @@ const SendToAgentItemRow = React.memo(function SendToAgentItemRow({
     >
       <span className="shrink-0 text-daintree-text/70" aria-hidden="true">
         <TerminalIcon
-          type={item.terminalType}
           kind={item.terminalKind}
           agentId={item.agentId}
           detectedAgentId={item.detectedAgentId}

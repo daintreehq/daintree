@@ -40,7 +40,6 @@ export const QuickSwitcherItem = React.memo(function QuickSwitcherItem({
       <span className="shrink-0 text-daintree-text/70" aria-hidden="true">
         {item.type === "terminal" ? (
           <TerminalIcon
-            type={item.terminalType}
             kind={item.terminalKind}
             agentId={item.agentId}
             detectedAgentId={item.detectedAgentId}

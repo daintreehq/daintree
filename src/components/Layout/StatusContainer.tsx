@@ -130,7 +130,6 @@ export function StatusContainer({ config, terminals, compact = false }: StatusCo
                 <div className="flex items-center gap-2 min-w-0 flex-1">
                   <div className="shrink-0 opacity-60 group-hover:opacity-100 transition-opacity">
                     <TerminalIcon
-                      type={terminal.type}
                       kind={terminal.kind}
                       agentId={terminal.agentId}
                       detectedAgentId={terminal.detectedAgentId}

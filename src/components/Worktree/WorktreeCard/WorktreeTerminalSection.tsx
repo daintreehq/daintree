@@ -101,7 +101,6 @@ function TerminalRow({ term, listeners, onClick }: TerminalRowProps) {
         >
           <div className="shrink-0 opacity-60 group-hover/termrow:opacity-100 transition-opacity">
             <TerminalIcon
-              type={term.type}
               kind={term.kind}
               agentId={term.agentId}
               detectedAgentId={term.detectedAgentId}

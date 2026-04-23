@@ -743,7 +743,6 @@ function PanelHeaderComponent({
         <div className="flex items-center gap-2 min-w-0">
           <span className="shrink-0 flex items-center justify-center w-3.5 h-3.5 text-daintree-text">
             <TerminalIcon
-              type={type}
               kind={kind}
               agentId={agentId}
               detectedAgentId={detectedAgentId}

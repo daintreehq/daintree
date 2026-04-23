@@ -177,7 +177,7 @@ export function TrashGroupItem({
               return 0;
             })
             .map(({ terminal }) => {
-              const terminalName = terminal.title || terminal.type || "Terminal";
+              const terminalName = terminal.title || "Terminal";
               const isActiveTab = groupMetadata.activeTabId === terminal.id;
               return (
                 <div
@@ -185,7 +185,6 @@ export function TrashGroupItem({
                   className="flex items-center gap-2 px-2 py-1 text-[11px] rounded hover:bg-tint/5 group/panel"
                 >
                   <TerminalIcon
-                    type={terminal.type}
                     kind={terminal.kind}
                     agentId={terminal.agentId}
                     detectedAgentId={terminal.detectedAgentId}

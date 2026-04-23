@@ -275,7 +275,6 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
           >
             <div className="flex items-center justify-center shrink-0">
               <TerminalIcon
-                type={terminal.type}
                 kind={terminal.kind}
                 agentId={terminal.agentId}
                 detectedAgentId={terminal.detectedAgentId}

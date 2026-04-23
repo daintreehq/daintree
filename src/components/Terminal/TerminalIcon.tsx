@@ -1,8 +1,8 @@
 import { SquareTerminal, Globe, Monitor } from "lucide-react";
 import { cn } from "@/lib/utils";
-import type { TerminalType, PanelKind } from "@/types";
+import type { PanelKind } from "@/types";
 import type { ComponentType } from "react";
-import { getAgentConfig, isRegisteredAgent } from "@/config/agents";
+import { getAgentConfig } from "@/config/agents";
 import { resolveEffectiveAgentId } from "@/utils/agentIdentity";
 import {
   NpmIcon,
@@ -51,7 +51,6 @@ const PROCESS_ICON_MAP: Record<string, ComponentType<{ className?: string; size?
 };
 
 export interface TerminalIconProps {
-  type?: TerminalType;
   kind?: PanelKind;
   agentId?: string;
   /**
@@ -65,7 +64,6 @@ export interface TerminalIconProps {
 }
 
 export function TerminalIcon({
-  type,
   kind,
   agentId,
   detectedAgentId,
@@ -88,10 +86,8 @@ export function TerminalIcon({
     return <Monitor {...finalProps} className={cn(finalProps.className, "text-status-info")} />;
   }
 
-  // Prefer runtime-detected identity, then launch-time agentId, then legacy type fallback.
-  const effectiveAgentId =
-    resolveEffectiveAgentId(detectedAgentId, agentId) ??
-    (type && isRegisteredAgent(type) ? type : undefined);
+  // Prefer runtime-detected identity, then launch-time agentId.
+  const effectiveAgentId = resolveEffectiveAgentId(detectedAgentId, agentId);
 
   if (effectiveAgentId) {
     const config = getAgentConfig(effectiveAgentId);
