@@ -10,7 +10,7 @@ interface TerminalDragPreviewProps {
 }
 
 export function TerminalDragPreview({ terminal, groupTabCount }: TerminalDragPreviewProps) {
-  // Drag visual color mirrors live chrome — detection only, not launch hint.
+  // Drag visual color mirrors the same chrome descriptor used by tabs/panels.
   const chrome = deriveTerminalChrome(terminal);
   const brandColor = chrome.color;
   const isWorking = chrome.isAgent && terminal.agentState === "working";

@@ -16,6 +16,9 @@ type AgentStateSource = {
   agentState?: AgentState;
   detectedAgentId?: string;
   runtimeIdentity?: TerminalRuntimeIdentity;
+  launchAgentId?: string;
+  runtimeStatus?: string;
+  exitCode?: number | null;
 };
 
 function hasRuntimeAgentIdentity(panel: AgentStateSource): boolean {

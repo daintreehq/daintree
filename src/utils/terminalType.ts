@@ -1,32 +1,38 @@
 import type { PanelKind } from "@/types";
 import { isBuiltInAgentId, type BuiltInAgentId } from "@shared/config/agentIds";
+import type { AgentState } from "@shared/types/agent";
 import type { TerminalRuntimeIdentity } from "@shared/types/panel";
+import { deriveTerminalChrome } from "./terminalChrome";
 
 export interface RuntimeAgentIdentityInput {
   detectedAgentId?: string;
   runtimeIdentity?: TerminalRuntimeIdentity;
   everDetectedAgent?: boolean;
   launchAgentId?: string;
+  agentState?: AgentState | string;
+  runtimeStatus?: string;
+  exitCode?: number | null;
 }
 
 /**
- * Is this terminal currently hosting an agent? Detection-only. Launch hints
- * do not count. See `docs/architecture/terminal-identity.md`.
+ * Is this terminal currently agent-addressable?
+ *
+ * Live detection wins, but a launchAgentId is durable agent affinity while the
+ * terminal has not received a strong exit signal. This keeps restored and
+ * toolbar-launched agent terminals wired for agent chrome/activity before the
+ * transient detector fields rehydrate.
  */
 export function isAgentTerminal(terminal: {
   detectedAgentId?: string;
   runtimeIdentity?: TerminalRuntimeIdentity;
   everDetectedAgent?: boolean;
   launchAgentId?: string;
+  agentState?: AgentState | string;
+  runtimeStatus?: string;
+  exitCode?: number | null;
   kind?: PanelKind;
 }): boolean {
-  if (terminal.detectedAgentId) {
-    return true;
-  }
-  if (terminal.runtimeIdentity) {
-    return terminal.runtimeIdentity.kind === "agent";
-  }
-  return false;
+  return deriveTerminalChrome(terminal).isAgent;
 }
 
 export const isRuntimeAgentTerminal = isAgentTerminal;
@@ -35,13 +41,7 @@ export function getRuntimeAgentId(
   terminal: RuntimeAgentIdentityInput | undefined
 ): string | undefined {
   if (!terminal) return undefined;
-  if (terminal.detectedAgentId) {
-    return terminal.detectedAgentId;
-  }
-  if (terminal.runtimeIdentity) {
-    return terminal.runtimeIdentity.kind === "agent" ? terminal.runtimeIdentity.agentId : undefined;
-  }
-  return undefined;
+  return deriveTerminalChrome(terminal).agentId ?? undefined;
 }
 
 export function getBuiltInRuntimeAgentId(
@@ -52,18 +52,13 @@ export function getBuiltInRuntimeAgentId(
 }
 
 /**
- * Non-chrome grouping helper. Runtime identity wins; launch intent is only a
- * boot-window fallback before any detector result has ever committed.
+ * Non-chrome grouping helper. Kept as a named wrapper for older call sites;
+ * it now follows the same durable agent-affinity rule as terminal chrome.
  */
 export function getRuntimeOrBootAgentId(
   terminal: RuntimeAgentIdentityInput | undefined
 ): string | undefined {
-  const runtimeAgentId = getRuntimeAgentId(terminal);
-  if (runtimeAgentId) return runtimeAgentId;
-  if (terminal?.launchAgentId && terminal.everDetectedAgent !== true) {
-    return terminal.launchAgentId;
-  }
-  return undefined;
+  return getRuntimeAgentId(terminal);
 }
 
 // Pure utility — accept HMR in place so edits don't propagate into a full

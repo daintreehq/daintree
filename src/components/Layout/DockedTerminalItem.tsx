@@ -197,11 +197,24 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
     () =>
       deriveTerminalChrome({
         kind: terminal.kind,
+        launchAgentId: terminal.launchAgentId,
         runtimeIdentity: terminal.runtimeIdentity,
         detectedAgentId: terminal.detectedAgentId,
         detectedProcessId: terminal.detectedProcessId,
+        agentState: terminal.agentState,
+        runtimeStatus: terminal.runtimeStatus,
+        exitCode: terminal.exitCode,
       }),
-    [terminal.kind, terminal.runtimeIdentity, terminal.detectedAgentId, terminal.detectedProcessId]
+    [
+      terminal.kind,
+      terminal.launchAgentId,
+      terminal.runtimeIdentity,
+      terminal.detectedAgentId,
+      terminal.detectedProcessId,
+      terminal.agentState,
+      terminal.runtimeStatus,
+      terminal.exitCode,
+    ]
   );
   const brandColor = useMemo(() => {
     const fallbackColor = baseChrome.color;
@@ -226,16 +239,24 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
     () =>
       deriveTerminalChrome({
         kind: terminal.kind,
+        launchAgentId: terminal.launchAgentId,
         runtimeIdentity: terminal.runtimeIdentity,
         detectedAgentId: terminal.detectedAgentId,
         detectedProcessId: terminal.detectedProcessId,
+        agentState: terminal.agentState,
+        runtimeStatus: terminal.runtimeStatus,
+        exitCode: terminal.exitCode,
         presetColor: brandColor,
       }),
     [
       terminal.kind,
+      terminal.launchAgentId,
       terminal.runtimeIdentity,
       terminal.detectedAgentId,
       terminal.detectedProcessId,
+      terminal.agentState,
+      terminal.runtimeStatus,
+      terminal.exitCode,
       brandColor,
     ]
   );

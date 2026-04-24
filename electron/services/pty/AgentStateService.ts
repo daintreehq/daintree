@@ -14,9 +14,7 @@ import type { WaitingReason } from "../../../shared/types/agent.js";
 // Backend-side identity used when routing agent-state events (who is this
 // event about?). Detection wins; during the boot window the launch hint is
 // used so a cold-launched agent's first state transitions carry a stable
-// agentType. This helper is NOT chrome — chrome is detection-only and is
-// derived in the renderer from TerminalRuntimeIdentity. See
-// `docs/architecture/terminal-identity.md`.
+// agentType.
 function getLiveAgentId(terminal: TerminalInfo): string | undefined {
   return terminal.detectedAgentId ?? terminal.launchAgentId;
 }

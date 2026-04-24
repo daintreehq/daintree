@@ -658,6 +658,7 @@ describe("TerminalFocusSlice - focusNextAgent / focusPreviousAgent runtime ident
       launchAgentId?: string;
       detectedAgentId?: string;
       everDetectedAgent?: boolean;
+      agentState?: string;
     } = {}
   ): TerminalInstance =>
     ({
@@ -669,7 +670,7 @@ describe("TerminalFocusSlice - focusNextAgent / focusPreviousAgent runtime ident
       everDetectedAgent: opts.everDetectedAgent,
       cwd: "/test",
       location: "grid",
-      agentState: "idle",
+      agentState: opts.agentState ?? "idle",
       isVisible: true,
       cols: 80,
       rows: 24,
@@ -709,19 +710,30 @@ describe("TerminalFocusSlice - focusNextAgent / focusPreviousAgent runtime ident
   const neverInTrash = () => false;
   const validWorktrees = new Set(["worktree-1"]);
 
-  // RETIRED: boot-window launchAgentId fallback for focusNextAgent.
-  // focusNextAgent now filters strictly by detectedAgentId (isRuntimeAgentTerminal).
-  // A freshly-spawned panel with only launchAgentId is NOT included in the agent
-  // cycle until the process detector fires. The old test encoded the retired model
-  // where launchAgentId alone counted during the boot window.
+  it("includes a launch-affinity agent before detection rehydrates", () => {
+    terminals = [
+      makeTerminal("launch-agent", {
+        kind: "terminal",
+        launchAgentId: "claude",
+      }),
+      makeTerminal("shell", { kind: "terminal" }),
+    ];
+    state.focusedId = "shell";
+
+    state.focusNextAgent(neverInTrash, validWorktrees);
+
+    expect(state.focusedId).toBe("launch-agent");
+  });
 
   it("excludes an ex-agent panel whose runtime identity has cleared", () => {
-    // Spawned as agent, detector fired then cleared on exit — no longer in cycle.
+    // Spawned as agent, detector fired then a strong exit arrived — no longer
+    // in cycle even though launchAgentId remains persisted for restart/resume.
     terminals = [
       makeTerminal("ex-agent", {
         kind: "terminal",
         launchAgentId: "claude",
         everDetectedAgent: true,
+        agentState: "exited",
       }),
       makeTerminal("live-agent", {
         kind: "terminal",
@@ -765,6 +777,7 @@ describe("TerminalFocusSlice - focusNextAgent / focusPreviousAgent runtime ident
         kind: "terminal",
         launchAgentId: "gemini",
         everDetectedAgent: true,
+        agentState: "exited",
       }),
       makeTerminal("shell", { kind: "terminal" }),
       makeTerminal("agent-2", {
@@ -787,13 +800,14 @@ describe("TerminalFocusSlice - focusNextAgent / focusPreviousAgent runtime ident
         kind: "terminal",
         launchAgentId: "claude",
         everDetectedAgent: true,
+        agentState: "exited",
       }),
     ];
     state.focusedId = "ex-agent";
 
     state.focusNextAgent(neverInTrash, validWorktrees);
 
-    // No cycle candidates because the sole agent has no runtime identity;
+    // No cycle candidates because the sole agent has a strong exit signal;
     // focus is left untouched.
     expect(state.focusedId).toBe("ex-agent");
   });

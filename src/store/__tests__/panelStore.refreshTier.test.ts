@@ -4,8 +4,8 @@ import { TerminalRefreshTier } from "@shared/types/panel";
 import type { TerminalInstance } from "@shared/types";
 
 // Pure unit tests for the refresh-tier gate that decides which panels are
-// eligible to hibernate. Uses runtime-detected agent identity (#5772) so that
-// a panel spawned as an agent but no longer running one can drop to BACKGROUND.
+// eligible to hibernate. Uses durable agent affinity so a toolbar-launched or
+// restored agent terminal stays active until a strong exit signal arrives.
 
 function makeTerminal(overrides: Partial<TerminalInstance>): TerminalInstance {
   return {
@@ -21,11 +21,7 @@ function makeTerminal(overrides: Partial<TerminalInstance>): TerminalInstance {
 }
 
 describe("getTerminalRefreshTier - runtime agent identity", () => {
-  it("drops a demoted ex-agent (detection fired then cleared) to BACKGROUND", () => {
-    // everDetectedAgent distinguishes "boot window" from "exited agent" — the
-    // sticky flag is set on first detection and never cleared, so a panel whose
-    // detectedAgentId is now undefined but everDetectedAgent is true is a
-    // genuine ex-agent and should be free to hibernate.
+  it("keeps a launch-affinity agent terminal VISIBLE when detection is not currently set", () => {
     const terminal = makeTerminal({
       kind: "terminal",
       launchAgentId: "claude",
@@ -33,7 +29,7 @@ describe("getTerminalRefreshTier - runtime agent identity", () => {
       everDetectedAgent: true,
       agentState: "idle",
     });
-    expect(getTerminalRefreshTier(terminal, false)).toBe(TerminalRefreshTier.BACKGROUND);
+    expect(getTerminalRefreshTier(terminal, false)).toBe(TerminalRefreshTier.VISIBLE);
   });
 
   it("keeps a promoted shell (kind:terminal + detectedAgentId) at VISIBLE", () => {
@@ -45,11 +41,16 @@ describe("getTerminalRefreshTier - runtime agent identity", () => {
     expect(getTerminalRefreshTier(terminal, false)).toBe(TerminalRefreshTier.VISIBLE);
   });
 
-  // RETIRED: "boot window" launchAgentId fallback — chrome is detection-only.
-  // A panel with only launchAgentId (no detectedAgentId) is no longer treated
-  // as an agent for refresh-tier purposes; it drops to BACKGROUND until the
-  // process detector fires and sets detectedAgentId. The old test that expected
-  // VISIBLE here was encoding the retired spawn-time fallback model.
+  it("drops a demoted launch-affinity terminal after explicit agent exit", () => {
+    const terminal = makeTerminal({
+      kind: "terminal",
+      launchAgentId: "claude",
+      detectedAgentId: undefined,
+      everDetectedAgent: true,
+      agentState: "exited",
+    });
+    expect(getTerminalRefreshTier(terminal, false)).toBe(TerminalRefreshTier.BACKGROUND);
+  });
 
   it("drops an exited agent even when detectedAgentId is still set (race guard)", () => {
     // Covers the race between onAgentExited and the process-detector exit event.

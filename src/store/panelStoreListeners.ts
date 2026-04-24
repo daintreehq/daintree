@@ -437,9 +437,10 @@ export function setupTerminalStoreListeners() {
               `launchAgentId=${terminal.launchAgentId ?? "<none>"}`
           );
 
-          // Runtime identity is live-detection canonical. Apply it to every
-          // renderer terminal instance, including toolbar-launched terminals
-          // whose launch hint was only a spawn instruction.
+          // Runtime detection still applies the in-process agent policies
+          // (scrollback/activity handlers). Launch affinity can brand the
+          // shell before this event, but detection confirms which live agent
+          // owns the PTY instance.
           if (
             nextDetectedAgentId &&
             (needsAgentIdUpdate || needsRuntimeIdentityUpdate || shouldSeedAgentState)
@@ -481,12 +482,10 @@ export function setupTerminalStoreListeners() {
         });
         terminalInstanceService.clearAgentPromotion(terminalId);
 
-        // `agent:exited` is a subcommand/demotion signal — the shell PTY is
-        // still alive. Clear live-detection fields and re-sync the default
-        // title. `launchAgentId` is immutable and is not touched here; a
-        // cold-launched agent terminal whose agent has exited demotes to
-        // plain shell chrome (see deriveTerminalChrome's demotion rule),
-        // but the launch hint is still available for manual restart.
+        // `agent:exited` clears live-detection fields for both subcommand
+        // demotion and preserved PTY exit. `launchAgentId` is immutable and is
+        // not touched here; `agentState: "exited"` is the durable strong-exit
+        // signal that makes deriveTerminalChrome release launch affinity.
         usePanelStore.setState((state) => {
           const terminal = state.panelsById[terminalId];
           if (!terminal) {
@@ -498,21 +497,35 @@ export function setupTerminalStoreListeners() {
           const clearProcess = terminal.detectedProcessId !== undefined;
           const clearDetectedAgent = terminal.detectedAgentId !== undefined;
           const clearRuntimeIdentity = terminal.runtimeIdentity !== undefined;
-          // After demotion, detectedAgentId is cleared and everDetectedAgent stays
-          // true, so deriveTerminalChrome returns no agent → title reverts to "Terminal".
+          const shouldMarkAgentExited =
+            clearDetectedAgent ||
+            Boolean((data as { agentType?: string }).agentType) ||
+            data.exitKind === "subcommand" ||
+            data.exitKind === "terminal";
+          const needsAgentStateExited = shouldMarkAgentExited && terminal.agentState !== "exited";
+          // After demotion, detectedAgentId is cleared and agentState becomes
+          // exited, so deriveTerminalChrome ignores durable launch affinity and
+          // the title reverts to "Terminal".
           const titleMode = terminal.titleMode ?? "default";
-          const computedTitle = clearDetectedAgent
+          const computedTitle = shouldMarkAgentExited
             ? getDefaultTitle(terminal.kind, {
                 detectedAgentId: undefined,
                 launchAgentId: terminal.launchAgentId,
                 everDetectedAgent: true,
+                agentState: "exited",
               })
             : undefined;
           const needsTitleUpdate =
             titleMode === "default" &&
             computedTitle !== undefined &&
             terminal.title !== computedTitle;
-          if (!clearProcess && !clearDetectedAgent && !clearRuntimeIdentity && !needsTitleUpdate) {
+          if (
+            !clearProcess &&
+            !clearDetectedAgent &&
+            !clearRuntimeIdentity &&
+            !needsAgentStateExited &&
+            !needsTitleUpdate
+          ) {
             console.log(`[IdentityDebug] exited NOOP term=${terminalId.slice(-8)} already cleared`);
             return state;
           }
@@ -531,6 +544,10 @@ export function setupTerminalStoreListeners() {
                 ...(clearProcess && { detectedProcessId: undefined }),
                 ...(clearDetectedAgent && { detectedAgentId: undefined }),
                 ...(clearRuntimeIdentity && { runtimeIdentity: undefined }),
+                ...(needsAgentStateExited && {
+                  agentState: "exited" as const,
+                  lastStateChange: data.timestamp ?? Date.now(),
+                }),
                 ...(needsTitleUpdate && { title: computedTitle }),
               },
             },

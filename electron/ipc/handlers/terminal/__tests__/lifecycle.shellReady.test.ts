@@ -98,7 +98,7 @@ async function flush(ms = 0) {
   await Promise.resolve();
 }
 
-describe("agent command injection via stdin write", () => {
+describe("agent command launch", () => {
   const project = { id: "proj-id", name: "Project", path: process.cwd() };
   const originalPlatform = process.platform;
 
@@ -123,7 +123,7 @@ describe("agent command injection via stdin write", () => {
     vi.useRealTimers();
   });
 
-  it("waits for a prompt before injecting the agent command", async () => {
+  it("launches a POSIX agent command through shell startup without echoing stdin", async () => {
     const deps = { ptyClient } as unknown as HandlerDependencies;
     cleanup = registerTerminalLifecycleHandlers(deps);
     const handler = getSpawnHandler();
@@ -138,24 +138,20 @@ describe("agent command injection via stdin write", () => {
 
     expect(ptyClient.spawn).toHaveBeenCalledTimes(1);
     const spawnArgs = ptyClient.spawn.mock.calls[0][1];
-    expect(spawnArgs.args).toBeUndefined();
+    expect(spawnArgs.shell).toBe("/bin/zsh");
+    expect(spawnArgs.args).toEqual([
+      "-lic",
+      "trap : INT\nclaude --dangerously-skip-permissions\ntrap - INT\nexec '/bin/zsh' -l",
+    ]);
     const id = ptyClient.spawn.mock.calls[0][0];
 
-    // No prompt yet → no write.
-    await flush(20);
     expect(ptyClient.write).not.toHaveBeenCalled();
-
-    ptyClient.emit("data", id, "$ ");
-    await flush(49);
-    expect(ptyClient.write).not.toHaveBeenCalled();
-
-    await flush(1);
-    expect(ptyClient.write).toHaveBeenCalledTimes(1);
-    const writes = ptyClient.write.mock.calls.map((c) => c[1] as string);
-    expect(writes[0]).toBe("claude --dangerously-skip-permissions\r");
+    expect(ptyClient.listenerCount("data")).toBe(0);
+    expect(ptyClient.listenerCount("exit")).toBe(0);
+    expect(id).toBeTruthy();
   });
 
-  it("tolerates a slow shell (1200ms RC delay) before the first prompt", async () => {
+  it("does not wait for slow shell RC output before launching the command", async () => {
     const deps = { ptyClient } as unknown as HandlerDependencies;
     cleanup = registerTerminalLifecycleHandlers(deps);
     const handler = getSpawnHandler();
@@ -166,21 +162,12 @@ describe("agent command injection via stdin write", () => {
       command: "ls -la",
     });
 
-    const id = ptyClient.spawn.mock.calls[0][0];
-
-    ptyClient.emit("data", id, "loading nvm...\r\n");
-    await flush(600);
-    ptyClient.emit("data", id, "sourcing ~/.zshrc...\r\n");
-    await flush(600);
+    const spawnArgs = ptyClient.spawn.mock.calls[0][1];
+    expect(spawnArgs.args).toEqual(["-lic", "trap : INT\nls -la\ntrap - INT\nexec '/bin/zsh' -l"]);
     expect(ptyClient.write).not.toHaveBeenCalled();
-
-    ptyClient.emit("data", id, "$ ");
-    await flush(50);
-    expect(ptyClient.write).toHaveBeenCalledTimes(1);
-    expect(ptyClient.write.mock.calls[0][1]).toBe("ls -la\r");
   });
 
-  it("handles p10k-style two-phase prompt by resetting quiescence", async () => {
+  it("does not register shell-ready listeners for p10k-style prompt output", async () => {
     const deps = { ptyClient } as unknown as HandlerDependencies;
     cleanup = registerTerminalLifecycleHandlers(deps);
     const handler = getSpawnHandler();
@@ -191,20 +178,14 @@ describe("agent command injection via stdin write", () => {
       command: "echo hi",
     });
 
-    const id = ptyClient.spawn.mock.calls[0][0];
-
-    ptyClient.emit("data", id, "❯ "); // instant prompt
-    await flush(40);
-    ptyClient.emit("data", id, "\r\n❯ "); // real prompt redraw — resets quiescence
-    await flush(40);
+    const spawnArgs = ptyClient.spawn.mock.calls[0][1];
+    expect(spawnArgs.args).toEqual(["-lic", "trap : INT\necho hi\ntrap - INT\nexec '/bin/zsh' -l"]);
     expect(ptyClient.write).not.toHaveBeenCalled();
-
-    await flush(20);
-    expect(ptyClient.write).toHaveBeenCalledTimes(1);
-    expect(ptyClient.write.mock.calls[0][1]).toBe("echo hi\r");
+    expect(ptyClient.listenerCount("data")).toBe(0);
+    expect(ptyClient.listenerCount("exit")).toBe(0);
   });
 
-  it("Windows agent terminal writes command without clear preamble once shell is ready", async () => {
+  it("Windows agent terminal writes command immediately without clear preamble", async () => {
     Object.defineProperty(process, "platform", { value: "win32" });
 
     const deps = { ptyClient } as unknown as HandlerDependencies;
@@ -219,16 +200,13 @@ describe("agent command injection via stdin write", () => {
       command: "claude",
     });
 
-    const id = ptyClient.spawn.mock.calls[0][0];
-
-    ptyClient.emit("data", id, "> ");
-    await flush(50);
     expect(ptyClient.write).toHaveBeenCalledTimes(1);
     expect(ptyClient.write.mock.calls[0][1]).toBe("claude\r");
   });
 
-  it("skips write when terminal is killed mid-wait", async () => {
+  it("skips stdin write entirely for POSIX command launches", async () => {
     const deps = { ptyClient } as unknown as HandlerDependencies;
+    ptyClient.hasTerminal.mockReturnValue(false);
     cleanup = registerTerminalLifecycleHandlers(deps);
     const handler = getSpawnHandler();
 
@@ -240,18 +218,14 @@ describe("agent command injection via stdin write", () => {
       command: "claude",
     });
 
-    const id = ptyClient.spawn.mock.calls[0][0];
-
-    ptyClient.hasTerminal.mockReturnValue(false);
-    ptyClient.emit("exit", id, 0);
-    await flush(0);
-
+    const spawnArgs = ptyClient.spawn.mock.calls[0][1];
+    expect(spawnArgs.args).toEqual(["-lic", "trap : INT\nclaude\ntrap - INT\nexec '/bin/zsh' -l"]);
     expect(ptyClient.write).not.toHaveBeenCalled();
     expect(ptyClient.listenerCount("data")).toBe(0);
     expect(ptyClient.listenerCount("exit")).toBe(0);
   });
 
-  it("injects the command via timeout fallback when no prompt ever appears", async () => {
+  it("launches the command without a timeout fallback when no prompt appears", async () => {
     const deps = { ptyClient } as unknown as HandlerDependencies;
     cleanup = registerTerminalLifecycleHandlers(deps);
     const handler = getSpawnHandler();
@@ -262,9 +236,11 @@ describe("agent command injection via stdin write", () => {
       command: "ls",
     });
 
-    await flush(1_500);
-    expect(ptyClient.write).toHaveBeenCalledTimes(1);
-    expect(ptyClient.write.mock.calls[0][1]).toBe("ls\r");
+    const spawnArgs = ptyClient.spawn.mock.calls[0][1];
+    expect(spawnArgs.args).toEqual(["-lic", "trap : INT\nls\ntrap - INT\nexec '/bin/zsh' -l"]);
+    expect(ptyClient.write).not.toHaveBeenCalled();
+    expect(ptyClient.listenerCount("data")).toBe(0);
+    expect(ptyClient.listenerCount("exit")).toBe(0);
   });
 
   it("rejects multi-line commands for agent terminals", async () => {

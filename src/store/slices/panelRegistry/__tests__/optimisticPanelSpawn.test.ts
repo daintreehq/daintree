@@ -118,6 +118,11 @@ describe("optimistic panel spawn (#5789)", () => {
     const panel = usePanelStore.getState().panelsById["opt-1"];
     expect(panel).toBeDefined();
     expect(panel?.spawnStatus).toBe("spawning");
+    expect(panel?.runtimeIdentity).toMatchObject({
+      kind: "agent",
+      agentId: "claude",
+      iconId: "claude",
+    });
     expect(usePanelStore.getState().panelIds).toContain("opt-1");
 
     release!();

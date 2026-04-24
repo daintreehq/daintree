@@ -26,6 +26,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const SCREENSHOT_DIR = path.resolve(__dirname, "../../test-results/terminal-identity-transitions");
 const MAX_DIAGNOSTIC_LINES = 1_500;
+const AGENT_IDLE_STICKINESS_MS = 45_000;
 const ANSI_ESCAPE_PATTERN = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, "g");
 const AGENT_STATE_VALUES = new Set([
   "idle",
@@ -85,6 +86,24 @@ async function expectPanelHasNoAgentState(panel: Locator): Promise<void> {
       intervals: [250],
     })
     .toBeNull();
+}
+
+async function expectAgentChromeSurvivesIdle(
+  page: Page,
+  panel: Locator,
+  terminalId: string,
+  agentId: string
+): Promise<void> {
+  await page.waitForTimeout(AGENT_IDLE_STICKINESS_MS);
+  await expect
+    .poll(() => panel.getAttribute("data-chrome-agent-id"), {
+      timeout: 5_000,
+      intervals: [250],
+    })
+    .toBe(agentId);
+  await expectPanelHeaderIcon(panel, agentId);
+  await expectPanelHasAgentState(panel);
+  await expectWorktreeTracksAgent(page, terminalId, agentId);
 }
 
 async function expandVisibleWorktreeTerminalAccordions(page: Page): Promise<void> {
@@ -429,7 +448,7 @@ test.describe("Terminal chrome ↔ live process identity (bidirectional)", () =>
         })
         .toBe("claude");
 
-      // Derived chrome attribute — must match detection exactly (chrome = live).
+      // Detection has now caught up; chrome must still be Claude.
       expect(await panel.getAttribute("data-chrome-agent-id")).toBe("claude");
 
       // Visible chrome: title contains "Claude".
@@ -469,6 +488,13 @@ test.describe("Terminal chrome ↔ live process identity (bidirectional)", () =>
       }
     });
 
+    await test.step("cold-launched Claude remains agent-branded after idle wait", async () => {
+      const { window } = ctx;
+      const panel = window.locator(`[data-panel-id="${claudePanelId}"]`);
+      await expectAgentChromeSurvivesIdle(window, panel, claudePanelId, "claude");
+      await diagnostics?.captureSnapshot("cold-launched Claude survived idle wait", window);
+    });
+
     await test.step("type /quit in Claude", async () => {
       const { window } = ctx;
       const panel = window.locator(`[data-panel-id="${claudePanelId}"]`);
@@ -491,7 +517,7 @@ test.describe("Terminal chrome ↔ live process identity (bidirectional)", () =>
         })
         .toBeNull();
 
-      // Chrome must mirror detection. Zero lag.
+      // Chrome must release durable launch affinity after the explicit exit.
       await expect
         .poll(() => panel.getAttribute("data-chrome-agent-id"), {
           timeout: 5_000,
@@ -593,10 +619,17 @@ test.describe("Terminal chrome ↔ live process identity (bidirectional)", () =>
       });
     });
 
+    await test.step("typed Claude remains agent-branded after idle wait", async () => {
+      const { window } = ctx;
+      const panel = window.locator(`[data-panel-id="${plainPanelId}"]`);
+      await expectAgentChromeSurvivesIdle(window, panel, plainPanelId, "claude");
+      await diagnostics?.captureSnapshot("typed Claude survived idle wait", window);
+    });
+
     // ---------------------------------------------------------------------
     // FLOW 3: Promoted plain shell → /quit → demotes back
     // Covers the full enter-exit cycle on a single terminal — the scenario
-    // that most directly proves chrome is driven ONLY by live process state.
+    // that most directly proves a terminal can enter and exit agent affinity.
     // ---------------------------------------------------------------------
 
     await test.step("quit Claude from the promoted plain terminal", async () => {

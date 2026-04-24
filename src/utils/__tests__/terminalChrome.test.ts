@@ -88,13 +88,60 @@ describe("deriveTerminalChrome", () => {
     });
   });
 
-  it("returns agent chrome from live detection only", () => {
+  it("returns agent chrome from live detection", () => {
     expect(deriveTerminalChrome({ detectedAgentId: "claude" })).toMatchObject({
       iconId: "claude",
       label: "Claude",
       isAgent: true,
       agentId: "claude",
       runtimeKind: "agent",
+    });
+  });
+
+  it("returns agent chrome from durable launch affinity until explicit exit", () => {
+    expect(
+      deriveTerminalChrome({
+        launchAgentId: "claude",
+        agentState: "working",
+      })
+    ).toMatchObject({
+      iconId: "claude",
+      label: "Claude",
+      isAgent: true,
+      agentId: "claude",
+      runtimeKind: "agent",
+    });
+  });
+
+  it("demotes launch affinity to plain terminal after explicit agent exit", () => {
+    expect(
+      deriveTerminalChrome({
+        launchAgentId: "claude",
+        agentState: "exited",
+      })
+    ).toMatchObject({
+      iconId: null,
+      label: "Terminal",
+      isAgent: false,
+      agentId: null,
+      runtimeKind: "none",
+    });
+  });
+
+  it("shows a process icon after a launch-affinity terminal has explicitly exited", () => {
+    expect(
+      deriveTerminalChrome({
+        launchAgentId: "claude",
+        agentState: "exited",
+        detectedProcessId: "npm",
+      })
+    ).toMatchObject({
+      iconId: "npm",
+      label: "npm",
+      isAgent: false,
+      agentId: null,
+      processId: "npm",
+      runtimeKind: "process",
     });
   });
 

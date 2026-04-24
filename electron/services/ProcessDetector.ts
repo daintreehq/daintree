@@ -103,6 +103,8 @@ const PACKAGE_MANAGER_ICON_IDS = new Set(["npm", "yarn", "pnpm", "bun", "compose
  * commonly for Node-hosted CLIs where `comm = "node"` and argv[1] is the
  * agent script path (`node /path/to/claude --resume`).
  *
+ * Shell quotes and path separators are stripped so
+ * `'/Users/me/.local/bin/claude' --flag` resolves to `claude`.
  * Extensions like .js / .py / .rb are stripped so "claude.mjs" → "claude".
  * Returns argv[0], argv[1], argv[2] basenames.
  *
@@ -113,17 +115,69 @@ const PACKAGE_MANAGER_ICON_IDS = new Set(["npm", "yarn", "pnpm", "bun", "compose
  */
 export function extractCommandNameCandidates(command: string | undefined): string[] {
   if (!command) return [];
-  const parts = command.trim().split(/\s+/);
+  const parts = splitShellLikeCommand(command);
   const candidates: string[] = [];
   for (let i = 0; i < parts.length && candidates.length < 3; i++) {
     const arg = parts[i];
     if (!arg || arg.startsWith("-")) continue;
+    if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(arg)) continue;
     const basename = arg.split(/[\\/]/).pop();
     if (!basename) continue;
-    const withoutExt = basename.replace(/\.(m?js|cjs|ts|py|rb|php|pl)$/i, "");
+    const withoutExt = basename
+      .replace(/\.exe$/i, "")
+      .replace(/\.(m?js|cjs|ts|py|rb|php|pl)$/i, "");
     if (withoutExt) candidates.push(withoutExt);
   }
   return candidates;
+}
+
+function splitShellLikeCommand(command: string): string[] {
+  const parts: string[] = [];
+  let current = "";
+  let quote: "'" | `"` | null = null;
+  let escaping = false;
+
+  for (const char of command.trim()) {
+    if (escaping) {
+      current += char;
+      escaping = false;
+      continue;
+    }
+
+    if (char === "\\" && quote !== "'") {
+      escaping = true;
+      continue;
+    }
+
+    if ((char === "'" || char === `"`) && quote === null) {
+      quote = char;
+      continue;
+    }
+
+    if (char === quote) {
+      quote = null;
+      continue;
+    }
+
+    if (quote === null && /\s/.test(char)) {
+      if (current) {
+        parts.push(current);
+        current = "";
+      }
+      continue;
+    }
+
+    current += char;
+  }
+
+  if (escaping) {
+    current += "\\";
+  }
+  if (current) {
+    parts.push(current);
+  }
+
+  return parts;
 }
 
 /** @deprecated Use extractCommandNameCandidates — retained for test import. */
@@ -140,7 +194,7 @@ export function extractScriptBasenameFromCommand(command: string | undefined): s
 // leaking credentials into console or into window.__daintreeIdentityEvents().
 export function redactArgv(command: string | undefined): string {
   if (!command) return "";
-  const first = command.trim().split(/\s+/)[0];
+  const first = splitShellLikeCommand(command)[0];
   if (!first) return "";
   const basename = first.split(/[\\/]/).pop() ?? first;
   return JSON.stringify(basename);
@@ -242,12 +296,14 @@ export function makeAgentResult(params: {
 export function makeNoAgentResult(params: {
   isBusy?: boolean;
   currentCommand?: string;
+  evidenceSource?: DetectionEvidenceSource;
 }): DetectionResult {
   return {
     detectionState: "no_agent",
     detected: false,
     isBusy: params.isBusy,
     currentCommand: params.currentCommand,
+    evidenceSource: params.evidenceSource,
   };
 }
 
@@ -310,6 +366,7 @@ export class ProcessDetector {
   private pendingDetected: { agentType?: BuiltInAgentId; processIconId?: string } | null = null;
   private lastUnknownSignature: string | null = null;
   private lastPassSignature: string | null = null;
+  private lastShellEvidenceRetentionSignature: string | null = null;
 
   // Shell-command evidence injected by TerminalProcess when a command is
   // submitted through the PTY. Merges with process-tree evidence inside
@@ -371,27 +428,35 @@ export class ProcessDetector {
    * Clear any injected shell-command evidence. Called by TerminalProcess on
    * prompt-return (the command finished) or on terminal teardown.
    *
-   * When the committed identity was held SOLELY by shell-command evidence
-   * (evidenceSource === "shell_command"), clearing the evidence leaves no
-   * support for the commit — the process tree showed nothing, and the shell
-   * signal just went away. In that case we demote synchronously so the UI
-   * clears the stale badge instead of waiting for process-tree hysteresis
-   * to run (which in test/mock environments may never tick). When the
-   * commit was also backed by the process tree ("both" or "process_tree"),
-   * the tree-sourced support is independent of the shell clear — let the
-   * natural detect cycle drive any demotion.
+   * Prompt-return is an explicit lifecycle signal: the shell prompt came back,
+   * so the agent command finished. That is allowed to demote an agent. Timer
+   * expiry and process-tree absence are not allowed to demote agents because
+   * idle CLIs can rewrite argv/comm or briefly disappear from process scans.
    */
-  clearShellCommandEvidence(): void {
+  clearShellCommandEvidence(reason = "manual"): void {
+    const promptReturned = reason === "prompt-return";
     const shellWasSoleSupport =
       this.lastEvidenceSource === "shell_command" &&
       (this.lastDetected !== null || this.lastProcessIconId !== null);
+    const shouldDemoteCommittedAgent = promptReturned && this.lastDetected !== null;
+    const shouldDemoteCommittedProcessIcon =
+      this.lastDetected === null && this.lastProcessIconId !== null && shellWasSoleSupport;
+
+    if (this.shellCommandIdentity !== null) {
+      console.log(
+        `[IdentityDebug] shell-evidence-clear term=${this.terminalId.slice(-8)} ` +
+          `reason=${reason} agent=${this.shellCommandIdentity.agentType ?? "<none>"} ` +
+          `icon=${this.shellCommandIdentity.processIconId ?? "<none>"} ` +
+          `soleSupport=${shellWasSoleSupport} promptReturned=${promptReturned}`
+      );
+    }
 
     this.shellCommandIdentity = null;
     this.shellCommandText = undefined;
     this.shellCommandStickyUntil = 0;
     this.shellCommandExpiresAt = 0;
 
-    if (shellWasSoleSupport && this.isStarted) {
+    if ((shouldDemoteCommittedAgent || shouldDemoteCommittedProcessIcon) && this.isStarted) {
       this.lastDetected = null;
       this.lastProcessIconId = null;
       this.lastEvidenceSource = null;
@@ -402,7 +467,11 @@ export class ProcessDetector {
       this.pendingDetected = null;
       try {
         this.callback(
-          makeNoAgentResult({ isBusy: false, currentCommand: undefined }),
+          makeNoAgentResult({
+            isBusy: false,
+            currentCommand: undefined,
+            evidenceSource: promptReturned ? "shell_command" : undefined,
+          }),
           this.spawnedAt
         );
       } catch (err) {
@@ -481,15 +550,32 @@ export class ProcessDetector {
 
   private detect(): void {
     try {
-      // Expire stale shell-command evidence before each detect pass so a
-      // synthetic identity from a never-started subprocess can't pin the
-      // detector to `agent` past the upper bound.
+      // Expire stale non-agent shell-command evidence before each detect pass
+      // so short-lived process badges (npm/docker/etc.) do not pin chrome.
+      // Agent evidence is deliberately NOT expired here. Agents demote only on
+      // explicit lifecycle signals (prompt-return/PTy exit/kill), not on timer
+      // expiry or process-tree absence. Real CLIs can rewrite argv/comm or look
+      // idle in `ps` while still owning the terminal.
       if (
         this.shellCommandIdentity !== null &&
         this.shellCommandExpiresAt > 0 &&
         Date.now() > this.shellCommandExpiresAt
       ) {
-        this.clearShellCommandEvidence();
+        const childCount = this.getPtyChildCount();
+        if (this.shellCommandIdentity.agentType) {
+          const signature = `${this.shellCommandIdentity.agentType}|${childCount}`;
+          if (signature !== this.lastShellEvidenceRetentionSignature) {
+            this.lastShellEvidenceRetentionSignature = signature;
+            console.log(
+              `[IdentityDebug] shell-evidence-retain term=${this.terminalId.slice(-8)} ` +
+                `reason=agent-requires-explicit-exit agent=${this.shellCommandIdentity.agentType} ` +
+                `children=${childCount}`
+            );
+          }
+        } else {
+          this.lastShellEvidenceRetentionSignature = null;
+          this.clearShellCommandEvidence("expired");
+        }
       }
 
       const result = this.detectAgent();
@@ -547,6 +633,7 @@ export class ProcessDetector {
         this.shellCommandIdentity !== null && Date.now() < this.shellCommandStickyUntil;
 
       let gatedCommitted = false;
+      let heldAgentDemotion = false;
 
       // Fast-commit path for shell-sourced evidence. The shell-command
       // fallback already debounces at its capture site (~1.2 s prompt-not-
@@ -595,6 +682,23 @@ export class ProcessDetector {
           this.onStreak = 0;
           this.offStreak = 0;
           this.pendingDetected = null;
+        } else if (committedAgent !== null) {
+          // Agent sessions are sticky until an explicit lifecycle signal
+          // arrives. Process-tree absence is too weak: idle CLIs can rewrite
+          // argv/comm, temporarily hide children, or show prompt-like TUI
+          // elements while still running. Prompt-return clears via
+          // clearShellCommandEvidence("prompt-return").
+          if (this.offStreak === 0) {
+            console.log(
+              `[IdentityDebug] demote-hold term=${this.terminalId.slice(-8)} ` +
+                `reason=agent-requires-explicit-exit agent=${committedAgent} ` +
+                `rawIcon=${rawIcon ?? "<none>"}`
+            );
+          }
+          this.onStreak = 0;
+          this.offStreak = 0;
+          this.pendingDetected = null;
+          heldAgentDemotion = true;
         } else {
           // OFF direction: raw reports no detection but committed state has one.
           this.offStreak += 1;
@@ -616,11 +720,10 @@ export class ProcessDetector {
         this.pendingDetected = null;
 
         // Upgrade evidence source when the process tree later corroborates a
-        // shell-only commit. Without this, `lastEvidenceSource` remains
-        // `"shell_command"` forever, and a subsequent `clearShellCommandEvidence()`
-        // call (e.g. on prompt-return) would mistakenly compute the shell as
-        // the sole support and emit a spurious demotion — even though the
-        // process tree still shows the agent running. #5809
+        // shell-only commit. This keeps diagnostics accurate and prevents a
+        // non-lifecycle/manual shell-evidence clear from treating the shell as
+        // the only support for a still-observed process. Prompt-return remains
+        // an explicit lifecycle demotion regardless of corroboration. #5809
         if (
           rawDetected &&
           result.evidenceSource &&
@@ -639,7 +742,8 @@ export class ProcessDetector {
       // otherwise a one-poll blip would leak through the side-channel and undo
       // the hysteresis gate. Once the gated streak commits (or the raw state
       // stabilises back onto committed), immediate emissions resume.
-      const shouldEmitImmediate = (busyChanged || commandChanged) && !inPendingTransition;
+      const shouldEmitImmediate =
+        (busyChanged || commandChanged) && !inPendingTransition && !heldAgentDemotion;
 
       if (gatedCommitted || shouldEmitImmediate) {
         if (result.isBusy !== undefined) {
@@ -687,8 +791,7 @@ export class ProcessDetector {
     // shell signal. Only when both signals are absent do we hold `unknown`.
     const cacheError = this.cache.getLastError();
     if (!isBusy && cacheError !== null) {
-      const shellEvidenceValid =
-        this.shellCommandIdentity !== null && Date.now() < this.shellCommandExpiresAt;
+      const shellEvidenceValid = this.isShellCommandEvidenceValid(false);
       if (shellEvidenceValid) {
         return this.mergeWithShellEvidence(null, { isBusy: false, currentCommand: undefined });
       }
@@ -799,7 +902,7 @@ export class ProcessDetector {
     // for merging even after the 12 s sticky window closes. Sticky governs
     // off-streak suppression in detect(); merge governs whether the shell
     // signal can promote (no tree) or disagree (tree shows different agent).
-    const shellEvidenceValid = shellIdentity !== null && Date.now() < this.shellCommandExpiresAt;
+    const shellEvidenceValid = this.isShellCommandEvidenceValid(ctx.isBusy);
 
     // Case A — tree has a positive agent match.
     if (treeMatch?.agentType) {
@@ -873,6 +976,22 @@ export class ProcessDetector {
 
   getLastDetected(): BuiltInAgentId | null {
     return this.lastDetected;
+  }
+
+  private getPtyChildCount(): number {
+    try {
+      return this.cache.getChildren(this.ptyPid).length;
+    } catch {
+      return 0;
+    }
+  }
+
+  private isShellCommandEvidenceValid(_isBusy: boolean): boolean {
+    const shellIdentity = this.shellCommandIdentity;
+    if (shellIdentity === null) return false;
+    if (shellIdentity.agentType) return true;
+    if (Date.now() < this.shellCommandExpiresAt) return true;
+    return false;
   }
 
   private normalizeProcessName(name: string): string {

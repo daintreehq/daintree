@@ -1,5 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ProcessDetector, extractScriptBasenameFromCommand } from "../ProcessDetector.js";
+import {
+  ProcessDetector,
+  detectCommandIdentity,
+  extractCommandNameCandidates,
+  extractScriptBasenameFromCommand,
+} from "../ProcessDetector.js";
 
 type ProcessNode = { pid: number; comm: string; command?: string };
 
@@ -376,7 +381,7 @@ describe("ProcessDetector", () => {
     );
   });
 
-  it("emits a state change when a previously detected process exits", () => {
+  it("does not demote a previously detected agent from process-tree absence", () => {
     const cache = createCacheMock();
     cache.setChildren(100, [{ pid: 200, comm: "claude", command: "claude --resume" }]);
     const callback = vi.fn();
@@ -392,20 +397,13 @@ describe("ProcessDetector", () => {
     detector.start();
     cache.emitRefresh();
 
-    // Two polls with no children to commit the OFF state (hysteresis threshold).
+    // Process-tree absence is no longer an agent-exit signal.
     cache.setChildren(100, []);
     cache.emitRefresh();
     cache.emitRefresh();
 
-    expect(callback).toHaveBeenCalledTimes(2);
-    expect(callback).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        detected: false,
-        isBusy: false,
-        currentCommand: undefined,
-      }),
-      expect.any(Number)
-    );
+    expect(callback).toHaveBeenCalledTimes(1);
+    expect(detector.getLastDetected()).toBe("claude");
   });
 
   it("detects Windows grandchild processes and applies priority against direct children", () => {
@@ -479,7 +477,7 @@ describe("ProcessDetector", () => {
       );
     });
 
-    it("does not emit off after a single absent poll; commits after two", () => {
+    it("does not demote an agent after absent process-tree polls", () => {
       const cache = createCacheMock();
       cache.setChildren(100, [{ pid: 200, comm: "claude", command: "claude --resume" }]);
       const callback = vi.fn();
@@ -500,15 +498,8 @@ describe("ProcessDetector", () => {
       expect(callback).toHaveBeenCalledTimes(1);
 
       cache.emitRefresh();
-      expect(callback).toHaveBeenCalledTimes(2);
-      expect(callback).toHaveBeenLastCalledWith(
-        expect.objectContaining({
-          detected: false,
-          isBusy: false,
-          currentCommand: undefined,
-        }),
-        expect.any(Number)
-      );
+      expect(callback).toHaveBeenCalledTimes(1);
+      expect(detector.getLastDetected()).toBe("claude");
     });
 
     it("does not commit detection when polls alternate between present and absent", () => {
@@ -574,7 +565,7 @@ describe("ProcessDetector", () => {
       );
     });
 
-    it("flushes a pending off streak on stop() so teardown does not leave ghost state", () => {
+    it("does not synthesize agent demotion on detector stop without explicit exit", () => {
       const cache = createCacheMock();
       cache.setChildren(100, [{ pid: 200, comm: "claude", command: "claude --resume" }]);
       const callback = vi.fn();
@@ -596,15 +587,7 @@ describe("ProcessDetector", () => {
 
       detector.stop();
 
-      expect(callback).toHaveBeenCalledTimes(2);
-      expect(callback).toHaveBeenLastCalledWith(
-        expect.objectContaining({
-          detected: false,
-          isBusy: false,
-          currentCommand: undefined,
-        }),
-        expect.any(Number)
-      );
+      expect(callback).toHaveBeenCalledTimes(1);
     });
 
     it("does not emit a synthetic on event when stop() is called mid on-streak", () => {
@@ -684,7 +667,7 @@ describe("ProcessDetector", () => {
       expect(callback).toHaveBeenCalledTimes(1);
     });
 
-    it("does not emit a second off flush on repeated stop() calls", () => {
+    it("does not emit an agent off flush on repeated stop() calls", () => {
       const cache = createCacheMock();
       cache.setChildren(100, [{ pid: 200, comm: "claude", command: "claude --resume" }]);
       const callback = vi.fn();
@@ -703,10 +686,10 @@ describe("ProcessDetector", () => {
       cache.emitRefresh();
       detector.stop();
 
-      expect(callback).toHaveBeenCalledTimes(2);
+      expect(callback).toHaveBeenCalledTimes(1);
 
       detector.stop();
-      expect(callback).toHaveBeenCalledTimes(2);
+      expect(callback).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -890,9 +873,10 @@ describe("ProcessDetector", () => {
       vi.useRealTimers();
     });
 
-    it("allows demotion after shell evidence expires past the upper bound", () => {
-      // Absolute upper bound (~30 s) guards against a synthetic shell identity
-      // holding `agent` forever when the process never actually started.
+    it("retains agent shell evidence after expiry until explicit prompt return", () => {
+      // Timer expiry is not an exit signal for agents. Idle CLIs can disappear
+      // from process scans while still owning the terminal; the shell prompt
+      // returning is the explicit exit signal.
       const base = Date.now();
       vi.setSystemTime(base);
       const cache = createCacheMock();
@@ -907,21 +891,68 @@ describe("ProcessDetector", () => {
       );
       expect(detector.getLastDetected()).toBe("claude");
 
-      // Advance past expiry (30 s upper bound) — shell evidence should now be
-      // expired and a blind tree can demote the commit via normal hysteresis.
+      // Advance past expiry (30 s upper bound) with an empty tree. This used
+      // to demote; it must now hold until prompt-return cleanup.
       vi.setSystemTime(base + 31_000);
       cache.setChildren(100, []);
       cache.emitRefresh();
       cache.emitRefresh();
 
+      expect(detector.getLastDetected()).toBe("claude");
+
+      detector.clearShellCommandEvidence("prompt-return");
       expect(detector.getLastDetected()).toBeNull();
       vi.useRealTimers();
     });
 
-    it("clearShellCommandEvidence releases the TTL so the tree path can demote", () => {
-      // On prompt-return, TerminalProcess clears shell evidence. The next
-      // detector pass with empty tree then moves through normal off-streak
-      // hysteresis and commits no_agent after two confirmations.
+    it("retains expired shell-agent evidence while the PTY still has a live child", () => {
+      // Real agent CLIs can rewrite argv/comm so process-tree matching never
+      // corroborates the shell command, but a live child still proves the
+      // launched command has not returned to the shell. The 30s shell-evidence
+      // expiry must not demote in that state.
+      const base = Date.now();
+      vi.setSystemTime(base);
+      const cache = createCacheMock();
+      const callback = vi.fn();
+      const detector = new ProcessDetector(
+        "terminal-expired-live-child",
+        base,
+        100,
+        callback,
+        cache as never
+      );
+      detector.start();
+
+      detector.injectShellCommandEvidence(
+        { agentType: "claude", processIconId: "claude", processName: "claude" },
+        "claude --resume",
+        base
+      );
+      expect(detector.getLastDetected()).toBe("claude");
+      callback.mockClear();
+
+      vi.setSystemTime(base + 31_000);
+      cache.setChildren(100, [{ pid: 200, comm: "node", command: "node /tmp/runtime.js" }]);
+      cache.emitRefresh();
+      cache.emitRefresh();
+
+      expect(detector.getLastDetected()).toBe("claude");
+      expect(callback.mock.calls.filter(([r]) => r.detectionState === "no_agent")).toHaveLength(0);
+
+      cache.setChildren(100, []);
+      cache.emitRefresh();
+
+      expect(detector.getLastDetected()).toBe("claude");
+
+      detector.clearShellCommandEvidence("prompt-return");
+      expect(detector.getLastDetected()).toBeNull();
+      vi.useRealTimers();
+    });
+
+    it("prompt-return clear demotes an agent synchronously", () => {
+      // On prompt-return, TerminalProcess clears shell evidence with the
+      // explicit lifecycle reason. That is the demotion signal; no process-tree
+      // confirmation is required.
       const base = Date.now();
       vi.setSystemTime(base);
       const cache = createCacheMock();
@@ -936,10 +967,7 @@ describe("ProcessDetector", () => {
       );
       expect(detector.getLastDetected()).toBe("claude");
 
-      detector.clearShellCommandEvidence();
-      cache.setChildren(100, []);
-      cache.emitRefresh();
-      cache.emitRefresh();
+      detector.clearShellCommandEvidence("prompt-return");
 
       expect(detector.getLastDetected()).toBeNull();
       vi.useRealTimers();
@@ -1008,7 +1036,7 @@ describe("ProcessDetector", () => {
       cache.setChildren(100, [{ pid: 200, comm: "claude", command: "claude --resume" }]);
       cache.emitRefresh();
 
-      // Step 3: clear shell evidence (simulates prompt-return). The committed
+      // Step 3: clear shell evidence without a lifecycle reason. The committed
       // state must PERSIST because the tree still supports it.
       callback.mockClear();
       detector.clearShellCommandEvidence();
@@ -1018,10 +1046,36 @@ describe("ProcessDetector", () => {
       expect(detector.getLastDetected()).toBe("claude");
     });
 
-    it("holds agent identity at 12s sticky boundary but demotes past 30s expiry", () => {
-      // The sticky TTL (12 s) and expiry TTL (30 s) must be distinct — at
-      // the sticky boundary the badge persists, only at the absolute expiry
-      // can the tree path demote.
+    it("prompt-return demotes even after process-tree corroboration", () => {
+      const cache = createCacheMock();
+      const callback = vi.fn();
+      const detector = new ProcessDetector(
+        "terminal-prompt-return-corroborated",
+        Date.now(),
+        100,
+        callback,
+        cache as never
+      );
+      detector.start();
+
+      detector.injectShellCommandEvidence(
+        { agentType: "claude", processIconId: "claude", processName: "claude" },
+        "claude --resume"
+      );
+      cache.setChildren(100, [{ pid: 200, comm: "claude", command: "claude --resume" }]);
+      cache.emitRefresh();
+      expect(detector.getLastDetected()).toBe("claude");
+
+      detector.clearShellCommandEvidence("prompt-return");
+
+      expect(detector.getLastDetected()).toBeNull();
+      expect(callback.mock.calls.some(([r]) => r.detectionState === "no_agent")).toBe(true);
+    });
+
+    it("holds agent identity at sticky and expiry boundaries until prompt return", () => {
+      // Sticky TTL (12 s) still suppresses off-streaks for all shell evidence,
+      // but agent evidence also survives the old 30 s expiry. Demotion now
+      // requires prompt return.
       const base = Date.now();
       vi.setSystemTime(base);
       const cache = createCacheMock();
@@ -1053,12 +1107,14 @@ describe("ProcessDetector", () => {
       cache.emitRefresh();
       expect(detector.getLastDetected()).toBe("claude");
 
-      // Past absolute expiry — shell evidence cleared on next detect, tree
-      // is empty and healthy, normal off-streak hysteresis runs and commits
-      // no_agent.
+      // Past the old absolute expiry — empty tree is still not enough to
+      // demote an agent.
       vi.setSystemTime(base + 30_001);
       cache.emitRefresh();
       cache.emitRefresh();
+      expect(detector.getLastDetected()).toBe("claude");
+
+      detector.clearShellCommandEvidence("prompt-return");
       expect(detector.getLastDetected()).toBeNull();
       vi.useRealTimers();
     });
@@ -1107,6 +1163,27 @@ describe("extractScriptBasenameFromCommand", () => {
     expect(extractScriptBasenameFromCommand("python3 /opt/script.py")).toBe("script");
     expect(extractScriptBasenameFromCommand("ruby /opt/tool.rb")).toBe("tool");
     expect(extractScriptBasenameFromCommand("deno /opt/thing.ts")).toBe("thing");
+  });
+
+  it("extracts command basenames from quoted absolute launch paths", () => {
+    expect(
+      extractCommandNameCandidates(
+        "'/Users/gpriday/.local/bin/claude' --dangerously-skip-permissions"
+      )
+    ).toEqual(["claude"]);
+    expect(
+      extractCommandNameCandidates('"/tmp/Daintree Test/bin/claude" --dangerously-skip-permissions')
+    ).toEqual(["claude"]);
+  });
+
+  it("detects agents from quoted absolute launch paths", () => {
+    expect(
+      detectCommandIdentity("'/Users/gpriday/.local/bin/claude' --dangerously-skip-permissions")
+    ).toMatchObject({
+      agentType: "claude",
+      processIconId: "claude",
+      processName: "claude",
+    });
   });
 
   it("skips leading flags", () => {

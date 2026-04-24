@@ -122,7 +122,7 @@ describe("TabButton", () => {
   // chrome (which read detectedAgentId elsewhere) but the tab icon stayed on
   // the generic terminal glyph because TerminalIcon never received the
   // detected id. This test pins the prop thread so a regression fails loud.
-  describe("icon tracks detectedAgentId (detection-only chrome rule)", () => {
+  describe("icon tracks terminal chrome descriptor", () => {
     it("renders the Claude agent icon when detectedAgentId='claude', even without launch hint", () => {
       const { container } = render(
         <TabButton
@@ -137,14 +137,19 @@ describe("TabButton", () => {
       expect(iconHost).not.toBeNull();
     });
 
-    it("renders the generic terminal icon when detectedAgentId is absent, ignoring launch hint", () => {
-      // Detection-only rule: no detection → no agent chrome, even if
-      // launchAgentId (aka `agentId` prop) says "claude". TerminalIcon should
-      // fall through to the plain SquareTerminal glyph.
+    it("renders the generic terminal icon when no agent affinity is present", () => {
       const { container } = render(<TabButton {...defaultProps} chrome={deriveTerminalChrome()} />);
       // Lucide's SquareTerminal renders an <svg>; that's what we expect here.
       const svgs = container.querySelectorAll("svg");
       expect(svgs.length).toBeGreaterThan(0);
+    });
+
+    it("renders the launch-affinity agent icon before live detection rehydrates", () => {
+      const { container } = render(
+        <TabButton {...defaultProps} chrome={deriveTerminalChrome({ launchAgentId: "claude" })} />
+      );
+      const marker = container.querySelector("[data-terminal-icon-id]");
+      expect(marker?.getAttribute("data-terminal-icon-id")).toBe("claude");
     });
 
     it("switches icon when detectedAgentId changes from undefined to 'claude' (promote)", () => {

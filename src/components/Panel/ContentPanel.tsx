@@ -204,12 +204,27 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
       chrome ??
       deriveTerminalChrome({
         kind,
+        launchAgentId: agentId,
         runtimeIdentity,
         detectedAgentId,
         detectedProcessId,
+        agentState,
+        runtimeStatus: isExited ? "exited" : undefined,
+        exitCode,
         presetColor,
       }),
-    [chrome, kind, runtimeIdentity, detectedAgentId, detectedProcessId, presetColor]
+    [
+      chrome,
+      kind,
+      agentId,
+      runtimeIdentity,
+      detectedAgentId,
+      detectedProcessId,
+      agentState,
+      isExited,
+      exitCode,
+      presetColor,
+    ]
   );
   const ownAgentState = terminalChrome.isAgent ? agentState : undefined;
   // Determine effective agent state for container border styling.

@@ -85,18 +85,18 @@ export interface AgentExitedPayload {
   /**
    * Identifies the kind of exit. `"subcommand"` means the detected agent
    * process stopped while the shell PTY is still alive (user quit to shell,
-   * process-tree demotion). PTY-level exits use the separate `agent:completed`
-   * channel and never emit `agent:exited`, so in practice this is always
-   * `"subcommand"` when set.
+   * process-tree demotion). `"terminal"` means the PTY itself exited but the
+   * preserved panel still needs renderer-side live identity cleared.
    *
    * The `agent:exited` channel is dual-purpose: it ALSO fires to clear
    * renderer-side live-detection fields when a plain process icon
    * (npm/vite/etc.) exits. In that case both `agentType` and `exitKind`
    * are undefined, and consumers that care only about actual agent exits
-   * should gate on `exitKind === "subcommand"` or `agentType !== undefined`.
+   * should gate on `exitKind === "subcommand" || exitKind === "terminal"`
+   * or `agentType !== undefined`.
    * #5807
    */
-  exitKind?: "subcommand";
+  exitKind?: "subcommand" | "terminal";
 }
 
 /**

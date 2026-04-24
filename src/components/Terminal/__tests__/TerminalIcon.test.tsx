@@ -79,12 +79,15 @@ describe("TerminalIcon", () => {
   });
 
   it("prefers detectedAgentId over launch-time agentId", () => {
-    // Runtime descriptor mirrors detectedAgentId; launch hints are not part of chrome.
+    // Live detection wins over durable launch affinity.
     const claudeLaunch = render(
-      <TerminalIcon kind="agent" chrome={deriveTerminalChrome({ detectedAgentId: "claude" })} />
+      <TerminalIcon kind="agent" chrome={deriveTerminalChrome({ launchAgentId: "claude" })} />
     ).container.innerHTML;
     const geminiDetected = render(
-      <TerminalIcon kind="agent" chrome={deriveTerminalChrome({ detectedAgentId: "gemini" })} />
+      <TerminalIcon
+        kind="agent"
+        chrome={deriveTerminalChrome({ launchAgentId: "claude", detectedAgentId: "gemini" })}
+      />
     ).container.innerHTML;
     const geminiOnly = render(
       <TerminalIcon kind="agent" chrome={deriveTerminalChrome({ detectedAgentId: "gemini" })} />
@@ -94,12 +97,24 @@ describe("TerminalIcon", () => {
     expect(geminiDetected).toBe(geminiOnly);
   });
 
-  it("does not use launch-time agent identity as chrome fallback", () => {
+  it("uses launch-time agent identity as chrome fallback until explicit exit", () => {
     const launchOnly = render(
-      <TerminalIcon kind="agent" chrome={deriveTerminalChrome({ detectedAgentId: undefined })} />
+      <TerminalIcon kind="agent" chrome={deriveTerminalChrome({ launchAgentId: "claude" })} />
     ).container.innerHTML;
     const generic = renderDefaultTerminalIcon();
 
-    expect(launchOnly).toBe(generic);
+    expect(launchOnly).not.toBe(generic);
+  });
+
+  it("returns to the generic terminal icon after explicit launch-agent exit", () => {
+    const launchExited = render(
+      <TerminalIcon
+        kind="agent"
+        chrome={deriveTerminalChrome({ launchAgentId: "claude", agentState: "exited" })}
+      />
+    ).container.innerHTML;
+    const generic = renderDefaultTerminalIcon();
+
+    expect(launchExited).toBe(generic);
   });
 });

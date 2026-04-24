@@ -93,7 +93,6 @@ const SHELL_PROMPT_PATTERNS = [
   /^\s*[A-Za-z0-9_.-]+@[\w.-]+(?:\s+[^\r\n]*)?\s*[#$%>]\s*$/,
   /^\s*[➜➤➟➔❯›]\s+.*$/,
 ] as const;
-
 // OSC 10/11 "?" queries terminated by BEL (\x07) or ST (\x1b\\).
 // Trigger and strip must use the same terminator-requiring pattern: if we
 // responded on an unterminated fragment but stripped only terminated ones,
@@ -111,8 +110,7 @@ const OSC_11_QUERY_STRIP_RE = /\x1b\]11;\?(?:\x07|\x1b\\)/g;
 // Backend-side identity for internal decisions (activity monitor pattern
 // lookup, event routing). Detection wins; during the boot window the launch
 // hint is used so cold-launched terminals start monitoring before the
-// process-tree poll has caught up. This helper is NOT chrome — chrome is
-// detection-only. See `docs/architecture/terminal-identity.md`.
+// process-tree poll has caught up.
 function getLiveAgentId(terminal: TerminalInfo): string | undefined {
   return terminal.detectedAgentId ?? terminal.launchAgentId;
 }
@@ -121,12 +119,13 @@ function getLiveAgentId(terminal: TerminalInfo): string | undefined {
  * Compute the default panel title for a terminal given its current chrome
  * identity. Used by the PTY host so the renderer can sync `panel.title` when
  * `titleMode === "default"`. Kept in lockstep with the renderer's
- * renderer terminal chrome rule: detection wins; demotion (ever-detected and
- * nothing now) returns the shell title; otherwise the launch hint.
+ * renderer terminal chrome rule: detection wins; launch affinity remains
+ * agent-branded until an explicit exited state says the agent has ended.
  */
 function computeDefaultTitle(terminal: TerminalInfo): string {
   const chromeId =
-    terminal.detectedAgentId ?? (terminal.everDetectedAgent ? undefined : terminal.launchAgentId);
+    terminal.detectedAgentId ??
+    (terminal.agentState === "exited" || terminal.isExited ? undefined : terminal.launchAgentId);
   if (!chromeId) return "Terminal";
   const config = AGENT_REGISTRY[chromeId];
   return config?.name ?? String(chromeId);
@@ -166,6 +165,7 @@ export class TerminalProcess {
   private shellIdentityFallbackIdentity: CommandIdentity | null = null;
   private shellIdentityFallbackCommitted = false;
   private shellIdentityFallbackPromptStreak = 0;
+  private shellIdentityFallbackSawPtyDescendant = false;
   private suppressNextShellSubmitSignal = false;
   private shellInputBuffer = "";
   private seededLaunchCommandText: string | undefined;
@@ -182,21 +182,19 @@ export class TerminalProcess {
   /**
    * True when an agent is currently observed in this PTY. Used to drive
    * chrome-level decisions (OSC color responder ownership, output fan-out to
-   * agent:output listeners). Returns true when detection is live OR when a
-   * launch hint exists and detection hasn't yet committed either way — the
-   * boot window, so cold-launched agents get responder ownership immediately.
+   * agent:output listeners). Detection wins, and durable launch affinity keeps
+   * cold-launched/restored agents wired until an explicit exit signal arrives.
    */
   private get isAgentLive(): boolean {
     const t = this.terminalInfo;
     if (t.detectedAgentId !== undefined) return true;
-    if (t.everDetectedAgent) return false;
+    if (t.agentState === "exited" || t.isExited) return false;
     return t.launchAgentId !== undefined;
   }
 
   // Live identity check for OSC 10/11 color-query responder ownership. Matches
-  // isAgentLive so a cold-launched agent owns the responder from the first
-  // write (before process-tree polling has caught up) and a demoted plain
-  // terminal releases it.
+  // isAgentLive so launch-affinity terminals own the responder before
+  // process-tree polling has caught up and release it on explicit exit.
   private get shouldHandleOscColorQueries(): boolean {
     return this.isAgentLive;
   }
@@ -637,10 +635,19 @@ export class TerminalProcess {
       !bracketedPaste &&
       (this.terminalInfo.detectedAgentId === undefined || isSeededLaunchCommandSubmit);
     const submittedCommandText = canCaptureShellInput ? this.captureShellInput(data) : undefined;
+    const isAgentUiPromptResponse =
+      !bracketedPaste &&
+      submittedCommandText === undefined &&
+      this.shellIdentityFallbackIdentity?.agentType !== undefined &&
+      (!this.shellIdentityFallbackCommitted || this.hasAgentUiPromptFalsePositive());
 
     if (!bracketedPaste && /[\r\n]/.test(data)) {
       if (this.suppressNextShellSubmitSignal) {
         this.suppressNextShellSubmitSignal = false;
+      } else if (isAgentUiPromptResponse) {
+        console.log(
+          `[IdentityDebug] shell-submit-skip term=${this.id.slice(-8)} reason=agent-ui-prompt`
+        );
       } else {
         this.markShellCommandSubmitted(submittedCommandText, {
           allowWhenAgentDetected: isSeededLaunchCommandSubmit,
@@ -1214,6 +1221,7 @@ export class TerminalProcess {
       : null;
     this.shellIdentityFallbackCommitted = false;
     this.shellIdentityFallbackPromptStreak = 0;
+    this.shellIdentityFallbackSawPtyDescendant = false;
 
     // If the new command has no recognizable identity (e.g. `echo hi` after a
     // prior `npm run dev` that committed `npm`), clear any stale shell
@@ -1240,6 +1248,8 @@ export class TerminalProcess {
         `argv0=${redactArgv(normalized)}`
     );
     this.processDetector.injectShellCommandEvidence(identity, normalized);
+    this.markShellCommandSubmitted(normalized, { allowWhenAgentDetected: true });
+    this.seededLaunchCommandText = undefined;
   }
 
   private startShellIdentityFallbackWatcher(): void {
@@ -1261,6 +1271,83 @@ export class TerminalProcess {
     this.shellIdentityFallbackIdentity = null;
     this.shellIdentityFallbackCommitted = false;
     this.shellIdentityFallbackPromptStreak = 0;
+    this.shellIdentityFallbackSawPtyDescendant = false;
+  }
+
+  private getPtyDescendantCount(): number | undefined {
+    const ptyPid = this.terminalInfo.ptyProcess.pid;
+    if (ptyPid === undefined || !this.deps.processTreeCache) {
+      return undefined;
+    }
+    return this.deps.processTreeCache.getDescendantPids(ptyPid).length;
+  }
+
+  private readForegroundProcessGroupSnapshot(): {
+    shellPgid: number;
+    foregroundPgid: number;
+  } | null {
+    if (process.platform === "win32") {
+      return null;
+    }
+
+    const ptyPid = this.terminalInfo.ptyProcess.pid;
+    if (ptyPid === undefined) {
+      return null;
+    }
+
+    try {
+      const result = spawnSync("ps", ["-o", "pgid=,tpgid=", "-p", String(ptyPid)], {
+        encoding: "utf8",
+        timeout: 750,
+      });
+      if (result.status !== 0 || result.error) {
+        return null;
+      }
+      const [pgidText, tpgidText] = result.stdout.trim().split(/\s+/);
+      const shellPgid = Number.parseInt(pgidText ?? "", 10);
+      const foregroundPgid = Number.parseInt(tpgidText ?? "", 10);
+      if (!Number.isFinite(shellPgid) || !Number.isFinite(foregroundPgid)) {
+        return null;
+      }
+      return { shellPgid, foregroundPgid };
+    } catch {
+      return null;
+    }
+  }
+
+  private isForegroundShellIdleForAgentDemotion(): boolean {
+    const snapshot = this.readForegroundProcessGroupSnapshot();
+    if (!snapshot) {
+      // Non-POSIX and unsupported environments fall back to the legacy prompt
+      // path. On macOS/Linux this snapshot is the authoritative demotion gate.
+      return true;
+    }
+
+    if (snapshot.shellPgid <= 0 || snapshot.foregroundPgid <= 0) {
+      return true;
+    }
+
+    return snapshot.shellPgid === snapshot.foregroundPgid;
+  }
+
+  private hasRecentCommandFailureOutput(): boolean {
+    const recent = this.getLastNLines(SHELL_IDENTITY_FALLBACK_SCAN_LINES).join("\n");
+    return /(?:command not found|not found|no such file|permission denied)/i.test(recent);
+  }
+
+  private hasAgentUiPromptFalsePositive(): boolean {
+    const lines = this.getLastNLines(SHELL_IDENTITY_FALLBACK_SCAN_LINES);
+    const lastVisibleLine = [...lines]
+      .reverse()
+      .find((line) => typeof line === "string" && line.trim().length > 0);
+    const recent = [this.getCursorLine(), lastVisibleLine]
+      .filter((line): line is string => typeof line === "string" && line.trim().length > 0)
+      .join("\n");
+    return (
+      /(?:accessing workspace|yes,\s*i trust this folder|enter to confirm|quick safety check)/i.test(
+        recent
+      ) || /^\s*[❯›]\s+\d+\./m.test(recent)
+    );
   }
 
   private isShellPromptVisible(): boolean {
@@ -1295,6 +1382,12 @@ export class TerminalProcess {
         this.shellIdentityFallbackCommandText = normalized;
         this.shellIdentityFallbackIdentity = detectCommandIdentity(normalized);
       }
+    }
+
+    const ptyDescendantCount = this.getPtyDescendantCount();
+    const hasPtyDescendants = ptyDescendantCount !== undefined && ptyDescendantCount > 0;
+    if (hasPtyDescendants) {
+      this.shellIdentityFallbackSawPtyDescendant = true;
     }
 
     const promptVisible = this.isShellPromptVisible();
@@ -1374,19 +1467,49 @@ export class TerminalProcess {
       return;
     }
 
+    if (
+      this.shellIdentityFallbackIdentity.agentType &&
+      !this.hasRecentCommandFailureOutput() &&
+      !this.isForegroundShellIdleForAgentDemotion()
+    ) {
+      if (this.shellIdentityFallbackPromptStreak > 0) {
+        console.log(
+          `[IdentityDebug] shell-fallback-hold term=${this.id.slice(-8)} ` +
+            `reason=foreground-child-active`
+        );
+      }
+      this.shellIdentityFallbackPromptStreak = 0;
+      return;
+    }
+
+    if (
+      this.shellIdentityFallbackIdentity.agentType &&
+      !this.hasRecentCommandFailureOutput() &&
+      this.hasAgentUiPromptFalsePositive()
+    ) {
+      if (this.shellIdentityFallbackPromptStreak > 0) {
+        console.log(
+          `[IdentityDebug] shell-fallback-hold term=${this.id.slice(-8)} ` +
+            `reason=agent-ui-prompt count=${ptyDescendantCount ?? "unknown"} ` +
+            `sawDescendant=${this.shellIdentityFallbackSawPtyDescendant}`
+        );
+      }
+      this.shellIdentityFallbackPromptStreak = 0;
+      return;
+    }
+
     this.shellIdentityFallbackPromptStreak += 1;
     if (this.shellIdentityFallbackPromptStreak < SHELL_IDENTITY_FALLBACK_PROMPT_POLLS) {
       return;
     }
 
     // Prompt has returned — the command has finished. Clear the injected
-    // shell evidence so the next detector pass no longer overrides a blind
-    // process tree with a stale shell identity. The process-tree path then
-    // takes over and emits the demotion naturally via hysteresis. When no
-    // detector is attached, fall back to the legacy direct emission so the
-    // UI still demotes promptly.
+    // shell evidence as an explicit lifecycle demotion. Process-tree absence
+    // is not authoritative for agent exit; shell prompt return is. When no
+    // detector is attached, fall back to the legacy direct emission so the UI
+    // still demotes promptly.
     if (this.processDetector) {
-      this.processDetector.clearShellCommandEvidence();
+      this.processDetector.clearShellCommandEvidence("prompt-return");
     } else {
       this.handleAgentDetection(
         {
@@ -1745,8 +1868,8 @@ export class TerminalProcess {
         this.killTreeTimer = null;
       }
 
-      this.callbacks.onExit(this.id, exitCode ?? 0);
       const hadAgent = !!terminal.launchAgentId || !!terminal.everDetectedAgent;
+      const liveAgentAtExit = getLiveAgentId(terminal);
       this.forensicsBuffer.logForensics(this.id, exitCode ?? 0, terminal, hadAgent, signal);
 
       if (hadAgent && !terminal.wasKilled) {
@@ -1757,9 +1880,36 @@ export class TerminalProcess {
         });
       }
 
-      if (hadAgent && getLiveAgentId(terminal) && !terminal.wasKilled) {
+      if (hadAgent && liveAgentAtExit && !terminal.wasKilled) {
         this.deps.agentStateService.emitAgentCompleted(terminal, exitCode ?? 0);
       }
+
+      const previousAgent = terminal.detectedAgentId;
+      const hadDetectedIdentity =
+        previousAgent !== undefined ||
+        terminal.detectedProcessIconId !== undefined ||
+        this.lastDetectedProcessIconId !== undefined;
+      if (hadDetectedIdentity && !terminal.wasKilled) {
+        terminal.detectedAgentId = undefined;
+        terminal.detectedProcessIconId = undefined;
+        this.lastDetectedProcessIconId = undefined;
+        if (previousAgent) {
+          terminal.analysisEnabled = false;
+        }
+        const nextTitle = computeDefaultTitle(terminal);
+        if (previousAgent && (terminal.titleMode ?? "default") === "default") {
+          terminal.title = nextTitle;
+        }
+        events.emit("agent:exited", {
+          terminalId: this.id,
+          agentType: previousAgent,
+          defaultTitle: previousAgent ? nextTitle : undefined,
+          timestamp: Date.now(),
+          ...(previousAgent ? { exitKind: "terminal" as const } : {}),
+        });
+      }
+
+      this.callbacks.onExit(this.id, exitCode ?? 0);
 
       // Fallback detection: inspect the forensic buffer BEFORE teardown clears
       // anything and emit a fallback-triggered event so the renderer can walk
@@ -1893,25 +2043,13 @@ export class TerminalProcess {
       }
     } else if (isDetected && !result.agentType && result.processIconId) {
       // Non-agent process detected (npm, python, docker, etc.)
-      // If we're transitioning directly from an agent, clear agent state first
       if (terminal.detectedAgentId) {
-        const previousAgent = terminal.detectedAgentId;
-        this.deps.agentStateService.updateAgentState(terminal, { type: "exit", code: 0 });
-        terminal.detectedAgentId = undefined;
-        this.stopActivityMonitor();
-        terminal.analysisEnabled = false;
-        const nextTitle = computeDefaultTitle(terminal);
-        if ((terminal.titleMode ?? "default") === "default") {
-          terminal.title = nextTitle;
-        }
-        events.emit("agent:exited", {
-          terminalId: this.id,
-          agentType: previousAgent,
-          defaultTitle: nextTitle,
-          timestamp: Date.now(),
-          exitKind: "subcommand",
-        });
-        justClearedDetection = true;
+        console.log(
+          `[IdentityDebug] terminal-demote-hold term=${this.id.slice(-8)} ` +
+            `reason=agent-requires-explicit-exit agent=${terminal.detectedAgentId} ` +
+            `processIcon=${result.processIconId}`
+        );
+        return;
       }
       if (this.lastDetectedProcessIconId !== result.processIconId) {
         this.lastDetectedProcessIconId = result.processIconId;
@@ -1926,6 +2064,17 @@ export class TerminalProcess {
     } else if (!isDetected && (terminal.detectedAgentId || this.lastDetectedProcessIconId)) {
       const previousAgent = terminal.detectedAgentId;
       if (previousAgent) {
+        if (result.evidenceSource !== "shell_command") {
+          console.log(
+            `[IdentityDebug] terminal-demote-hold term=${this.id.slice(-8)} ` +
+              `reason=agent-requires-explicit-exit agent=${previousAgent}`
+          );
+          return;
+        }
+        console.log(
+          `[IdentityDebug] terminal-demote-apply term=${this.id.slice(-8)} ` +
+            `reason=prompt-return agent=${previousAgent}`
+        );
         this.deps.agentStateService.updateAgentState(terminal, { type: "exit", code: 0 });
         terminal.detectedAgentId = undefined;
         justClearedDetection = true;

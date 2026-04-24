@@ -157,11 +157,21 @@ describe("WorktreeTerminalSection summary icon", () => {
     expect(screen.queryByTestId("agent-icon")).toBeNull();
   });
 
-  it("does not resolve agent from launchAgentId alone (everDetectedAgent=true demotes to plain shell)", () => {
+  it("resolves agent from launchAgentId while launch affinity is still active", () => {
+    renderSection({
+      terminals: [
+        makeTerminal({ launchAgentId: "claude", everDetectedAgent: true, agentState: "working" }),
+        makeTerminal({ launchAgentId: "claude", everDetectedAgent: true, agentState: "idle" }),
+      ],
+    });
+    expect(screen.getByTestId("agent-icon")).toBeDefined();
+  });
+
+  it("demotes launchAgentId-only terminals after explicit agent exit", () => {
     const { container } = renderSection({
       terminals: [
-        makeTerminal({ launchAgentId: "claude", everDetectedAgent: true }),
-        makeTerminal({ launchAgentId: "claude", everDetectedAgent: true }),
+        makeTerminal({ launchAgentId: "claude", agentState: "exited" }),
+        makeTerminal({ launchAgentId: "claude", agentState: "exited" }),
       ],
     });
     expect(screen.queryByTestId("agent-icon")).toBeNull();

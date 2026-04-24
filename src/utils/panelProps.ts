@@ -71,9 +71,13 @@ export function buildPanelProps({
     runtimeIdentity: terminal.runtimeIdentity,
     chrome: deriveTerminalChrome({
       kind: terminal.kind,
+      launchAgentId: terminal.launchAgentId,
       runtimeIdentity: terminal.runtimeIdentity,
       detectedAgentId: terminal.detectedAgentId,
       detectedProcessId: terminal.detectedProcessId,
+      agentState: terminal.agentState,
+      runtimeStatus: terminal.runtimeStatus,
+      exitCode: terminal.exitCode,
       presetColor: terminal.agentPresetColor,
     }),
     agentPresetId: terminal.agentPresetId,

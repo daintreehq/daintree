@@ -19,7 +19,7 @@ type AgentExitedHandler = (data: {
   terminalId: string;
   agentType?: string;
   timestamp: number;
-  exitKind?: "subcommand";
+  exitKind?: "subcommand" | "terminal";
 }) => void;
 type ActivityHandler = (data: {
   terminalId: string;

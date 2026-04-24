@@ -85,6 +85,31 @@ function createMockProcessTreeCache(): ProcessTreeCache {
   } as unknown as ProcessTreeCache;
 }
 
+function createMutableDescendantCache(): {
+  cache: ProcessTreeCache;
+  setDescendants: (pids: number[]) => void;
+} {
+  const cache = createMockProcessTreeCache();
+  let descendants: number[] = [];
+  vi.mocked(cache.getDescendantPids).mockImplementation(() => descendants);
+  vi.mocked(cache.getChildren).mockImplementation(() =>
+    descendants.map((pid) => ({
+      pid,
+      ppid: 123,
+      comm: "node",
+      command: "node /tmp/runtime.js",
+      cpuPercent: 0,
+      rssKb: 0,
+    }))
+  );
+  return {
+    cache,
+    setDescendants: (pids) => {
+      descendants = pids;
+    },
+  };
+}
+
 type TerminalProcessOptions = ConstructorParameters<typeof TerminalProcess>[1];
 type TerminalProcessDeps = ConstructorParameters<typeof TerminalProcess>[3];
 
@@ -110,6 +135,7 @@ function createAgentTerminal(deps?: Partial<TerminalProcessDeps>): TerminalProce
         handleActivityState: () => {},
         updateAgentState: () => {},
         emitAgentKilled: () => {},
+        emitAgentCompleted: () => {},
       } as unknown as TerminalProcessDeps["agentStateService"],
       ptyPool: null,
       processTreeCache: createMockProcessTreeCache(),
@@ -141,6 +167,7 @@ function createPlainTerminal(id = "t-plain", deps?: Partial<TerminalProcessDeps>
         handleActivityState: () => {},
         updateAgentState: () => {},
         emitAgentKilled: () => {},
+        emitAgentCompleted: () => {},
       } as unknown as TerminalProcessDeps["agentStateService"],
       ptyPool: null,
       processTreeCache: createMockProcessTreeCache(),
@@ -177,6 +204,7 @@ function createPlainTerminalWithCommand(
         handleActivityState: () => {},
         updateAgentState: () => {},
         emitAgentKilled: () => {},
+        emitAgentCompleted: () => {},
       } as unknown as TerminalProcessDeps["agentStateService"],
       ptyPool: null,
       processTreeCache: createMockProcessTreeCache(),
@@ -240,7 +268,7 @@ describe("TerminalProcess.handleAgentDetection — disposes ActivityMonitor on a
     terminal.dispose();
   });
 
-  it("Branch A — disposes monitor when a non-agent process replaces the agent", () => {
+  it("holds monitor when a non-agent process appears while an agent is live", () => {
     expect(getActivityMonitor(terminal)).not.toBeNull();
 
     callHandleAgentDetection(
@@ -249,17 +277,32 @@ describe("TerminalProcess.handleAgentDetection — disposes ActivityMonitor on a
       getSpawnedAt(terminal)
     );
 
-    expect(getActivityMonitor(terminal)).toBeNull();
-    expect(exitedEvents).toHaveLength(1);
-    expect(exitedEvents[0]).toEqual({ terminalId: "t-agent", agentType: "claude" });
+    expect(getActivityMonitor(terminal)).not.toBeNull();
+    expect(terminal.getInfo().detectedAgentId).toBe("claude");
+    expect(exitedEvents).toHaveLength(0);
   });
 
-  it("Branch B — disposes monitor when no process is detected after the agent", () => {
+  it("holds monitor when process-tree absence reports no process after the agent", () => {
     expect(getActivityMonitor(terminal)).not.toBeNull();
 
     callHandleAgentDetection(terminal, makeNoAgentResult({}), getSpawnedAt(terminal));
 
+    expect(getActivityMonitor(terminal)).not.toBeNull();
+    expect(terminal.getInfo().detectedAgentId).toBe("claude");
+    expect(exitedEvents).toHaveLength(0);
+  });
+
+  it("disposes monitor when prompt-return explicitly exits the agent", () => {
+    expect(getActivityMonitor(terminal)).not.toBeNull();
+
+    callHandleAgentDetection(
+      terminal,
+      makeNoAgentResult({ evidenceSource: "shell_command" }),
+      getSpawnedAt(terminal)
+    );
+
     expect(getActivityMonitor(terminal)).toBeNull();
+    expect(terminal.getInfo().detectedAgentId).toBeUndefined();
     expect(exitedEvents).toHaveLength(1);
     expect(exitedEvents[0]).toEqual({ terminalId: "t-agent", agentType: "claude" });
   });
@@ -287,7 +330,7 @@ describe("TerminalProcess.handleAgentDetection — disposes ActivityMonitor on a
       // Demote: agent gone.
       callHandleAgentDetection(
         trackedTerminal,
-        makeNoAgentResult({}),
+        makeNoAgentResult({ evidenceSource: "shell_command" }),
         getSpawnedAt(trackedTerminal)
       );
       expect(getActivityMonitor(trackedTerminal)).toBeNull();
@@ -302,23 +345,19 @@ describe("TerminalProcess.handleAgentDetection — disposes ActivityMonitor on a
     }
   });
 
-  it("Branch A → Branch B sequence — only one agent:exited with the original agentType", () => {
+  it("non-agent process and process absence do not emit agent exit without prompt return", () => {
     callHandleAgentDetection(
       terminal,
       makeAgentResult({ processIconId: "npm", processName: "npm" }),
       getSpawnedAt(terminal)
     );
-    expect(getActivityMonitor(terminal)).toBeNull();
-    expect(exitedEvents).toHaveLength(1);
-    expect(exitedEvents[0]).toEqual({ terminalId: "t-agent", agentType: "claude" });
+    expect(getActivityMonitor(terminal)).not.toBeNull();
+    expect(exitedEvents).toHaveLength(0);
 
-    // Subsequent Branch B fires because lastDetectedProcessIconId is still set.
     callHandleAgentDetection(terminal, makeNoAgentResult({}), getSpawnedAt(terminal));
-    expect(getActivityMonitor(terminal)).toBeNull();
-    // Branch B emits a second exit (with undefined agentType) by existing contract;
-    // the load-bearing assertion is no monitor leak across the sequence.
-    expect(exitedEvents.length).toBeGreaterThanOrEqual(1);
-    expect(exitedEvents[0]).toEqual({ terminalId: "t-agent", agentType: "claude" });
+    expect(getActivityMonitor(terminal)).not.toBeNull();
+    expect(terminal.getInfo().detectedAgentId).toBe("claude");
+    expect(exitedEvents).toHaveLength(0);
   });
 });
 
@@ -342,7 +381,7 @@ describe("TerminalProcess.handleAgentDetection — disposes monitor without prio
       // Now everything goes away — Branch B with previousType undefined.
       callHandleAgentDetection(
         trackedTerminal,
-        makeNoAgentResult({}),
+        makeNoAgentResult({ evidenceSource: "shell_command" }),
         getSpawnedAt(trackedTerminal)
       );
 
@@ -385,7 +424,7 @@ describe("TerminalProcess.handleAgentDetection — polling loop teardown", () =>
 
       callHandleAgentDetection(
         trackedTerminal,
-        makeNoAgentResult({}),
+        makeNoAgentResult({ evidenceSource: "shell_command" }),
         getSpawnedAt(trackedTerminal)
       );
       expect(getActivityMonitor(trackedTerminal)).toBeNull();
@@ -530,6 +569,74 @@ describe("TerminalProcess shell-command identity fallback", () => {
     }
   });
 
+  it("does not let a trust-prompt Enter overwrite pending typed-agent fallback cleanup", async () => {
+    const terminal = createPlainTerminal("t-fallback-agent-trust-enter");
+    const pty = getMockPty(terminal);
+
+    try {
+      terminal.write("claude\r");
+      pty.__emitData("claude\r\n");
+      pty.__emitData("Accessing workspace:\r\n");
+      pty.__emitData(" ❯ 1. Yes, I trust this folder\r\n");
+
+      // This Enter belongs to Claude's trust UI, not to the shell. It must
+      // not reset the pending shell-command identity to "no command".
+      terminal.write("\r");
+      pty.__emitData("FAKE_CLAUDE_READY\r\n");
+
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(terminal.getInfo().detectedAgentId).toBe("claude");
+
+      pty.__emitData("^CFAKE_CLAUDE_EXIT\r\n");
+      pty.__emitData("➜  canopy-app git:(main) ");
+      await vi.advanceTimersByTimeAsync(600);
+
+      expect(terminal.getInfo().detectedAgentId).toBeUndefined();
+      expect(terminal.getInfo().detectedProcessIconId).toBeUndefined();
+      expect(terminal.getInfo().analysisEnabled).toBe(false);
+    } finally {
+      terminal.dispose();
+    }
+  });
+
+  it("does not demote an agent on prompt-looking TUI text while a foreground child owns the PTY", async () => {
+    const terminal = createPlainTerminal("t-fallback-agent-foreground-pgid");
+    const pty = getMockPty(terminal);
+    let foregroundPgid = 456;
+    (
+      terminal as unknown as {
+        readForegroundProcessGroupSnapshot: () => { shellPgid: number; foregroundPgid: number };
+      }
+    ).readForegroundProcessGroupSnapshot = () => ({ shellPgid: 123, foregroundPgid });
+
+    try {
+      terminal.write("claude\r");
+      pty.__emitData("claude\r\n");
+      pty.__emitData("FAKE_CLAUDE_READY\r\n");
+
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(terminal.getInfo().detectedAgentId).toBe("claude");
+
+      // Claude/Ink idle input can look like a shell prompt. The foreground
+      // process group says the agent still owns the TTY, so hold identity.
+      pty.__emitData("\r\n❯ ");
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(terminal.getInfo().detectedAgentId).toBe("claude");
+
+      // Once the shell reclaims the foreground process group, prompt return is
+      // authoritative and demotion is allowed.
+      foregroundPgid = 123;
+      pty.__emitData("\r\n➜  canopy-app git:(main) ");
+      await vi.advanceTimersByTimeAsync(600);
+
+      expect(terminal.getInfo().detectedAgentId).toBeUndefined();
+      expect(terminal.getInfo().detectedProcessIconId).toBeUndefined();
+      expect(terminal.getInfo().analysisEnabled).toBe(false);
+    } finally {
+      terminal.dispose();
+    }
+  });
+
   it("demotes a spawn-sealed agent terminal back to plain shell when the prompt returns", async () => {
     const terminal = createAgentTerminal();
     const pty = getMockPty(terminal);
@@ -626,6 +733,37 @@ describe("TerminalProcess shell-command identity fallback", () => {
       expect(emittedEventsAfterExit).toHaveLength(0);
       unsub();
     } finally {
+      terminal.dispose();
+    }
+  });
+
+  it("clears live agent identity when a preserved agent PTY exits before a shell prompt returns", async () => {
+    const terminal = createPlainTerminalWithCommand("t-agent-pty-exit-clear", "claude");
+    const pty = getMockPty(terminal);
+    const exitedEvents: Array<{ terminalId: string; agentType?: string; exitKind?: string }> = [];
+    const unsub = events.on("agent:exited", (payload) => {
+      exitedEvents.push({
+        terminalId: payload.terminalId,
+        agentType: payload.agentType,
+        exitKind: payload.exitKind,
+      });
+    });
+
+    try {
+      expect(terminal.getInfo().detectedAgentId).toBe("claude");
+
+      pty.__emitExit(0);
+
+      const info = terminal.getInfo();
+      expect(info.detectedAgentId).toBeUndefined();
+      expect(info.detectedProcessIconId).toBeUndefined();
+      expect(info.analysisEnabled).toBe(false);
+      expect(info.isExited).toBe(true);
+      expect(exitedEvents).toEqual([
+        { terminalId: "t-agent-pty-exit-clear", agentType: "claude", exitKind: "terminal" },
+      ]);
+    } finally {
+      unsub();
       terminal.dispose();
     }
   });
@@ -763,28 +901,169 @@ describe("TerminalProcess spawn command identity seeding", () => {
     }
   });
 
-  it("clears spawn-time shell evidence when the injected command returns to prompt", async () => {
+  it("routes a spawn-time quoted absolute Claude path through the same agent:detected path", () => {
+    const detectedEvents: Array<{
+      terminalId: string;
+      agentType?: string;
+      processIconId?: string;
+      processName?: string;
+    }> = [];
+    const unsub = events.on("agent:detected", (payload) => {
+      detectedEvents.push({
+        terminalId: payload.terminalId,
+        agentType: payload.agentType,
+        processIconId: payload.processIconId,
+        processName: payload.processName,
+      });
+    });
+
+    const terminal = createPlainTerminalWithCommand(
+      "t-spawn-quoted-claude",
+      "'/Users/gpriday/.local/bin/claude' --dangerously-skip-permissions"
+    );
+
+    try {
+      expect(detectedEvents).toHaveLength(1);
+      expect(detectedEvents[0]).toMatchObject({
+        terminalId: "t-spawn-quoted-claude",
+        agentType: "claude",
+        processIconId: "claude",
+        processName: "claude",
+      });
+      expect(terminal.getInfo().detectedAgentId).toBe("claude");
+      expect(terminal.getInfo().detectedProcessIconId).toBe("claude");
+    } finally {
+      unsub();
+      terminal.dispose();
+    }
+  });
+
+  it("clears spawn-time shell evidence when the command-launch shell returns to prompt", async () => {
     vi.useFakeTimers();
-    const terminal = createPlainTerminalWithCommand("t-spawn-claude-clear", "claude");
+    const { cache, setDescendants } = createMutableDescendantCache();
+    setDescendants([456]);
+    const terminal = createPlainTerminalWithCommand("t-spawn-claude-clear", "claude", {
+      processTreeCache: cache,
+    });
     const pty = getMockPty(terminal);
 
     try {
       expect(terminal.getInfo().detectedAgentId).toBe("claude");
 
-      // Lifecycle command injection writes after shell-ready. The spawn seed
-      // already promoted, so this must still arm prompt-return cleanup.
-      terminal.write("claude\r");
       pty.__emitData("claude\r\n");
       pty.__emitData("FAKE_CLAUDE_READY\r\n");
-      await vi.advanceTimersByTimeAsync(2000);
+      await vi.advanceTimersByTimeAsync(250);
       expect(terminal.getInfo().detectedAgentId).toBe("claude");
 
+      setDescendants([]);
       pty.__emitData("\r\ngpriday@macbook canopy-app % ");
       await vi.advanceTimersByTimeAsync(600);
 
       expect(terminal.getInfo().detectedAgentId).toBeUndefined();
       expect(terminal.getInfo().detectedProcessIconId).toBeUndefined();
       expect(terminal.getInfo().analysisEnabled).toBe(false);
+    } finally {
+      terminal.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it("clears agent identity at a returned shell prompt even if prompt helpers are descendants", async () => {
+    vi.useFakeTimers();
+    const { cache, setDescendants } = createMutableDescendantCache();
+    setDescendants([456]);
+    const terminal = createPlainTerminalWithCommand("t-spawn-claude-prompt-helper", "claude", {
+      processTreeCache: cache,
+    });
+    const pty = getMockPty(terminal);
+
+    try {
+      expect(terminal.getInfo().detectedAgentId).toBe("claude");
+
+      pty.__emitData("FAKE_CLAUDE_READY\r\n");
+      await vi.advanceTimersByTimeAsync(250);
+      expect(terminal.getInfo().detectedAgentId).toBe("claude");
+
+      // zsh/git prompts can briefly spawn helper descendants while the shell
+      // prompt is visible. That must not keep the terminal in agent chrome.
+      setDescendants([999]);
+      pty.__emitData("\r\n➜  canopy-app git:(main) ");
+      await vi.advanceTimersByTimeAsync(600);
+
+      expect(terminal.getInfo().detectedAgentId).toBeUndefined();
+      expect(terminal.getInfo().detectedProcessIconId).toBeUndefined();
+      expect(terminal.getInfo().analysisEnabled).toBe(false);
+    } finally {
+      terminal.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it("clears agent identity when a shell prompt returns below historical trust-prompt text", async () => {
+    vi.useFakeTimers();
+    const terminal = createPlainTerminalWithCommand("t-agent-trust-prompt-history", "claude");
+    const pty = getMockPty(terminal);
+
+    try {
+      expect(terminal.getInfo().detectedAgentId).toBe("claude");
+
+      pty.__emitData("Accessing workspace:\r\n");
+      pty.__emitData(" ❯ 1. Yes, I trust this folder\r\n");
+      pty.__emitData(" Enter to confirm · Esc to cancel\r\n");
+      pty.__emitData("FAKE_CLAUDE_READY\r\n");
+      pty.__emitData("^CFAKE_CLAUDE_EXIT\r\n");
+      pty.__emitData("➜  canopy-app git:(main) ");
+      await vi.advanceTimersByTimeAsync(600);
+
+      expect(terminal.getInfo().detectedAgentId).toBeUndefined();
+      expect(terminal.getInfo().detectedProcessIconId).toBeUndefined();
+      expect(terminal.getInfo().analysisEnabled).toBe(false);
+    } finally {
+      terminal.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not clear agent identity when an agent UI prompt is visible before process observation", async () => {
+    vi.useFakeTimers();
+    const terminal = createPlainTerminalWithCommand("t-agent-ui-prompt-before-tree", "claude");
+    const pty = getMockPty(terminal);
+
+    try {
+      expect(terminal.getInfo().detectedAgentId).toBe("claude");
+
+      terminal.write("claude\r");
+      pty.__emitData("Accessing workspace:\r\n");
+      pty.__emitData(" ❯ 1. Yes, I trust this folder\r\n");
+      await vi.advanceTimersByTimeAsync(1000);
+
+      expect(terminal.getInfo().detectedAgentId).toBe("claude");
+      expect(terminal.getInfo().detectedProcessIconId).toBe("claude");
+    } finally {
+      terminal.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not clear agent identity when an agent UI prompt is visible while a descendant is live", async () => {
+    vi.useFakeTimers();
+    const { cache, setDescendants } = createMutableDescendantCache();
+    setDescendants([456]);
+    const terminal = createPlainTerminalWithCommand("t-agent-ui-prompt-live-tree", "claude", {
+      processTreeCache: cache,
+    });
+    const pty = getMockPty(terminal);
+
+    try {
+      expect(terminal.getInfo().detectedAgentId).toBe("claude");
+
+      terminal.write("claude\r");
+      pty.__emitData("Accessing workspace:\r\n");
+      pty.__emitData(" ❯ 1. Yes, I trust this folder\r\n");
+      await vi.advanceTimersByTimeAsync(1000);
+
+      expect(terminal.getInfo().detectedAgentId).toBe("claude");
+      expect(terminal.getInfo().detectedProcessIconId).toBe("claude");
     } finally {
       terminal.dispose();
       vi.useRealTimers();
@@ -845,7 +1124,7 @@ describe("TerminalProcess.handleAgentDetection — launch identity immutability 
     }
   });
 
-  it("plain terminal demotion does not set launchAgentId", () => {
+  it("plain terminal prompt-return demotion does not set launchAgentId", () => {
     const terminal = createPlainTerminal("t-immut-demote-plain");
     try {
       callHandleAgentDetection(
@@ -855,24 +1134,19 @@ describe("TerminalProcess.handleAgentDetection — launch identity immutability 
       );
       expect(terminal.getInfo().launchAgentId).toBeUndefined();
 
-      // Demotion via non-agent icon.
       callHandleAgentDetection(
         terminal,
-        makeAgentResult({ processIconId: "npm", processName: "npm" }),
+        makeNoAgentResult({ evidenceSource: "shell_command" }),
         getSpawnedAt(terminal)
       );
       expect(terminal.getInfo().launchAgentId).toBeUndefined();
       expect(terminal.getInfo().detectedAgentId).toBeUndefined();
-
-      // Demotion via no-detection.
-      callHandleAgentDetection(terminal, makeNoAgentResult({}), getSpawnedAt(terminal));
-      expect(terminal.getInfo().launchAgentId).toBeUndefined();
     } finally {
       terminal.dispose();
     }
   });
 
-  it("spawn-sealed agent preserves launchAgentId across a non-agent-icon demotion", () => {
+  it("spawn-sealed agent ignores non-agent-icon blips and preserves launchAgentId", () => {
     const terminal = createAgentTerminal();
     try {
       callHandleAgentDetection(
@@ -890,13 +1164,13 @@ describe("TerminalProcess.handleAgentDetection — launch identity immutability 
 
       const info = terminal.getInfo();
       expect(info.launchAgentId).toBe("claude");
-      expect(info.detectedAgentId).toBeUndefined();
+      expect(info.detectedAgentId).toBe("claude");
     } finally {
       terminal.dispose();
     }
   });
 
-  it("spawn-sealed agent preserves launchAgentId across a no-detection demotion", () => {
+  it("spawn-sealed agent ignores no-detection blips and preserves launchAgentId", () => {
     const terminal = createAgentTerminal();
     try {
       callHandleAgentDetection(
@@ -910,7 +1184,7 @@ describe("TerminalProcess.handleAgentDetection — launch identity immutability 
 
       const info = terminal.getInfo();
       expect(info.launchAgentId).toBe("claude");
-      expect(info.detectedAgentId).toBeUndefined();
+      expect(info.detectedAgentId).toBe("claude");
     } finally {
       terminal.dispose();
     }
@@ -937,7 +1211,11 @@ describe("TerminalProcess.handleAgentDetection — launch identity immutability 
       expect(detectedEvents[0].agentType).toBe("claude");
       expect(terminal.getInfo().launchAgentId).toBeUndefined();
 
-      callHandleAgentDetection(terminal, makeNoAgentResult({}), getSpawnedAt(terminal));
+      callHandleAgentDetection(
+        terminal,
+        makeNoAgentResult({ evidenceSource: "shell_command" }),
+        getSpawnedAt(terminal)
+      );
       expect(exitedEvents).toHaveLength(1);
       expect(exitedEvents[0].agentType).toBe("claude");
       expect(terminal.getInfo().launchAgentId).toBeUndefined();

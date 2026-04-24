@@ -210,7 +210,7 @@ export type PtyHostEvent =
       /** Default title derived from the demoted/launched identity — written into panel.title when titleMode === "default". */
       defaultTitle?: string;
       timestamp: number;
-      exitKind?: "subcommand";
+      exitKind?: "subcommand" | "terminal";
     }
   | { type: "agent-spawned"; payload: AgentSpawnedPayload }
   | { type: "agent-output"; payload: AgentOutputPayload }

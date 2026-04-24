@@ -1,4 +1,4 @@
-import type { AgentId } from "@shared/types/agent";
+import type { AgentId, AgentState } from "@shared/types/agent";
 import type { PanelKind } from "@/types";
 import type { TerminalRuntimeIdentity } from "@shared/types/panel";
 import { getPanelKindColor, getPanelKindConfig } from "@shared/config/panelKindRegistry";
@@ -6,9 +6,13 @@ import { getAgentConfig } from "@/config/agents";
 
 export interface TerminalChromeInput {
   kind?: PanelKind;
+  launchAgentId?: AgentId | string;
   runtimeIdentity?: TerminalRuntimeIdentity | null;
   detectedAgentId?: AgentId | string;
   detectedProcessId?: string;
+  agentState?: AgentState | string;
+  runtimeStatus?: string;
+  exitCode?: number | null;
   presetColor?: string;
 }
 
@@ -68,6 +72,51 @@ function makeProcessIdentity(processId: string): TerminalRuntimeIdentity {
     iconId: processId,
     processId,
   };
+}
+
+function hasExplicitAgentExit(input: TerminalChromeInput | undefined): boolean {
+  return (
+    input?.agentState === "exited" ||
+    input?.runtimeStatus === "exited" ||
+    input?.runtimeStatus === "error" ||
+    typeof input?.exitCode === "number"
+  );
+}
+
+function deriveChromeAgentIdentity(
+  input: TerminalChromeInput | undefined
+): TerminalRuntimeIdentity | null {
+  if (input?.detectedAgentId) {
+    return makeAgentIdentity(input.detectedAgentId, normalizeProcessId(input.detectedProcessId));
+  }
+
+  const current = input?.runtimeIdentity;
+  if (current?.kind === "agent" && current.agentId) {
+    return makeAgentIdentity(current.agentId, current.processId);
+  }
+
+  if (input?.launchAgentId && !hasExplicitAgentExit(input)) {
+    return makeAgentIdentity(input.launchAgentId, normalizeProcessId(input.detectedProcessId));
+  }
+
+  return null;
+}
+
+function deriveChromeProcessIdentity(
+  input: TerminalChromeInput | undefined
+): TerminalRuntimeIdentity | null {
+  const detectedProcessId = normalizeProcessId(input?.detectedProcessId);
+  if (detectedProcessId) {
+    return makeProcessIdentity(detectedProcessId);
+  }
+
+  const current = input?.runtimeIdentity;
+  if (current?.kind !== "process") {
+    return null;
+  }
+
+  const processId = normalizeProcessId(current.processId ?? current.id ?? current.iconId);
+  return processId ? makeProcessIdentity(processId) : null;
 }
 
 export function deriveTerminalRuntimeIdentity(
@@ -141,21 +190,25 @@ export function deriveTerminalChrome(input: TerminalChromeInput = {}): TerminalC
     };
   }
 
-  const identity = deriveTerminalRuntimeIdentity(input);
-  if (identity?.kind === "agent" && identity.agentId) {
-    const config = getAgentConfig(identity.agentId);
+  const agentIdentity = deriveChromeAgentIdentity(input);
+  const agentId = agentIdentity?.agentId;
+  if (agentIdentity && agentId) {
+    const identity = agentIdentity;
+    const config = getAgentConfig(agentId);
     return {
       iconId: config?.iconId ?? identity.iconId,
       color: input.presetColor ?? config?.color ?? getPanelKindColor(kind),
-      label: config?.name ?? identity.agentId,
+      label: config?.name ?? agentId,
       isAgent: true,
-      agentId: identity.agentId,
+      agentId,
       processId: identity.processId ?? null,
       runtimeKind: "agent",
     };
   }
 
-  if (identity?.kind === "process") {
+  const processIdentity = deriveChromeProcessIdentity(input);
+  if (processIdentity?.kind === "process") {
+    const identity = processIdentity;
     const config = getAgentConfig(identity.iconId);
     return {
       iconId: identity.iconId,

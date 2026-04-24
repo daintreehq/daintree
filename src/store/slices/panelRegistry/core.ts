@@ -411,7 +411,13 @@ export const createCorePanelActions = (
         deriveTerminalRuntimeIdentity({
           detectedAgentId: options.detectedAgentId,
           detectedProcessId: options.detectedProcessId,
-        }) ?? undefined,
+        }) ??
+        (launchAgentId
+          ? deriveTerminalRuntimeIdentity({
+              detectedAgentId: launchAgentId,
+            })
+          : undefined) ??
+        undefined,
       agentPresetId: options.agentPresetId,
       agentPresetColor: options.agentPresetColor,
       originalPresetId: options.originalPresetId ?? options.agentPresetId,

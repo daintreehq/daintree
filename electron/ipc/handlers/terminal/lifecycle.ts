@@ -14,7 +14,58 @@ import {
   listAgentSessions,
   clearAgentSessions,
 } from "../../../services/pty/agentSessionHistory.js";
-import { waitForShellReady } from "./shellReady.js";
+import { getDefaultShell } from "../../../services/pty/terminalShell.js";
+
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+function supportsCommandLaunchShell(shell: string): boolean {
+  const name = shell.split(/[\\/]/).pop()?.toLowerCase() ?? "";
+  return (
+    name === "zsh" ||
+    name === "bash" ||
+    name === "sh" ||
+    name.endsWith("zsh") ||
+    name.endsWith("bash") ||
+    name.endsWith("sh")
+  );
+}
+
+function buildCommandLaunchShell(
+  command: string,
+  configuredShell: string | undefined
+): { shell: string; args: string[] } | null {
+  if (process.platform === "win32" || command.length === 0) {
+    return null;
+  }
+
+  const shell = configuredShell || getDefaultShell();
+  if (!supportsCommandLaunchShell(shell)) {
+    return null;
+  }
+
+  const name = shell.split(/[\\/]/).pop()?.toLowerCase() ?? "";
+  const execInteractiveShell =
+    name.includes("zsh") || name.includes("bash")
+      ? `exec ${shellQuote(shell)} -l`
+      : `exec ${shellQuote(shell)}`;
+
+  // Run the command as interactive shell startup work instead of typing it into
+  // the PTY. This prevents the tail of long absolute launch commands from being
+  // echoed while preserving job control: zsh/bash only move the launched CLI
+  // into the PTY foreground process group when the shell is interactive. The
+  // foreground-pgid detector relies on that, and agent CLIs rely on it for raw
+  // input. The wrapper shell traps SIGINT so Ctrl-C reaches the foreground
+  // agent without killing the wrapper before it can exec the follow-up shell.
+  // Use a no-op trap rather than SIG_IGN so child CLIs don't inherit ignored
+  // SIGINT.
+  const script = `trap : INT\n${command}\ntrap - INT\n${execInteractiveShell}`;
+  const args =
+    name.includes("zsh") || name.includes("bash") ? ["-lic", script] : ["-i", "-c", script];
+
+  return { shell, args };
+}
 
 export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): () => void {
   const { ptyClient } = deps;
@@ -133,10 +184,6 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       );
     }
 
-    // Resolve shell and args: project overrides > spawn options > defaults
-    const resolvedShell = validatedOptions.shell || projectShell;
-    const resolvedArgs = projectArgs;
-
     const trimmedCommand = validatedOptions.command?.trim() || "";
     const hasMultilineCommand =
       trimmedCommand.length > 0 && (trimmedCommand.includes("\n") || trimmedCommand.includes("\r"));
@@ -146,6 +193,14 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
     }
     const safeCommand = hasMultilineCommand ? "" : trimmedCommand;
 
+    // Resolve shell and args: project overrides > spawn options > defaults.
+    // For command launches on POSIX, run the command through the shell's
+    // startup script instead of echoing it into the PTY.
+    const resolvedShell = validatedOptions.shell || projectShell;
+    const commandLaunchShell = buildCommandLaunchShell(safeCommand, resolvedShell);
+    const resolvedArgs = commandLaunchShell ? commandLaunchShell.args : projectArgs;
+    const spawnShell = commandLaunchShell ? commandLaunchShell.shell : resolvedShell;
+
     try {
       // Every terminal is an interactive shell. Agent launches inject their
       // command after the shell's first prompt renders — never `exec`'d over
@@ -154,7 +209,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       // kernel's TTY line discipline; the shell stays pristine.
       ptyClient.spawn(id, {
         cwd,
-        shell: resolvedShell,
+        shell: spawnShell,
         args: resolvedArgs,
         cols,
         rows,
@@ -174,22 +229,14 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
           validatedOptions.originalAgentPresetId ?? validatedOptions.agentPresetId,
       });
 
-      if (safeCommand.length > 0) {
-        // Wait for the shell to print its first prompt and go quiet before
-        // injecting the command — a fixed delay races with slow RC files
-        // (oh-my-zsh, p10k, nvm, direnv). Fire-and-forget so the IPC
-        // response returns immediately; `hasTerminal` guards against the
-        // terminal being killed mid-wait.
-        //
-        // No clear-screen preamble is written. Users see their shell prompt
-        // momentarily before the agent takes over — that is the honest
-        // "first-class terminal" UX and it eliminates the escape-garbage
-        // some shells echoed when the preamble's `printf` text was visible
-        // before execution.
-        void waitForShellReady(ptyClient, id).then(() => {
-          if (!ptyClient.hasTerminal(id)) return;
+      if (safeCommand.length > 0 && !commandLaunchShell) {
+        // Execute immediately. node-pty queues the write against the spawned
+        // shell, so users do not stare at a blank prompt while we wait for RC
+        // files/prompt detection. The shell still remains the parent process;
+        // when the command exits, the terminal returns to a normal shell.
+        if (ptyClient.hasTerminal(id)) {
           ptyClient.write(id, `${safeCommand}\r`);
-        });
+        }
       }
 
       return id;

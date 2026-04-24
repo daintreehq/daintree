@@ -297,12 +297,23 @@ function TerminalPaneComponent({
         ? chromeProp
         : deriveTerminalChrome({
             kind,
+            launchAgentId: agentId,
             runtimeIdentity,
             detectedAgentId,
             detectedProcessId,
+            agentState,
             presetColor: livePresetColor,
           }),
-    [chromeProp, kind, runtimeIdentity, detectedAgentId, detectedProcessId, livePresetColor]
+    [
+      chromeProp,
+      kind,
+      agentId,
+      runtimeIdentity,
+      detectedAgentId,
+      detectedProcessId,
+      agentState,
+      livePresetColor,
+    ]
   );
   const effectiveAgentId = isBuiltInAgentId(chrome.agentId) ? chrome.agentId : undefined;
   // HybridInputBar is shown when an agent is currently detected as live.

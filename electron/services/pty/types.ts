@@ -19,8 +19,9 @@ export type PtySpawnOptions = PtyHostSpawnOptions;
  * - External APIs
  *
  * Identity fields follow the canonical model in
- * `docs/architecture/terminal-identity.md`: `detectedAgentId` drives chrome,
- * `launchAgentId` is a non-identity launch hint used only for restart/resume.
+ * `docs/architecture/terminal-identity.md`: `detectedAgentId` is live
+ * detection, while `launchAgentId` is durable launch affinity until a strong
+ * exit signal (`agentState: "exited"` / terminal exit) demotes the terminal.
  */
 export interface TerminalPublicState {
   id: string;
@@ -29,9 +30,9 @@ export interface TerminalPublicState {
   shell: string;
   kind?: PanelKind;
   /**
-   * Launch hint — the agent this terminal was launched to run. NOT an identity.
-   * Used only to key agent-specific settings and auto-inject commands. See
-   * `docs/architecture/terminal-identity.md`.
+   * Durable launch affinity — the agent this terminal was launched to run.
+   * Used to key agent-specific settings, auto-inject commands, and keep
+   * restored agent terminals branded until explicit exit.
    */
   launchAgentId?: AgentId;
   title?: string;

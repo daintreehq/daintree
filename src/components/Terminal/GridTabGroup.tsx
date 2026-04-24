@@ -193,9 +193,13 @@ export const GridTabGroup = React.memo(function GridTabGroup({
         title: p.title,
         chrome: deriveTerminalChrome({
           kind: p.kind,
+          launchAgentId: p.launchAgentId,
           runtimeIdentity: p.runtimeIdentity,
           detectedAgentId: p.detectedAgentId,
           detectedProcessId: p.detectedProcessId,
+          agentState: p.agentState,
+          runtimeStatus: p.runtimeStatus,
+          exitCode: p.exitCode,
           presetColor,
         }),
         kind: p.kind ?? "terminal",

@@ -24,6 +24,7 @@ const AGENT_STATE_VALUES = new Set([
 ]);
 
 const T_IDENTITY = 60_000;
+const T_AGENT_STICKY_REGRESSION = 45_000;
 
 function panelHeaderIcon(panel: Locator): Locator {
   return panel.locator("[data-pane-chrome] [data-terminal-icon-id]").first();
@@ -199,7 +200,9 @@ async function newestPanelId(page: Page, previousIds: Set<string>): Promise<stri
 
 function prepareFixture(): void {
   fixtureDir = createFixtureRepo({ name: "terminal-agent-promotion" });
-  fakeBinDir = path.join(fixtureDir, ".e2e-bin");
+  // Keep a space in the fake CLI path so toolbar launches exercise the same
+  // quoted absolute executable form that real resolved paths can use.
+  fakeBinDir = path.join(fixtureDir, ".e2e bin");
   mkdirSync(fakeBinDir, { recursive: true });
 
   const fakeClaude = path.join(fakeBinDir, "claude");
@@ -280,7 +283,7 @@ test.describe.serial("Core: terminal runtime agent promotion", () => {
   });
 
   test("toolbar Claude launch and plain-terminal Claude command both activate agent chrome/state", async () => {
-    test.setTimeout(180_000);
+    test.setTimeout(260_000);
 
     const { window } = ctx;
 
@@ -305,6 +308,16 @@ test.describe.serial("Core: terminal runtime agent promotion", () => {
       await expectPanelHeaderIcon(panel, "claude");
       await expectPanelHasAgentState(panel);
       await expectWorktreeTracksAgent(window, toolbarPanelId, "claude");
+      expect(await getTerminalText(panel)).not.toContain(".e2e bin");
+
+      // Regression guard: shell-command evidence has a 30s expiry. A live
+      // agent must not demote to plain terminal when that timer elapses.
+      await window.waitForTimeout(T_AGENT_STICKY_REGRESSION);
+      await expect(panel).toHaveAttribute("data-detected-agent-id", "claude");
+      await expect(panel).toHaveAttribute("data-chrome-agent-id", "claude");
+      await expectRuntimeKind(panel, "agent");
+      await expectPanelHeaderIcon(panel, "claude");
+      await expectPanelHasAgentState(panel);
 
       await ptyWrite(window, toolbarPanelId, "\x03");
       await waitForTerminalText(panel, "FAKE_CLAUDE_EXIT", T_LONG);
@@ -377,6 +390,13 @@ test.describe.serial("Core: terminal runtime agent promotion", () => {
       await expectPanelHeaderIcon(panel, "claude");
       await expectPanelHasAgentState(panel);
       await expectWorktreeTracksAgent(window, plainPanelId, "claude");
+
+      await window.waitForTimeout(T_AGENT_STICKY_REGRESSION);
+      await expect(panel).toHaveAttribute("data-detected-agent-id", "claude");
+      await expect(panel).toHaveAttribute("data-chrome-agent-id", "claude");
+      await expectRuntimeKind(panel, "agent");
+      await expectPanelHeaderIcon(panel, "claude");
+      await expectPanelHasAgentState(panel);
 
       await ptyWrite(window, plainPanelId, "\x03");
       await waitForTerminalText(panel, "FAKE_CLAUDE_EXIT", T_LONG);

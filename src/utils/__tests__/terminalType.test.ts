@@ -54,12 +54,19 @@ describe("runtime agent identity helpers", () => {
     ).toBeUndefined();
   });
 
-  it("uses launch intent only as a boot-window fallback", () => {
+  it("uses launch intent as durable agent affinity until explicit exit", () => {
     expect(getRuntimeOrBootAgentId({ launchAgentId: "claude" })).toBe("claude");
     expect(
       getRuntimeOrBootAgentId({
         launchAgentId: "claude",
         everDetectedAgent: true,
+        agentState: "working",
+      })
+    ).toBe("claude");
+    expect(
+      getRuntimeOrBootAgentId({
+        launchAgentId: "claude",
+        agentState: "exited",
       })
     ).toBeUndefined();
   });

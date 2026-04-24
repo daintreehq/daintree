@@ -387,9 +387,13 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
     panelPresetColors.get(activePanel.id) ?? deriveTerminalChrome(activePanel).color;
   const activeChrome = deriveTerminalChrome({
     kind: activePanel.kind,
+    launchAgentId: activePanel.launchAgentId,
     runtimeIdentity: activePanel.runtimeIdentity,
     detectedAgentId: activePanel.detectedAgentId,
     detectedProcessId: activePanel.detectedProcessId,
+    agentState: activePanel.agentState,
+    runtimeStatus: activePanel.runtimeStatus,
+    exitCode: activePanel.exitCode,
     presetColor: brandColor,
   });
   const agentState = activeChrome.isAgent ? activePanel.agentState : undefined;
@@ -540,9 +544,13 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
               {panels.map((panel) => {
                 const tabChrome = deriveTerminalChrome({
                   kind: panel.kind,
+                  launchAgentId: panel.launchAgentId,
                   runtimeIdentity: panel.runtimeIdentity,
                   detectedAgentId: panel.detectedAgentId,
                   detectedProcessId: panel.detectedProcessId,
+                  agentState: panel.agentState,
+                  runtimeStatus: panel.runtimeStatus,
+                  exitCode: panel.exitCode,
                   presetColor: panelPresetColors.get(panel.id),
                 });
                 return (

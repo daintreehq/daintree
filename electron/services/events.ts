@@ -533,17 +533,16 @@ export type DaintreeEventMap = {
 
   /**
    * Emitted when an agent CLI (or a live-detected process icon) exits from
-   * a terminal. PTY-level exits use the separate `agent:completed` channel —
-   * this channel only fires while the shell PTY is still alive.
-   * `exitKind: "subcommand"` distinguishes an actual agent exit from a plain
-   * process-icon clearing.
+   * a terminal. `exitKind: "subcommand"` means the shell PTY survived and
+   * returned to a prompt. `exitKind: "terminal"` means the PTY itself exited
+   * and this event is clearing live renderer identity before preservation.
    */
   "agent:exited": {
     terminalId: string;
     agentType?: string;
     defaultTitle?: string;
     timestamp: number;
-    exitKind?: "subcommand";
+    exitKind?: "subcommand" | "terminal";
   };
 
   /**

@@ -199,16 +199,18 @@ interface BasePanelData {
 export interface PtyPanelData extends BasePanelData {
   kind: "terminal";
   /**
-   * Launch hint — the agent this terminal was *launched to run*, if any.
+   * Durable launch affinity — the agent this terminal was launched to run, if any.
    *
-   * This is NOT an identity claim. It is the "which agent's command did we
-   * inject at spawn time" record, kept so:
+   * It is the "which agent's command did we inject at spawn time" record, kept so:
    *   - Restart can re-inject the same command.
    *   - Session resume can look up the agent's resume flags.
    *   - Persisted settings (model, preset, launch flags) have a key.
+   *   - Chrome/activity can stay agent-branded across renderer restore before
+   *     transient runtime detection rehydrates.
    *
-   * Never read by chrome. Never gates fleet/hybrid-input/focus. Absent for
-   * plain-shell launches. See `docs/architecture/terminal-identity.md`.
+   * Live detection wins when present. A strong exit signal (`agentState:
+   * "exited"`, terminal exit/error, or exitCode) demotes back to shell chrome.
+   * Absent for plain-shell launches.
    */
   launchAgentId?: AgentId;
   /** Current working directory of the terminal */
@@ -290,10 +292,10 @@ export interface PtyPanelData extends BasePanelData {
   /**
    * Live detected identity — the agent currently running in this terminal.
    *
-   * This is the ONE field that drives UI chrome: icon, title, brand color,
-   * fleet eligibility, hybrid-input visibility, focus routing. When it is
-   * set, the terminal *is* an agent terminal. When it is cleared, the
-   * terminal *is* a plain shell. There is no other kind of terminal.
+   * Live detected identity — highest-precedence runtime evidence for UI
+   * chrome, fleet eligibility, hybrid-input visibility, and focus routing.
+   * When absent, durable `launchAgentId` can still provide agent affinity until
+   * a strong exit signal demotes the terminal back to shell chrome.
    *
    * Not persisted; rehydrated from backend reconnect payload.
    * See `docs/architecture/terminal-identity.md`.
