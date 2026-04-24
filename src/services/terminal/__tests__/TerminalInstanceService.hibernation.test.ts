@@ -708,12 +708,14 @@ describe("TerminalInstanceService - Hibernation", () => {
       service.unhibernate("t1");
       const nonAgentListenerCount = nonAgent.listeners.length;
 
-      // Agent terminal
+      // Runtime agent terminal. Listener scaffolding is installed for every
+      // terminal; runtime identity only decides whether the listeners act.
       const agent = makeMockManaged({
         isHibernated: true,
         isOpened: false,
         kind: "terminal",
         launchAgentId: "claude",
+        runtimeAgentId: "claude",
         ipcListenerCount: 0,
       });
       agent.listeners = [];
@@ -721,8 +723,7 @@ describe("TerminalInstanceService - Hibernation", () => {
       service.unhibernate("t2");
       const agentListenerCount = agent.listeners.length;
 
-      // Agent should have 2 more listeners: title-state + enter-key
-      expect(agentListenerCount).toBe(nonAgentListenerCount + 2);
+      expect(agentListenerCount).toBe(nonAgentListenerCount);
     });
 
     it("should install enter-key listener but not title listener when no titleStatePatterns", () => {
@@ -741,12 +742,14 @@ describe("TerminalInstanceService - Hibernation", () => {
       service.unhibernate("t1");
       const nonAgentListenerCount = nonAgent.listeners.length;
 
-      // Agent without title patterns
+      // Runtime agent without title patterns. It still has the same dormant
+      // scaffolding as a standard terminal.
       const agent = makeMockManaged({
         isHibernated: true,
         isOpened: false,
         kind: "terminal",
         launchAgentId: "claude",
+        runtimeAgentId: "claude",
         ipcListenerCount: 0,
       });
       agent.listeners = [];
@@ -754,8 +757,7 @@ describe("TerminalInstanceService - Hibernation", () => {
       service.unhibernate("t2");
       const agentListenerCount = agent.listeners.length;
 
-      // Agent should have 1 more listener: enter-key only (no title-state)
-      expect(agentListenerCount).toBe(nonAgentListenerCount + 1);
+      expect(agentListenerCount).toBe(nonAgentListenerCount);
     });
 
     it("should preserve onInput callback on ManagedTerminal through unhibernate", () => {

@@ -158,6 +158,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
         args: resolvedArgs,
         cols,
         rows,
+        command: safeCommand || undefined,
         env: validatedOptions.env,
         kind,
         launchAgentId,

@@ -73,6 +73,15 @@ function makeProcessIdentity(processId: string): TerminalRuntimeIdentity {
 export function deriveTerminalRuntimeIdentity(
   input: TerminalChromeInput | undefined
 ): TerminalRuntimeIdentity | null {
+  if (input?.detectedAgentId) {
+    return makeAgentIdentity(input.detectedAgentId, normalizeProcessId(input.detectedProcessId));
+  }
+
+  const detectedProcessId = normalizeProcessId(input?.detectedProcessId);
+  if (detectedProcessId) {
+    return makeProcessIdentity(detectedProcessId);
+  }
+
   const current = input?.runtimeIdentity;
   if (current?.kind === "agent" && current.agentId) {
     return makeAgentIdentity(current.agentId, current.processId);
@@ -82,12 +91,7 @@ export function deriveTerminalRuntimeIdentity(
     return processId ? makeProcessIdentity(processId) : null;
   }
 
-  if (input?.detectedAgentId) {
-    return makeAgentIdentity(input.detectedAgentId, normalizeProcessId(input.detectedProcessId));
-  }
-
-  const processId = normalizeProcessId(input?.detectedProcessId);
-  return processId ? makeProcessIdentity(processId) : null;
+  return null;
 }
 
 export function terminalRuntimeIdentitiesEqual(

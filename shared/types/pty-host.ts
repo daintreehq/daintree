@@ -22,6 +22,12 @@ export interface PtyHostSpawnOptions {
   env?: Record<string, string>;
   cols: number;
   rows: number;
+  /**
+   * Optional command submitted immediately after spawn. Used as detector seed
+   * so toolbar-launched agents and command-launched processes enter the same
+   * runtime identity path as typed shell commands.
+   */
+  command?: string;
   kind?: PanelKind;
   /**
    * Launch hint — the agent this terminal is being launched to run. NOT an

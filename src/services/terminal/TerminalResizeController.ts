@@ -338,8 +338,8 @@ export class TerminalResizeController {
   }
 
   private getResizeStrategy(managed: ManagedTerminal): "default" | "settled" {
-    if (!managed.launchAgentId) return "default";
-    const config = getEffectiveAgentConfig(managed.launchAgentId);
+    if (!managed.runtimeAgentId) return "default";
+    const config = getEffectiveAgentConfig(managed.runtimeAgentId);
     return config?.capabilities?.resizeStrategy ?? "default";
   }
 

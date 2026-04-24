@@ -10,6 +10,7 @@ import { isBuiltInAgentId, type BuiltInAgentId } from "../../../shared/config/ag
 import {
   ProcessDetector,
   detectCommandIdentity,
+  redactArgv,
   type CommandIdentity,
   type DetectionResult,
   type DetectionState,
@@ -167,6 +168,7 @@ export class TerminalProcess {
   private shellIdentityFallbackPromptStreak = 0;
   private suppressNextShellSubmitSignal = false;
   private shellInputBuffer = "";
+  private seededLaunchCommandText: string | undefined;
 
   private _scrollback: number;
   private headlessResponderDisposable: { dispose: () => void } | null = null;
@@ -433,6 +435,7 @@ export class TerminalProcess {
       );
       this.terminalInfo.processDetector = this.processDetector;
       this.processDetector.start();
+      this.seedInitialCommandIdentity(options.command);
     }
 
     // If we have a launch hint, start the activity monitor immediately so the
@@ -619,20 +622,32 @@ export class TerminalProcess {
     }
 
     const bracketedPaste = isBracketedPaste(data);
+    const isSeededLaunchCommandSubmit =
+      !bracketedPaste &&
+      this.seededLaunchCommandText !== undefined &&
+      /[\r\n]/.test(data) &&
+      this.normalizeShellCommandText(data) === this.seededLaunchCommandText;
     // Shell input capture is only meaningless when a live AGENT owns the PTY
     // (agents have their own input semantics). A plain process badge (npm,
     // pnpm, docker, etc.) does not change the shell semantics — the shell
     // is still the direct recipient of typed commands, and the next command
     // must still be visible to the fallback detector so a follow-up
     // `pnpm build` can re-identify the badge. #5813
-    const canCaptureShellInput = !bracketedPaste && this.terminalInfo.detectedAgentId === undefined;
+    const canCaptureShellInput =
+      !bracketedPaste &&
+      (this.terminalInfo.detectedAgentId === undefined || isSeededLaunchCommandSubmit);
     const submittedCommandText = canCaptureShellInput ? this.captureShellInput(data) : undefined;
 
     if (!bracketedPaste && /[\r\n]/.test(data)) {
       if (this.suppressNextShellSubmitSignal) {
         this.suppressNextShellSubmitSignal = false;
       } else {
-        this.markShellCommandSubmitted(submittedCommandText);
+        this.markShellCommandSubmitted(submittedCommandText, {
+          allowWhenAgentDetected: isSeededLaunchCommandSubmit,
+        });
+      }
+      if (isSeededLaunchCommandSubmit) {
+        this.seededLaunchCommandText = undefined;
       }
     }
 
@@ -1175,7 +1190,10 @@ export class TerminalProcess {
     return submittedCommandText;
   }
 
-  private markShellCommandSubmitted(commandText?: string): void {
+  private markShellCommandSubmitted(
+    commandText?: string,
+    options: { allowWhenAgentDetected?: boolean } = {}
+  ): void {
     if (this.terminalInfo.isExited || this.terminalInfo.wasKilled) {
       return;
     }
@@ -1185,7 +1203,7 @@ export class TerminalProcess {
     // the user ran `npm run dev` then Ctrl+C then typed `pnpm dev`, the new
     // command must be allowed to restart detection regardless of whether the
     // previous badge was cleared by the process-tree path yet.
-    if (this.terminalInfo.detectedAgentId) {
+    if (this.terminalInfo.detectedAgentId && !options.allowWhenAgentDetected) {
       return;
     }
 
@@ -1207,6 +1225,21 @@ export class TerminalProcess {
     }
 
     this.startShellIdentityFallbackWatcher();
+  }
+
+  private seedInitialCommandIdentity(commandText?: string): void {
+    if (!this.processDetector) return;
+    const normalized = this.normalizeShellCommandText(commandText);
+    if (!normalized) return;
+    const identity = detectCommandIdentity(normalized);
+    if (!identity) return;
+    this.seededLaunchCommandText = normalized;
+    console.log(
+      `[IdentityDebug] shell-submit term=${this.id.slice(-8)} src=spawn ` +
+        `agent=${identity.agentType ?? "<none>"} icon=${identity.processIconId ?? "<none>"} ` +
+        `argv0=${redactArgv(normalized)}`
+    );
+    this.processDetector.injectShellCommandEvidence(identity, normalized);
   }
 
   private startShellIdentityFallbackWatcher(): void {
@@ -1279,6 +1312,9 @@ export class TerminalProcess {
 
     if (!this.shellIdentityFallbackIdentity) {
       if (promptVisible && Date.now() - submittedAt >= SHELL_IDENTITY_FALLBACK_COMMIT_MS) {
+        console.log(
+          `[IdentityDebug] shell-fallback-stop term=${this.id.slice(-8)} reason=no-identity-prompt`
+        );
         this.stopShellIdentityFallbackWatcher();
       }
       return;
@@ -1290,7 +1326,11 @@ export class TerminalProcess {
         return;
       }
 
-      if (promptVisible) {
+      if (promptVisible && !this.shellIdentityFallbackIdentity.agentType) {
+        console.log(
+          `[IdentityDebug] shell-fallback-stop term=${this.id.slice(-8)} ` +
+            `reason=prompt-before-commit icon=${this.shellIdentityFallbackIdentity.processIconId ?? "<none>"}`
+        );
         this.stopShellIdentityFallbackWatcher();
         return;
       }

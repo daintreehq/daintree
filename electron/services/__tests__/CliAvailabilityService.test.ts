@@ -63,6 +63,7 @@ describe("CliAvailabilityService", () => {
     "GITHUB_TOKEN",
     "GH_TOKEN",
     "COPILOT_GITHUB_TOKEN",
+    "DAINTREE_CLI_PATH_PREPEND",
   ];
 
   beforeEach(async () => {
@@ -209,6 +210,32 @@ describe("CliAvailabilityService", () => {
       expect(result.opencode).toBe("missing");
       expect(result.cursor).toBe("missing");
       expect(result.kiro).toBe("missing");
+    });
+
+    it("prefers DAINTREE_CLI_PATH_PREPEND over shell resolution", async () => {
+      const { access, constants } = await import("fs/promises");
+      const mockedAccess = vi.mocked(access);
+
+      process.env.DAINTREE_CLI_PATH_PREPEND = "/tmp/daintree-fake-bin";
+
+      mockedExecFileSync.mockImplementation((_file, args) => {
+        if (args?.[0] === "claude") {
+          return Buffer.from("/usr/local/bin/claude");
+        }
+        throw new Error("Command not found");
+      });
+      mockedAccess.mockImplementation(async (p, mode) => {
+        if (String(p) === "/tmp/daintree-fake-bin/claude" && mode === constants.X_OK) {
+          return;
+        }
+        throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+      });
+
+      const result = await service.checkAvailability();
+
+      expect(result.claude).toBe("ready");
+      expect(service.getDetails()?.claude?.resolvedPath).toBe("/tmp/daintree-fake-bin/claude");
+      expect(mockedExecFileSync).not.toHaveBeenCalledWith("which", ["claude"], expect.any(Object));
     });
 
     it("uses which on Unix-like systems", async () => {

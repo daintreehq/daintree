@@ -17,6 +17,7 @@ import {
   buildAgentLaunchFlags,
   resolveEffectivePresetId,
 } from "@shared/types";
+import { escapeShellArgOptional } from "@shared/utils/shellEscape";
 import {
   getAgentConfig,
   isRegisteredAgent,
@@ -24,6 +25,7 @@ import {
   getMergedPreset,
   sanitizeAgentEnv,
 } from "@/config/agents";
+import type { AgentCliDetail } from "@shared/types/ipc";
 
 const CLIPBOARD_DIR_NAME = "daintree-clipboard";
 
@@ -43,6 +45,30 @@ export interface UseAgentLauncherReturn {
   isCheckingAvailability: boolean;
   agentSettings: AgentSettings | null;
   refreshSettings: () => Promise<void>;
+}
+
+export function resolveAgentLaunchBaseCommand(
+  registryCommand: string,
+  detail: AgentCliDetail | undefined
+): string {
+  const resolvedPath = detail?.state === "ready" ? detail.resolvedPath?.trim() : undefined;
+  return resolvedPath ? escapeShellArgOptional(resolvedPath) : registryCommand;
+}
+
+async function getCurrentLaunchCliDetail(agentId: string): Promise<AgentCliDetail | undefined> {
+  const current = useCliAvailabilityStore.getState().details[agentId];
+  if (current?.state === "ready" && current.resolvedPath?.trim()) {
+    return current;
+  }
+
+  try {
+    await useCliAvailabilityStore.getState().refresh(true);
+  } catch {
+    // Launch can still fall back to the registry command; availability UI
+    // surfaces the refresh error separately.
+  }
+
+  return useCliAvailabilityStore.getState().details[agentId];
 }
 
 export function useAgentLauncher(): UseAgentLauncherReturn {
@@ -271,7 +297,9 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
           }
         }
 
-        command = generateAgentCommand(agentConfig.command, effectiveEntry, agentId, {
+        const launchCliDetail = await getCurrentLaunchCliDetail(agentId);
+        const baseCommand = resolveAgentLaunchBaseCommand(agentConfig.command, launchCliDetail);
+        command = generateAgentCommand(baseCommand, effectiveEntry, agentId, {
           initialPrompt: launchOptions?.prompt,
           interactive: launchOptions?.interactive ?? true,
           clipboardDirectory,

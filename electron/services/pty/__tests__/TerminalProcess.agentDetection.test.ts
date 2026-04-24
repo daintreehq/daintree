@@ -151,6 +151,42 @@ function createPlainTerminal(id = "t-plain", deps?: Partial<TerminalProcessDeps>
   );
 }
 
+function createPlainTerminalWithCommand(
+  id: string,
+  command: string,
+  deps?: Partial<TerminalProcessDeps>
+): TerminalProcess {
+  const options: TerminalProcessOptions = {
+    cwd: process.cwd(),
+    cols: 80,
+    rows: 24,
+    kind: "terminal",
+    command,
+  } as TerminalProcessOptions;
+  const ctx: SpawnContext = {
+    shell: "/bin/zsh",
+    args: ["-lc", command],
+    env: {},
+  };
+  return new TerminalProcess(
+    id,
+    options,
+    { emitData: () => {}, onExit: () => {} },
+    {
+      agentStateService: {
+        handleActivityState: () => {},
+        updateAgentState: () => {},
+        emitAgentKilled: () => {},
+      } as unknown as TerminalProcessDeps["agentStateService"],
+      ptyPool: null,
+      processTreeCache: createMockProcessTreeCache(),
+      ...deps,
+    } as TerminalProcessDeps,
+    ctx,
+    createMockPty()
+  );
+}
+
 function getScrollback(terminal: TerminalProcess): number {
   return (terminal as unknown as { _scrollback: number })._scrollback;
 }
@@ -685,6 +721,100 @@ describe("TerminalProcess.handleAgentDetection — plain process icon badge emis
       expect(exitedEvents).toHaveLength(1);
       expect(exitedEvents[0].terminalId).toBe("t-plain-badge-clear");
       expect(exitedEvents[0].agentType).toBeUndefined();
+    } finally {
+      unsub();
+      terminal.dispose();
+    }
+  });
+});
+
+describe("TerminalProcess spawn command identity seeding", () => {
+  it("routes a spawn-time Claude command through the same agent:detected path", () => {
+    const detectedEvents: Array<{
+      terminalId: string;
+      agentType?: string;
+      processIconId?: string;
+      processName?: string;
+    }> = [];
+    const unsub = events.on("agent:detected", (payload) => {
+      detectedEvents.push({
+        terminalId: payload.terminalId,
+        agentType: payload.agentType,
+        processIconId: payload.processIconId,
+        processName: payload.processName,
+      });
+    });
+
+    const terminal = createPlainTerminalWithCommand("t-spawn-claude", "claude --model sonnet");
+
+    try {
+      expect(detectedEvents).toHaveLength(1);
+      expect(detectedEvents[0]).toMatchObject({
+        terminalId: "t-spawn-claude",
+        agentType: "claude",
+        processIconId: "claude",
+        processName: "claude",
+      });
+      expect(terminal.getInfo().detectedAgentId).toBe("claude");
+      expect(terminal.getInfo().detectedProcessIconId).toBe("claude");
+    } finally {
+      unsub();
+      terminal.dispose();
+    }
+  });
+
+  it("clears spawn-time shell evidence when the injected command returns to prompt", async () => {
+    vi.useFakeTimers();
+    const terminal = createPlainTerminalWithCommand("t-spawn-claude-clear", "claude");
+    const pty = getMockPty(terminal);
+
+    try {
+      expect(terminal.getInfo().detectedAgentId).toBe("claude");
+
+      // Lifecycle command injection writes after shell-ready. The spawn seed
+      // already promoted, so this must still arm prompt-return cleanup.
+      terminal.write("claude\r");
+      pty.__emitData("claude\r\n");
+      pty.__emitData("FAKE_CLAUDE_READY\r\n");
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(terminal.getInfo().detectedAgentId).toBe("claude");
+
+      pty.__emitData("\r\ngpriday@macbook canopy-app % ");
+      await vi.advanceTimersByTimeAsync(600);
+
+      expect(terminal.getInfo().detectedAgentId).toBeUndefined();
+      expect(terminal.getInfo().detectedProcessIconId).toBeUndefined();
+      expect(terminal.getInfo().analysisEnabled).toBe(false);
+    } finally {
+      terminal.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it("routes a spawn-time npm command through the same process icon path", () => {
+    const detectedEvents: Array<{
+      terminalId: string;
+      agentType?: string;
+      processIconId?: string;
+    }> = [];
+    const unsub = events.on("agent:detected", (payload) => {
+      detectedEvents.push({
+        terminalId: payload.terminalId,
+        agentType: payload.agentType,
+        processIconId: payload.processIconId,
+      });
+    });
+
+    const terminal = createPlainTerminalWithCommand("t-spawn-npm", "npm run build");
+
+    try {
+      expect(detectedEvents).toHaveLength(1);
+      expect(detectedEvents[0]).toMatchObject({
+        terminalId: "t-spawn-npm",
+        processIconId: "npm",
+      });
+      expect(detectedEvents[0].agentType).toBeUndefined();
+      expect(terminal.getInfo().detectedProcessIconId).toBe("npm");
     } finally {
       unsub();
       terminal.dispose();

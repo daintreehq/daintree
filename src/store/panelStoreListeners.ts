@@ -357,10 +357,12 @@ export function setupTerminalStoreListeners() {
       terminalRegistryController.onAgentDetected((data) => {
         const { terminalId, processIconId, agentType } = data;
         if (!terminalId) return;
+        const timestamp = data.timestamp ?? Date.now();
         recordIdentityEvent("detected", terminalId, { agentType, processIconId });
         const nextEverDetectedAgent = agentType ? true : undefined;
         const nextDetectedAgentId = isBuiltInAgentId(agentType) ? agentType : undefined;
-        if (!processIconId && !nextEverDetectedAgent && !nextDetectedAgentId) {
+        const nextDetectedProcessId = processIconId ?? nextDetectedAgentId;
+        if (!nextDetectedProcessId && !nextEverDetectedAgent && !nextDetectedAgentId) {
           console.log(
             `[IdentityDebug] detected IGNORED term=${terminalId.slice(-8)} reason=no-icon-and-no-agent`
           );
@@ -377,19 +379,23 @@ export function setupTerminalStoreListeners() {
           }
 
           const needsIconUpdate =
-            processIconId !== undefined && terminal.detectedProcessId !== processIconId;
+            nextDetectedProcessId !== undefined &&
+            terminal.detectedProcessId !== nextDetectedProcessId;
           const needsStickyUpdate =
             nextEverDetectedAgent === true && terminal.everDetectedAgent !== true;
           const needsAgentIdUpdate =
             nextDetectedAgentId !== undefined && terminal.detectedAgentId !== nextDetectedAgentId;
           const nextRuntimeIdentity = deriveTerminalRuntimeIdentity({
             detectedAgentId: nextDetectedAgentId,
-            detectedProcessId: processIconId,
+            detectedProcessId: nextDetectedProcessId,
           });
           const needsRuntimeIdentityUpdate = !terminalRuntimeIdentitiesEqual(
             terminal.runtimeIdentity,
             nextRuntimeIdentity
           );
+          const shouldSeedAgentState =
+            nextDetectedAgentId !== undefined &&
+            (terminal.agentState === undefined || terminal.agentState === "exited");
           // Compute the new default title from the resolved chrome identity.
           const titleMode = terminal.titleMode ?? "default";
           const computedTitle = needsAgentIdUpdate
@@ -410,6 +416,7 @@ export function setupTerminalStoreListeners() {
             !needsStickyUpdate &&
             !needsAgentIdUpdate &&
             !needsRuntimeIdentityUpdate &&
+            !shouldSeedAgentState &&
             !needsTitleUpdate
           ) {
             console.log(
@@ -424,13 +431,19 @@ export function setupTerminalStoreListeners() {
           console.log(
             `[IdentityDebug] detected APPLY term=${terminalId.slice(-8)} ` +
               `prev.detectedAgentId=${terminal.detectedAgentId ?? "<none>"} → ${nextDetectedAgentId ?? "<none>"} ` +
-              `prev.detectedProcessId=${terminal.detectedProcessId ?? "<none>"} → ${processIconId ?? "<none>"} ` +
+              `prev.detectedProcessId=${terminal.detectedProcessId ?? "<none>"} → ${nextDetectedProcessId ?? "<none>"} ` +
+              `prev.runtimeIdentity=${terminal.runtimeIdentity?.kind ?? "<none>"}:${terminal.runtimeIdentity?.id ?? "<none>"} → ` +
+              `${nextRuntimeIdentity?.kind ?? "<none>"}:${nextRuntimeIdentity?.id ?? "<none>"} ` +
               `launchAgentId=${terminal.launchAgentId ?? "<none>"}`
           );
 
-          // Plain terminals (no launchAgentId) promoted at runtime need scrollback
-          // policy applied in-process — cold-spawned agents already have it sealed at spawn.
-          if (needsAgentIdUpdate && nextDetectedAgentId && !terminal.launchAgentId) {
+          // Runtime identity is live-detection canonical. Apply it to every
+          // renderer terminal instance, including toolbar-launched terminals
+          // whose launch hint was only a spawn instruction.
+          if (
+            nextDetectedAgentId &&
+            (needsAgentIdUpdate || needsRuntimeIdentityUpdate || shouldSeedAgentState)
+          ) {
             terminalInstanceService.applyAgentPromotion(terminalId, nextDetectedAgentId);
           }
 
@@ -439,11 +452,15 @@ export function setupTerminalStoreListeners() {
               ...state.panelsById,
               [terminalId]: {
                 ...terminal,
-                ...(needsIconUpdate && { detectedProcessId: processIconId }),
+                ...(needsIconUpdate && { detectedProcessId: nextDetectedProcessId }),
                 ...(needsStickyUpdate && { everDetectedAgent: true }),
                 ...(needsAgentIdUpdate && { detectedAgentId: nextDetectedAgentId }),
                 ...(needsRuntimeIdentityUpdate && {
                   runtimeIdentity: nextRuntimeIdentity ?? undefined,
+                }),
+                ...(shouldSeedAgentState && {
+                  agentState: "idle" as const,
+                  lastStateChange: timestamp,
                 }),
                 ...(needsTitleUpdate && { title: computedTitle }),
               },

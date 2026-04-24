@@ -7,7 +7,7 @@ import {
 } from "../terminalType";
 
 describe("isAgentTerminal", () => {
-  it("uses runtimeIdentity before legacy detectedAgentId fallback", () => {
+  it("uses fresh detectedAgentId before stale runtimeIdentity", () => {
     expect(
       isAgentTerminal({
         detectedAgentId: "claude",
@@ -18,7 +18,7 @@ describe("isAgentTerminal", () => {
           processId: "npm",
         },
       })
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it("falls back to detectedAgentId for legacy terminal records", () => {
@@ -27,7 +27,7 @@ describe("isAgentTerminal", () => {
 });
 
 describe("runtime agent identity helpers", () => {
-  it("returns runtime identity before legacy detectedAgentId fallback", () => {
+  it("returns detectedAgentId before runtime identity", () => {
     expect(
       getRuntimeAgentId({
         detectedAgentId: "claude",
@@ -38,13 +38,12 @@ describe("runtime agent identity helpers", () => {
           agentId: "codex",
         },
       })
-    ).toBe("codex");
+    ).toBe("claude");
   });
 
-  it("does not treat process runtime identity as an agent", () => {
+  it("does not treat process runtime identity as an agent without detectedAgentId", () => {
     expect(
       getRuntimeAgentId({
-        detectedAgentId: "claude",
         runtimeIdentity: {
           kind: "process",
           id: "npm",

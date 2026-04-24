@@ -916,114 +916,114 @@ class TerminalInstanceService {
       listeners.push(removePrimaryListeners);
     }
 
-    if (launchAgentId) {
-      const agentConfig = getEffectiveAgentConfig(launchAgentId);
-
-      const observedTitleDisposable = terminal.onTitleChange((title: string) => {
-        const normalized = normalizeObservedTitle(title);
-        if (!normalized || isUselessTitle(normalized)) return;
-        if (normalized === managed.lastObservedTitleSent) return;
-        managed.pendingObservedTitle = normalized;
-        if (managed.observedTitleTimer !== undefined) {
-          clearTimeout(managed.observedTitleTimer);
-        }
-        managed.observedTitleTimer = window.setTimeout(() => {
-          managed.observedTitleTimer = undefined;
-          const pending = managed.pendingObservedTitle;
-          managed.pendingObservedTitle = undefined;
-          if (!pending || pending === managed.lastObservedTitleSent) return;
-          managed.lastObservedTitleSent = pending;
-          try {
-            window.electron.terminal.updateObservedTitle(id, pending);
-          } catch (err) {
-            logWarn("[TerminalInstanceService] updateObservedTitle failed", {
-              error: err instanceof Error ? err.message : String(err),
-            });
-          }
-          try {
-            usePanelStore.getState().updateLastObservedTitle(id, pending);
-          } catch (err) {
-            logWarn("[TerminalInstanceService] panel store title update failed", {
-              error: err instanceof Error ? err.message : String(err),
-            });
-          }
-        }, 150);
-      });
-      listeners.push(() => {
-        observedTitleDisposable.dispose();
-        if (managed.observedTitleTimer !== undefined) {
-          clearTimeout(managed.observedTitleTimer);
-          managed.observedTitleTimer = undefined;
-          managed.pendingObservedTitle = undefined;
-        }
-      });
-
-      const titlePatterns = agentConfig?.detection?.titleStatePatterns;
-      if (titlePatterns) {
-        let lastReportedTitleState: "working" | "waiting" | undefined;
-
-        const titleDisposable = terminal.onTitleChange((title: string) => {
-          let matched: "working" | "waiting" | undefined;
-          for (const pattern of titlePatterns.working) {
-            if (title.includes(pattern)) {
-              matched = "working";
-              break;
-            }
-          }
-          if (!matched) {
-            for (const pattern of titlePatterns.waiting) {
-              if (title.includes(pattern)) {
-                matched = "waiting";
-                break;
-              }
-            }
-          }
-          if (!matched) {
-            if (managed.titleReportTimer !== undefined) {
-              clearTimeout(managed.titleReportTimer);
-              managed.titleReportTimer = undefined;
-              managed.pendingTitleState = undefined;
-            }
-            return;
-          }
-
-          if (matched === "working") {
-            if (managed.titleReportTimer !== undefined) {
-              clearTimeout(managed.titleReportTimer);
-              managed.titleReportTimer = undefined;
-              managed.pendingTitleState = undefined;
-            }
-            if (lastReportedTitleState !== "working") {
-              lastReportedTitleState = "working";
-              window.electron.terminal.reportTitleState(id, "working");
-            }
-          } else {
-            managed.pendingTitleState = "waiting";
-            if (managed.titleReportTimer !== undefined) {
-              clearTimeout(managed.titleReportTimer);
-            }
-            managed.titleReportTimer = window.setTimeout(() => {
-              managed.titleReportTimer = undefined;
-              if (managed.pendingTitleState === "waiting") {
-                managed.pendingTitleState = undefined;
-                if (lastReportedTitleState !== "waiting") {
-                  lastReportedTitleState = "waiting";
-                  window.electron.terminal.reportTitleState(id, "waiting");
-                }
-              }
-            }, 250);
-          }
-        });
-        listeners.push(() => {
-          titleDisposable.dispose();
-          if (managed.titleReportTimer !== undefined) {
-            clearTimeout(managed.titleReportTimer);
-            managed.titleReportTimer = undefined;
-            managed.pendingTitleState = undefined;
-          }
-        });
+    const observedTitleDisposable = terminal.onTitleChange((title: string) => {
+      if (!managed.runtimeAgentId) return;
+      const normalized = normalizeObservedTitle(title);
+      if (!normalized || isUselessTitle(normalized)) return;
+      if (normalized === managed.lastObservedTitleSent) return;
+      managed.pendingObservedTitle = normalized;
+      if (managed.observedTitleTimer !== undefined) {
+        clearTimeout(managed.observedTitleTimer);
       }
-    }
+      managed.observedTitleTimer = window.setTimeout(() => {
+        managed.observedTitleTimer = undefined;
+        const pending = managed.pendingObservedTitle;
+        managed.pendingObservedTitle = undefined;
+        if (!managed.runtimeAgentId) return;
+        if (!pending || pending === managed.lastObservedTitleSent) return;
+        managed.lastObservedTitleSent = pending;
+        try {
+          window.electron.terminal.updateObservedTitle(id, pending);
+        } catch (err) {
+          logWarn("[TerminalInstanceService] updateObservedTitle failed", {
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+        try {
+          usePanelStore.getState().updateLastObservedTitle(id, pending);
+        } catch (err) {
+          logWarn("[TerminalInstanceService] panel store title update failed", {
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }, 150);
+    });
+    listeners.push(() => {
+      observedTitleDisposable.dispose();
+      if (managed.observedTitleTimer !== undefined) {
+        clearTimeout(managed.observedTitleTimer);
+        managed.observedTitleTimer = undefined;
+        managed.pendingObservedTitle = undefined;
+      }
+    });
+
+    let lastReportedTitleState: "working" | "waiting" | undefined;
+    const titleDisposable = terminal.onTitleChange((title: string) => {
+      const agentId = managed.runtimeAgentId;
+      const titlePatterns = agentId
+        ? getEffectiveAgentConfig(agentId)?.detection?.titleStatePatterns
+        : undefined;
+      if (!titlePatterns) return;
+
+      let matched: "working" | "waiting" | undefined;
+      for (const pattern of titlePatterns.working) {
+        if (title.includes(pattern)) {
+          matched = "working";
+          break;
+        }
+      }
+      if (!matched) {
+        for (const pattern of titlePatterns.waiting) {
+          if (title.includes(pattern)) {
+            matched = "waiting";
+            break;
+          }
+        }
+      }
+      if (!matched) {
+        if (managed.titleReportTimer !== undefined) {
+          clearTimeout(managed.titleReportTimer);
+          managed.titleReportTimer = undefined;
+          managed.pendingTitleState = undefined;
+        }
+        return;
+      }
+
+      if (matched === "working") {
+        if (managed.titleReportTimer !== undefined) {
+          clearTimeout(managed.titleReportTimer);
+          managed.titleReportTimer = undefined;
+          managed.pendingTitleState = undefined;
+        }
+        if (lastReportedTitleState !== "working") {
+          lastReportedTitleState = "working";
+          window.electron.terminal.reportTitleState(id, "working");
+        }
+      } else {
+        managed.pendingTitleState = "waiting";
+        if (managed.titleReportTimer !== undefined) {
+          clearTimeout(managed.titleReportTimer);
+        }
+        managed.titleReportTimer = window.setTimeout(() => {
+          managed.titleReportTimer = undefined;
+          if (managed.pendingTitleState === "waiting") {
+            managed.pendingTitleState = undefined;
+            if (lastReportedTitleState !== "waiting") {
+              lastReportedTitleState = "waiting";
+              window.electron.terminal.reportTitleState(id, "waiting");
+            }
+          }
+        }, 250);
+      }
+    });
+    listeners.push(() => {
+      titleDisposable.dispose();
+      if (managed.titleReportTimer !== undefined) {
+        clearTimeout(managed.titleReportTimer);
+        managed.titleReportTimer = undefined;
+        managed.pendingTitleState = undefined;
+      }
+    });
 
     const inputDisposable = terminal.onData((data) => {
       if (!managed.isInputLocked) {
@@ -1850,15 +1850,27 @@ class TerminalInstanceService {
   applyAgentPromotion(id: string, agentId: string): void {
     const managed = this.instances.get(id);
     if (!managed) return;
-    if (managed.runtimeAgentId === agentId) return;
+    if (managed.runtimeAgentId === agentId) {
+      restoreScrollback(managed);
+      return;
+    }
     managed.runtimeAgentId = agentId;
     restoreScrollback(managed);
+    if (
+      managed.isOpened &&
+      (managed.lastAppliedTier === TerminalRefreshTier.FOCUSED ||
+        managed.lastAppliedTier === TerminalRefreshTier.BURST ||
+        managed.lastAppliedTier === TerminalRefreshTier.VISIBLE)
+    ) {
+      this.webGLManager.ensureContext(id, managed);
+    }
   }
 
   clearAgentPromotion(id: string): void {
     const managed = this.instances.get(id);
     if (!managed?.runtimeAgentId) return;
     managed.runtimeAgentId = undefined;
+    restoreScrollback(managed);
     this.webGLManager.releaseContext(id);
     this.maybeReflowTerminal(managed);
   }

@@ -1,6 +1,6 @@
 import { execFile, execFileSync } from "child_process";
 import { access, constants } from "fs/promises";
-import { join } from "path";
+import { delimiter, join } from "path";
 import { homedir } from "os";
 import type {
   CliAvailability,
@@ -350,6 +350,11 @@ export class CliAvailabilityService {
       return { status: "missing" };
     }
 
+    const prependedPathProbe = await this.probePrependedCliPath(command);
+    if (prependedPathProbe.status !== "missing") {
+      return prependedPathProbe;
+    }
+
     const shellProbe = await this.probeViaShell(command);
     if (shellProbe.status !== "missing") {
       return shellProbe;
@@ -373,6 +378,39 @@ export class CliAvailabilityService {
       const wslProbe = await this.probeWsl(command);
       if (wslProbe.status !== "missing") {
         return wslProbe;
+      }
+    }
+
+    return { status: "missing" };
+  }
+
+  private async probePrependedCliPath(command: string): Promise<ProbeResult> {
+    const pathPrefix = process.env.DAINTREE_CLI_PATH_PREPEND;
+    if (!pathPrefix) return { status: "missing" };
+
+    const commandCandidates =
+      process.platform === "win32"
+        ? [command, `${command}.exe`, `${command}.cmd`, `${command}.bat`]
+        : [command];
+
+    for (const dir of pathPrefix.split(delimiter).filter(Boolean)) {
+      for (const candidate of commandCandidates) {
+        const candidatePath = join(dir, candidate);
+        try {
+          await access(candidatePath, constants.X_OK);
+          return { status: "found", path: candidatePath, via: "which" };
+        } catch (err) {
+          const code = (err as NodeJS.ErrnoException | undefined)?.code;
+          if (typeof code === "string" && SECURITY_ERROR_CODES.has(code)) {
+            return {
+              status: "blocked",
+              reason: code === "EACCES" ? "permissions" : "security",
+              path: candidatePath,
+              via: "which",
+              message: `${candidatePath} exists but execution failed with ${code} — check file permissions or security software allowlist`,
+            };
+          }
+        }
       }
     }
 

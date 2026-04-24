@@ -21,6 +21,46 @@ describe("deriveTerminalRuntimeIdentity", () => {
     });
   });
 
+  it("prefers fresh detected agent evidence over stale process runtime identity", () => {
+    expect(
+      deriveTerminalRuntimeIdentity({
+        detectedAgentId: "claude",
+        detectedProcessId: "claude",
+        runtimeIdentity: {
+          kind: "process",
+          id: "npm",
+          iconId: "npm",
+          processId: "npm",
+        },
+      })
+    ).toMatchObject({
+      kind: "agent",
+      id: "claude",
+      iconId: "claude",
+      agentId: "claude",
+      processId: "claude",
+    });
+  });
+
+  it("prefers fresh detected process evidence over stale agent runtime identity", () => {
+    expect(
+      deriveTerminalRuntimeIdentity({
+        detectedProcessId: "npm",
+        runtimeIdentity: {
+          kind: "agent",
+          id: "claude",
+          iconId: "claude",
+          agentId: "claude",
+        },
+      })
+    ).toEqual({
+      kind: "process",
+      id: "npm",
+      iconId: "npm",
+      processId: "npm",
+    });
+  });
+
   it("uses process identity when no agent is detected", () => {
     expect(deriveTerminalRuntimeIdentity({ detectedProcessId: "NPM" })).toEqual({
       kind: "process",

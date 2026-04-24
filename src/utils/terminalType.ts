@@ -20,10 +20,13 @@ export function isAgentTerminal(terminal: {
   launchAgentId?: string;
   kind?: PanelKind;
 }): boolean {
+  if (terminal.detectedAgentId) {
+    return true;
+  }
   if (terminal.runtimeIdentity) {
     return terminal.runtimeIdentity.kind === "agent";
   }
-  return Boolean(terminal.detectedAgentId);
+  return false;
 }
 
 export const isRuntimeAgentTerminal = isAgentTerminal;
@@ -32,10 +35,13 @@ export function getRuntimeAgentId(
   terminal: RuntimeAgentIdentityInput | undefined
 ): string | undefined {
   if (!terminal) return undefined;
+  if (terminal.detectedAgentId) {
+    return terminal.detectedAgentId;
+  }
   if (terminal.runtimeIdentity) {
     return terminal.runtimeIdentity.kind === "agent" ? terminal.runtimeIdentity.agentId : undefined;
   }
-  return terminal.detectedAgentId;
+  return undefined;
 }
 
 export function getBuiltInRuntimeAgentId(

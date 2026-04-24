@@ -1,136 +1,122 @@
 # Terminal Identity
 
-> **There is only one kind of PTY panel: a terminal.** Agent-ness is a dynamic
-> state of a terminal, inferred from what's running inside it right now.
+> **There is one PTY-backed panel shape: an agent-capable terminal.** A plain
+> terminal is the dormant runtime state. An agent terminal is the promoted
+> runtime state, inferred from what is running inside the PTY right now.
 
-This document defines the identity model. It replaces an earlier three-field
-contract (`agentId` / `detectedAgentId` / `capabilityAgentId`) that tried to
-distinguish "cold-launched agent" from "shell running an agent" as structurally
-different things. They aren't. Both are the same thing: a terminal whose live
-process is an agent.
+This document defines the terminal identity model. It deliberately avoids a
+separate "agent panel" runtime path. A terminal can run `npm`, then `claude`,
+then return to the shell, then run `codex`; chrome and agent capability follow
+the live process each time.
 
-See also: [terminal-lifecycle.md](./terminal-lifecycle.md) for the runtime
-status model.
+See also: [terminal-lifecycle.md](./terminal-lifecycle.md) for process
+runtime status.
 
-## The rule
+## The Rule
 
-Everything UI-facing — icon, title, brand color, hybrid-input bar, fleet
-membership, focus routing, state badges, context menus — derives from **one
-field**: `detectedAgentId`. When it's set, the terminal is an agent terminal.
-When it's cleared, the terminal is a plain shell. Demotion and promotion are
-free and instant.
+Terminal chrome and agent capability are derived from live runtime identity:
 
-## The two fields
+1. `detectedAgentId` wins. If it is set, the terminal is currently an agent.
+2. Otherwise `detectedProcessId` wins. If it is set, the terminal shows that
+   process icon without agent capability.
+3. Otherwise the terminal is plain shell chrome.
 
-| Field               | Purpose                        | Type             | Writer                          | Persisted |
-| ------------------- | ------------------------------ | ---------------- | ------------------------------- | --------- |
-| `detectedAgentId`   | live chrome identity           | `BuiltInAgentId` | PTY host process detector (IPC) | no        |
-| `everDetectedAgent` | sticky "has ever hosted agent" | `boolean`        | PTY host process detector (IPC) | no        |
+`launchAgentId` is never chrome identity. It is only the spawn/restart hint for
+the command that was requested.
 
-Both are transient. Both are authored exclusively by the backend process
-detector and pushed through IPC. Neither is persisted — on reconnect/hydrate
-the backend replays the current truth.
+## Runtime Identity
 
-## The launch hint
-
-`PtyPanelData.launchAgentId` exists but is **not an identity**. It records
-which agent command was injected at spawn time. Its only consumers are:
-
-- **Spawn & restart** — knows which command to inject.
-- **Session resume** — looks up the agent's resume flags.
-- **Persisted agent settings** — model, preset, launch flags are keyed by it.
-
-Chrome never reads `launchAgentId`. Fleet never reads it. Hybrid input never
-reads it. Focus routing never reads it. Anyone reading it for UI classification
-is a bug.
-
-## The chrome resolver
-
-One helper answers "what does the user see right now?":
+Renderer state carries a normalized `runtimeIdentity` alongside the raw
+detection fields:
 
 ```ts
-resolveChromeAgentId(panel); // or: (detectedAgentId, launchAgentId?, everDetectedAgent?)
+type TerminalRuntimeIdentity =
+  | {
+      kind: "agent";
+      id: string;
+      iconId: string;
+      agentId: string;
+      processId?: string;
+    }
+  | {
+      kind: "process";
+      id: string;
+      iconId: string;
+      processId: string;
+    };
 ```
 
-Behavior: **`chrome agent id === detectedAgentId`.** That's the only rule.
+`deriveTerminalRuntimeIdentity()` and `deriveTerminalChrome()` are the canonical
+helpers. Components should consume the derived descriptor, not stitch together
+`launchAgentId`, `detectedAgentId`, `detectedProcessId`, and sticky flags.
 
-- If `detectedAgentId` is set → return it. Chrome shows the agent.
-- Otherwise → return `undefined`. Chrome is a plain terminal.
+Fresh detection fields take precedence over any existing `runtimeIdentity`.
+This protects promotion paths like `npm run build -> claude`, where stale
+process identity must not block agent promotion.
 
-`launchAgentId` and `everDetectedAgent` are accepted by the function signature
-for call-site compatibility, but they are intentionally **ignored** by the
-resolver. Chrome is a pure function of the live process inside the PTY. Nothing
-else.
+## Fields
 
-Consequence: during the ~1–2 seconds between a cold-launched spawn and the
-first detection commit, chrome reads as a plain terminal. It flips the instant
-the detector commits. This is the same code path as typing `claude` into a
-plain terminal — there is no spawn-time special case.
+| Field               | Purpose                                                      | Writer                | Persisted |
+| ------------------- | ------------------------------------------------------------ | --------------------- | --------- |
+| `detectedAgentId`   | Live agent identity                                          | PTY detector via IPC  | No        |
+| `detectedProcessId` | Live non-agent process icon                                  | PTY detector via IPC  | No        |
+| `runtimeIdentity`   | Normalized live identity descriptor                          | Renderer IPC listener | No        |
+| `everDetectedAgent` | Sticky "has hosted an agent" flag for lifecycle preservation | PTY detector via IPC  | No        |
+| `launchAgentId`     | Spawn/restart command hint                                   | Launcher/hydration    | Yes       |
 
-Every chrome consumer uses this helper. No consumer reads `launchAgentId` for
-display decisions.
+## Agent-Capable Terminal
 
-## Title ownership
+Every terminal is wired as if it might become an agent:
 
-`PtyPanelData.title` has two modes tracked by `titleMode`:
+- The PTY host starts `ProcessDetector` for every terminal.
+- The shell-command watcher can inject typed command evidence for every plain
+  terminal.
+- Spawn-time commands are also seeded into the detector, so toolbar-launched
+  `claude` and typed `claude` use the same promotion path.
+- Renderer terminal instances always have dormant parser, title, Enter-key,
+  resize, hibernation, and scrollback hooks.
+- Those hooks activate based on `runtimeAgentId`, which is updated from live
+  detection and cleared on demotion.
 
-- `"default"` (or absent) — title is derived from `resolveChromeAgentId`:
-  `getAgentConfig(chromeId)?.name ?? "Terminal"`. Promotion/demotion freely
-  rewrites it.
-- `"custom"` — the user renamed the panel. The renderer stores the typed
-  title and never overwrites it.
+This means a standard terminal is not a different implementation. It is the
+same terminal with no live agent identity.
 
-The store listener that syncs `detectedAgentId` is also responsible for
-updating `title` when `titleMode === "default"`. Any rename action sets
-`titleMode = "custom"` and writes the user's text.
+## Activity And Fleet
 
-## What got deleted
+Agent-specific UI is gated by runtime agent identity:
 
-- `PtyPanelData.capabilityAgentId` — the sealed-at-spawn "is this a full agent
-  terminal" flag. Gone. No tiering. Every terminal participates in
-  fleet/hybrid-input/focus equally, gated on live `detectedAgentId`.
-- `PtyPanelData.type` (legacy `TerminalType`) — the pre-unification "terminal"
-  vs "claude"/"gemini"/etc. classifier. Gone. All PTY panels are `kind:
-"terminal"`.
-- The observational chip / "Restart as agent" CTA — gone. There's nothing to
-  promote to; the live agent already has full chrome.
-- `terminal.convertType` action — gone. Nothing to convert.
-- `isAgentTerminal` discriminator in the PTY spawn path — gone. All terminals
-  spawn the same way (interactive shell, generic env).
-- The pre-command `printf '\x1b[H\x1b[2J\x1b[3J'` clear-screen preamble (both
-  cold-spawn and pool-acquire paths) — gone. No visible escape noise on start.
-- `resolveEffectiveAgentId` with its `detectedAgentId ?? agentId` fallback —
-  replaced by `resolveChromeAgentId` with the demotion rule above.
+- Activity indicators render only when derived chrome says `isAgent === true`.
+- Fleet membership uses runtime agent identity, not launch intent.
+- Worktree sidebar rows use the same derived chrome descriptor and only show
+  agent state when the row is currently an agent.
+- Plain process icons such as `npm` never enter the agent state machine.
 
-## Persistence
+The backend starts the activity monitor when an agent is detected at runtime.
+The renderer seeds `agentState: "idle"` on promotion if no state event has
+arrived yet, so the UI has a stable dormant-to-active transition.
 
-`launchAgentId`, `title`, `titleMode`, `command`, `agentLaunchFlags`,
-`agentModelId`, `agentPresetId`, `agentPresetColor`, `originalPresetId`,
-`agentSessionId` — all persisted. Enough to rebuild the command on restart.
+## Launch Hint
 
-`detectedAgentId`, `everDetectedAgent`, `detectedProcessId`, `agentState`,
-`runtimeStatus`, `flowStatus` — all transient. Rehydrated from the backend
-reconnect payload.
+`launchAgentId` records which agent command the user asked to launch. It is
+kept for:
 
-## The PTY-side name
+- Command generation and restart.
+- Session resume flags.
+- Preset/model/settings lookup.
+- Command replay after app restart.
 
-PTY-internal state (`TerminalPublicState` in `electron/services/pty/types.ts`)
-uses `detectedAgentId: BuiltInAgentId | undefined` — same name as the
-renderer-facing types. There is no name translation at the IPC boundary.
-(Earlier versions had `detectedAgentType: TerminalType` that got narrowed.
-Since legacy `type` is retired, the conflation is resolved.)
+It must not decide chrome, fleet membership, status badges, worktree sidebar
+agent rows, or activity indicators.
 
-## Reader guidance
+## Reader Guidance
 
-- **Is there an agent running right now?** `detectedAgentId !== undefined`.
-- **What agent should the tab show as the icon/title/color?**
-  `resolveChromeAgentId(...)`.
-- **What command should restart use?** `command` (regenerated from
-  `launchAgentId` settings if needed).
-- **Which agent's session resume should this restart use?**
-  `detectedAgentId ?? launchAgentId`.
-- **Should fleet / hybrid-input / focus trust this as an agent?**
-  `detectedAgentId !== undefined`. Never `launchAgentId`.
+- **What icon/color/title should I show?** Use `deriveTerminalChrome(panel)`.
+- **Is this terminal currently an agent?** Use `deriveTerminalChrome(panel).isAgent`
+  or `getRuntimeAgentId(panel)`.
+- **Should agent activity UI be visible?** Only when runtime chrome is agent.
+- **What command should restart use?** Use persisted command/launch hint fields.
+- **Should a typed agent in a plain terminal be first-class?** Yes. Runtime
+  detection promotes it through the same path as a toolbar-launched agent.
 
-If you find yourself branching on "was this spawn-time or runtime-promoted?",
-you're doing the old model. Delete the branch.
+If code branches on "was this born as an agent terminal?", it is probably using
+the old model. The runtime question is only "what is running in the PTY now?"

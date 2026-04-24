@@ -330,6 +330,51 @@ describe("terminalStore process detection listeners", () => {
   it("stores detectedAgentId when agent:detected carries a BuiltInAgentId", () => {
     const cleanup = setupTerminalStoreListeners();
     const detected = handlers.agentDetected;
+    const timestamp = Date.now();
+
+    detected?.({
+      terminalId: "term-1",
+      agentType: "claude",
+      processIconId: "claude",
+      processName: "claude",
+      timestamp,
+    });
+
+    const panel = usePanelStore.getState().panelsById["term-1"];
+    expect(panel?.detectedAgentId).toBe("claude");
+    expect(panel?.runtimeIdentity).toMatchObject({
+      kind: "agent",
+      id: "claude",
+      iconId: "claude",
+      agentId: "claude",
+      processId: "claude",
+    });
+    expect(panel?.agentState).toBe("idle");
+    expect(panel?.lastStateChange).toBe(timestamp);
+    cleanup();
+  });
+
+  it("promotes from a stale process runtime identity to agent runtime identity", () => {
+    usePanelStore.setState((s) => ({
+      panelsById: {
+        ...s.panelsById,
+        "term-1": {
+          ...s.panelsById["term-1"]!,
+          detectedProcessId: "npm",
+          runtimeIdentity: {
+            kind: "process",
+            id: "npm",
+            iconId: "npm",
+            processId: "npm",
+          },
+        },
+      },
+    }));
+
+    const cleanup = setupTerminalStoreListeners();
+    const detected = handlers.agentDetected;
+
+    applyAgentPromotionMock.mockClear();
 
     detected?.({
       terminalId: "term-1",
@@ -339,7 +384,17 @@ describe("terminalStore process detection listeners", () => {
       timestamp: Date.now(),
     });
 
-    expect(usePanelStore.getState().panelsById["term-1"]?.detectedAgentId).toBe("claude");
+    const panel = usePanelStore.getState().panelsById["term-1"];
+    expect(panel?.detectedAgentId).toBe("claude");
+    expect(panel?.detectedProcessId).toBe("claude");
+    expect(panel?.runtimeIdentity).toMatchObject({
+      kind: "agent",
+      id: "claude",
+      agentId: "claude",
+      processId: "claude",
+    });
+    expect(panel?.agentState).toBe("idle");
+    expect(applyAgentPromotionMock).toHaveBeenCalledWith("term-1", "claude");
     cleanup();
   });
 
@@ -426,7 +481,7 @@ describe("terminalStore process detection listeners", () => {
     cleanup();
   });
 
-  it("does not call applyAgentPromotion for cold-spawned agent panels (launchAgentId set at spawn)", () => {
+  it("applies runtime promotion for cold-spawned agent panels too", () => {
     usePanelStore.setState((s) => ({
       panelsById: {
         ...s.panelsById,
@@ -447,7 +502,7 @@ describe("terminalStore process detection listeners", () => {
       timestamp: Date.now(),
     });
 
-    expect(applyAgentPromotionMock).not.toHaveBeenCalled();
+    expect(applyAgentPromotionMock).toHaveBeenCalledWith("term-1", "claude");
     cleanup();
   });
 
