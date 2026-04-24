@@ -32,7 +32,6 @@
     "package:local:dmg": "npm run build && electron-builder --mac dmg -c.mac.identity=null -c.mac.forceCodeSigning=false -c.mac.notarize=false",
     "rebuild": "electron-rebuild -f -w node-pty,better-sqlite3 && node node_modules/node-pty/scripts/post-install.js",
     "postinstall": "node scripts/postinstall.cjs",
-    "pretest": "npm rebuild better-sqlite3 --silent",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:ui": "vitest --ui",
