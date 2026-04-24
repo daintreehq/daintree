@@ -68,6 +68,14 @@ function createMockTerminal(
   };
 }
 
+function createGlobalMockTerminal(
+  id: string,
+  location: "grid" | "dock" | "trash" = "grid"
+): TerminalInstance {
+  const terminal = createMockTerminal(id, location);
+  return { ...terminal, worktreeId: undefined };
+}
+
 function createMockTabGroup(
   id: string,
   panelIds: string[],
@@ -130,6 +138,63 @@ describe("dock ↔ grid transitions", () => {
       const moved = usePanelStore.getState().moveTerminalToGrid("t1");
       expect(moved).toBe(false);
     });
+
+    it("restores a docked panel even when a stale persisted group still says grid", () => {
+      const t1 = createMockTerminal("t1", "dock");
+      const t2 = createMockTerminal("t2", "grid");
+      setTerminals([t1, t2]);
+
+      const staleGroup = createMockTabGroup("g1", ["t1", "t2"], "grid");
+      usePanelStore.setState({ tabGroups: new Map([["g1", staleGroup]]) });
+
+      expect(usePanelStore.getState().getPanelGroup("t1")).toBeUndefined();
+
+      const moved = usePanelStore.getState().moveTerminalToGrid("t1");
+
+      expect(moved).toBe(true);
+      expect(usePanelStore.getState().panelsById["t1"]!.location).toBe("grid");
+      expect(usePanelStore.getState().panelsById["t1"]!.isVisible).toBe(true);
+    });
+  });
+
+  describe("getTabGroups dock visibility", () => {
+    it("includes global dock panels in a worktree-scoped dock", () => {
+      const globalDocked = createGlobalMockTerminal("global-dock", "dock");
+      const worktreeDocked = createMockTerminal("worktree-dock", "dock");
+      setTerminals([globalDocked, worktreeDocked]);
+
+      const groups = usePanelStore.getState().getTabGroups("dock", "wt-1");
+
+      expect(groups.map((g) => g.panelIds)).toEqual([["global-dock"], ["worktree-dock"]]);
+    });
+
+    it("removes a global dock panel from dock groups after restoring it to grid", () => {
+      const globalDocked = createGlobalMockTerminal("global-dock", "dock");
+      setTerminals([globalDocked]);
+
+      expect(usePanelStore.getState().getTabGroups("dock", "wt-1")).toHaveLength(1);
+
+      const moved = usePanelStore.getState().moveTerminalToGrid("global-dock");
+
+      expect(moved).toBe(true);
+      expect(usePanelStore.getState().getTabGroups("dock", "wt-1")).toHaveLength(0);
+    });
+
+    it("filters stale grid members out when resolving panels for a dock group", () => {
+      const t1 = createMockTerminal("t1", "dock");
+      const t2 = createMockTerminal("t2", "grid");
+      const group = createMockTabGroup("g1", ["t1", "t2"], "dock");
+      setTerminals([t1, t2]);
+      usePanelStore.setState({ tabGroups: new Map([["g1", group]]) });
+
+      expect(usePanelStore.getState().getTabGroups("dock", "wt-1")[0]?.panelIds).toEqual(["t1"]);
+      expect(
+        usePanelStore
+          .getState()
+          .getTabGroupPanels("g1", "dock")
+          .map((p) => p.id)
+      ).toEqual(["t1"]);
+    });
   });
 
   describe("hydrateTabGroups — dock location preservation", () => {
@@ -150,6 +215,7 @@ describe("dock ↔ grid transitions", () => {
       const updated = usePanelStore.getState().panelsById["t1"];
       expect(updated!.location).toBe("dock");
       expect(updated!.isVisible).toBe(false);
+      expect(usePanelStore.getState().getPanelGroup("t1")).toBeUndefined();
     });
 
     it("applies group location when terminal is already in grid", () => {

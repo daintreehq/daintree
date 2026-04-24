@@ -11,6 +11,22 @@ import { deriveRuntimeStatus } from "./helpers";
 type Set = PanelRegistryStoreApi["setState"];
 type Get = PanelRegistryStoreApi["getState"];
 
+function getPanelTabGroupLocation(panel: TerminalInstance | undefined): TabGroupLocation | null {
+  if (!panel || panel.location === "trash" || panel.location === "background") return null;
+  return panel.location === "dock" ? "dock" : "grid";
+}
+
+function panelMatchesWorktreeScope(
+  panelWorktreeId: string | undefined,
+  worktreeId: string | undefined,
+  location: TabGroupLocation
+): boolean {
+  if ((panelWorktreeId ?? undefined) === worktreeId) return true;
+  // Docked global panels are intentionally visible in every worktree-scoped dock.
+  // Grid panels remain worktree-exact to avoid leaking global panels into every grid.
+  return location === "dock" && panelWorktreeId === undefined && worktreeId !== undefined;
+}
+
 export const createTabGroupActions = (
   set: Set,
   get: Get
@@ -33,9 +49,12 @@ export const createTabGroupActions = (
   | "setTabGroupInfo"
 > => ({
   getPanelGroup: (panelId) => {
-    const tabGroups = get().tabGroups;
+    const state = get();
+    const tabGroups = state.tabGroups;
+    const panelLocation = getPanelTabGroupLocation(state.panelsById[panelId]);
     for (const group of tabGroups.values()) {
       if (group.panelIds.includes(panelId)) {
+        if (panelLocation !== null && panelLocation !== group.location) continue;
         return group;
       }
     }
@@ -196,7 +215,7 @@ export const createTabGroupActions = (
     });
   },
 
-  getTabGroupPanels: (groupId, _location) => {
+  getTabGroupPanels: (groupId, location) => {
     const state = get();
     const trashedTerminals = state.trashedTerminals;
     const tabGroups = state.tabGroups;
@@ -207,13 +226,21 @@ export const createTabGroupActions = (
         .map((id) => state.panelsById[id])
         .filter(
           (t): t is TerminalInstance =>
-            t !== undefined && t.location !== "trash" && !trashedTerminals.has(t.id)
+            t !== undefined &&
+            getPanelTabGroupLocation(t) !== null &&
+            (location === undefined || getPanelTabGroupLocation(t) === location) &&
+            !trashedTerminals.has(t.id)
         );
     }
 
     // Not an explicit group - check if it's a single ungrouped panel
     const panel = state.panelsById[groupId];
-    if (panel && panel.location !== "trash" && !trashedTerminals.has(panel.id)) {
+    if (
+      panel &&
+      getPanelTabGroupLocation(panel) !== null &&
+      (location === undefined || getPanelTabGroupLocation(panel) === location) &&
+      !trashedTerminals.has(panel.id)
+    ) {
       for (const g of tabGroups.values()) {
         if (g.panelIds.includes(groupId)) {
           return [];
@@ -234,11 +261,16 @@ export const createTabGroupActions = (
     const panelsInExplicitGroups = new Set<string>();
 
     for (const group of tabGroups.values()) {
-      if (group.location === location && (group.worktreeId ?? undefined) === worktreeId) {
+      if (
+        group.location === location &&
+        panelMatchesWorktreeScope(group.worktreeId, worktreeId, location)
+      ) {
         const validPanelIds = group.panelIds.filter((id) => {
           const panel = state.panelsById[id];
           if (!panel || trashedTerminals.has(id)) return false;
-          const panelLocation = panel.location ?? "grid";
+          const panelLocation = getPanelTabGroupLocation(panel);
+          if (panelLocation === null) return false;
+          if (!panelMatchesWorktreeScope(panel.worktreeId, worktreeId, location)) return false;
           return panelLocation === location;
         });
 
@@ -261,9 +293,10 @@ export const createTabGroupActions = (
       const t = state.panelsById[tid];
       if (!t) continue;
       if (t.location === "trash" || trashedTerminals.has(t.id)) continue;
-      const effectiveLocation = t.location ?? "grid";
+      const effectiveLocation = getPanelTabGroupLocation(t);
+      if (effectiveLocation === null) continue;
       if (effectiveLocation !== location) continue;
-      if ((t.worktreeId ?? undefined) !== worktreeId) continue;
+      if (!panelMatchesWorktreeScope(t.worktreeId, worktreeId, location)) continue;
       if (panelsInExplicitGroups.has(t.id)) continue;
       ungroupedPanels.push(t);
     }
@@ -625,6 +658,10 @@ export const createTabGroupActions = (
         if (trashedTerminals.has(id)) return false;
         const terminal = state.panelsById[id];
         if (terminal?.location === "trash" || terminal?.location === "background") return false;
+        // A docked panel inside a persisted grid group means the panel was moved
+        // after the group snapshot. Preserve the newer per-panel dock state and
+        // sever stale membership so restore-to-grid can update the panel directly.
+        if (terminal?.location === "dock" && groupLocation !== "dock") return false;
         return true;
       });
 
