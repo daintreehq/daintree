@@ -9,8 +9,7 @@ type PtySerializeInput = PtyPanelData & { createdAt?: number };
 
 export function serializePtyPanel(t: PtySerializeInput): Partial<PanelSnapshot> {
   return {
-    type: t.type,
-    agentId: t.agentId,
+    launchAgentId: t.launchAgentId,
     cwd: t.cwd,
     command: t.command?.trim() || undefined,
     ...(t.createdAt !== undefined && { createdAt: t.createdAt }),

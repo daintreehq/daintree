@@ -66,10 +66,9 @@ export function gridPanelPropsAreEqual(prev: GridPanelProps, next: GridPanelProp
       a.title !== b.title ||
       a.worktreeId !== b.worktreeId ||
       a.kind !== b.kind ||
-      a.type !== b.type ||
-      a.agentId !== b.agentId ||
+      a.launchAgentId !== b.launchAgentId ||
       a.detectedAgentId !== b.detectedAgentId ||
-      a.capabilityAgentId !== b.capabilityAgentId ||
+      a.everDetectedAgent !== b.everDetectedAgent ||
       a.cwd !== b.cwd ||
       a.agentState !== b.agentState ||
       a.activityHeadline !== b.activityHeadline ||
@@ -105,8 +104,9 @@ export function gridPanelPropsAreEqual(prev: GridPanelProps, next: GridPanelProp
       if (
         pt.id !== nt.id ||
         pt.title !== nt.title ||
-        pt.type !== nt.type ||
         pt.agentId !== nt.agentId ||
+        pt.detectedAgentId !== nt.detectedAgentId ||
+        pt.everDetectedAgent !== nt.everDetectedAgent ||
         pt.detectedProcessId !== nt.detectedProcessId ||
         pt.kind !== nt.kind ||
         pt.agentState !== nt.agentState ||

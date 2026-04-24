@@ -84,7 +84,7 @@ describe("TaskOrchestrator", () => {
         {
           id: "term-1",
           kind: "terminal",
-          agentId: "agent-1",
+          launchAgentId: "agent-1",
           agentState: "idle",
         },
       ]);
@@ -105,7 +105,7 @@ describe("TaskOrchestrator", () => {
         {
           id: "term-1",
           kind: "terminal",
-          agentId: "agent-1",
+          launchAgentId: "agent-1",
           agentState: "waiting",
         },
       ]);
@@ -125,7 +125,7 @@ describe("TaskOrchestrator", () => {
         {
           id: "term-1",
           kind: "terminal",
-          agentId: "agent-1",
+          launchAgentId: "agent-1",
           agentState: "working",
         },
       ]);
@@ -186,13 +186,13 @@ describe("TaskOrchestrator", () => {
         {
           id: "term-a",
           kind: "terminal",
-          agentId: "claude",
+          launchAgentId: "claude",
           agentState: "idle",
         },
         {
           id: "term-b",
           kind: "terminal",
-          agentId: "claude",
+          launchAgentId: "claude",
           agentState: "idle",
         },
       ]);
@@ -215,7 +215,7 @@ describe("TaskOrchestrator", () => {
         {
           id: "term-1",
           kind: "terminal",
-          agentId: "agent-1",
+          launchAgentId: "agent-1",
           agentState: "idle",
         },
       ]);
@@ -233,7 +233,7 @@ describe("TaskOrchestrator", () => {
         {
           id: "term-1",
           kind: "terminal",
-          agentId: "agent-1",
+          launchAgentId: "agent-1",
           agentState: "idle",
         },
       ]);
@@ -261,7 +261,7 @@ describe("TaskOrchestrator", () => {
         {
           id: "term-1",
           kind: "terminal",
-          agentId: "agent-1",
+          launchAgentId: "agent-1",
           agentState: "idle",
         },
       ]);
@@ -289,7 +289,7 @@ describe("TaskOrchestrator", () => {
         {
           id: "term-1",
           kind: "terminal",
-          agentId: "agent-1",
+          launchAgentId: "agent-1",
           agentState: "idle",
         },
       ]);
@@ -352,7 +352,7 @@ describe("TaskOrchestrator", () => {
         {
           id: "term-1",
           kind: "terminal",
-          agentId: "agent-1",
+          launchAgentId: "agent-1",
           agentState: "waiting",
         },
       ]);
@@ -406,7 +406,7 @@ describe("TaskOrchestrator", () => {
         {
           id: "term-1",
           kind: "terminal",
-          agentId: "agent-1",
+          launchAgentId: "agent-1",
           agentState: "idle",
         },
       ]);
@@ -440,13 +440,13 @@ describe("TaskOrchestrator", () => {
         {
           id: "term-a",
           kind: "terminal",
-          agentId: "claude",
+          launchAgentId: "claude",
           agentState: "idle",
         },
         {
           id: "term-b",
           kind: "terminal",
-          agentId: "claude",
+          launchAgentId: "claude",
           agentState: "idle",
         },
       ]);
@@ -485,7 +485,7 @@ describe("TaskOrchestrator", () => {
         {
           id: "term-1",
           kind: "terminal",
-          agentId: "claude",
+          launchAgentId: "claude",
           agentState: "idle",
         },
       ]);
@@ -531,7 +531,7 @@ describe("TaskOrchestrator", () => {
         {
           id: "term-1",
           kind: "terminal",
-          agentId: "agent-1",
+          launchAgentId: "agent-1",
           agentState: "idle",
         },
       ]);
@@ -714,7 +714,7 @@ describe("TaskOrchestrator", () => {
         {
           id: "term-1",
           kind: "terminal",
-          agentId: "agent-1",
+          launchAgentId: "agent-1",
           agentState: "idle",
           worktreeId: "wt-1",
         },
@@ -754,7 +754,7 @@ describe("TaskOrchestrator", () => {
         {
           id: "term-1",
           kind: "terminal",
-          agentId: "agent-1",
+          launchAgentId: "agent-1",
           agentState: "idle",
         },
       ]);
@@ -795,7 +795,7 @@ describe("TaskOrchestrator", () => {
         {
           id: "term-1",
           kind: "terminal",
-          agentId: "routed-agent",
+          launchAgentId: "routed-agent",
           agentState: "idle",
         },
       ]);
@@ -832,7 +832,7 @@ describe("TaskOrchestrator", () => {
         {
           id: "term-1",
           kind: "terminal",
-          agentId: "fallback-agent",
+          launchAgentId: "fallback-agent",
           agentState: "idle",
         },
       ]);
@@ -852,7 +852,7 @@ describe("TaskOrchestrator", () => {
         {
           id: "term-1",
           kind: "terminal",
-          agentId: "any-agent",
+          launchAgentId: "any-agent",
           agentState: "idle",
         },
       ]);
@@ -884,7 +884,7 @@ describe("TaskOrchestrator", () => {
         {
           id: "term-1",
           kind: "terminal",
-          agentId: "different-agent",
+          launchAgentId: "different-agent",
           agentState: "idle",
         },
       ]);
@@ -929,7 +929,7 @@ describe("TaskOrchestrator", () => {
         {
           id: "term-1",
           kind: "terminal",
-          agentId: "agent-1",
+          launchAgentId: "agent-1",
           agentState: "idle",
         },
       ]);
@@ -951,7 +951,7 @@ describe("TaskOrchestrator", () => {
         {
           id: "term-1",
           kind: "terminal",
-          agentId: "agent-1",
+          launchAgentId: "agent-1",
           agentState: "idle",
         },
       ]);
@@ -977,7 +977,7 @@ describe("TaskOrchestrator", () => {
         {
           id: "term-1",
           kind: "terminal",
-          agentId: "agent-1",
+          launchAgentId: "agent-1",
           agentState: "idle",
         },
       ]);

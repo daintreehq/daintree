@@ -20,7 +20,6 @@ import {
   ChevronRight,
   CopyPlus,
   Ellipsis,
-  Eye,
   Info,
   Lock,
   Pencil,
@@ -39,7 +38,7 @@ import {
 import { SortableContext, horizontalListSortingStrategy, arrayMove } from "@dnd-kit/sortable";
 import { restrictToHorizontalAxis, restrictToParentElement } from "@dnd-kit/modifiers";
 import { LayoutGroup } from "framer-motion";
-import type { PanelKind, TerminalType } from "@/types";
+import type { PanelKind } from "@/types";
 import { cn, getBaseTitle } from "@/lib/utils";
 import { formatShortcutForTooltip, createTooltipWithShortcut } from "@/lib/platform";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
@@ -54,7 +53,7 @@ import {
   useKeybindingDisplay,
 } from "@/hooks";
 import { usePanelStore } from "@/store/panelStore";
-import { resolveEffectiveAgentId } from "@/utils/agentIdentity";
+import { resolveChromeAgentId } from "@/utils/agentIdentity";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -66,7 +65,6 @@ import { TabButton, type TabInfo } from "./TabButton";
 import { SortableTabButton } from "./SortableTabButton";
 import { useShallow } from "zustand/react/shallow";
 import { panelKindCanRestart, panelKindHasPty } from "@shared/config/panelKindRegistry";
-import { isRegisteredAgent } from "@shared/config/agentRegistry";
 import type { BuiltInAgentId } from "@shared/config/agentIds";
 import { actionService } from "@/services/ActionService";
 import { fireWatchNotification } from "@/lib/watchNotification";
@@ -76,16 +74,12 @@ export interface PanelHeaderProps {
   id: string;
   title: string;
   kind: PanelKind;
-  type?: TerminalType;
   agentId?: string;
   /** Runtime-detected agent identity (cleared when the agent exits). Drives icons and the watch button. */
   detectedAgentId?: string;
-  /**
-   * Agent identity sealed at spawn for full-mode terminals. Absent when an
-   * agent was started inside a plain shell — the chip uses this gap to offer
-   * a one-click respawn into a proper agent terminal.
-   */
-  capabilityAgentId?: BuiltInAgentId;
+  /** Sticky flag: has an agent ever been live-detected in this panel. Needed so
+   * resolveChromeAgentId applies the demotion rule — agent exited → plain shell. */
+  everDetectedAgent?: boolean;
   detectedProcessId?: string;
   presetColor?: string;
   worktreeAccentColor?: string;
@@ -149,10 +143,9 @@ function PanelHeaderComponent({
   id,
   title,
   kind,
-  type,
   agentId,
   detectedAgentId,
-  capabilityAgentId,
+  everDetectedAgent,
   detectedProcessId,
   presetColor,
   worktreeAccentColor,
@@ -256,7 +249,11 @@ function PanelHeaderComponent({
   // Watch button tracks live agent identity: visible when an agent is currently
   // running (`detectedAgentId`) OR was launched as one (`agentId`). The fallback
   // keeps the button available right after spawn before the process detector fires.
-  const effectiveAgentId = resolveEffectiveAgentId(detectedAgentId, agentId);
+  const effectiveAgentId = resolveChromeAgentId(
+    detectedAgentId as BuiltInAgentId | undefined,
+    agentId,
+    everDetectedAgent
+  );
   const showWatchButton = !!effectiveAgentId;
 
   // Fleet failure state for this pane: when the most recent broadcast
@@ -276,17 +273,6 @@ function PanelHeaderComponent({
   const terminal = usePanelStore(useShallow((state) => state.panelsById[id]));
   const isInputLocked = terminal?.isInputLocked ?? false;
   const hasPty = panelKindHasPty(kind);
-
-  // Observational mode: an agent is running inside a plain shell that wasn't
-  // launched as an agent terminal. `capabilityAgentId` is sealed at spawn for
-  // full-mode terminals; its absence alongside a live `detectedAgentId` is the
-  // gap we surface — calmly, with a one-click respawn into the proper agent
-  // terminal. We only show the CTA for agents the registry can spawn.
-  const isObservationalAgent =
-    !!detectedAgentId &&
-    !capabilityAgentId &&
-    isRegisteredAgent(detectedAgentId) &&
-    !terminal?.isRestarting;
 
   // Whether the overflow "..." menu has any items to show
   const showMoveToDock = !!onMinimize && !isMaximized && location !== "dock";
@@ -374,7 +360,7 @@ function PanelHeaderComponent({
 
   const getAriaLabel = () => {
     if (kind === "browser") return "Edit browser title";
-    if (!agentId && type === "terminal") return "Edit terminal title";
+    if (!agentId && kind === "terminal") return "Edit terminal title";
     return "Edit agent title";
   };
 
@@ -382,7 +368,7 @@ function PanelHeaderComponent({
     const prefix =
       kind === "browser"
         ? "Browser title"
-        : !agentId && type === "terminal"
+        : !agentId && kind === "terminal"
           ? "Terminal title"
           : "Agent title";
     return `${prefix}: ${title}. Press Enter or F2 to edit`;
@@ -572,7 +558,6 @@ function PanelHeaderComponent({
                           key={tab.id}
                           id={tab.id}
                           title={getBaseTitle(tab.title)}
-                          type={tab.type}
                           agentId={tab.agentId}
                           detectedProcessId={tab.detectedProcessId}
                           kind={tab.kind}
@@ -673,7 +658,6 @@ function PanelHeaderComponent({
                       key={tab.id}
                       id={tab.id}
                       title={getBaseTitle(tab.title)}
-                      type={tab.type}
                       agentId={tab.agentId}
                       detectedProcessId={tab.detectedProcessId}
                       kind={tab.kind}
@@ -748,7 +732,7 @@ function PanelHeaderComponent({
               detectedAgentId={detectedAgentId}
               detectedProcessId={detectedProcessId}
               className="w-3.5 h-3.5"
-              brandColor={presetColor ?? getBrandColorHex(effectiveAgentId ?? type)}
+              brandColor={presetColor ?? getBrandColorHex(effectiveAgentId)}
             />
           </span>
 
@@ -829,36 +813,6 @@ function PanelHeaderComponent({
                 <TooltipContent side="bottom">
                   Last fleet broadcast failed here — click to dismiss. Run "Fleet: Retry failed
                   broadcast" from the command palette to resend.
-                </TooltipContent>
-              </Tooltip>
-            </TooltipProvider>
-          )}
-
-          {isObservationalAgent && (
-            <TooltipProvider>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      void actionService.dispatch(
-                        "terminal.convertType",
-                        { terminalId: id, type: detectedAgentId },
-                        { source: "menu" }
-                      );
-                    }}
-                    onPointerDown={(e) => e.stopPropagation()}
-                    aria-label={`Restart as ${detectedAgentId} agent terminal`}
-                    data-testid="panel-observational-chip"
-                    className="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium leading-none select-none bg-overlay-subtle text-daintree-text/70 hover:text-daintree-text hover:bg-daintree-text/10 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-1"
-                  >
-                    <Eye className="w-3 h-3" aria-hidden="true" />
-                    <span>Observing · Restart as agent</span>
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent side="bottom">
-                  {`${detectedAgentId} is running inside a plain shell. Restart to give it the full agent terminal — managed environment, scrollback, and fleet membership.`}
                 </TooltipContent>
               </Tooltip>
             </TooltipProvider>

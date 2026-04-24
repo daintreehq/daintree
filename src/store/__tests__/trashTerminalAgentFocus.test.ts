@@ -37,19 +37,17 @@ const { useWorktreeSelectionStore } = await import("../worktreeStore");
 function makeTerminal(
   id: string,
   _legacyKind: "terminal" | "agent",
-  agentId?: string,
+  launchAgentId?: string,
   worktreeId?: string,
   detectedAgentId?: "claude" | "gemini" | "codex",
   everDetectedAgent?: boolean
 ) {
-  // After the kind collapse (#5777), all PTY panels have kind:"terminal".
-  // The `_legacyKind` parameter is retained only so legacy test call sites
-  // keep compiling — agent-ness is expressed via `agentId` / `detectedAgentId`.
+  // After the kind collapse, all PTY panels have kind:"terminal".
+  // Agent-ness is expressed via launchAgentId / detectedAgentId.
   return {
     id,
-    type: "terminal" as const,
     kind: "terminal" as const,
-    agentId,
+    launchAgentId,
     worktreeId,
     title: id,
     cwd: "/test",
@@ -554,7 +552,7 @@ describe("lastClosedConfig snapshot (#4717)", () => {
 
     const config = usePanelStore.getState().lastClosedConfig;
     expect(config).not.toBeNull();
-    expect(config!.agentId).toBe("claude");
+    expect(config!.launchAgentId).toBe("claude");
     expect(config!.worktreeId).toBe("wt-1");
     expect(config!.command).toBe("claude --interactive");
     expect(config!.agentModelId).toBe("opus");
@@ -573,7 +571,7 @@ describe("lastClosedConfig snapshot (#4717)", () => {
     });
 
     usePanelStore.getState().trashPanel("shell-1");
-    expect(usePanelStore.getState().lastClosedConfig!.type).toBe("terminal");
+    expect(usePanelStore.getState().lastClosedConfig).not.toBeNull();
 
     usePanelStore.getState().trashPanel("shell-2");
     expect(usePanelStore.getState().lastClosedConfig!.command).toBe("zsh");
@@ -605,7 +603,7 @@ describe("lastClosedConfig snapshot (#4717)", () => {
 
     const config = usePanelStore.getState().lastClosedConfig;
     expect(config).not.toBeNull();
-    expect(config!.agentId).toBe("claude");
+    expect(config!.launchAgentId).toBe("claude");
     expect(config!.command).toBe("claude-cmd");
   });
 

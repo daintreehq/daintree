@@ -182,7 +182,7 @@ describe("TerminalInstanceService maybeReflowTerminal", () => {
   });
 
   it("skips agent terminals (WebGL — immune)", () => {
-    const managed = makeManaged({ kind: "terminal", agentId: "claude" });
+    const managed = makeManaged({ kind: "terminal", launchAgentId: "claude" });
     service.maybeReflowTerminal(managed);
     expect(paddingHistory(managed).length).toBe(0);
     expect(managed.lastReflowAt).toBe(0);

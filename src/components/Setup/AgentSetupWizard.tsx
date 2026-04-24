@@ -471,6 +471,8 @@ export function AgentSetupWizard({
         return 1;
       case "complete":
         return 2;
+      default:
+        return 0;
     }
   })();
 

@@ -2,11 +2,12 @@ import React, { useCallback, useState, useRef, useEffect, forwardRef } from "rea
 import type { DraggableAttributes, DraggableSyntheticListeners } from "@dnd-kit/core";
 import { motion } from "framer-motion";
 import { X, AlertTriangle } from "lucide-react";
-import type { PanelKind, TerminalType, AgentState } from "@/types";
+import type { PanelKind, AgentState } from "@/types";
 import type { WaitingReason } from "@shared/types/agent";
+import type { BuiltInAgentId } from "@shared/config/agentIds";
 import { cn } from "@/lib/utils";
 import { getBrandColorHex } from "@/lib/colorUtils";
-import { resolveEffectiveAgentId } from "@/utils/agentIdentity";
+import { resolveChromeAgentId } from "@/utils/agentIdentity";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import {
@@ -18,9 +19,9 @@ import { usePanelStore } from "@/store";
 export interface TabInfo {
   id: string;
   title: string;
-  type?: TerminalType;
   agentId?: string;
   detectedAgentId?: string;
+  everDetectedAgent?: boolean;
   detectedProcessId?: string;
   kind: PanelKind;
   agentState?: AgentState;
@@ -34,9 +35,9 @@ export interface TabInfo {
 export interface TabButtonProps {
   id: string;
   title: string;
-  type?: TerminalType;
   agentId?: string;
   detectedAgentId?: string;
+  everDetectedAgent?: boolean;
   detectedProcessId?: string;
   kind: PanelKind;
   agentState?: AgentState;
@@ -56,9 +57,9 @@ const TabButtonComponent = forwardRef<HTMLDivElement, TabButtonProps>(function T
   {
     id,
     title,
-    type,
     agentId,
     detectedAgentId,
+    everDetectedAgent,
     detectedProcessId,
     kind,
     agentState,
@@ -267,11 +268,18 @@ const TabButtonComponent = forwardRef<HTMLDivElement, TabButtonProps>(function T
                 kind={kind}
                 agentId={agentId}
                 detectedAgentId={detectedAgentId}
+                everDetectedAgent={everDetectedAgent}
                 detectedProcessId={detectedProcessId}
                 className="w-3.5 h-3.5"
                 brandColor={
                   presetColor ??
-                  getBrandColorHex(resolveEffectiveAgentId(detectedAgentId, agentId) ?? type)
+                  getBrandColorHex(
+                    resolveChromeAgentId(
+                      detectedAgentId as BuiltInAgentId | undefined,
+                      agentId,
+                      everDetectedAgent
+                    )
+                  )
                 }
               />
             </span>

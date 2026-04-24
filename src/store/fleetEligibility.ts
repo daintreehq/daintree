@@ -1,4 +1,4 @@
-import { isBuiltInAgentId, type BuiltInAgentId } from "@shared/config/agentIds";
+import type { BuiltInAgentId } from "@shared/config/agentIds";
 import type { TerminalInstance } from "@shared/types";
 
 /**
@@ -17,18 +17,17 @@ export function isTerminalFleetEligible(t: TerminalInstance | undefined): t is T
 }
 
 /**
- * Agent capability for Fleet actions that depend on a full agent session
- * (accept/reject/interrupt/restart). Prefers the sealed-at-spawn
- * `capabilityAgentId` (#5804); falls back to launch-time built-in `agentId`
- * for terminals reconnected from older backend payloads that predate the
- * writer.
+ * Agent capability for Fleet actions — live-detection only.
+ *
+ * Fleet only acts on terminals that are *currently* hosting an agent. Launch
+ * intent doesn't matter; a plain shell that spawned Claude is a valid fleet
+ * member, and a cold-launched Claude panel whose Claude exited to shell is
+ * not. See `docs/architecture/terminal-identity.md`.
  */
 export function resolveFleetAgentCapabilityId(
   t: TerminalInstance | undefined
 ): BuiltInAgentId | undefined {
-  if (!t) return undefined;
-  if (t.capabilityAgentId) return t.capabilityAgentId;
-  return isBuiltInAgentId(t.agentId) ? t.agentId : undefined;
+  return t?.detectedAgentId;
 }
 
 export function isAgentFleetActionEligible(t: TerminalInstance | undefined): t is TerminalInstance {

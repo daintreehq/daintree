@@ -2,7 +2,7 @@ import type * as pty from "node-pty";
 import type { Terminal as HeadlessTerminal } from "@xterm/headless";
 import type { SerializeAddon } from "@xterm/addon-serialize";
 import type { AgentState, AgentId, WaitingReason } from "../../../shared/types/agent.js";
-import type { TerminalType, PanelKind } from "../../../shared/types/panel.js";
+import type { PanelKind, PanelTitleMode } from "../../../shared/types/panel.js";
 import type { BuiltInAgentId } from "../../../shared/config/agentIds.js";
 import type { PtyHostSpawnOptions } from "../../../shared/types/pty-host.js";
 import type { ProcessDetector } from "../ProcessDetector.js";
@@ -18,11 +18,9 @@ export type PtySpawnOptions = PtyHostSpawnOptions;
  * - IPC payloads
  * - External APIs
  *
- * Identity fields follow the canonical model documented in
- * `docs/architecture/terminal-identity.md`. Note: this PTY-side type uses the
- * internal name `detectedAgentType` for the live-detection concept. The IPC
- * boundary (`electron/pty-host.ts#narrowDetectedAgentId`) translates it to
- * `detectedAgentId` on the renderer-facing types.
+ * Identity fields follow the canonical model in
+ * `docs/architecture/terminal-identity.md`: `detectedAgentId` drives chrome,
+ * `launchAgentId` is a non-identity launch hint used only for restart/resume.
  */
 export interface TerminalPublicState {
   id: string;
@@ -31,19 +29,13 @@ export interface TerminalPublicState {
   shell: string;
   kind?: PanelKind;
   /**
-   * @deprecated Legacy terminal classification. See
-   * `docs/architecture/terminal-identity.md`. Prefer `agentId` (launch intent),
-   * `detectedAgentType` (live detection), or `capabilityAgentId` (capability mode).
+   * Launch hint — the agent this terminal was launched to run. NOT an identity.
+   * Used only to key agent-specific settings and auto-inject commands. See
+   * `docs/architecture/terminal-identity.md`.
    */
-  type?: TerminalType;
-  /**
-   * Launch intent — the agent identity this terminal was spawned as, if any.
-   * Sealed at spawn time; must not be rewritten by runtime process detection.
-   * See `docs/architecture/terminal-identity.md` for the full contract and the
-   * known `handleAgentDetection()` bridge-write violation.
-   */
-  agentId?: AgentId;
+  launchAgentId?: AgentId;
   title?: string;
+  titleMode?: PanelTitleMode;
   spawnedAt: number;
   wasKilled?: boolean;
   isExited?: boolean;
@@ -56,32 +48,18 @@ export interface TerminalPublicState {
   lastOutputTime: number;
   lastCheckTime: number;
   /**
-   * Live detected identity — internal PTY-side name for the agent currently
-   * running in this PTY. Equivalent to `detectedAgentId` on IPC-facing types;
-   * translated via `narrowDetectedAgentId()` in `electron/pty-host.ts` at the
-   * IPC boundary.
-   *
-   * Cleared when the detected agent exits. Not persisted.
+   * Live detected identity — the agent currently running in this PTY. The ONE
+   * field that drives chrome. Cleared when the detected agent exits.
+   * Not persisted. See `docs/architecture/terminal-identity.md`.
    */
-  detectedAgentType?: TerminalType;
+  detectedAgentId?: BuiltInAgentId;
   /** Runtime-detected non-agent process icon id (npm, yarn, python, etc.). Cleared when the process exits. */
   detectedProcessIconId?: string;
   /**
    * Sticky live-session flag. True once runtime detection fires in this session,
-   * even if no agent is currently detected. Not persisted; not launch intent;
-   * not capability mode.
+   * even if no agent is currently detected. Not persisted.
    */
   everDetectedAgent?: boolean;
-  /**
-   * Capability mode — the agent capability surface this terminal is allowed to
-   * participate in (fleet membership, hybrid input, orchestration). Sealed at
-   * spawn time from launch intent (`agentId` narrowed to `BuiltInAgentId`);
-   * never written by runtime detection. Absent on plain shells and on agent
-   * terminals launched with a non-built-in `agentId`. Not persisted — re-derived
-   * on every spawn from the same launch context. See
-   * `docs/architecture/terminal-identity.md`.
-   */
-  capabilityAgentId?: BuiltInAgentId;
   restartCount: number;
   isTrashed?: boolean;
   trashExpiresAt?: number;
@@ -168,16 +146,8 @@ export interface TerminalSnapshot {
   lastOutputTime: number;
   lastCheckTime: number;
   kind?: PanelKind;
-  /**
-   * @deprecated Legacy terminal classification. See
-   * `docs/architecture/terminal-identity.md`. Prefer `agentId` (launch intent).
-   */
-  type?: TerminalType;
-  /**
-   * Launch intent — the agent identity this terminal was spawned as.
-   * See `docs/architecture/terminal-identity.md`.
-   */
-  agentId?: AgentId;
+  /** Launch hint — agent this terminal was launched to run. Not identity. */
+  launchAgentId?: AgentId;
   agentState?: AgentState;
   lastStateChange?: number;
   spawnedAt: number;
@@ -193,11 +163,11 @@ export const WRITE_MAX_CHUNK_SIZE = 50;
 export const WRITE_INTERVAL_MS = 5;
 
 // Scrollback configuration
-// Headless PTY scrollback is intentionally equal to the renderer default (1000)
-// because headless terminals only need enough buffer for agent state detection,
-// not full user-visible scroll history.
-export const DEFAULT_SCROLLBACK = 1000;
-export const AGENT_SCROLLBACK = 10000;
+// All PTY panels get a generous scrollback; there is no "agent tier" scrollback
+// decision any more. The headless analysis buffer is small because only recent
+// output is needed for state detection; the renderer-visible scrollback is
+// larger so long agent runs don't truncate.
+export const DEFAULT_SCROLLBACK = 10000;
 
 // Raw output buffer for non-headless terminals (100KB max)
 export const RAW_OUTPUT_BUFFER_MAX_SIZE = 100 * 1024;

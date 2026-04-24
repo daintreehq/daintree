@@ -14,7 +14,7 @@ function createTerminal(overrides: Partial<TerminalInfo> = {}): TerminalInfo {
     lastOutputTime: 0,
     lastCheckTime: 0,
     restartCount: 0,
-    agentId: "claude",
+    launchAgentId: "claude",
     agentState: "idle",
     ptyProcess: {} as never,
     inputWriteQueue: [],
@@ -263,8 +263,8 @@ describe("AgentStateService", () => {
     it("updateAgentState emits agent:state-changed using detectedAgentType when agentId is absent", () => {
       const service = new AgentStateService();
       const terminal = createTerminal({
-        agentId: undefined,
-        detectedAgentType: "claude",
+        launchAgentId: undefined,
+        detectedAgentId: "claude",
         agentState: "idle",
       });
       const stateChanges: Array<{ state: string; agentId?: string }> = [];
@@ -284,8 +284,8 @@ describe("AgentStateService", () => {
     it("handleActivityState transitions state for runtime-detected agents", () => {
       const service = new AgentStateService();
       const terminal = createTerminal({
-        agentId: undefined,
-        detectedAgentType: "gemini",
+        launchAgentId: undefined,
+        detectedAgentId: "gemini",
         agentState: "working",
       });
       const stateChanges: Array<{ state: string; agentId?: string }> = [];
@@ -304,8 +304,8 @@ describe("AgentStateService", () => {
     it("does nothing when both agentId and detectedAgentType are absent", () => {
       const service = new AgentStateService();
       const terminal = createTerminal({
-        agentId: undefined,
-        detectedAgentType: undefined,
+        launchAgentId: undefined,
+        detectedAgentId: undefined,
         agentState: "idle",
       });
       const stateChanges: unknown[] = [];
@@ -324,8 +324,8 @@ describe("AgentStateService", () => {
     it("emitTerminalActivity produces agent-style headline for detectedAgentType-only terminal", () => {
       const service = new AgentStateService();
       const terminal = createTerminal({
-        agentId: undefined,
-        detectedAgentType: "claude",
+        launchAgentId: undefined,
+        detectedAgentId: "claude",
         agentState: "working",
       });
       const activityEvents: Array<{ headline: string; status: string }> = [];
@@ -347,8 +347,8 @@ describe("AgentStateService", () => {
       // is observed — detectedAgentType is still set (TerminalProcess clears
       // it AFTER calling updateAgentState).
       const terminal = createTerminal({
-        agentId: undefined,
-        detectedAgentType: "claude",
+        launchAgentId: undefined,
+        detectedAgentId: "claude",
         agentState: "working",
       });
       const stateChanges: Array<{ state: string; agentId?: string }> = [];
@@ -397,8 +397,8 @@ describe("AgentStateService", () => {
     it("emitAgentCompleted uses detectedAgentType when agentId is absent", () => {
       const service = new AgentStateService();
       const terminal = createTerminal({
-        agentId: undefined,
-        detectedAgentType: "claude",
+        launchAgentId: undefined,
+        detectedAgentId: "claude",
         agentState: "working",
       });
       const payloads: Array<{ agentId: string }> = [];
@@ -416,8 +416,8 @@ describe("AgentStateService", () => {
     it("emitAgentKilled uses detectedAgentType when agentId is absent", () => {
       const service = new AgentStateService();
       const terminal = createTerminal({
-        agentId: undefined,
-        detectedAgentType: "gemini",
+        launchAgentId: undefined,
+        detectedAgentId: "gemini",
         agentState: "working",
       });
       const payloads: Array<{ agentId: string; reason?: string }> = [];
@@ -433,11 +433,11 @@ describe("AgentStateService", () => {
       expect(payloads[0]?.reason).toBe("manual");
     });
 
-    it("emitAgentCompleted prefers spawn-sealed agentId over detectedAgentType", () => {
+    it("emitAgentCompleted uses detectedAgentId when both launchAgentId and detectedAgentId are set (live identity wins)", () => {
       const service = new AgentStateService();
       const terminal = createTerminal({
-        agentId: "claude",
-        detectedAgentType: "gemini",
+        launchAgentId: "claude",
+        detectedAgentId: "gemini",
         agentState: "working",
       });
       const payloads: Array<{ agentId: string }> = [];
@@ -449,14 +449,14 @@ describe("AgentStateService", () => {
       service.emitAgentCompleted(terminal, 0);
 
       expect(payloads).toHaveLength(1);
-      expect(payloads[0]?.agentId).toBe("claude");
+      expect(payloads[0]?.agentId).toBe("gemini");
     });
 
     it("emitAgentCompleted is a no-op when both agentId and detectedAgentType are absent", () => {
       const service = new AgentStateService();
       const terminal = createTerminal({
-        agentId: undefined,
-        detectedAgentType: undefined,
+        launchAgentId: undefined,
+        detectedAgentId: undefined,
         agentState: "idle",
       });
       const payloads: unknown[] = [];
@@ -473,8 +473,8 @@ describe("AgentStateService", () => {
     it("emitAgentKilled is a no-op when both agentId and detectedAgentType are absent", () => {
       const service = new AgentStateService();
       const terminal = createTerminal({
-        agentId: undefined,
-        detectedAgentType: undefined,
+        launchAgentId: undefined,
+        detectedAgentId: undefined,
         agentState: "idle",
       });
       const payloads: unknown[] = [];

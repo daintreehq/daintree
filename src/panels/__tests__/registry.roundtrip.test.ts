@@ -10,7 +10,7 @@ beforeAll(() => {
   initBuiltInPanelKinds();
 });
 
-type PtyData = Extract<PanelInstance, { kind: "terminal" | "agent" }>;
+type PtyData = Extract<PanelInstance, { kind: "terminal" }>;
 type BrowserData = Extract<PanelInstance, { kind: "browser" }>;
 type DevPreviewData = Extract<PanelInstance, { kind: "dev-preview" }>;
 
@@ -26,8 +26,7 @@ type DevPreviewData = Extract<PanelInstance, { kind: "dev-preview" }>;
 // trip for dev-preview's `createdAt` is still exercised in
 // registry.serialization.test.ts.
 type PersistedPtyFields =
-  | "type"
-  | "agentId"
+  | "launchAgentId"
   | "cwd"
   | "command"
   | "exitBehavior"
@@ -74,22 +73,10 @@ const agentStateArb = fc.constantFrom(
   "exited" as const
 );
 
-const terminalTypeArb = fc.constantFrom(
-  "terminal" as const,
-  "claude" as const,
-  "gemini" as const,
-  "codex" as const,
-  "opencode" as const,
-  "cursor" as const,
-  "kiro" as const,
-  "copilot" as const
-);
-
 const zoomArb = fc.double({ min: 0.25, max: 5.0, noNaN: true, noDefaultInfinity: true });
 
 const ptyArbSpec = {
-  type: terminalTypeArb,
-  agentId: fc.option(fc.string(), { nil: undefined }),
+  launchAgentId: fc.option(fc.string(), { nil: undefined }),
   cwd: fc.string(),
   command: fc.option(fc.string(), { nil: undefined }),
   exitBehavior: fc.option(exitBehaviorArb, { nil: undefined }),
@@ -137,8 +124,7 @@ describe("panel serializer round-trip (property tests)", () => {
       const input: TerminalInstance = { ...basePanel("terminal"), ...fields };
       const result = getPanelKindConfig("terminal")!.serialize!(input);
 
-      expect(result.type).toBe(fields.type);
-      expect(result.agentId).toBe(fields.agentId);
+      expect(result.launchAgentId).toBe(fields.launchAgentId);
       expect(result.cwd).toBe(fields.cwd);
       expect(result.command).toBe(fields.command?.trim() || undefined);
 
@@ -202,7 +188,6 @@ describe("panel serializer round-trip (property tests)", () => {
       (fields) => {
         const input: TerminalInstance = {
           ...basePanel("dev-preview"),
-          type: "terminal",
           ...fields,
         };
         const saved = getPanelKindConfig("dev-preview")!.serialize!(input) as SavedTerminalData;

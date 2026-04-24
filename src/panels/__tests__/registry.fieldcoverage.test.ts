@@ -33,8 +33,7 @@ type BrowserData = Extract<PanelInstance, { kind: "browser" }>;
 type DevPreviewData = Extract<PanelInstance, { kind: "dev-preview" }>;
 
 const PERSISTED_PTY_FIELDS = [
-  "type",
-  "agentId",
+  "launchAgentId",
   "cwd",
   "command",
   "exitBehavior",
@@ -93,8 +92,8 @@ function baseFields(
 
 const terminalFixture: TerminalInstance = {
   ...baseFields("terminal"),
-  type: "terminal",
-  agentId: "claude",
+  launchAgentId: "claude",
+  titleMode: "default",
   cwd: "/home/project",
   command: "npm start",
   exitBehavior: "keep" satisfies PanelExitBehavior,
@@ -117,7 +116,6 @@ const browserFixture: TerminalInstance = {
 
 const devPreviewFixture: TerminalInstance = {
   ...baseFields("dev-preview"),
-  type: "terminal",
   cwd: "/home/project",
   devCommand: "npm run dev",
   browserUrl: "http://localhost:3000",

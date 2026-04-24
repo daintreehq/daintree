@@ -47,8 +47,7 @@ function makeAgentTerminal(overrides: Partial<TerminalInstance> = {}): TerminalI
   return {
     id: "t1",
     kind: "terminal",
-    agentId: "claude",
-    type: "claude",
+    launchAgentId: "claude",
     title: "claude",
     location: "trash",
     ...overrides,
@@ -97,7 +96,6 @@ describe("TrashBinItem", () => {
     const terminal = {
       id: "t2",
       kind: "terminal" as const,
-      type: "terminal" as const,
       title: "my dev shell",
       location: "trash" as const,
     } as TerminalInstance;

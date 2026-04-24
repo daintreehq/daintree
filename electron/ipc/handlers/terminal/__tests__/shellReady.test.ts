@@ -33,7 +33,7 @@ describe("waitForShellReady", () => {
     waitForShellReady(ptyClient, "t1").then(resolved);
 
     ptyClient.emit("data", "t1", "$ ");
-    await flush(199);
+    await flush(49);
     expect(resolved).not.toHaveBeenCalled();
 
     await flush(1);
@@ -49,7 +49,7 @@ describe("waitForShellReady", () => {
     expect(resolved).not.toHaveBeenCalled();
 
     ptyClient.emit("data", "t1", "$ ");
-    await flush(200);
+    await flush(50);
     expect(resolved).toHaveBeenCalledTimes(1);
   });
 
@@ -58,14 +58,14 @@ describe("waitForShellReady", () => {
     waitForShellReady(ptyClient, "t1").then(resolved);
 
     ptyClient.emit("data", "t1", "❯ "); // p10k instant prompt
-    await flush(150);
+    await flush(40);
     expect(resolved).not.toHaveBeenCalled();
 
-    ptyClient.emit("data", "t1", "\r\n❯ "); // real prompt redraw
-    await flush(150);
+    ptyClient.emit("data", "t1", "\r\n❯ "); // real prompt redraw — resets quiescence
+    await flush(40);
     expect(resolved).not.toHaveBeenCalled();
 
-    await flush(50);
+    await flush(20);
     expect(resolved).toHaveBeenCalledTimes(1);
   });
 
@@ -80,7 +80,7 @@ describe("waitForShellReady", () => {
     expect(resolved).not.toHaveBeenCalled();
 
     ptyClient.emit("data", "t1", "$ ");
-    await flush(200);
+    await flush(50);
     expect(resolved).toHaveBeenCalledTimes(1);
   });
 
@@ -111,7 +111,7 @@ describe("waitForShellReady", () => {
 
     // Happy path
     ptyClient.emit("data", "t1", "$ ");
-    await flush(200);
+    await flush(50);
     await p1;
 
     // Timeout path
@@ -193,7 +193,7 @@ describe("waitForShellReady", () => {
     waitForShellReady(ptyClient, "t1").then(resolved);
 
     ptyClient.emit("data", "t1", "$ ");
-    await flush(100); // inside 200ms quiescence
+    await flush(30); // inside 50ms quiescence
     expect(resolved).not.toHaveBeenCalled();
 
     ptyClient.emit("exit", "t1", 0);

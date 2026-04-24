@@ -117,14 +117,12 @@ describe("hydration batch (#5196)", () => {
       const token = beginHydrationBatch();
       await addPanel({
         kind: "terminal",
-        type: "terminal",
         requestedId: "term-1",
         cwd: "/",
         bypassLimits: true,
       });
       await addPanel({
         kind: "terminal",
-        type: "terminal",
         requestedId: "term-2",
         cwd: "/",
         bypassLimits: true,
@@ -254,7 +252,6 @@ describe("hydration batch (#5196)", () => {
         "term-1": {
           id: "term-1",
           kind: "terminal",
-          type: "terminal",
           title: "Agent",
           cwd: "/",
           cols: 80,
@@ -274,7 +271,7 @@ describe("hydration batch (#5196)", () => {
     const token = beginHydrationBatch();
     await addPanel({
       kind: "terminal",
-      agentId: "claude",
+      launchAgentId: "claude",
       command: "claude",
       existingId: "term-1",
       cwd: "/",
@@ -298,9 +295,8 @@ describe("hydration batch (#5196)", () => {
     const token = beginHydrationBatch();
     await addPanel({
       kind: "terminal",
-      agentId: "claude",
+      launchAgentId: "claude",
       command: "claude",
-      type: "terminal",
       requestedId: "term-1",
       cwd: "/",
       bypassLimits: true,
@@ -342,14 +338,12 @@ describe("hydration batch (#5196)", () => {
     const token = beginHydrationBatch();
     await addPanel({
       kind: "terminal",
-      type: "terminal",
       requestedId: "fail-1",
       cwd: "/",
       bypassLimits: true,
     });
     await addPanel({
       kind: "terminal",
-      type: "terminal",
       requestedId: "ok-1",
       cwd: "/",
       bypassLimits: true,

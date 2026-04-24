@@ -57,7 +57,7 @@ import type {
 import type { TerminalSnapshot } from "./PtyManager.js";
 import type { AgentStateChangeTrigger } from "../types/index.js";
 import type { AgentState, AgentId } from "../../shared/types/agent.js";
-import type { TerminalType, PanelKind } from "../../shared/types/panel.js";
+import type { PanelKind } from "../../shared/types/panel.js";
 import type { ResourceProfile } from "../../shared/types/resourceProfile.js";
 import type { BuiltInAgentId } from "../../shared/config/agentIds.js";
 
@@ -68,8 +68,7 @@ interface TerminalInfoResponse {
   id: string;
   projectId?: string;
   kind?: PanelKind;
-  type?: TerminalType;
-  agentId?: AgentId;
+  launchAgentId?: AgentId;
   title?: string;
   cwd: string;
   worktreeId?: string;

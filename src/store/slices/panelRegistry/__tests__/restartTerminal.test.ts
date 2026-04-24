@@ -99,9 +99,8 @@ const { usePanelStore } = await import("../../../panelStore");
 
 const agentPanelBase = {
   id: "test-1",
-  type: "claude" as const,
   kind: "terminal" as const,
-  agentId: "claude",
+  launchAgentId: "claude",
   agentLaunchFlags: ["--persisted-flag"],
   title: "Claude",
   cwd: "/some/path",
@@ -141,8 +140,7 @@ describe("restartTerminal agent-exited demotion (#5764)", () => {
     expect(mockSpawn).toHaveBeenCalledTimes(1);
     const payload = mockSpawn.mock.calls[0]![0];
     expect(payload.kind).toBe("terminal");
-    expect(payload.type).toBe("terminal");
-    expect(payload.agentId).toBeUndefined();
+    expect(payload.launchAgentId).toBeUndefined();
     expect(payload.command).toBeUndefined();
     expect(payload.agentLaunchFlags).toBeUndefined();
     expect(payload.agentModelId).toBeUndefined();
@@ -163,8 +161,7 @@ describe("restartTerminal agent-exited demotion (#5764)", () => {
     expect(mockSpawn).toHaveBeenCalledTimes(1);
     const payload = mockSpawn.mock.calls[0]![0];
     expect(payload.kind).toBe("terminal");
-    expect(payload.type).toBe("terminal");
-    expect(payload.agentId).toBeUndefined();
+    expect(payload.launchAgentId).toBeUndefined();
     expect(payload.command).toBeUndefined();
     expect(payload.agentLaunchFlags).toBeUndefined();
   });
@@ -181,12 +178,11 @@ describe("restartTerminal agent-exited demotion (#5764)", () => {
     expect(mockSpawn).toHaveBeenCalledTimes(1);
     const payload = mockSpawn.mock.calls[0]![0];
     expect(payload.kind).toBe("terminal");
-    expect(payload.type).toBe("claude");
-    expect(payload.agentId).toBe("claude");
+    expect(payload.launchAgentId).toBe("claude");
     expect(payload.agentLaunchFlags).toEqual(["--persisted-flag"]);
   });
 
-  it("preserves agentId on the panel after demoted restart (launch identity)", async () => {
+  it("preserves launchAgentId on the panel after demoted restart (launch identity)", async () => {
     const demoted = { ...agentPanelBase, agentState: "exited" as const, exitCode: 0 };
     usePanelStore.setState({
       panelsById: { [demoted.id]: demoted },
@@ -196,7 +192,7 @@ describe("restartTerminal agent-exited demotion (#5764)", () => {
     await usePanelStore.getState().restartTerminal("test-1");
 
     const after = usePanelStore.getState().panelsById["test-1"];
-    expect(after?.agentId).toBe("claude");
+    expect(after?.launchAgentId).toBe("claude");
   });
 
   it("preserves agentState: exited across repeated demoted restarts", async () => {
@@ -219,7 +215,7 @@ describe("restartTerminal agent-exited demotion (#5764)", () => {
     expect(mockSpawn).toHaveBeenCalledTimes(2);
     const secondPayload = mockSpawn.mock.calls[1]![0];
     expect(secondPayload.kind).toBe("terminal");
-    expect(secondPayload.agentId).toBeUndefined();
+    expect(secondPayload.launchAgentId).toBeUndefined();
     expect(secondPayload.command).toBeUndefined();
   });
 
@@ -264,7 +260,6 @@ describe("restartTerminal exit/demotion semantics (#5807)", () => {
   it("does not relaunch agent when quitting an agent in a plain shell", async () => {
     const plainShellWithDetectedAgent = {
       id: "test-1",
-      type: "terminal" as const,
       kind: "terminal" as const,
       title: "Terminal",
       cwd: "/some/path",
@@ -287,23 +282,21 @@ describe("restartTerminal exit/demotion semantics (#5807)", () => {
     expect(mockSpawn).toHaveBeenCalledTimes(1);
     const payload = mockSpawn.mock.calls[0]![0];
     expect(payload.kind).toBe("terminal");
-    expect(payload.type).toBe("terminal");
-    expect(payload.agentId).toBeUndefined();
+    expect(payload.launchAgentId).toBeUndefined();
     expect(payload.command).toBeUndefined();
   });
 
-  // Scenario 2: cold-launched agent terminal (`agentId: "claude"` sealed at
+  // Scenario 2: cold-launched agent terminal (`launchAgentId: "claude"` sealed at
   // spawn). User typed `/quit` and the shell survived. onAgentExited must
-  // preserve agentId; the FSM-set `agentState: "exited"` drives the demoted
+  // preserve launchAgentId; the FSM-set `agentState: "exited"` drives the demoted
   // restart. Restart is a plain shell (user explicitly quit the agent), but
   // the panel's launch identity is preserved so that a subsequent deliberate
   // restart-as-agent is still possible.
   it("restarts cold-launched agent terminal as plain shell after subcommand exit, preserving launch identity", async () => {
     const coldLaunchedQuit = {
       id: "test-1",
-      type: "claude" as const,
       kind: "terminal" as const,
-      agentId: "claude",
+      launchAgentId: "claude",
       agentLaunchFlags: ["--persisted-flag"],
       title: "Claude",
       cwd: "/some/path",
@@ -324,14 +317,14 @@ describe("restartTerminal exit/demotion semantics (#5807)", () => {
 
     expect(mockSpawn).toHaveBeenCalledTimes(1);
     const payload = mockSpawn.mock.calls[0]![0];
-    expect(payload.agentId).toBeUndefined();
+    expect(payload.launchAgentId).toBeUndefined();
     expect(payload.command).toBeUndefined();
 
     // Launch identity on the panel is preserved for future deliberate
     // restart-as-agent flows; agentState stays "exited" to keep demotion
     // sticky across repeat restarts (#5764).
     const after = usePanelStore.getState().panelsById["test-1"];
-    expect(after?.agentId).toBe("claude");
+    expect(after?.launchAgentId).toBe("claude");
     expect(after?.agentState).toBe("exited");
   });
 
@@ -341,9 +334,8 @@ describe("restartTerminal exit/demotion semantics (#5807)", () => {
   it("relaunches cold-launched agent terminal as agent when still active (shell-survives invariant)", async () => {
     const active = {
       id: "test-1",
-      type: "claude" as const,
       kind: "terminal" as const,
-      agentId: "claude",
+      launchAgentId: "claude",
       agentLaunchFlags: ["--persisted-flag"],
       title: "Claude",
       cwd: "/some/path",
@@ -365,8 +357,7 @@ describe("restartTerminal exit/demotion semantics (#5807)", () => {
 
     expect(mockSpawn).toHaveBeenCalledTimes(1);
     const payload = mockSpawn.mock.calls[0]![0];
-    expect(payload.type).toBe("claude");
-    expect(payload.agentId).toBe("claude");
+    expect(payload.launchAgentId).toBe("claude");
     expect(payload.command).toBeDefined();
   });
 });

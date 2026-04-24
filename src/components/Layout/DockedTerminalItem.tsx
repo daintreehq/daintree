@@ -18,7 +18,7 @@ import { getMergedPresets } from "@/config/agents";
 import { TerminalContextMenu } from "@/components/Terminal/TerminalContextMenu";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { getTerminalFocusTarget } from "@/components/Terminal/terminalFocus";
-import { resolveEffectiveAgentId } from "@/utils/agentIdentity";
+import { resolveChromeAgentId } from "@/utils/agentIdentity";
 import {
   getEffectiveStateIcon,
   getEffectiveStateColor,
@@ -186,30 +186,34 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
   );
 
   const presetCustomPresets = useAgentSettingsStore((s) =>
-    terminal.agentId ? s.settings?.agents?.[terminal.agentId]?.customPresets : undefined
+    terminal.launchAgentId ? s.settings?.agents?.[terminal.launchAgentId]?.customPresets : undefined
   );
   const presetCcrPresets = useCcrPresetsStore((s) =>
-    terminal.agentId ? s.ccrPresetsByAgent[terminal.agentId] : undefined
+    terminal.launchAgentId ? s.ccrPresetsByAgent[terminal.launchAgentId] : undefined
   );
   const presetProjectPresets = useProjectPresetsStore((s) =>
-    terminal.agentId ? s.presetsByAgent[terminal.agentId] : undefined
+    terminal.launchAgentId ? s.presetsByAgent[terminal.launchAgentId] : undefined
   );
   const brandColor = useMemo(() => {
     const fallbackColor = getBrandColorHex(
-      resolveEffectiveAgentId(terminal.detectedAgentId, terminal.agentId) ?? terminal.type
+      resolveChromeAgentId(
+        terminal.detectedAgentId,
+        terminal.launchAgentId,
+        terminal.everDetectedAgent
+      ) ?? undefined
     );
-    if (!terminal.agentPresetId || !terminal.agentId) return fallbackColor;
+    if (!terminal.agentPresetId || !terminal.launchAgentId) return fallbackColor;
     const preset = getMergedPresets(
-      terminal.agentId,
+      terminal.launchAgentId,
       presetCustomPresets,
       presetCcrPresets,
       presetProjectPresets
     ).find((f) => f.id === terminal.agentPresetId);
     return preset?.color ?? terminal.agentPresetColor ?? fallbackColor;
   }, [
-    terminal.agentId,
+    terminal.launchAgentId,
     terminal.detectedAgentId,
-    terminal.type,
+    undefined,
     terminal.agentPresetId,
     terminal.agentPresetColor,
     presetCustomPresets,
@@ -276,7 +280,7 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
             <div className="flex items-center justify-center shrink-0">
               <TerminalIcon
                 kind={terminal.kind}
-                agentId={terminal.agentId}
+                agentId={terminal.launchAgentId}
                 detectedAgentId={terminal.detectedAgentId}
                 detectedProcessId={terminal.detectedProcessId}
                 className="w-3.5 h-3.5"
@@ -343,11 +347,9 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
         onOpenAutoFocus={(event) => {
           event.preventDefault();
           const focusTarget = getTerminalFocusTarget({
-            // #5804: capability mode (sealed at spawn) — not the broader
-            // runtime-detect predicate. The HybridInputBar only renders for
-            // cold-launched built-in agents, so observational shells must
-            // fall through to xterm focus to keep clicks responsive.
-            hasFullAgentCapability: terminal.capabilityAgentId !== undefined,
+            // Focus routing mirrors chrome — HybridInputBar renders when an
+            // agent is live-detected in the PTY, so route focus there only then.
+            hasChromeAgentIdentity: terminal.detectedAgentId !== undefined,
             isInputDisabled: backendStatus === "disconnected" || backendStatus === "recovering",
             hybridInputEnabled,
             hybridInputAutoFocus,

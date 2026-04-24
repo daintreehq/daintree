@@ -1,4 +1,4 @@
-import type { TerminalType } from "../../shared/types/panel.js";
+import type { BuiltInAgentId } from "../../shared/config/agentIds.js";
 import type { ProcessTreeCache } from "./ProcessTreeCache.js";
 import { logDebug, logWarn } from "../utils/logger.js";
 import { AGENT_REGISTRY } from "../../shared/config/agentRegistry.js";
@@ -10,7 +10,7 @@ interface ChildProcess {
 }
 
 interface DetectedProcessCandidate {
-  agentType?: TerminalType;
+  agentType?: BuiltInAgentId;
   processIconId?: string;
   processName: string;
   processCommand?: string;
@@ -18,11 +18,11 @@ interface DetectedProcessCandidate {
   order: number;
 }
 
-const AGENT_CLI_NAMES: Record<string, TerminalType> = Object.fromEntries(
+const AGENT_CLI_NAMES: Record<string, BuiltInAgentId> = Object.fromEntries(
   Object.entries(AGENT_REGISTRY).flatMap(([id, config]) => {
-    const entries: [string, TerminalType][] = [[config.command, id as TerminalType]];
+    const entries: [string, BuiltInAgentId][] = [[config.command, id as BuiltInAgentId]];
     if (config.command !== id) {
-      entries.push([id, id as TerminalType]);
+      entries.push([id, id as BuiltInAgentId]);
     }
     return entries;
   })
@@ -116,7 +116,7 @@ export function extractScriptBasenameFromCommand(command: string | undefined): s
 }
 
 export interface CommandIdentity {
-  agentType?: TerminalType;
+  agentType?: BuiltInAgentId;
   processIconId?: string;
   processName: string;
 }
@@ -178,7 +178,7 @@ export interface DetectionResult {
   detectionState: DetectionState;
   /** @deprecated Use `detectionState === "agent"`. Retained for legacy consumers. */
   detected: boolean;
-  agentType?: TerminalType;
+  agentType?: BuiltInAgentId;
   processIconId?: string;
   processName?: string;
   isBusy?: boolean;
@@ -189,7 +189,7 @@ export interface DetectionResult {
 export type DetectionCallback = (result: DetectionResult, spawnedAt: number) => void;
 
 export function makeAgentResult(params: {
-  agentType?: TerminalType;
+  agentType?: BuiltInAgentId;
   processIconId?: string;
   processName?: string;
   isBusy?: boolean;
@@ -266,7 +266,7 @@ export class ProcessDetector {
   private spawnedAt: number;
   private ptyPid: number;
   private callback: DetectionCallback;
-  private lastDetected: TerminalType | null = null;
+  private lastDetected: BuiltInAgentId | null = null;
   private lastProcessIconId: string | null = null;
   private lastBusyState: boolean | null = null;
   private lastCurrentCommand: string | undefined;
@@ -276,7 +276,7 @@ export class ProcessDetector {
   private isStarted: boolean = false;
   private onStreak: number = 0;
   private offStreak: number = 0;
-  private pendingDetected: { agentType?: TerminalType; processIconId?: string } | null = null;
+  private pendingDetected: { agentType?: BuiltInAgentId; processIconId?: string } | null = null;
   private lastUnknownSignature: string | null = null;
 
   // Shell-command evidence injected by TerminalProcess when a command is
@@ -810,7 +810,7 @@ export class ProcessDetector {
     return makeNoAgentResult({ isBusy: ctx.isBusy, currentCommand: ctx.currentCommand });
   }
 
-  getLastDetected(): TerminalType | null {
+  getLastDetected(): BuiltInAgentId | null {
     return this.lastDetected;
   }
 
@@ -908,7 +908,7 @@ export class ProcessDetector {
     return current;
   }
 
-  private getDetectionPriority(agentType?: TerminalType, processIconId?: string): number {
+  private getDetectionPriority(agentType?: BuiltInAgentId, processIconId?: string): number {
     if (agentType) {
       return 0;
     }

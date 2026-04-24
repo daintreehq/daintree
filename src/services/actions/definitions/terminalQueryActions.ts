@@ -50,11 +50,11 @@ export function registerTerminalQueryActions(
       return terminals.map((t) => ({
         id: t.id,
         kind: t.kind,
-        type: t.type,
+        type: undefined,
         worktreeId: t.worktreeId ?? null,
         title: t.title ?? null,
         location: t.location ?? "grid",
-        agentId: t.agentId ?? null,
+        agentId: t.launchAgentId ?? null,
         agentState: t.agentState ?? null,
         isInputLocked: t.isInputLocked ?? false,
       }));

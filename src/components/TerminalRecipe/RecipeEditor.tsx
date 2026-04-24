@@ -372,7 +372,7 @@ export function RecipeEditor({
                     </label>
                     <select
                       id={`terminal-type-${index}`}
-                      value={terminal.type}
+                      value={undefined}
                       onChange={(e) => {
                         const newType = e.target.value as RecipeTerminalType;
                         setTerminals((prev) => {

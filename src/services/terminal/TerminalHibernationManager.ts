@@ -44,7 +44,7 @@ export class TerminalHibernationManager {
     if (
       !managed ||
       managed.isHibernated ||
-      (managed.agentId &&
+      (managed.launchAgentId &&
         managed.canonicalAgentState !== "completed" &&
         managed.canonicalAgentState !== "exited")
     )
@@ -267,8 +267,8 @@ export class TerminalHibernationManager {
     managed.listeners.push(() => inputDisposable.dispose());
 
     // Reinstall title-state listener for agent terminals
-    if (managed.agentId) {
-      const agentConfig = getEffectiveAgentConfig(managed.agentId);
+    if (managed.launchAgentId) {
+      const agentConfig = getEffectiveAgentConfig(managed.launchAgentId);
       const titlePatterns = agentConfig?.detection?.titleStatePatterns;
       if (titlePatterns) {
         let lastReportedTitleState: "working" | "waiting" | undefined;
@@ -337,7 +337,7 @@ export class TerminalHibernationManager {
     }
 
     // Reinstall agent Enter key listener
-    if (managed.agentId) {
+    if (managed.launchAgentId) {
       const keyDisposable = terminal.onKey(({ domEvent }) => {
         if (
           !managed.isInputLocked &&

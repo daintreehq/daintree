@@ -8,9 +8,9 @@ function makeAgent(id: string, overrides: Partial<TerminalInstance> = {}): Termi
   return {
     id,
     title: id,
-    type: "terminal",
     kind: "terminal",
-    agentId: "claude",
+    detectedAgentId: "claude",
+    everDetectedAgent: true,
     worktreeId: "wt-1",
     location: "grid",
     agentState: "idle",
@@ -224,9 +224,15 @@ describe("deriveHighestPriorityCluster", () => {
         makeAgent("a", {
           agentState: undefined,
           kind: "terminal",
-          agentId: undefined,
+          detectedAgentId: undefined,
+          everDetectedAgent: false,
         }),
-        makeAgent("b", { agentState: undefined, kind: "terminal", agentId: undefined }),
+        makeAgent("b", {
+          agentState: undefined,
+          kind: "terminal",
+          detectedAgentId: undefined,
+          everDetectedAgent: false,
+        }),
       ]);
       expect(cluster).toBeNull();
     });

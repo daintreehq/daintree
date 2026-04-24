@@ -127,31 +127,6 @@ describe("Terminal Entry Validation Schemas", () => {
       expect(result.success).toBe(false);
     });
 
-    it("rejects entry with missing type", () => {
-      const entry = {
-        id: "term-123",
-        title: "Terminal",
-        cwd: "/Users/test",
-        location: "grid",
-      };
-
-      const result = AppStateTerminalEntrySchema.safeParse(entry);
-      expect(result.success).toBe(false);
-    });
-
-    it("rejects entry with invalid type", () => {
-      const entry = {
-        id: "term-123",
-        type: "invalid-type",
-        title: "Terminal",
-        cwd: "/Users/test",
-        location: "grid",
-      };
-
-      const result = AppStateTerminalEntrySchema.safeParse(entry);
-      expect(result.success).toBe(false);
-    });
-
     it("rejects entry with invalid location", () => {
       const entry = {
         id: "term-123",
@@ -339,7 +314,7 @@ describe("Terminal Entry Validation Schemas", () => {
         { id: "t1", type: "terminal", title: "T1", cwd: "/", location: "grid" },
         { id: "", type: "terminal", title: "Invalid", cwd: "/", location: "grid" }, // empty id
         { type: "terminal", title: "Missing ID", cwd: "/", location: "grid" }, // no id
-        { id: "t2", type: "invalid", title: "Bad type", cwd: "/", location: "grid" }, // invalid type
+        { id: "t2", title: "Bad location", cwd: "/", location: "invalid-loc" }, // invalid location
         { id: "t3", type: "claude", title: "T3", cwd: "/", location: "dock" },
       ];
 
@@ -352,8 +327,8 @@ describe("Terminal Entry Validation Schemas", () => {
     it("logs warning for each filtered entry", () => {
       const entries = [
         { id: "valid", type: "terminal", title: "V", cwd: "/", location: "grid" },
-        { id: "bad1", type: "invalid", title: "Bad", cwd: "/", location: "grid" },
-        { id: "bad2", title: "Missing type", cwd: "/", location: "grid" },
+        { id: "bad1", title: "Bad location", cwd: "/", location: "invalid-loc" },
+        { id: "bad2", cwd: "/", location: "grid" }, // missing required title
       ];
 
       filterValidTerminalEntries(entries, AppStateTerminalEntrySchema, "test-context");

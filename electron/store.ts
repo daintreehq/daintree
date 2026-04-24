@@ -10,7 +10,8 @@ import type {
 } from "../shared/types/index.js";
 import type { IssueAssociation } from "../shared/types/ipc/worktree.js";
 import type { AppError } from "../shared/types/ipc/errors.js";
-import type { BuiltInTerminalType } from "../shared/config/agentIds.js";
+import type { BuiltInAgentId } from "../shared/config/agentIds.js";
+import type { AgentId } from "../shared/types/agent.js";
 import { DEFAULT_AGENT_SETTINGS, DEFAULT_APP_AGENT_CONFIG } from "../shared/types/index.js";
 import type { AppThemeConfig } from "../shared/types/appTheme.js";
 import type { SettingsRecovery, ActionFrecencyEntry } from "../shared/types/ipc/app.js";
@@ -63,10 +64,10 @@ export interface StoreSchema {
     };
     terminals: Array<{
       id: string;
-      kind?: "terminal" | "agent" | "browser" | "dev-preview" | string;
-      type?: BuiltInTerminalType;
-      agentId?: string;
+      kind?: "terminal" | "browser" | "dev-preview" | string;
+      launchAgentId?: AgentId;
       title: string;
+      titleMode?: "default" | "custom";
       cwd?: string;
       worktreeId?: string;
       location: "grid" | "dock";
@@ -88,7 +89,7 @@ export interface StoreSchema {
       name: string;
       worktreeId?: string;
       terminals: Array<{
-        type: BuiltInTerminalType;
+        launchAgentId?: BuiltInAgentId;
         title?: string;
         command?: string;
         env?: Record<string, string>;

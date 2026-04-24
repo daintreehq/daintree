@@ -38,10 +38,7 @@ export function splitTrailingNewlines(text: string): { body: string; enterCount:
 }
 
 function getEffectiveAgentId(terminal: TerminalInfo): string | undefined {
-  // Pre-migration sessions written before the agentId field existed (where
-  // identity lived only in `terminal.type`) lose bracketed-paste / soft-newline
-  // capability data here until they respawn — acceptable rolloff per #5812.
-  return terminal.detectedAgentType ?? terminal.agentId;
+  return terminal.detectedAgentId ?? terminal.launchAgentId;
 }
 
 export function supportsBracketedPaste(terminal: TerminalInfo): boolean {

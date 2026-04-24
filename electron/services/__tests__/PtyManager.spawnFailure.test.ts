@@ -15,8 +15,6 @@ vi.mock("../pty/terminalSpawn.js", async (importOriginal) => {
     computeSpawnContext: vi.fn(() => ({
       shell: "/bin/zsh",
       args: ["-l"],
-      isAgentTerminal: false,
-      agentId: undefined,
       env: {},
     })),
     acquirePtyProcess: vi.fn(),
@@ -34,7 +32,7 @@ vi.mock("../pty/index.js", async (importOriginal) => {
       getInfo() {
         return {};
       }
-      getIsAgentTerminal() {
+      isAgentCurrentlyLive() {
         return false;
       }
       setSabModeEnabled() {}
@@ -86,7 +84,6 @@ describe("PtyManager.spawn — PTY cleanup on constructor failure", () => {
         cols: 80,
         rows: 24,
         kind: "terminal",
-        type: "terminal",
       })
     ).toThrow(constructorError);
 
@@ -102,7 +99,6 @@ describe("PtyManager.spawn — PTY cleanup on constructor failure", () => {
         cols: 80,
         rows: 24,
         kind: "terminal",
-        type: "terminal",
       });
     } catch {
       // expected
@@ -123,7 +119,6 @@ describe("PtyManager.spawn — PTY cleanup on constructor failure", () => {
         cols: 80,
         rows: 24,
         kind: "terminal",
-        type: "terminal",
       })
     ).toThrow(constructorError);
 
@@ -141,7 +136,6 @@ describe("PtyManager.spawn — PTY cleanup on constructor failure", () => {
         cols: 80,
         rows: 24,
         kind: "terminal",
-        type: "terminal",
       })
     ).toThrow("spawn ENOENT");
 
@@ -156,7 +150,6 @@ describe("PtyManager.spawn — PTY cleanup on constructor failure", () => {
       cols: 80,
       rows: 24,
       kind: "terminal",
-      type: "terminal",
     });
 
     expect(manager.hasTerminal("t1")).toBe(true);

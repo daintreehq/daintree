@@ -5,7 +5,7 @@ import { ImageAddon } from "@xterm/addon-image";
 import { SearchAddon } from "@xterm/addon-search";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 
-import { TerminalRefreshTier, TerminalType, PanelKind, AgentState } from "@/types";
+import { TerminalRefreshTier, PanelKind, AgentState } from "@/types";
 
 export type RefreshTierProvider = () => TerminalRefreshTier;
 
@@ -15,9 +15,9 @@ export type PostCompleteHook = (output: string) => void | Promise<void>;
 
 export interface ManagedTerminal {
   terminal: Terminal;
-  type: TerminalType;
   kind?: PanelKind;
-  agentId?: string;
+  /** Launch hint — agent this terminal was launched to run. Not identity. */
+  launchAgentId?: string;
   agentState?: AgentState;
   agentStateSubscribers: Set<AgentStateCallback>;
   fitAddon: FitAddon;

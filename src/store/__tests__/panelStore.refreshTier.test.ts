@@ -11,7 +11,6 @@ function makeTerminal(overrides: Partial<TerminalInstance>): TerminalInstance {
   return {
     id: overrides.id ?? "t-1",
     title: "test",
-    type: "terminal",
     cwd: "/test",
     location: "grid",
     isVisible: true,
@@ -29,7 +28,7 @@ describe("getTerminalRefreshTier - runtime agent identity", () => {
     // genuine ex-agent and should be free to hibernate.
     const terminal = makeTerminal({
       kind: "terminal",
-      agentId: "claude",
+      launchAgentId: "claude",
       detectedAgentId: undefined,
       everDetectedAgent: true,
       agentState: "idle",
@@ -51,7 +50,7 @@ describe("getTerminalRefreshTier - runtime agent identity", () => {
     // fallback keeps the panel at VISIBLE so it doesn't immediately hibernate.
     const terminal = makeTerminal({
       kind: "terminal",
-      agentId: "claude",
+      launchAgentId: "claude",
       detectedAgentId: undefined,
       agentState: "idle",
     });
@@ -66,7 +65,7 @@ describe("getTerminalRefreshTier - runtime agent identity", () => {
     // Covers the race between onAgentExited and the process-detector exit event.
     const terminal = makeTerminal({
       kind: "terminal",
-      agentId: "claude",
+      launchAgentId: "claude",
       detectedAgentId: "claude",
       agentState: "exited",
     });
@@ -76,7 +75,7 @@ describe("getTerminalRefreshTier - runtime agent identity", () => {
   it("drops a completed agent to BACKGROUND", () => {
     const terminal = makeTerminal({
       kind: "terminal",
-      agentId: "claude",
+      launchAgentId: "claude",
       detectedAgentId: "claude",
       agentState: "completed",
     });

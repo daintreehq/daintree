@@ -27,18 +27,23 @@ export interface ResolvedCommand {
  * first, preset overrides). For all others, copies the existing command.
  */
 async function resolveCommandForPanel(panel: TerminalInstance): Promise<ResolvedCommand> {
-  if (panel.agentId && isRegisteredAgent(panel.agentId)) {
-    const agentConfig = getAgentConfig(panel.agentId);
+  if (panel.launchAgentId && isRegisteredAgent(panel.launchAgentId)) {
+    const agentConfig = getAgentConfig(panel.launchAgentId);
     if (agentConfig) {
       try {
         const [agentSettings, tmpDir] = await Promise.all([
           agentSettingsClient.get(),
           systemClient.getTmpDir().catch(() => ""),
         ]);
-        const entry = agentSettings?.agents?.[panel.agentId] ?? {};
-        const ccrPresets = useCcrPresetsStore.getState().ccrPresetsByAgent[panel.agentId];
+        const entry = agentSettings?.agents?.[panel.launchAgentId] ?? {};
+        const ccrPresets = useCcrPresetsStore.getState().ccrPresetsByAgent[panel.launchAgentId];
         const preset = panel.agentPresetId
-          ? getMergedPreset(panel.agentId, panel.agentPresetId, entry.customPresets, ccrPresets)
+          ? getMergedPreset(
+              panel.launchAgentId,
+              panel.agentPresetId,
+              entry.customPresets,
+              ccrPresets
+            )
           : undefined;
         const presetWasStale = !!panel.agentPresetId && !preset;
         const effectiveEntry = preset
@@ -52,12 +57,17 @@ async function resolveCommandForPanel(panel: TerminalInstance): Promise<Resolved
             }
           : entry;
         const clipboardDirectory = tmpDir ? `${tmpDir}/daintree-clipboard` : undefined;
-        const command = generateAgentCommand(agentConfig.command, effectiveEntry, panel.agentId, {
-          interactive: true,
-          clipboardDirectory,
-          modelId: panel.agentModelId,
-          presetArgs: preset?.args?.join(" "),
-        });
+        const command = generateAgentCommand(
+          agentConfig.command,
+          effectiveEntry,
+          panel.launchAgentId,
+          {
+            interactive: true,
+            clipboardDirectory,
+            modelId: panel.agentModelId,
+            presetArgs: preset?.args?.join(" "),
+          }
+        );
         // Mirror useAgentLauncher.ts: global env first, preset env wins on
         // conflicts. Critical for duplicates — dropping globalEnv here
         // silently routes the duplicated panel to the default backend.
@@ -70,7 +80,7 @@ async function resolveCommandForPanel(panel: TerminalInstance): Promise<Resolved
         return { command, env: mergedEnv, preset, presetWasStale };
       } catch (error) {
         console.warn(
-          `Failed to get agent settings for ${panel.agentId}, using existing command:`,
+          `Failed to get agent settings for ${panel.launchAgentId}, using existing command:`,
           error
         );
         return {
@@ -115,14 +125,13 @@ function buildDevPreviewOptions(panel: TerminalInstance) {
 export function buildPanelSnapshotOptions(panel: TerminalInstance): AddPanelOptions | null {
   const kind = panel.kind ?? "terminal";
 
-  if (panel.agentId && kind === "terminal") {
+  if (panel.launchAgentId && kind === "terminal") {
     if (!panel.command) {
       return null;
     }
     return {
       kind: "terminal",
-      type: panel.type,
-      agentId: panel.agentId,
+      launchAgentId: panel.launchAgentId,
       command: panel.command,
       cwd: panel.cwd || "",
       worktreeId: panel.worktreeId,
@@ -136,7 +145,6 @@ export function buildPanelSnapshotOptions(panel: TerminalInstance): AddPanelOpti
   if (kind === "browser") {
     return {
       kind: "browser",
-      type: panel.type,
       cwd: panel.cwd || "",
       worktreeId: panel.worktreeId,
       exitBehavior: panel.exitBehavior,
@@ -148,7 +156,6 @@ export function buildPanelSnapshotOptions(panel: TerminalInstance): AddPanelOpti
   if (kind === "dev-preview") {
     return {
       kind: "dev-preview",
-      type: panel.type,
       cwd: panel.cwd || "",
       worktreeId: panel.worktreeId,
       exitBehavior: panel.exitBehavior,
@@ -159,8 +166,7 @@ export function buildPanelSnapshotOptions(panel: TerminalInstance): AddPanelOpti
 
   return {
     kind: "terminal",
-    type: panel.type,
-    agentId: panel.agentId,
+    launchAgentId: panel.launchAgentId,
     title: panel.title,
     cwd: panel.cwd || "",
     worktreeId: panel.worktreeId,
@@ -189,7 +195,7 @@ export async function buildPanelDuplicateOptions(
   const kind = sourcePanel.kind ?? "terminal";
   const { command, env, presetWasStale } = await resolveCommandForPanel(sourcePanel);
 
-  if (sourcePanel.agentId && kind === "terminal") {
+  if (sourcePanel.launchAgentId && kind === "terminal") {
     if (!command) {
       throw new Error(`Cannot duplicate agent terminal: command is missing`);
     }
@@ -197,15 +203,14 @@ export async function buildPanelDuplicateOptions(
     // route removed from config), null out the preset-derived fields so the
     // duplicate doesn't lie about its identity — blue "Claude (Pro)" title
     // with default env is the split-brain the review flagged.
-    const agentConfig = getAgentConfig(sourcePanel.agentId);
+    const agentConfig = getAgentConfig(sourcePanel.launchAgentId);
     const fallbackTitle = agentConfig?.name ?? sourcePanel.title;
     const agentPresetId = presetWasStale ? undefined : sourcePanel.agentPresetId;
     const agentPresetColor = presetWasStale ? undefined : sourcePanel.agentPresetColor;
     const title = presetWasStale ? fallbackTitle : sourcePanel.title;
     return {
       kind: "terminal",
-      type: sourcePanel.type,
-      agentId: sourcePanel.agentId,
+      launchAgentId: sourcePanel.launchAgentId,
       command,
       title,
       cwd: sourcePanel.cwd || "",
@@ -224,7 +229,6 @@ export async function buildPanelDuplicateOptions(
   if (kind === "browser") {
     return {
       kind: "browser",
-      type: sourcePanel.type,
       cwd: sourcePanel.cwd || "",
       worktreeId: sourcePanel.worktreeId,
       location: targetLocation,
@@ -237,7 +241,6 @@ export async function buildPanelDuplicateOptions(
   if (kind === "dev-preview") {
     return {
       kind: "dev-preview",
-      type: sourcePanel.type,
       cwd: sourcePanel.cwd || "",
       worktreeId: sourcePanel.worktreeId,
       location: targetLocation,
@@ -249,8 +252,7 @@ export async function buildPanelDuplicateOptions(
 
   return {
     kind: "terminal",
-    type: sourcePanel.type,
-    agentId: sourcePanel.agentId,
+    launchAgentId: sourcePanel.launchAgentId,
     cwd: sourcePanel.cwd || "",
     title: sourcePanel.title,
     worktreeId: sourcePanel.worktreeId,

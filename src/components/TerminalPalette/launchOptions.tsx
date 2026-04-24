@@ -1,13 +1,15 @@
 import { SquareTerminal, Globe, Settings } from "lucide-react";
 import { getBrandColorHex } from "@/lib/colorUtils";
-import type { TerminalType, PanelKind } from "@/types";
+import type { PanelKind } from "@/types";
+import type { BuiltInAgentId } from "@shared/config/agentIds";
 import { AGENT_REGISTRY } from "@/config/agents";
 import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
 import { resolveAgentIcon } from "@/config/agentIcons";
 
 export interface LaunchOption {
   id: string;
-  type: TerminalType;
+  /** Agent id when this option launches an agent; absent for plain terminal/browser. */
+  launchAgentId?: BuiltInAgentId;
   kind?: PanelKind;
   label: string;
   description: string;
@@ -23,7 +25,7 @@ export function getLaunchOptions(): LaunchOption[] {
     const presetSuffix = presetCount > 0 ? ` (${presetCount} presets)` : "";
     return {
       id,
-      type: id as TerminalType,
+      launchAgentId: id,
       label: config?.name ?? id,
       description: `${description}${presetSuffix}`.trim(),
       icon: <Icon className="w-4 h-4" brandColor={getBrandColorHex(id)} />,
@@ -34,14 +36,12 @@ export function getLaunchOptions(): LaunchOption[] {
     ...agentOptions,
     {
       id: "terminal",
-      type: "terminal",
       label: "Terminal",
       description: "Standard system shell (zsh/bash/powershell).",
       icon: <SquareTerminal className="w-4 h-4" />,
     },
     {
       id: "browser",
-      type: "terminal",
       kind: "browser",
       label: "Browser",
       description: "Embed localhost dev server preview.",
@@ -53,7 +53,6 @@ export function getLaunchOptions(): LaunchOption[] {
 export function getMoreAgentsOption(): LaunchOption {
   return {
     id: "more-agents",
-    type: "terminal",
     label: "More agents...",
     description: "Configure which agents appear in this menu",
     icon: <Settings className="w-4 h-4 text-daintree-text/50" />,

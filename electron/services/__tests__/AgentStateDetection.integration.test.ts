@@ -158,29 +158,6 @@ describe.skipIf(shouldSkip)("Agent State Detection Integration", () => {
     }, 10000);
   });
 
-  describe("Agent Type Detection", () => {
-    it("should preserve agent type metadata", async () => {
-      const id = await spawnShellTerminal(manager, { type: "claude" });
-      await sleep(500);
-
-      const terminal = manager.getTerminal(id);
-      expect(terminal).toBeDefined();
-      expect(terminal?.type).toBe("claude");
-    }, 10000);
-
-    it("should handle different agent types", async () => {
-      const claudeId = await spawnShellTerminal(manager, { type: "claude" });
-      const geminiId = await spawnShellTerminal(manager, { type: "gemini" });
-      await sleep(500);
-
-      const claudeTerm = manager.getTerminal(claudeId);
-      const geminiTerm = manager.getTerminal(geminiId);
-
-      expect(claudeTerm?.type).toBe("claude");
-      expect(geminiTerm?.type).toBe("gemini");
-    }, 10000);
-  });
-
   describe("State Transitions for Different Terminal Types", () => {
     it("should handle state transitions for agent terminals", async () => {
       const id = await spawnShellTerminal(manager, { type: "claude" });

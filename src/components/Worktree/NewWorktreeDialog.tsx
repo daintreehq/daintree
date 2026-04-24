@@ -137,16 +137,17 @@ async function cloneLayoutPanels(
         command: t.command?.trim() || undefined,
       });
     } else {
-      const agentConfig = getAgentConfig(t.type);
-      const baseCommand = agentConfig?.command || t.type;
-      const entry = agentSettings?.agents?.[t.type] ?? {};
-      const command = generateAgentCommand(baseCommand, entry, t.type, {
+      const agentId = t.type;
+      const agentConfig = getAgentConfig(agentId);
+      const baseCommand = agentConfig?.command ?? "";
+      const entry = agentSettings?.agents?.[agentId] ?? {};
+      const command = generateAgentCommand(baseCommand, entry, agentId, {
         clipboardDirectory,
         modelId: t.agentModelId,
       });
       await addPanel({
         kind: "terminal",
-        agentId: t.type,
+        launchAgentId: agentId,
         command,
         title: t.title,
         cwd,

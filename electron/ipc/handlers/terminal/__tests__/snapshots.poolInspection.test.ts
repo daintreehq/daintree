@@ -288,8 +288,7 @@ describe("terminal pool inspection handlers", () => {
             id: "t-full",
             projectId: "proj-1",
             kind: "terminal",
-            type: "claude",
-            agentId: "claude",
+            launchAgentId: "claude",
             title: "Claude Agent",
             cwd: "/tmp",
             worktreeId: "wt-1",
@@ -319,7 +318,7 @@ describe("terminal pool inspection handlers", () => {
         id: string;
         projectId?: string;
         worktreeId?: string;
-        agentId?: string;
+        launchAgentId?: string;
         lastStateChange?: number;
         activityTier?: string;
         hasPty?: boolean;
@@ -329,7 +328,7 @@ describe("terminal pool inspection handlers", () => {
       expect(result[0].id).toBe("t-full");
       expect(result[0].projectId).toBe("proj-1");
       expect(result[0].worktreeId).toBe("wt-1");
-      expect(result[0].agentId).toBe("claude");
+      expect(result[0].launchAgentId).toBe("claude");
       expect(result[0].lastStateChange).toBe(now - 1000);
       expect(result[0].activityTier).toBe("active");
       expect(result[0].hasPty).toBe(true);

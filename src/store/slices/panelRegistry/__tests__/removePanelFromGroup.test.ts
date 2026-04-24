@@ -88,7 +88,6 @@ describe("removePanelFromGroup", () => {
       panelsById: {
         "term-1": {
           id: "term-1",
-          type: "terminal",
           title: "Shell 1",
           cwd: "/test",
           cols: 80,
@@ -97,7 +96,6 @@ describe("removePanelFromGroup", () => {
         },
         "term-2": {
           id: "term-2",
-          type: "terminal",
           title: "Shell 2",
           cwd: "/test",
           cols: 80,
@@ -128,7 +126,6 @@ describe("removePanelFromGroup", () => {
       panelsById: {
         "term-1": {
           id: "term-1",
-          type: "terminal",
           title: "Shell 1",
           cwd: "/test",
           cols: 80,
@@ -159,7 +156,6 @@ describe("removePanelFromGroup", () => {
       panelsById: {
         "term-1": {
           id: "term-1",
-          type: "terminal",
           title: "Shell 1",
           cwd: "/test",
           cols: 80,
@@ -168,7 +164,6 @@ describe("removePanelFromGroup", () => {
         },
         "term-2": {
           id: "term-2",
-          type: "terminal",
           title: "Shell 2",
           cwd: "/test",
           cols: 80,
@@ -177,7 +172,6 @@ describe("removePanelFromGroup", () => {
         },
         "term-3": {
           id: "term-3",
-          type: "terminal",
           title: "Shell 3",
           cwd: "/test",
           cols: 80,
@@ -209,7 +203,6 @@ describe("removePanelFromGroup", () => {
       panelsById: {
         "term-1": {
           id: "term-1",
-          type: "terminal",
           title: "Shell 1",
           cwd: "/test",
           cols: 80,
@@ -218,7 +211,6 @@ describe("removePanelFromGroup", () => {
         },
         "term-2": {
           id: "term-2",
-          type: "terminal",
           title: "Shell 2",
           cwd: "/test",
           cols: 80,
@@ -227,7 +219,6 @@ describe("removePanelFromGroup", () => {
         },
         "term-3": {
           id: "term-3",
-          type: "terminal",
           title: "Shell 3",
           cwd: "/test",
           cols: 80,
@@ -259,7 +250,6 @@ describe("removePanelFromGroup", () => {
       panelsById: {
         "term-1": {
           id: "term-1",
-          type: "terminal",
           title: "Shell 1",
           cwd: "/test",
           cols: 80,
@@ -268,7 +258,6 @@ describe("removePanelFromGroup", () => {
         },
         "term-2": {
           id: "term-2",
-          type: "terminal",
           title: "Shell 2",
           cwd: "/test",
           cols: 80,
@@ -277,7 +266,6 @@ describe("removePanelFromGroup", () => {
         },
         "term-3": {
           id: "term-3",
-          type: "terminal",
           title: "Shell 3",
           cwd: "/test",
           cols: 80,
@@ -302,7 +290,6 @@ describe("removePanelFromGroup", () => {
       panelsById: {
         "term-1": {
           id: "term-1",
-          type: "terminal",
           title: "Shell 1",
           cwd: "/test",
           cols: 80,
@@ -340,7 +327,6 @@ describe("removePanelFromGroup", () => {
       panelsById: {
         "term-1": {
           id: "term-1",
-          type: "terminal",
           title: "Shell 1",
           cwd: "/test",
           cols: 80,
@@ -349,7 +335,6 @@ describe("removePanelFromGroup", () => {
         },
         "term-2": {
           id: "term-2",
-          type: "terminal",
           title: "Shell 2",
           cwd: "/test",
           cols: 80,
@@ -358,7 +343,6 @@ describe("removePanelFromGroup", () => {
         },
         "term-3": {
           id: "term-3",
-          type: "terminal",
           title: "Shell 3",
           cwd: "/test",
           cols: 80,
@@ -367,7 +351,6 @@ describe("removePanelFromGroup", () => {
         },
         "term-4": {
           id: "term-4",
-          type: "terminal",
           title: "Shell 4",
           cwd: "/test",
           cols: 80,
@@ -376,7 +359,6 @@ describe("removePanelFromGroup", () => {
         },
         "term-5": {
           id: "term-5",
-          type: "terminal",
           title: "Shell 5",
           cwd: "/test",
           cols: 80,
@@ -414,7 +396,6 @@ describe("removePanelFromGroup", () => {
       panelsById: {
         "term-1": {
           id: "term-1",
-          type: "terminal",
           title: "Shell 1",
           cwd: "/test",
           cols: 80,
@@ -423,7 +404,6 @@ describe("removePanelFromGroup", () => {
         },
         "term-2": {
           id: "term-2",
-          type: "terminal",
           title: "Shell 2",
           cwd: "/test",
           cols: 80,
@@ -432,7 +412,6 @@ describe("removePanelFromGroup", () => {
         },
         "term-3": {
           id: "term-3",
-          type: "terminal",
           title: "Shell 3",
           cwd: "/test",
           cols: 80,
@@ -465,7 +444,6 @@ describe("removePanelFromGroup", () => {
       panelsById: {
         "term-1": {
           id: "term-1",
-          type: "terminal",
           title: "Shell 1",
           cwd: "/test",
           cols: 80,
@@ -474,7 +452,6 @@ describe("removePanelFromGroup", () => {
         },
         "term-2": {
           id: "term-2",
-          type: "terminal",
           title: "Shell 2",
           cwd: "/test",
           cols: 80,
@@ -505,7 +482,6 @@ describe("removePanelFromGroup", () => {
       panelsById: {
         "term-1": {
           id: "term-1",
-          type: "terminal",
           title: "Shell 1",
           cwd: "/test",
           cols: 80,
@@ -514,7 +490,6 @@ describe("removePanelFromGroup", () => {
         },
         "term-2": {
           id: "term-2",
-          type: "terminal",
           title: "Shell 2",
           cwd: "/test",
           cols: 80,
@@ -523,7 +498,6 @@ describe("removePanelFromGroup", () => {
         },
         "term-3": {
           id: "term-3",
-          type: "terminal",
           title: "Shell 3",
           cwd: "/test",
           cols: 80,
@@ -555,7 +529,6 @@ describe("removePanelFromGroup", () => {
       panelsById: {
         "term-1": {
           id: "term-1",
-          type: "terminal",
           title: "Shell 1",
           cwd: "/test",
           cols: 80,
@@ -565,7 +538,6 @@ describe("removePanelFromGroup", () => {
         },
         "term-2": {
           id: "term-2",
-          type: "terminal",
           title: "Shell 2",
           cwd: "/test",
           cols: 80,
@@ -575,7 +547,6 @@ describe("removePanelFromGroup", () => {
         },
         "term-3": {
           id: "term-3",
-          type: "terminal",
           title: "Shell 3",
           cwd: "/test",
           cols: 80,

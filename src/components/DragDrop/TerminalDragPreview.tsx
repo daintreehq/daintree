@@ -10,7 +10,7 @@ interface TerminalDragPreviewProps {
 }
 
 export function TerminalDragPreview({ terminal, groupTabCount }: TerminalDragPreviewProps) {
-  const brandColor = getPanelKindColor(terminal.kind ?? "terminal", terminal.agentId);
+  const brandColor = getPanelKindColor(terminal.kind ?? "terminal", terminal.launchAgentId);
   const isWorking = terminal.agentState === "working";
   const isGroupDrag = (groupTabCount ?? 0) > 1;
 
@@ -113,7 +113,7 @@ export function TerminalDragPreview({ terminal, groupTabCount }: TerminalDragPre
           flexDirection: "column",
         }}
       >
-        <PlaceholderContent kind={terminal.kind ?? "terminal"} agentId={terminal.agentId} />
+        <PlaceholderContent kind={terminal.kind ?? "terminal"} agentId={terminal.launchAgentId} />
       </div>
     </div>
   );

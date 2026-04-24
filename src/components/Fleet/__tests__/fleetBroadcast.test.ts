@@ -43,9 +43,8 @@ function makeAgent(id: string, overrides: Partial<TerminalInstance> = {}): Termi
   return {
     id,
     title: id,
-    type: "terminal",
     kind: "terminal",
-    agentId: "claude",
+    detectedAgentId: "claude",
     worktreeId: "wt-1",
     projectId: "proj-1",
     location: "grid",
@@ -227,25 +226,11 @@ describe("resolveFleetBroadcastTargetIds", () => {
     expect(resolveFleetBroadcastTargetIds()).toEqual(["a"]);
   });
 
-  it("excludes a plain terminal running a detected agent", () => {
-    seedPanels([
-      makeAgent("a"),
-      makeAgent("p", {
-        kind: "terminal",
-        agentId: undefined,
-        detectedAgentId: "claude",
-      }),
-    ]);
-    useFleetArmingStore.getState().armIds(["a", "p"]);
-    expect(resolveFleetBroadcastTargetIds()).toEqual(["a"]);
-  });
-
   it("excludes a plain terminal after detected agent exits", () => {
     seedPanels([
       makeAgent("a"),
       makeAgent("p", {
         kind: "terminal",
-        agentId: undefined,
         detectedAgentId: undefined,
         everDetectedAgent: true,
       }),

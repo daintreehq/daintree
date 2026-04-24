@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { Pause, Lock } from "lucide-react";
-import type { TerminalType, AgentState, PanelKind, AgentStateChangeTrigger } from "@/types";
+import type { AgentState, PanelKind, AgentStateChangeTrigger } from "@/types";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 import {
@@ -44,7 +44,6 @@ const TRIGGER_LABELS: Record<AgentStateChangeTrigger, string> = {
 export interface TerminalHeaderContentProps {
   id: string;
   kind?: PanelKind;
-  type?: TerminalType;
   agentState?: AgentState;
   activity?: ActivityState | null;
   activityStatus?: "working" | "waiting" | "success" | "failure";
@@ -70,7 +69,6 @@ function getResourceSeverity(cpuPercent: number, memoryKb: number): "muted" | "a
 function TerminalHeaderContentComponent({
   id,
   kind,
-  type,
   agentState,
   activity,
   activityStatus,
@@ -130,8 +128,7 @@ function TerminalHeaderContentComponent({
     tick - lastStateChange > 10_000;
 
   // Show command pill only for plain terminals (not agent terminals)
-  // Use kind to distinguish - agent panels have kind="agent"
-  const isPlainTerminal = kind === "terminal" || (!kind && type === "terminal");
+  const isPlainTerminal = kind == null || kind === "terminal";
   const showCommandPill = isPlainTerminal && activityStatus === "working" && !!lastCommand;
 
   const renderAgentStateChip = () => {

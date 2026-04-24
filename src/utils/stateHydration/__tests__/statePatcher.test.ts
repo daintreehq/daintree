@@ -176,7 +176,6 @@ describe("buildArgsForBackendTerminal", () => {
     const backend = {
       id: "t1",
       kind: "terminal" as const,
-      type: undefined,
       title: "Shell",
       cwd: "/project",
       worktreeId: "wt1",
@@ -207,17 +206,16 @@ describe("buildArgsForBackendTerminal", () => {
     expect(result.cwd).toBe("/project");
   });
 
-  it("falls back to saved.agentId when backend record lost it", () => {
+  it("falls back to saved.launchAgentId when backend record lost it", () => {
     // Mirrors buildArgsForReconnectedFallback's saved-agentId recovery so a
-    // PTY-host restart that wiped backend.agentId doesn't strip the panel's
+    // PTY-host restart that wiped backend.launchAgentId doesn't strip the panel's
     // agent identity if the renderer state still has it.
     const result = buildArgsForBackendTerminal(
-      { id: "t1", cwd: "/p", agentId: undefined, capabilityAgentId: "claude" },
-      { id: "t1", location: "grid", agentId: "claude" },
+      { id: "t1", cwd: "/p", launchAgentId: undefined },
+      { id: "t1", location: "grid", launchAgentId: "claude" },
       "/p"
     );
-    expect(result.agentId).toBe("claude");
-    expect(result.capabilityAgentId).toBe("claude");
+    expect(result.launchAgentId).toBe("claude");
   });
 
   it("includes dev-preview browser fields", () => {
@@ -258,17 +256,17 @@ describe("buildArgsForBackendTerminal", () => {
       { id: "t1", location: "grid" },
       "/p"
     );
-    expect(result.agentId).toBe("claude");
+    expect(result.launchAgentId).toBe("claude");
     expect(result.kind).toBe("terminal");
   });
 
-  it('migrates legacy backend kind "agent" to "terminal" while preserving agentId', () => {
+  it('migrates legacy backend kind "agent" to "terminal" while preserving launchAgentId', () => {
     const result = buildArgsForBackendTerminal(
-      { id: "t1", cwd: "/p", kind: "agent", agentId: "claude", title: "Claude Code" },
+      { id: "t1", cwd: "/p", kind: "agent", launchAgentId: "claude", title: "Claude Code" },
       { id: "t1", location: "grid" },
       "/p"
     );
-    expect(result.agentId).toBe("claude");
+    expect(result.launchAgentId).toBe("claude");
     expect(result.kind).toBe("terminal");
   });
 
@@ -431,7 +429,7 @@ describe("buildArgsForRespawn", () => {
     );
     expect(result.command).toBe("claude --resume sess-123");
     expect(result.kind).toBe("terminal");
-    expect(result.agentId).toBe("claude");
+    expect(result.launchAgentId).toBe("claude");
     expect(result.requestedId).toBe("t1");
     expect(result.restore).toBe(true);
   });
@@ -498,7 +496,7 @@ describe("buildArgsForRespawn", () => {
     );
     expect(result.command).toBe("claude --generated");
     expect(result.kind).toBe("terminal");
-    expect(result.agentId).toBe("claude");
+    expect(result.launchAgentId).toBe("claude");
   });
 
   it("preserves exitBehavior for non-agent panels", () => {
@@ -750,7 +748,7 @@ describe("buildArgsForRespawn", () => {
 describe("agentModelId propagation", () => {
   it("buildArgsForBackendTerminal includes agentModelId", () => {
     const result = buildArgsForBackendTerminal(
-      { id: "t1", cwd: "/p", kind: "terminal", agentId: "claude" },
+      { id: "t1", cwd: "/p", kind: "terminal", launchAgentId: "claude" },
       {
         id: "t1",
         location: "grid",
@@ -862,61 +860,43 @@ describe("detectedAgentId propagation", () => {
   });
 });
 
-// #5804: capability mode is sealed at spawn time. Hydration must forward the
-// backend's value verbatim and never re-derive — the `handleAgentDetection`
-// bridge-write violation can pollute `agentId` and the legacy `type` field on
-// observed shells, and re-deriving from that would mint false `full` capability.
-describe("capabilityAgentId propagation", () => {
-  it("buildArgsForBackendTerminal forwards capabilityAgentId", () => {
+// Hydration builders must forward detectedAgentId and everDetectedAgent verbatim
+// from the backend — these are live runtime fields that the renderer uses for chrome.
+describe("detectedAgentId propagation", () => {
+  it("buildArgsForBackendTerminal forwards detectedAgentId and everDetectedAgent", () => {
     const result = buildArgsForBackendTerminal(
-      { id: "t1", cwd: "/p", kind: "terminal", capabilityAgentId: "claude" },
+      { id: "t1", cwd: "/p", kind: "terminal", detectedAgentId: "claude", everDetectedAgent: true },
       { id: "t1", location: "grid" },
       "/p"
     );
-    expect(result.capabilityAgentId).toBe("claude");
+    expect(result.detectedAgentId).toBe("claude");
+    expect(result.everDetectedAgent).toBe(true);
   });
 
-  it("buildArgsForReconnectedFallback forwards capabilityAgentId", () => {
-    const result = buildArgsForReconnectedFallback(
-      { id: "t1", cwd: "/p", capabilityAgentId: "gemini" },
-      { id: "t1", location: "grid" },
-      "/p"
-    );
-    expect(result.capabilityAgentId).toBe("gemini");
-  });
-
-  it("buildArgsForOrphanedTerminal forwards capabilityAgentId", () => {
+  it("buildArgsForOrphanedTerminal forwards detectedAgentId and everDetectedAgent", () => {
     const result = buildArgsForOrphanedTerminal(
-      { id: "t1", cwd: "/p", kind: "terminal", capabilityAgentId: "codex" },
+      { id: "t1", cwd: "/p", kind: "terminal", detectedAgentId: "codex", everDetectedAgent: true },
       "/p"
     );
-    expect(result.capabilityAgentId).toBe("codex");
+    expect(result.detectedAgentId).toBe("codex");
+    expect(result.everDetectedAgent).toBe(true);
   });
 
-  // Critical regression: an observed shell where `handleAgentDetection` has
-  // bridge-written `agentId="claude"` and `type="claude"` on the backend must
-  // still arrive in the renderer with `capabilityAgentId: undefined`. The
-  // hydration builders must not synthesize capability from the polluted fields.
-  it("buildArgsForBackendTerminal leaves capabilityAgentId undefined for an observed shell with bridge-written agentId", () => {
+  it("buildArgsForBackendTerminal does not set launchAgentId from detectedAgentId alone", () => {
+    // A plain shell with runtime detection must not have launchAgentId set —
+    // launchAgentId is the sealed spawn-time hint, not a detection result.
     const result = buildArgsForBackendTerminal(
       {
         id: "t1",
         cwd: "/p",
         kind: "terminal",
-        // Polluted by the bridge-write violation in handleAgentDetection:
-        agentId: "claude",
-        type: "claude",
         detectedAgentId: "claude",
         everDetectedAgent: true,
-        // Backend correctly omits capabilityAgentId — it was never sealed.
       },
       { id: "t1", location: "grid" },
       "/p"
     );
-    // agentId may be present (sealed-or-polluted, not our concern here);
-    // capabilityAgentId must remain undefined so the renderer can correctly
-    // reject this terminal from agent-only feature gates.
-    expect(result.capabilityAgentId).toBeUndefined();
+    expect(result.launchAgentId).toBeUndefined();
   });
 });
 
@@ -998,7 +978,6 @@ describe("buildArgsForOrphanedTerminal", () => {
       {
         id: "t1",
         kind: "terminal",
-        type: undefined,
         title: "Shell",
         cwd: "/project",
         agentState: "idle",
@@ -1023,7 +1002,7 @@ describe("buildArgsForOrphanedTerminal", () => {
       { id: "t1", kind: "agent", title: "Gemini", cwd: "/p" },
       "/p"
     );
-    expect(result.agentId).toBe("gemini");
+    expect(result.launchAgentId).toBe("gemini");
     expect(result.kind).toBe("terminal");
   });
 
@@ -1051,8 +1030,7 @@ describe("buildArgsForOrphanedTerminal", () => {
       {
         id: "t1",
         kind: "terminal",
-        type: "claude",
-        agentId: "claude",
+        launchAgentId: "claude",
         title: "Claude",
         cwd: "/project",
         agentLaunchFlags: ["--dangerously-skip-permissions", "--yolo"],
@@ -1071,7 +1049,7 @@ describe("buildArgsForOrphanedTerminal", () => {
       {
         id: "t1",
         kind: "terminal",
-        agentId: "claude",
+        launchAgentId: "claude",
         title: "Claude",
         cwd: "/p",
         agentLaunchFlags: [],
@@ -1232,8 +1210,7 @@ describe("buildArgsForBackendTerminal — agent launch flags", () => {
       {
         id: "t1",
         kind: "terminal",
-        type: "claude",
-        agentId: "claude",
+        launchAgentId: "claude",
         title: "Claude",
         cwd: "/p",
         agentLaunchFlags: ["--yolo"],
@@ -1252,7 +1229,7 @@ describe("buildArgsForBackendTerminal — agent launch flags", () => {
 
   it("falls back to saved when backend has no flags", () => {
     const result = buildArgsForBackendTerminal(
-      { id: "t1", kind: "terminal", type: "claude", agentId: "claude", title: "Claude", cwd: "/p" },
+      { id: "t1", kind: "terminal", launchAgentId: "claude", title: "Claude", cwd: "/p" },
       { id: "t1", agentLaunchFlags: ["--saved-flag"], agentModelId: "saved-model" },
       "/p"
     );
@@ -1265,8 +1242,7 @@ describe("buildArgsForBackendTerminal — agent launch flags", () => {
       {
         id: "t1",
         kind: "terminal",
-        type: "claude",
-        agentId: "claude",
+        launchAgentId: "claude",
         title: "Claude",
         cwd: "/p",
         agentLaunchFlags: null as unknown as string[] | undefined,
@@ -1439,7 +1415,7 @@ describe("buildArgsForRespawn — preset overrides", () => {
   it("preserves agentPresetId through all four buildArgs paths", () => {
     // buildArgsForBackendTerminal
     const r1 = buildArgsForBackendTerminal(
-      { id: "t1", cwd: "/p", kind: "terminal", agentId: "claude" },
+      { id: "t1", cwd: "/p", kind: "terminal", launchAgentId: "claude" },
       { id: "t1", location: "grid", agentPresetId: "user-aaa" },
       "/p"
     );
@@ -1495,7 +1471,7 @@ describe("buildArgsForRespawn — preset overrides", () => {
     };
 
     const r1 = buildArgsForBackendTerminal(
-      { id: "t1", cwd: "/p", kind: "terminal", agentId: "claude" },
+      { id: "t1", cwd: "/p", kind: "terminal", launchAgentId: "claude" },
       legacy,
       "/p"
     );
@@ -1533,7 +1509,7 @@ describe("buildArgsForRespawn — preset overrides", () => {
       agentFlavorColor: "#ff0000",
     };
     const r = buildArgsForBackendTerminal(
-      { id: "t1", cwd: "/p", kind: "terminal", agentId: "claude" },
+      { id: "t1", cwd: "/p", kind: "terminal", launchAgentId: "claude" },
       mixed,
       "/p"
     );
@@ -1781,7 +1757,7 @@ describe("adversarial: agentPresetColor must be carried through buildArgsForResp
 describe("Adversarial: buildArgsForBackendTerminal preserves agentPresetColor", () => {
   it("forwards agentPresetColor from saved state", () => {
     const result = buildArgsForBackendTerminal(
-      { id: "t1", cwd: "/p", kind: "terminal", agentId: "claude" },
+      { id: "t1", cwd: "/p", kind: "terminal", launchAgentId: "claude" },
       { id: "t1", location: "grid", agentPresetId: "user-x", agentPresetColor: "#ff6600" },
       "/p"
     );
@@ -1790,7 +1766,7 @@ describe("Adversarial: buildArgsForBackendTerminal preserves agentPresetColor", 
 
   it("returns undefined agentPresetColor when saved has none", () => {
     const result = buildArgsForBackendTerminal(
-      { id: "t1", cwd: "/p", kind: "terminal", agentId: "claude" },
+      { id: "t1", cwd: "/p", kind: "terminal", launchAgentId: "claude" },
       { id: "t1", location: "grid", agentPresetId: "user-x" },
       "/p"
     );
@@ -1801,7 +1777,7 @@ describe("Adversarial: buildArgsForBackendTerminal preserves agentPresetColor", 
 describe("Adversarial: buildArgsForReconnectedFallback preserves agentPresetColor", () => {
   it("forwards agentPresetColor from saved state", () => {
     const result = buildArgsForReconnectedFallback(
-      { id: "t1", cwd: "/p", kind: "terminal", agentId: "claude" },
+      { id: "t1", cwd: "/p", kind: "terminal", launchAgentId: "claude" },
       { id: "t1", location: "grid", agentPresetId: "user-x", agentPresetColor: "#ff6600" },
       "/p"
     );
@@ -1810,7 +1786,7 @@ describe("Adversarial: buildArgsForReconnectedFallback preserves agentPresetColo
 
   it("returns undefined agentPresetColor when saved has none", () => {
     const result = buildArgsForReconnectedFallback(
-      { id: "t1", cwd: "/p", kind: "terminal", agentId: "claude" },
+      { id: "t1", cwd: "/p", kind: "terminal", launchAgentId: "claude" },
       { id: "t1", location: "grid", agentPresetId: "user-x" },
       "/p"
     );
@@ -1845,7 +1821,7 @@ describe("Adversarial: buildArgsForOrphanedTerminal preserves agentPresetColor",
   // and therefore the result is always undefined (by design — no saved state available).
   it("result has no agentPresetColor (backend-only data — no saved state available)", () => {
     const result = buildArgsForOrphanedTerminal(
-      { id: "t1", cwd: "/p", kind: "terminal", agentId: "claude" },
+      { id: "t1", cwd: "/p", kind: "terminal", launchAgentId: "claude" },
       "/p"
     );
     expect(result.agentPresetColor).toBeUndefined();

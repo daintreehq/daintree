@@ -2,7 +2,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { IPty } from "node-pty";
 import { TerminalProcess } from "../TerminalProcess.js";
 import type { SpawnContext } from "../terminalSpawn.js";
-import type { TerminalType } from "../../../../shared/types/panel.js";
 
 let ptyWriteMock: ReturnType<typeof vi.fn<(data: string) => void>>;
 let emitDataMock: ReturnType<typeof vi.fn<(id: string, data: string | Uint8Array) => void>>;
@@ -37,8 +36,6 @@ function defaultSpawnContext(overrides?: Partial<SpawnContext>): SpawnContext {
   return {
     shell: "/bin/zsh",
     args: ["-l"],
-    isAgentTerminal: false,
-    agentId: undefined,
     env: {},
     ...overrides,
   };
@@ -47,10 +44,10 @@ function defaultSpawnContext(overrides?: Partial<SpawnContext>): SpawnContext {
 type TerminalProcessOptions = ConstructorParameters<typeof TerminalProcess>[1];
 
 function createAgentTerminal(
-  agentId: TerminalType,
+  agentId: string,
   options?: Partial<TerminalProcessOptions>
 ): TerminalProcess {
-  const ctx = defaultSpawnContext({ isAgentTerminal: true, agentId });
+  const ctx = defaultSpawnContext();
   return new TerminalProcess(
     "t1",
     {
@@ -58,8 +55,7 @@ function createAgentTerminal(
       cols: 80,
       rows: 24,
       kind: "terminal",
-      type: agentId,
-      agentId,
+      launchAgentId: agentId,
       ...options,
     },
     {
@@ -89,7 +85,6 @@ function createPlainTerminal(): TerminalProcess {
       cols: 80,
       rows: 24,
       kind: "terminal",
-      type: "terminal",
     },
     {
       emitData: (id, data) => {
@@ -190,7 +185,7 @@ describe("TerminalProcess OSC color query responder", () => {
     expect(emitDataMock).toHaveBeenCalledWith("t1", payload);
   });
 
-  it("responds and strips queries after runtime promotion via detectedAgentType", () => {
+  it("responds and strips queries after runtime promotion via detectedAgentId", () => {
     const proc = createPlainTerminal();
 
     // Pre-promotion: backend does not respond; renderer receives query.
@@ -199,9 +194,9 @@ describe("TerminalProcess OSC color query responder", () => {
     expect(emitDataMock).toHaveBeenLastCalledWith("t1", "\x1b]11;?\x1b\\");
 
     // Simulate promotion: ProcessDetector would call handleAgentDetection,
-    // which sets detectedAgentType on terminalInfo. Mutate directly to isolate
+    // which sets detectedAgentId on terminalInfo. Mutate directly to isolate
     // the OSC responder behavior.
-    proc.getInfo().detectedAgentType = "claude";
+    proc.getInfo().detectedAgentId = "claude";
 
     ptyOnDataCallback!("\x1b]11;?\x1b\\");
     expect(ptyWriteMock).toHaveBeenCalledWith("\x1b]11;rgb:0000/0000/0000\x1b\\");
@@ -209,16 +204,16 @@ describe("TerminalProcess OSC color query responder", () => {
     expect(emitDataMock).toHaveBeenLastCalledWith("t1", "");
   });
 
-  it("stops responding after demotion when detectedAgentType clears", () => {
+  it("stops responding after demotion when detectedAgentId clears", () => {
     const proc = createPlainTerminal();
-    proc.getInfo().detectedAgentType = "claude";
+    proc.getInfo().detectedAgentId = "claude";
 
     ptyOnDataCallback!("\x1b]10;?\x1b\\");
     expect(ptyWriteMock).toHaveBeenCalledWith("\x1b]10;rgb:cccc/cccc/cccc\x1b\\");
     ptyWriteMock.mockClear();
 
-    // Demotion: clear detectedAgentType as handleAgentDetection does on agent exit.
-    proc.getInfo().detectedAgentType = undefined;
+    // Demotion: clear detectedAgentId as handleAgentDetection does on agent exit.
+    proc.getInfo().detectedAgentId = undefined;
 
     ptyOnDataCallback!("\x1b]10;?\x1b\\");
     expect(ptyWriteMock).not.toHaveBeenCalled();

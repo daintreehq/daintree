@@ -83,11 +83,15 @@ vi.mock("@/services/ActionService", () => ({
 
 import { useNewTerminalPalette, MORE_AGENTS_TERMINAL_ID } from "../useNewTerminalPalette";
 
-function makeOption(id: string, overrides: { type?: string; kind?: string } = {}) {
+function makeOption(
+  id: string,
+  overrides: { type?: string; kind?: string; launchAgentId?: string } = {}
+) {
   return {
     id,
     type: overrides.type ?? id,
     kind: overrides.kind,
+    launchAgentId: overrides.launchAgentId,
     label: id,
     description: `${id} description`,
     icon: null,
@@ -125,9 +129,9 @@ describe("useNewTerminalPalette", () => {
 
     getEffectiveAgentIdsMock.mockReturnValue(["claude", "gemini", "codex"]);
     getLaunchOptionsMock.mockReturnValue([
-      makeOption("claude"),
-      makeOption("gemini"),
-      makeOption("codex"),
+      makeOption("claude", { launchAgentId: "claude" }),
+      makeOption("gemini", { launchAgentId: "gemini" }),
+      makeOption("codex", { launchAgentId: "codex" }),
       makeOption("terminal"),
       makeOption("browser", { type: "terminal", kind: "browser" }),
     ]);

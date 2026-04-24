@@ -454,8 +454,7 @@ describe("hydrateAppState", () => {
           {
             id: "agent-1",
             kind: "terminal",
-            type: "claude",
-            agentId: "claude",
+            launchAgentId: "claude",
             title: "Claude",
             cwd: "/project",
             location: "grid",
@@ -577,8 +576,7 @@ describe("hydrateAppState", () => {
       id: "agent-1",
       projectId: "project-1",
       kind: "terminal",
-      type: "claude",
-      agentId: "claude",
+      launchAgentId: "claude",
       title: "Claude Agent",
       cwd: "/project",
       worktreeId: undefined,
@@ -609,7 +607,7 @@ describe("hydrateAppState", () => {
     expect(addPanel).toHaveBeenCalledWith(
       expect.objectContaining({
         kind: "terminal",
-        agentId: "claude",
+        launchAgentId: "claude",
         existingId: "agent-1", // reconnect path uses existingId
         agentState: "waiting",
         lastStateChange: 123456789,
@@ -1193,8 +1191,7 @@ describe("hydrateAppState", () => {
           {
             id: "agent-1",
             kind: "terminal",
-            type: "claude",
-            agentId: "claude",
+            launchAgentId: "claude",
             title: "Claude",
             cwd: "/project",
             location: "grid",
@@ -1236,8 +1233,7 @@ describe("hydrateAppState", () => {
           {
             id: "agent-1",
             kind: "terminal",
-            type: "claude",
-            agentId: "claude",
+            launchAgentId: "claude",
             title: "Claude",
             cwd: "/project",
             location: "grid",
@@ -2478,8 +2474,7 @@ describe("hydrateAppState", () => {
             {
               id: "agent-1",
               kind: "terminal",
-              type: "claude",
-              agentId: "claude",
+              launchAgentId: "claude",
               title: "Claude",
               cwd: "/project",
               location: "grid",
@@ -2498,8 +2493,7 @@ describe("hydrateAppState", () => {
           hasPty: false,
           cwd: "/project",
           kind: "terminal",
-          type: "claude",
-          agentId: "claude",
+          launchAgentId: "claude",
           title: "Claude",
         },
       ]);
@@ -2654,8 +2648,7 @@ describe("hydrateAppState", () => {
           terminals: [
             {
               id: "agent-old",
-              type: "claude",
-              agentId: "claude",
+              launchAgentId: "claude",
               title: "Claude",
               cwd: "/project",
               location: "grid",
@@ -2703,15 +2696,13 @@ describe("hydrateAppState", () => {
         hasPty: true,
         cwd: "/project",
         kind: "terminal",
-        type: "claude",
-        agentId: "claude",
+        launchAgentId: "claude",
         title: "Claude",
         agentState: "working",
         lastStateChange: 123456789,
         everDetectedAgent: true,
         detectedAgentId: "claude",
         detectedProcessId: "claude-12345",
-        capabilityAgentId: "claude",
         ...overrides,
       };
     }
@@ -2720,8 +2711,7 @@ describe("hydrateAppState", () => {
       return {
         id: "agent-1",
         kind: "terminal",
-        type: "claude",
-        agentId: "claude",
+        launchAgentId: "claude",
         title: "Claude",
         cwd: "/project",
         location: "grid",
@@ -2762,12 +2752,11 @@ describe("hydrateAppState", () => {
       expect(addPanel).toHaveBeenCalledWith(
         expect.objectContaining({
           existingId: "agent-1",
-          agentId: "claude",
+          launchAgentId: "claude",
           agentState: "working",
           everDetectedAgent: true,
           detectedAgentId: "claude",
           detectedProcessId: "claude-12345",
-          capabilityAgentId: "claude",
         })
       );
       // Reconnect path, not respawn
@@ -2787,8 +2776,7 @@ describe("hydrateAppState", () => {
             makeSavedAgentPanel({
               id: "shell-1",
               kind: "terminal",
-              type: "terminal",
-              agentId: undefined,
+              launchAgentId: undefined,
               title: "zsh",
               command: undefined,
             }),
@@ -2803,10 +2791,8 @@ describe("hydrateAppState", () => {
       terminalClientMock.getForProject.mockResolvedValue([
         makeBackendAgentEntry({
           id: "shell-1",
-          type: "terminal",
-          agentId: undefined,
+          launchAgentId: undefined,
           title: "zsh",
-          capabilityAgentId: undefined,
           everDetectedAgent: true,
           detectedAgentId: "claude",
           detectedProcessId: "claude-98765",
@@ -2834,9 +2820,8 @@ describe("hydrateAppState", () => {
       expect(callArgs.everDetectedAgent).toBe(true);
       expect(callArgs.detectedAgentId).toBe("claude");
       expect(callArgs.detectedProcessId).toBe("claude-98765");
-      // Launch intent and capability must not be invented from detection
-      expect(callArgs.agentId).toBeUndefined();
-      expect(callArgs.capabilityAgentId).toBeUndefined();
+      // Launch intent must not be invented from detection
+      expect(callArgs.launchAgentId).toBeUndefined();
       expect(callArgs.existingId).toBe("shell-1");
     });
 
@@ -2897,8 +2882,7 @@ describe("hydrateAppState", () => {
         id: "agent-1",
         projectId: "project-1",
         kind: "terminal",
-        type: "claude",
-        agentId: "claude",
+        launchAgentId: "claude",
         title: "Claude",
         cwd: "/project",
         worktreeId: undefined,
@@ -2910,7 +2894,6 @@ describe("hydrateAppState", () => {
         everDetectedAgent: true,
         detectedAgentId: "claude",
         detectedProcessId: "claude-12345",
-        capabilityAgentId: "claude",
       });
 
       const addPanel = vi.fn(async (opts: Record<string, unknown>) => {
@@ -2933,12 +2916,11 @@ describe("hydrateAppState", () => {
       expect(addPanel).toHaveBeenCalledWith(
         expect.objectContaining({
           existingId: "agent-1",
-          agentId: "claude",
+          launchAgentId: "claude",
           agentState: "waiting",
           everDetectedAgent: true,
           detectedAgentId: "claude",
           detectedProcessId: "claude-12345",
-          capabilityAgentId: "claude",
         })
       );
       // Must go through reconnect, not respawn
@@ -3006,12 +2988,11 @@ describe("hydrateAppState", () => {
       expect(addPanel).toHaveBeenCalledWith(
         expect.objectContaining({
           existingId: "orphan-agent-1",
-          agentId: "claude",
+          launchAgentId: "claude",
           agentState: "working",
           everDetectedAgent: true,
           detectedAgentId: "claude",
           detectedProcessId: "claude-12345",
-          capabilityAgentId: "claude",
         })
       );
     });
@@ -3036,8 +3017,7 @@ describe("hydrateAppState", () => {
         id: "agent-1",
         projectId: "project-1",
         kind: "terminal",
-        type: "claude",
-        agentId: "claude",
+        launchAgentId: "claude",
         title: "Claude",
         cwd: "/project",
         worktreeId: undefined,
@@ -3047,9 +3027,7 @@ describe("hydrateAppState", () => {
         activityTier: "background",
         hasPty: true,
         // No live detection yet — everDetectedAgent / detectedAgentId /
-        // detectedProcessId omitted. capabilityAgentId is still sealed from
-        // the cold launch intent.
-        capabilityAgentId: "claude",
+        // detectedProcessId omitted.
       });
 
       const addPanel = vi.fn(async (opts: Record<string, unknown>) => {
@@ -3070,8 +3048,7 @@ describe("hydrateAppState", () => {
       expect(addPanel).toHaveBeenCalledTimes(1);
       const callArgs = addPanel.mock.calls[0]![0];
       expect(callArgs.existingId).toBe("agent-1");
-      expect(callArgs.agentId).toBe("claude");
-      expect(callArgs.capabilityAgentId).toBe("claude");
+      expect(callArgs.launchAgentId).toBe("claude");
       expect(callArgs.agentState).toBe("idle");
       // No invention: absent detection stays absent
       expect(callArgs.everDetectedAgent).toBeUndefined();

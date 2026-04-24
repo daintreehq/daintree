@@ -238,8 +238,7 @@ describe("TerminalInstanceService - Hibernation", () => {
     it("should never hibernate active agent terminals", () => {
       const managed = makeMockManaged({
         kind: "terminal",
-        agentId: "claude",
-        type: "claude",
+        launchAgentId: "claude",
         canonicalAgentState: "working",
       });
       service.instances.set("t1", managed as unknown as Record<string, unknown>);
@@ -253,8 +252,7 @@ describe("TerminalInstanceService - Hibernation", () => {
     it("should never hibernate waiting agent terminals", () => {
       const managed = makeMockManaged({
         kind: "terminal",
-        agentId: "claude",
-        type: "claude",
+        launchAgentId: "claude",
         canonicalAgentState: "waiting",
       });
       service.instances.set("t1", managed as unknown as Record<string, unknown>);
@@ -268,8 +266,7 @@ describe("TerminalInstanceService - Hibernation", () => {
     it("should hibernate completed agent terminals", () => {
       const managed = makeMockManaged({
         kind: "terminal",
-        agentId: "claude",
-        type: "claude",
+        launchAgentId: "claude",
         canonicalAgentState: "completed",
       });
       service.instances.set("t1", managed as unknown as Record<string, unknown>);
@@ -421,8 +418,7 @@ describe("TerminalInstanceService - Hibernation", () => {
         lastAppliedTier: TerminalRefreshTier.FOCUSED,
         isVisible: false,
         kind: "terminal",
-        agentId: "claude",
-        type: "claude",
+        launchAgentId: "claude",
         canonicalAgentState: "working",
       });
       service.instances.set("t1", managed as unknown as Record<string, unknown>);
@@ -438,8 +434,7 @@ describe("TerminalInstanceService - Hibernation", () => {
         lastAppliedTier: TerminalRefreshTier.FOCUSED,
         isVisible: false,
         kind: "terminal",
-        agentId: "claude",
-        type: "claude",
+        launchAgentId: "claude",
         canonicalAgentState: "completed",
       });
       service.instances.set("t1", managed as unknown as Record<string, unknown>);
@@ -455,8 +450,7 @@ describe("TerminalInstanceService - Hibernation", () => {
         lastAppliedTier: TerminalRefreshTier.FOCUSED,
         isVisible: false,
         kind: "terminal",
-        agentId: "claude",
-        type: "claude",
+        launchAgentId: "claude",
         canonicalAgentState: "completed",
       });
       service.instances.set("t1", managed as unknown as Record<string, unknown>);
@@ -708,8 +702,7 @@ describe("TerminalInstanceService - Hibernation", () => {
         isHibernated: true,
         isOpened: false,
         kind: "terminal",
-        agentId: "claude",
-        type: "claude",
+        launchAgentId: "claude",
         ipcListenerCount: 0,
       });
       agent.listeners = [];
@@ -742,8 +735,7 @@ describe("TerminalInstanceService - Hibernation", () => {
         isHibernated: true,
         isOpened: false,
         kind: "terminal",
-        agentId: "claude",
-        type: "claude",
+        launchAgentId: "claude",
         ipcListenerCount: 0,
       });
       agent.listeners = [];
@@ -783,8 +775,7 @@ describe("TerminalInstanceService - Hibernation", () => {
       const managed = makeMockManaged({
         ipcListenerCount: 2,
         kind: "terminal",
-        agentId: "claude",
-        type: "claude",
+        launchAgentId: "claude",
         canonicalAgentState: "completed",
         onInput: vi.fn(),
       });

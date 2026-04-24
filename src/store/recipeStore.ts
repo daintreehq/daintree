@@ -71,7 +71,7 @@ function terminalToRecipeTerminal(terminal: TerminalInstance): RecipeTerminal {
   // what runtime detection observed. Persisting `detectedAgentId` would corrupt
   // a recipe by baking ephemeral session state into a reusable template.
   const type: RecipeTerminalType =
-    terminal.kind === "dev-preview" ? "dev-preview" : (terminal.agentId ?? "terminal");
+    terminal.kind === "dev-preview" ? "dev-preview" : (terminal.launchAgentId ?? "terminal");
 
   const isAgent = isAgentRecipeType(type);
 
@@ -549,8 +549,9 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
         let terminalId: string | null;
 
         if (isAgent) {
-          const agentConfig = getAgentConfig(terminal.type);
-          const baseCommand = agentConfig?.command || terminal.type;
+          const agentId = terminal.type as string;
+          const agentConfig = getAgentConfig(agentId);
+          const baseCommand = agentConfig?.command ?? "";
           const rawPrompt = terminal.initialPrompt?.trim();
           const resolvedContext: RecipeContext = {
             ...context,
@@ -559,15 +560,15 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
           const initialPrompt = rawPrompt
             ? replaceRecipeVariables(rawPrompt, resolvedContext)
             : undefined;
-          const entry = agentSettings?.agents?.[terminal.type] ?? {};
-          const command = generateAgentCommand(baseCommand, entry, terminal.type, {
+          const entry = agentSettings?.agents?.[agentId] ?? {};
+          const command = generateAgentCommand(baseCommand, entry, agentId, {
             initialPrompt,
             clipboardDirectory,
             recipeArgs: terminal.args?.trim() || undefined,
           });
           terminalId = await terminalStore.addPanel({
             kind: "terminal",
-            agentId: terminal.type,
+            launchAgentId: agentId,
             command,
             title: terminal.title,
             cwd: worktreePath,

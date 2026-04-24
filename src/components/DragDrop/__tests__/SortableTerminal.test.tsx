@@ -27,7 +27,6 @@ vi.mock("@dnd-kit/utilities", () => ({
 
 const terminal: TerminalInstance = {
   id: "t1",
-  type: "terminal",
   title: "Terminal 1",
   cwd: "/test",
   cols: 80,

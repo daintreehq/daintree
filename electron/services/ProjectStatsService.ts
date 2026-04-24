@@ -130,7 +130,7 @@ export class ProjectStatsService {
         // (detectedAgentId). Uses the LIVE signal only — everDetectedAgent
         // is deliberately excluded so panels whose agent has exited do not
         // inflate the count.
-        if (!terminal.agentId && !terminal.detectedAgentId) continue;
+        if (!terminal.launchAgentId && !terminal.detectedAgentId) continue;
 
         if (terminal.agentState === "waiting") {
           counts.waiting += 1;

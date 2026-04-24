@@ -2,8 +2,9 @@ import { SquareTerminal, Globe, Monitor } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { PanelKind } from "@/types";
 import type { ComponentType } from "react";
+import type { BuiltInAgentId } from "@shared/config/agentIds";
 import { getAgentConfig } from "@/config/agents";
-import { resolveEffectiveAgentId } from "@/utils/agentIdentity";
+import { resolveChromeAgentId } from "@/utils/agentIdentity";
 import {
   NpmIcon,
   YarnIcon,
@@ -58,6 +59,8 @@ export interface TerminalIconProps {
    * over `agentId` so the icon reflects the live process, not the launch intent.
    */
   detectedAgentId?: string;
+  /** Sticky: has an agent ever been live-detected. Required for demotion rule. */
+  everDetectedAgent?: boolean;
   detectedProcessId?: string;
   className?: string;
   brandColor?: string;
@@ -67,6 +70,7 @@ export function TerminalIcon({
   kind,
   agentId,
   detectedAgentId,
+  everDetectedAgent,
   detectedProcessId,
   className,
   brandColor,
@@ -87,7 +91,11 @@ export function TerminalIcon({
   }
 
   // Prefer runtime-detected identity, then launch-time agentId.
-  const effectiveAgentId = resolveEffectiveAgentId(detectedAgentId, agentId);
+  const effectiveAgentId = resolveChromeAgentId(
+    detectedAgentId as BuiltInAgentId | undefined,
+    agentId,
+    everDetectedAgent
+  );
 
   if (effectiveAgentId) {
     const config = getAgentConfig(effectiveAgentId);

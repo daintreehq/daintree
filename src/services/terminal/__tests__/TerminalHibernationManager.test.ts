@@ -99,7 +99,6 @@ function makeMockTerminal() {
 function makeMockManaged(overrides: Partial<ManagedTerminal> = {}): ManagedTerminal {
   return {
     terminal: makeMockTerminal() as unknown as ManagedTerminal["terminal"],
-    type: "terminal" as ManagedTerminal["type"],
     kind: "terminal",
     fitAddon: { fit: vi.fn() } as unknown as ManagedTerminal["fitAddon"],
     serializeAddon: { serialize: vi.fn() } as unknown as ManagedTerminal["serializeAddon"],
@@ -194,21 +193,21 @@ describe("TerminalHibernationManager", () => {
     });
 
     it("should no-op for working agent terminal", () => {
-      managed.agentId = "claude";
+      managed.launchAgentId = "claude";
       managed.canonicalAgentState = "working";
       manager.hibernate("t1");
       expect(managed.isHibernated).toBeFalsy();
     });
 
     it("should no-op for waiting agent terminal", () => {
-      managed.agentId = "claude";
+      managed.launchAgentId = "claude";
       managed.canonicalAgentState = "waiting";
       manager.hibernate("t1");
       expect(managed.isHibernated).toBeFalsy();
     });
 
     it("should hibernate completed agent terminal", () => {
-      managed.agentId = "claude";
+      managed.launchAgentId = "claude";
       managed.canonicalAgentState = "completed";
       manager.hibernate("t1");
       expect(managed.isHibernated).toBe(true);

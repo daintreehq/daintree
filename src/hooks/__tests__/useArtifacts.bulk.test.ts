@@ -19,7 +19,7 @@ function sortArtifacts(artifacts: Artifact[], mode: "filename" | "extraction"): 
 
 function concatenateArtifacts(artifacts: Artifact[]): string {
   const sections = artifacts.map((artifact) => {
-    const header = artifact.filename || artifact.language || artifact.type;
+    const header = artifact.filename || artifact.language || artifact.id;
     const separator = "=".repeat(60);
     return `${separator}\n${header}\n${separator}\n${artifact.content}`;
   });

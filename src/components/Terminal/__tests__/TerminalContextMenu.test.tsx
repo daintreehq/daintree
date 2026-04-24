@@ -24,9 +24,8 @@ describe("TerminalContextMenu - Convert To Submenu", () => {
   describe("Submenu generation logic", () => {
     function buildConvertToSubmenu(
       terminal: {
-        type: string;
         kind?: string;
-        agentId?: string | null;
+        launchAgentId?: string | null;
         detectedAgentId?: string | null;
       } | null,
       isAvailabilityInitialized: boolean = false,
@@ -34,11 +33,8 @@ describe("TerminalContextMenu - Convert To Submenu", () => {
     ): MenuItemOption[] {
       if (!terminal) return [];
 
-      const currentAgentId =
-        terminal.detectedAgentId ??
-        terminal.agentId ??
-        (terminal.type !== "terminal" ? terminal.type : null);
-      const isPlainTerminal = terminal.type === "terminal" || terminal.kind === "terminal";
+      const currentAgentId = terminal.detectedAgentId ?? terminal.launchAgentId ?? undefined;
+      const isPlainTerminal = terminal.kind === "terminal";
 
       const visibleAgentIds = (() => {
         const filtered = computeGridSelectedAgentIds(
@@ -75,7 +71,7 @@ describe("TerminalContextMenu - Convert To Submenu", () => {
     }
 
     it("should include all agents for plain terminal (pre-probe)", () => {
-      const terminal = { type: "terminal", kind: "terminal" };
+      const terminal = { kind: "terminal" };
       const submenu = buildConvertToSubmenu(terminal, false);
 
       expect(submenu.length).toBeGreaterThan(0);
@@ -95,7 +91,7 @@ describe("TerminalContextMenu - Convert To Submenu", () => {
     });
 
     it("should filter to only installed agents after initialization", () => {
-      const terminal = { type: "terminal", kind: "terminal" };
+      const terminal = { kind: "terminal" };
       const availability: CliAvailability = Object.fromEntries(
         AGENT_IDS.map((id) => [id, AGENT_IDS.indexOf(id) === 0 ? "installed" : "missing"])
       ) as CliAvailability;
@@ -120,7 +116,7 @@ describe("TerminalContextMenu - Convert To Submenu", () => {
     });
 
     it("should show all agents when availability is undefined", () => {
-      const terminal = { type: "terminal", kind: "terminal" };
+      const terminal = { kind: "terminal" };
       const submenu = buildConvertToSubmenu(terminal, false, undefined);
 
       const agentItems = submenu.filter(
@@ -130,7 +126,7 @@ describe("TerminalContextMenu - Convert To Submenu", () => {
     });
 
     it("should include Terminal option and agents for agent terminal", () => {
-      const terminal = { type: "claude", kind: "terminal", agentId: "claude" };
+      const terminal = { kind: "terminal", launchAgentId: "claude" };
       const submenu = buildConvertToSubmenu(terminal);
 
       expect(submenu.length).toBeGreaterThan(0);
@@ -158,7 +154,7 @@ describe("TerminalContextMenu - Convert To Submenu", () => {
     });
 
     it("should disable current agent in submenu", () => {
-      const terminal = { type: "gemini", kind: "terminal", agentId: "gemini" };
+      const terminal = { kind: "terminal", launchAgentId: "gemini" };
       const submenu = buildConvertToSubmenu(terminal);
 
       const currentAgentItem = submenu.find((i) => i.id === "convert-to:gemini");
@@ -169,7 +165,7 @@ describe("TerminalContextMenu - Convert To Submenu", () => {
     });
 
     it("should keep current agent visible even if missing after initialization", () => {
-      const terminal = { type: "claude", kind: "terminal", agentId: "claude" };
+      const terminal = { kind: "terminal", launchAgentId: "claude" };
       const availability: CliAvailability = Object.fromEntries(
         AGENT_IDS.map((id) => [id, "missing"])
       ) as CliAvailability;
@@ -187,9 +183,9 @@ describe("TerminalContextMenu - Convert To Submenu", () => {
       expect(submenu).toEqual([]);
     });
 
-    it("should handle legacy agent terminal (type without agentId)", () => {
+    it("should handle legacy agent terminal (launchAgentId only)", () => {
       const agentType = AGENT_IDS[0]!;
-      const terminal = { type: agentType, kind: "terminal" };
+      const terminal = { kind: "terminal", launchAgentId: agentType };
       const submenu = buildConvertToSubmenu(terminal);
 
       const terminalItem = submenu.find((i) => i.id === "convert-to:terminal");
@@ -206,15 +202,15 @@ describe("TerminalContextMenu - Convert To Submenu", () => {
     });
 
     it("should not include Terminal option for plain terminal", () => {
-      const terminal = { type: "terminal", kind: "terminal" };
+      const terminal = { kind: "terminal" };
       const submenu = buildConvertToSubmenu(terminal);
 
       const terminalItem = submenu.find((i) => i.id === "convert-to:terminal");
       expect(terminalItem).toBeUndefined();
     });
 
-    it("should handle transitional state (type and agentId mismatch)", () => {
-      const terminal = { type: "terminal", kind: "terminal", agentId: AGENT_IDS[0] };
+    it("should handle transitional state (kind=terminal with launchAgentId)", () => {
+      const terminal = { kind: "terminal", launchAgentId: AGENT_IDS[0] };
       const submenu = buildConvertToSubmenu(terminal);
 
       const terminalItem = submenu.find((i) => i.id === "convert-to:terminal");
@@ -228,7 +224,7 @@ describe("TerminalContextMenu - Convert To Submenu", () => {
     });
 
     it("should handle unknown agent type gracefully", () => {
-      const terminal = { type: "some-unknown-agent", kind: "terminal" };
+      const terminal = { kind: "terminal", launchAgentId: "some-unknown-agent" };
       const submenu = buildConvertToSubmenu(terminal);
 
       const terminalItem = submenu.find((i) => i.id === "convert-to:terminal");
@@ -247,7 +243,7 @@ describe("TerminalContextMenu - Convert To Submenu", () => {
     });
 
     it("should return empty array if agents unavailable (edge case)", () => {
-      const terminal = { type: "terminal", kind: "terminal" };
+      const terminal = { kind: "terminal" };
       const submenu = buildConvertToSubmenu(terminal);
 
       if (AGENT_IDS.length === 0) {
@@ -258,7 +254,7 @@ describe("TerminalContextMenu - Convert To Submenu", () => {
     });
 
     it("should hide plain terminal convert submenu when no agents installed", () => {
-      const terminal = { type: "terminal", kind: "terminal" };
+      const terminal = { kind: "terminal" };
       const availability: CliAvailability = Object.fromEntries(
         AGENT_IDS.map((id) => [id, "missing"])
       ) as CliAvailability;
@@ -274,9 +270,8 @@ describe("TerminalContextMenu - Convert To Submenu", () => {
       const detected = AGENT_IDS[0]!;
       const launched = AGENT_IDS[1] ?? AGENT_IDS[0]!;
       const terminal = {
-        type: launched,
         kind: "terminal",
-        agentId: launched,
+        launchAgentId: launched,
         detectedAgentId: detected,
       };
       const submenu = buildConvertToSubmenu(terminal);
@@ -299,7 +294,7 @@ describe("TerminalContextMenu - Convert To Submenu", () => {
     });
 
     it("should show all states including ready", () => {
-      const terminal = { type: "terminal", kind: "terminal" };
+      const terminal = { kind: "terminal" };
       const availability: CliAvailability = Object.fromEntries(
         AGENT_IDS.map((id, idx) => [id, idx === 0 ? "installed" : idx === 1 ? "ready" : "missing"])
       ) as CliAvailability;

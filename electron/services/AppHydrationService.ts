@@ -78,7 +78,7 @@ export async function buildSwitchHydrateResult(projectId: string): Promise<Hydra
   const gpuWebGLHardware = isWebGLHardwareAccelerated(gpuStatus.webgl2);
 
   return {
-    appState,
+    appState: appState as import("../../shared/types/ipc/app.js").AppState,
     terminalConfig: store.get("terminalConfig"),
     project: currentProject ?? null,
     agentSettings: store.get("agentSettings"),

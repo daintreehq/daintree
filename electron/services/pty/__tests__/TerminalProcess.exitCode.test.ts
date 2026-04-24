@@ -43,8 +43,6 @@ function defaultSpawnContext(overrides?: Partial<SpawnContext>): SpawnContext {
   return {
     shell: "/bin/zsh",
     args: ["-l"],
-    isAgentTerminal: false,
-    agentId: undefined,
     env: {},
     ...overrides,
   };
@@ -61,14 +59,9 @@ function createTerminal(
     cols: 80,
     rows: 24,
     kind: "terminal" as const,
-    type: "terminal" as const,
     ...options,
   };
-  const isAgent =
-    merged.kind === "agent" || !!merged.agentId || (!!merged.type && merged.type !== "terminal");
   const ctx = defaultSpawnContext({
-    isAgentTerminal: isAgent,
-    agentId: isAgent ? ((merged as any).agentId ?? merged.type) : undefined,
     ...contextOverrides,
   });
   return new TerminalProcess(
@@ -96,7 +89,7 @@ describe("TerminalProcess exit code persistence", () => {
   });
 
   it("stores exitCode on clean exit for agent terminals", () => {
-    const terminal = createTerminal({ kind: "terminal", type: "claude" });
+    const terminal = createTerminal({ kind: "terminal", launchAgentId: "claude" });
 
     expect(exitHandler).not.toBeNull();
     exitHandler!({ exitCode: 0 });
@@ -107,7 +100,7 @@ describe("TerminalProcess exit code persistence", () => {
   });
 
   it("stores non-zero exitCode when agent terminal shouldPreserveOnExit returns false", () => {
-    const terminal = createTerminal({ kind: "terminal", type: "claude" });
+    const terminal = createTerminal({ kind: "terminal", launchAgentId: "claude" });
 
     expect(exitHandler).not.toBeNull();
     exitHandler!({ exitCode: 1 });
@@ -119,7 +112,7 @@ describe("TerminalProcess exit code persistence", () => {
   });
 
   it("does not store exitCode for non-agent terminals", () => {
-    const terminal = createTerminal({ kind: "terminal", type: "terminal" });
+    const terminal = createTerminal({ kind: "terminal" });
 
     expect(exitHandler).not.toBeNull();
     exitHandler!({ exitCode: 0 });
@@ -130,7 +123,7 @@ describe("TerminalProcess exit code persistence", () => {
   });
 
   it("does not store exitCode for killed terminals", () => {
-    const terminal = createTerminal({ kind: "terminal", type: "claude" });
+    const terminal = createTerminal({ kind: "terminal", launchAgentId: "claude" });
 
     terminal.kill("test");
     exitHandler!({ exitCode: 0 });
@@ -144,7 +137,7 @@ describe("TerminalProcess exit code persistence", () => {
   // everDetectedAgent flag is the single source of truth used by
   // shouldPreserveOnExit to catch that case.
   it("preserves plain terminals on clean exit when everDetectedAgent is set", () => {
-    const terminal = createTerminal({ kind: "terminal", type: "terminal" });
+    const terminal = createTerminal({ kind: "terminal" });
     (
       terminal as unknown as { terminalInfo: { everDetectedAgent?: boolean } }
     ).terminalInfo.everDetectedAgent = true;
@@ -159,7 +152,7 @@ describe("TerminalProcess exit code persistence", () => {
   });
 
   it("does not preserve plain terminals on clean exit when everDetectedAgent is true but wasKilled is set", () => {
-    const terminal = createTerminal({ kind: "terminal", type: "terminal" });
+    const terminal = createTerminal({ kind: "terminal" });
     (
       terminal as unknown as { terminalInfo: { everDetectedAgent?: boolean } }
     ).terminalInfo.everDetectedAgent = true;

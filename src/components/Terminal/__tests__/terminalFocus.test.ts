@@ -5,7 +5,7 @@ describe("getTerminalFocusTarget", () => {
   it("focuses hybrid input for enabled agent terminals", () => {
     expect(
       getTerminalFocusTarget({
-        hasFullAgentCapability: true,
+        hasChromeAgentIdentity: true,
         isInputDisabled: false,
         hybridInputEnabled: true,
         hybridInputAutoFocus: true,
@@ -16,7 +16,7 @@ describe("getTerminalFocusTarget", () => {
   it("falls back to xterm when input is disabled", () => {
     expect(
       getTerminalFocusTarget({
-        hasFullAgentCapability: true,
+        hasChromeAgentIdentity: true,
         isInputDisabled: true,
         hybridInputEnabled: true,
         hybridInputAutoFocus: true,
@@ -27,7 +27,7 @@ describe("getTerminalFocusTarget", () => {
   it("focuses xterm for non-agent terminals", () => {
     expect(
       getTerminalFocusTarget({
-        hasFullAgentCapability: false,
+        hasChromeAgentIdentity: false,
         isInputDisabled: false,
         hybridInputEnabled: true,
         hybridInputAutoFocus: true,
@@ -43,7 +43,7 @@ describe("getTerminalFocusTarget", () => {
   it("focuses xterm for observational shells with no full capability", () => {
     expect(
       getTerminalFocusTarget({
-        hasFullAgentCapability: false,
+        hasChromeAgentIdentity: false,
         isInputDisabled: false,
         hybridInputEnabled: true,
         hybridInputAutoFocus: true,
@@ -54,7 +54,7 @@ describe("getTerminalFocusTarget", () => {
   it("focuses xterm when hybrid input is disabled", () => {
     expect(
       getTerminalFocusTarget({
-        hasFullAgentCapability: true,
+        hasChromeAgentIdentity: true,
         isInputDisabled: false,
         hybridInputEnabled: false,
         hybridInputAutoFocus: true,
@@ -65,7 +65,7 @@ describe("getTerminalFocusTarget", () => {
   it("focuses xterm when hybrid input auto-focus is disabled", () => {
     expect(
       getTerminalFocusTarget({
-        hasFullAgentCapability: true,
+        hasChromeAgentIdentity: true,
         isInputDisabled: false,
         hybridInputEnabled: true,
         hybridInputAutoFocus: false,

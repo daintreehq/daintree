@@ -39,6 +39,8 @@ type TerminalLike = {
   id?: string;
   kind?: string;
   agentState?: string;
+  launchAgentId?: string;
+  detectedAgentId?: string;
   everDetectedAgent?: boolean;
 };
 type WorktreeLike = { prState?: string };
@@ -178,7 +180,7 @@ describe("useGettingStartedChecklist", () => {
       };
       const next = {
         panelsById: {
-          t1: { id: "t1", kind: "terminal", agentId: "claude", agentState: "idle" },
+          t1: { id: "t1", kind: "terminal", launchAgentId: "claude", agentState: "idle" },
         } as Record<string, TerminalLike>,
         panelIds: ["t1"],
       };

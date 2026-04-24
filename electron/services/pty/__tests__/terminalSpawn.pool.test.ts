@@ -48,20 +48,20 @@ describe("acquirePtyProcess pool handling (issue #5097)", () => {
       acquire: vi.fn(() => pooled),
     });
 
-    const result = acquirePtyProcess("t1", baseOptions, {}, "/bin/bash", [], false, pool, () => {});
+    const result = acquirePtyProcess("t1", baseOptions, {}, "/bin/bash", [], pool, () => {});
 
     expect(result).toBe(pooled);
     expect(spawnMock).not.toHaveBeenCalled();
   });
 
-  it("does NOT write a shell-level `cd` command to pooled PTYs (#5097 regression guard)", () => {
+  it("does NOT write a shell-level `cd` command or any preamble to pooled PTYs (#5097 regression guard)", () => {
     const pooled = createFakePooledPty();
     const pool = createFakePool({
       defaultCwd: "/repo",
       acquire: vi.fn(() => pooled),
     });
 
-    acquirePtyProcess("t1", baseOptions, {}, "/bin/bash", [], false, pool, () => {});
+    acquirePtyProcess("t1", baseOptions, {}, "/bin/bash", [], pool, () => {});
 
     const writes = pooled.write.mock.calls.map((c) => String(c[0]));
     for (const w of writes) {
@@ -69,10 +69,8 @@ describe("acquirePtyProcess pool handling (issue #5097)", () => {
       // aliases (zoxide/direnv/oh-my-zsh chpwd) could intercept. Must not happen.
       expect(w).not.toMatch(/\bcd\b/);
     }
-    // Only the screen-clear sequence is allowed on POSIX.
-    if (process.platform !== "win32") {
-      expect(writes.some((w) => w.includes("\\033[H\\033[2J\\033[3J"))).toBe(true);
-    }
+    // No screen-clear preamble is written on pool acquire (removed in hard-break).
+    expect(pooled.write).not.toHaveBeenCalled();
   });
 
   it("skips the pool and falls back to direct spawn when pool cwd doesn't match request", () => {
@@ -90,7 +88,6 @@ describe("acquirePtyProcess pool handling (issue #5097)", () => {
       { PATH: "/usr/bin" },
       "/bin/bash",
       ["-i"],
-      false,
       pool,
       () => {}
     );
@@ -106,32 +103,9 @@ describe("acquirePtyProcess pool handling (issue #5097)", () => {
     const spawnedPty = { fake: "pty" };
     spawnMock.mockReturnValue(spawnedPty);
 
-    const result = acquirePtyProcess(
-      "t3",
-      baseOptions,
-      {},
-      "/bin/bash",
-      ["-i"],
-      false,
-      null,
-      () => {}
-    );
+    const result = acquirePtyProcess("t3", baseOptions, {}, "/bin/bash", ["-i"], null, () => {});
 
     expect(spawnMock).toHaveBeenCalledTimes(1);
     expect(result).toBe(spawnedPty);
-  });
-
-  it("bypasses the pool for agent terminals even when cwd matches", () => {
-    const acquire = vi.fn();
-    const pool = createFakePool({
-      defaultCwd: "/repo",
-      acquire,
-    });
-    spawnMock.mockReturnValue({ fake: "pty" });
-
-    acquirePtyProcess("t4", baseOptions, {}, "/bin/bash", [], true, pool, () => {});
-
-    expect(acquire).not.toHaveBeenCalled();
-    expect(spawnMock).toHaveBeenCalledTimes(1);
   });
 });

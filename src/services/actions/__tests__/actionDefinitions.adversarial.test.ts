@@ -299,7 +299,6 @@ function createTerminal(overrides: Record<string, unknown> = {}): TerminalInstan
   return {
     id: "term-1",
     kind: "terminal",
-    type: "terminal",
     title: "Terminal",
     cwd: "/repo",
     cols: 80,
@@ -532,7 +531,7 @@ describe("terminal action hardening", () => {
 
     expect(addPanel).toHaveBeenCalledWith(
       expect.objectContaining({
-        type: "terminal",
+        kind: "terminal",
         title: "My Shell (copy)",
       })
     );
@@ -579,7 +578,7 @@ describe("terminal action hardening", () => {
 
     expect(addPanel).toHaveBeenCalledWith(
       expect.objectContaining({
-        type: "terminal",
+        kind: "terminal",
         cwd: "/repo",
         location: "grid",
       })

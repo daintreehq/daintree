@@ -125,11 +125,11 @@ describe("ProjectStatsService adversarial", () => {
       { projectId: "p1", isTrashed: true, kind: "terminal", agentState: "working" },
       { projectId: "p1", kind: "dev-preview", agentState: "working" },
       { projectId: "p1", hasPty: false, kind: "terminal", agentState: "working" },
-      { projectId: "p1", kind: "terminal", agentState: "working" }, // no agentId, not "agent" kind → skip
-      { projectId: "p1", kind: "terminal", agentId: "x", agentState: "waiting" }, // counts (waiting)
-      { projectId: "p1", kind: "terminal", agentId: "x", agentState: "working" }, // counts (active)
-      { projectId: "p1", kind: "terminal", agentId: "x", agentState: "working" }, // counts (active)
-      { projectId: "p1", kind: "terminal", agentId: "x", agentState: "idle" }, // counts neither
+      { projectId: "p1", kind: "terminal", agentState: "working" }, // no launchAgentId/detectedAgentId → skip
+      { projectId: "p1", kind: "terminal", launchAgentId: "x", agentState: "waiting" }, // counts (waiting)
+      { projectId: "p1", kind: "terminal", launchAgentId: "x", agentState: "working" }, // counts (active)
+      { projectId: "p1", kind: "terminal", launchAgentId: "x", agentState: "working" }, // counts (active)
+      { projectId: "p1", kind: "terminal", launchAgentId: "x", agentState: "idle" }, // counts neither
     ]);
     ptyClient.getProjectStats.mockResolvedValue({
       projectId: "p1",

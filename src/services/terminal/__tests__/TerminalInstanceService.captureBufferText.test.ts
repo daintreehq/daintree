@@ -61,7 +61,7 @@ vi.mock("@/store/projectSettingsStore", () => ({
 const { terminalInstanceService } = await import("../TerminalInstanceService");
 
 function createManagedTerminal(id: string) {
-  return terminalInstanceService.getOrCreate(id, "terminal", {
+  return terminalInstanceService.getOrCreate(id, undefined, {
     rows: 24,
     cols: 80,
     allowProposedApi: true,

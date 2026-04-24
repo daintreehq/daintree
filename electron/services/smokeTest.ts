@@ -223,7 +223,6 @@ function buildSmokeTerminalSnapshot(id: string, cwd: string, title: string): Ter
   return {
     id,
     kind: "terminal",
-    type: "terminal",
     title,
     cwd,
     location: "grid",

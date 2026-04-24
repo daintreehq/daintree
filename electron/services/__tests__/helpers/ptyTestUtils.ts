@@ -184,7 +184,7 @@ export function getShellCommand(command: string): { shell: string; args: string[
 export async function spawnEchoTerminal(
   manager: PtyManager,
   message: string,
-  options?: { type?: string }
+  _options?: Record<string, unknown>
 ): Promise<string> {
   const { shell, args } = getShellCommand(`echo "${message}"`);
   const id = randomUUID();
@@ -195,7 +195,6 @@ export async function spawnEchoTerminal(
     args,
     cols: 80,
     rows: 24,
-    type: options?.type as any,
   });
 
   return id;
@@ -205,30 +204,24 @@ export async function spawnShellTerminal(
   manager: PtyManager,
   options?: {
     cwd?: string;
-    type?: string;
+    launchAgentId?: string;
     projectId?: string;
     cols?: number;
     rows?: number;
-    kind?: "terminal" | "agent" | "browser";
   }
 ): Promise<string> {
   const isWindows = process.platform === "win32";
   const shell = isWindows ? "cmd.exe" : "/bin/sh";
   const id = randomUUID();
 
-  // If a type is provided (e.g., "claude", "gemini"), treat it as an agent terminal
-  // unless it's explicitly "terminal" which is a shell terminal
-  const isAgent = (!!options?.type && options.type !== "terminal") || options?.kind === "agent";
-
   manager.spawn(id, {
     cwd: options?.cwd || process.cwd(),
     shell,
     cols: options?.cols || 80,
     rows: options?.rows || 24,
-    type: options?.type as any,
     projectId: options?.projectId,
-    kind: isAgent ? "agent" : (options?.kind ?? "terminal"),
-    agentId: isAgent ? id : undefined,
+    kind: "terminal",
+    launchAgentId: options?.launchAgentId,
   });
 
   return id;

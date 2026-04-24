@@ -222,7 +222,6 @@ describe("terminalStore process detection listeners", () => {
 
     const term1 = {
       id: "term-1",
-      type: "terminal" as const,
       kind: "terminal" as const,
       title: "Terminal",
       cwd: "/tmp",
@@ -413,11 +412,11 @@ describe("terminalStore process detection listeners", () => {
     cleanup();
   });
 
-  it("does not call applyAgentPromotion for cold-spawned agent panels (agentId set at spawn)", () => {
+  it("does not call applyAgentPromotion for cold-spawned agent panels (launchAgentId set at spawn)", () => {
     usePanelStore.setState((s) => ({
       panelsById: {
         ...s.panelsById,
-        "term-1": { ...s.panelsById["term-1"]!, agentId: "claude" },
+        "term-1": { ...s.panelsById["term-1"]!, launchAgentId: "claude" },
       },
     }));
 
@@ -457,14 +456,18 @@ describe("terminalStore process detection listeners", () => {
   });
 
   // Regression for #5807: agent:exited is a subcommand/demotion signal, not
-  // a PTY exit. The sealed launch-intent `agentId` (#5803) must survive so
+  // a PTY exit. The sealed launch-intent `launchAgentId` must survive so
   // that restart decisions correctly relaunch a cold-launched agent terminal
   // after the user types `/quit`.
-  it("preserves agentId on agent:exited for cold-launched agent panels", () => {
+  it("preserves launchAgentId on agent:exited for cold-launched agent panels", () => {
     usePanelStore.setState((s) => ({
       panelsById: {
         ...s.panelsById,
-        "term-1": { ...s.panelsById["term-1"]!, agentId: "claude", detectedAgentId: "claude" },
+        "term-1": {
+          ...s.panelsById["term-1"]!,
+          launchAgentId: "claude",
+          detectedAgentId: "claude",
+        },
       },
     }));
 
@@ -474,14 +477,14 @@ describe("terminalStore process detection listeners", () => {
     exited?.({ terminalId: "term-1", agentType: "claude", timestamp: Date.now() });
 
     const panel = usePanelStore.getState().panelsById["term-1"];
-    expect(panel?.agentId).toBe("claude");
+    expect(panel?.launchAgentId).toBe("claude");
     expect(panel?.detectedAgentId).toBeUndefined();
     cleanup();
   });
 
   // Regression for #5807: a non-agent process exit (e.g., npm) in a plain
-  // shell with no agentId must leave agentId untouched.
-  it("leaves agentId untouched on non-agent process exit in a plain shell", () => {
+  // shell with no launchAgentId must leave launchAgentId untouched.
+  it("leaves launchAgentId untouched on non-agent process exit in a plain shell", () => {
     const cleanup = setupTerminalStoreListeners();
     const detected = handlers.agentDetected;
     const exited = handlers.agentExited;
@@ -496,7 +499,7 @@ describe("terminalStore process detection listeners", () => {
     exited?.({ terminalId: "term-1", timestamp: Date.now() });
 
     const panel = usePanelStore.getState().panelsById["term-1"];
-    expect(panel?.agentId).toBeUndefined();
+    expect(panel?.launchAgentId).toBeUndefined();
     expect(panel?.detectedProcessId).toBeUndefined();
     cleanup();
   });

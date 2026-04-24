@@ -14,7 +14,6 @@ const baseTerminal: TerminalInstance = {
 const baseTab: TabInfo = {
   id: "t-1",
   title: "Terminal 1",
-  type: undefined,
   agentId: undefined,
   detectedProcessId: undefined,
   kind: "terminal",
@@ -159,12 +158,12 @@ describe("gridPanelPropsAreEqual", () => {
     expect(gridPanelPropsAreEqual(prev, next)).toBe(false);
   });
 
-  it("returns false when terminal.agentId changes (identity swap)", () => {
+  it("returns false when terminal.launchAgentId changes (identity swap)", () => {
     const prev = baseProps({
-      terminal: { ...baseTerminal, kind: "terminal", agentId: undefined } as TerminalInstance,
+      terminal: { ...baseTerminal, kind: "terminal", launchAgentId: undefined } as TerminalInstance,
     });
     const next = baseProps({
-      terminal: { ...baseTerminal, kind: "terminal", agentId: "claude" } as TerminalInstance,
+      terminal: { ...baseTerminal, kind: "terminal", launchAgentId: "claude" } as TerminalInstance,
     });
     expect(gridPanelPropsAreEqual(prev, next)).toBe(false);
   });

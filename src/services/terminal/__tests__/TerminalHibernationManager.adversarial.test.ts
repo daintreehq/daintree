@@ -118,7 +118,6 @@ function makeMockTerminal() {
 function makeMockManaged(overrides: Partial<ManagedTerminal> = {}): ManagedTerminal {
   return {
     terminal: makeMockTerminal() as unknown as ManagedTerminal["terminal"],
-    type: "terminal" as ManagedTerminal["type"],
     kind: "terminal",
     fitAddon: { fit: vi.fn() } as unknown as ManagedTerminal["fitAddon"],
     serializeAddon: { serialize: vi.fn() } as unknown as ManagedTerminal["serializeAddon"],

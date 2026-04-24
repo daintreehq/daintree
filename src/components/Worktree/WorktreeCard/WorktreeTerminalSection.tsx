@@ -7,7 +7,7 @@ import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { cn } from "@/lib/utils";
 import type { WorktreeTerminalCounts } from "@/hooks/useWorktreeTerminals";
 import { getAgentConfig } from "@/config/agents";
-import { resolveEffectiveAgentId } from "@/utils/agentIdentity";
+import { resolveChromeAgentId } from "@/utils/agentIdentity";
 import {
   STATE_LABELS,
   STATE_PRIORITY,
@@ -102,7 +102,7 @@ function TerminalRow({ term, listeners, onClick }: TerminalRowProps) {
           <div className="shrink-0 opacity-60 group-hover/termrow:opacity-100 transition-opacity">
             <TerminalIcon
               kind={term.kind}
-              agentId={term.agentId}
+              agentId={term.launchAgentId}
               detectedAgentId={term.detectedAgentId}
               detectedProcessId={term.detectedProcessId}
               className="w-3 h-3"
@@ -112,16 +112,19 @@ function TerminalRow({ term, listeners, onClick }: TerminalRowProps) {
             <span className="truncate text-xs font-medium text-text-secondary transition-colors group-hover/termrow:text-daintree-text">
               {term.title}
             </span>
-            {term.type === "terminal" && term.activityStatus === "working" && term.lastCommand && (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <span className="truncate text-[11px] font-mono text-text-muted">
-                    {term.lastCommand}
-                  </span>
-                </TooltipTrigger>
-                <TooltipContent side="bottom">{term.lastCommand}</TooltipContent>
-              </Tooltip>
-            )}
+            {!term.detectedAgentId &&
+              !term.launchAgentId &&
+              term.activityStatus === "working" &&
+              term.lastCommand && (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span className="truncate text-[11px] font-mono text-text-muted">
+                      {term.lastCommand}
+                    </span>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">{term.lastCommand}</TooltipContent>
+                </Tooltip>
+              )}
           </div>
         </button>
 
@@ -217,7 +220,11 @@ export function WorktreeTerminalSection({
     if (terminals.length === 0) return null;
     let commonId: string | null = null;
     for (const t of terminals) {
-      const effectiveId = resolveEffectiveAgentId(t.detectedAgentId, t.agentId);
+      const effectiveId = resolveChromeAgentId(
+        t.detectedAgentId,
+        t.launchAgentId,
+        t.everDetectedAgent
+      );
       if (!effectiveId) return null;
       if (commonId === null) commonId = effectiveId;
       else if (effectiveId !== commonId) return null;

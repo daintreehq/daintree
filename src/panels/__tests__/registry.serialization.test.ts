@@ -23,7 +23,6 @@ describe("panelKindRegistry serialize hooks (co-located)", () => {
       const result = config!.serialize!(
         makePanel({
           kind: "terminal",
-          type: "terminal",
           cwd: "/home",
           command: "  ls -la  ",
           createdAt: 100,
@@ -31,8 +30,7 @@ describe("panelKindRegistry serialize hooks (co-located)", () => {
         })
       );
       expect(result).toEqual({
-        type: "terminal",
-        agentId: undefined,
+        launchAgentId: undefined,
         cwd: "/home",
         command: "ls -la",
         createdAt: 100,
@@ -45,7 +43,6 @@ describe("panelKindRegistry serialize hooks (co-located)", () => {
       const result = config!.serialize!(
         makePanel({
           kind: "terminal",
-          type: "terminal",
           cwd: "/home",
           agentSessionId: "sess-1",
           agentLaunchFlags: ["--flag"],
@@ -103,7 +100,6 @@ describe("panelKindRegistry serialize hooks (co-located)", () => {
       const result = config!.serialize!(
         makePanel({
           kind: "dev-preview",
-          type: "terminal",
           cwd: "/project",
           devCommand: "  npm run dev  ",
           browserUrl: "http://localhost:5173",
@@ -114,7 +110,6 @@ describe("panelKindRegistry serialize hooks (co-located)", () => {
         })
       );
       expect(result).toEqual({
-        type: "terminal",
         cwd: "/project",
         command: "npm run dev",
         browserUrl: "http://localhost:5173",

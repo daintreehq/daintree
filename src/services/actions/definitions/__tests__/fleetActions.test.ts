@@ -54,9 +54,8 @@ function makeAgent(id: string, overrides: Partial<TerminalInstance> = {}): Termi
   return {
     id,
     title: id,
-    type: "terminal",
     kind: "terminal",
-    agentId: "claude",
+    detectedAgentId: "claude",
     worktreeId: "wt-1",
     projectId: "proj-1",
     location: "grid",
@@ -152,8 +151,7 @@ describe("fleet actions — threshold confirmation", () => {
 
   it("fleet.restart and trash ignore observational shells even if stale-armed", async () => {
     const observedShell = makeAgent("observed", {
-      agentId: undefined,
-      detectedAgentId: "claude",
+      detectedAgentId: undefined,
       everDetectedAgent: true,
       agentState: "working",
     });
@@ -212,8 +210,7 @@ describe("fleet actions — threshold confirmation", () => {
     seedPanels([
       makeAgent("full", { agentState: "waiting" }),
       makeAgent("observed", {
-        agentId: undefined,
-        detectedAgentId: "claude",
+        detectedAgentId: undefined,
         everDetectedAgent: true,
         agentState: "waiting",
       }),
@@ -307,8 +304,7 @@ describe("fleet actions — threshold confirmation", () => {
     seedPanels([
       makeAgent("full", { agentState: "working" }),
       makeAgent("observed", {
-        agentId: undefined,
-        detectedAgentId: "claude",
+        detectedAgentId: undefined,
         everDetectedAgent: true,
         agentState: "working",
       }),

@@ -1,5 +1,5 @@
 export {
-  TerminalTypeSchema,
+  BuiltInAgentIdSchema,
   AgentStateSchema,
   AgentSpawnedSchema,
   AgentStateChangedSchema,

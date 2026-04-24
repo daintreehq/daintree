@@ -2,7 +2,7 @@ import { Terminal, ILink, IBufferRange } from "@xterm/xterm";
 import { isMac, isLinux } from "@/lib/platform";
 import { terminalClient } from "@/clients";
 import { installLinuxPrimarySelectionListeners } from "./primarySelection";
-import { TerminalRefreshTier, TerminalType } from "@/types";
+import { TerminalRefreshTier } from "@/types";
 import type { AgentState } from "@/types";
 import {
   ManagedTerminal,
@@ -269,7 +269,7 @@ class TerminalInstanceService {
           }
         }
 
-        if (managed.agentId) {
+        if (managed.launchAgentId) {
           if (
             tier === TerminalRefreshTier.FOCUSED ||
             tier === TerminalRefreshTier.BURST ||
@@ -349,7 +349,7 @@ class TerminalInstanceService {
    * element. Throttled per terminal.
    */
   private maybeReflowTerminal(managed: ManagedTerminal): void {
-    if (managed.agentId) return;
+    if (managed.launchAgentId) return;
     if (managed.isHibernated) return;
     if (!managed.isVisible) return;
     if (managed.isAttaching) return;
@@ -401,13 +401,13 @@ class TerminalInstanceService {
 
   prewarmTerminal(
     id: string,
-    type: TerminalType,
+    launchAgentId: string | undefined,
     options: ConstructorParameters<typeof Terminal>[0],
     params: { offscreen?: boolean; widthPx?: number; heightPx?: number } = {}
   ): ManagedTerminal {
     const managed = this.getOrCreate(
       id,
-      type,
+      launchAgentId,
       options,
       () => TerminalRefreshTier.BACKGROUND,
       undefined
@@ -677,7 +677,7 @@ class TerminalInstanceService {
 
   getOrCreate(
     id: string,
-    type: TerminalType,
+    launchAgentId: string | undefined,
     options: ConstructorParameters<typeof Terminal>[0],
     getRefreshTier: RefreshTierProvider = () => TerminalRefreshTier.FOCUSED,
     onInput?: (data: string) => void,
@@ -760,16 +760,11 @@ class TerminalInstanceService {
     listeners.push(unsubExit);
 
     const kind = "terminal" as const;
-    const agentId =
-      type === "claude" || type === "gemini" || type === "codex" || type === "opencode"
-        ? type
-        : undefined;
 
     const managed: ManagedTerminal = {
       terminal,
-      type,
       kind,
-      agentId,
+      launchAgentId,
       agentState: undefined,
       agentStateSubscribers,
       ...addons,
@@ -920,8 +915,8 @@ class TerminalInstanceService {
       listeners.push(removePrimaryListeners);
     }
 
-    if (agentId) {
-      const agentConfig = getEffectiveAgentConfig(agentId);
+    if (launchAgentId) {
+      const agentConfig = getEffectiveAgentConfig(launchAgentId);
 
       const observedTitleDisposable = terminal.onTitleChange((title: string) => {
         const normalized = normalizeObservedTitle(title);
@@ -1046,7 +1041,7 @@ class TerminalInstanceService {
     });
     listeners.push(() => inputDisposable.dispose());
 
-    if (agentId) {
+    if (launchAgentId) {
       const keyDisposable = terminal.onKey(({ domEvent }) => {
         if (
           !managed.isInputLocked &&
@@ -1201,7 +1196,7 @@ class TerminalInstanceService {
       managed.isOpened = true;
       logDebug(`[TIS.attach] Opened terminal ${id}`);
       if (
-        managed.agentId &&
+        managed.launchAgentId &&
         (managed.lastAppliedTier === TerminalRefreshTier.FOCUSED ||
           managed.lastAppliedTier === TerminalRefreshTier.BURST ||
           managed.lastAppliedTier === TerminalRefreshTier.VISIBLE)
@@ -1538,8 +1533,8 @@ class TerminalInstanceService {
   }
 
   private getResizeStrategyForTerminal(managed: ManagedTerminal): "default" | "settled" {
-    if (!managed.agentId) return "default";
-    const config = getEffectiveAgentConfig(managed.agentId);
+    if (!managed.launchAgentId) return "default";
+    const config = getEffectiveAgentConfig(managed.launchAgentId);
     return config?.capabilities?.resizeStrategy ?? "default";
   }
 
@@ -1853,11 +1848,11 @@ class TerminalInstanceService {
     restoreScrollback(managed);
   }
 
-  applyAgentPromotion(id: string, agentType: TerminalType): void {
+  applyAgentPromotion(id: string, agentId: string): void {
     const managed = this.instances.get(id);
     if (!managed) return;
-    if (managed.type === agentType) return;
-    managed.type = agentType;
+    if (managed.launchAgentId === agentId) return;
+    managed.launchAgentId = agentId;
     restoreScrollback(managed);
   }
 
@@ -1866,7 +1861,7 @@ class TerminalInstanceService {
       if (managed.isHibernated) continue;
       if (managed.isFocused) continue;
       if (
-        managed.agentId &&
+        managed.launchAgentId &&
         managed.canonicalAgentState !== "completed" &&
         managed.canonicalAgentState !== "exited"
       )
@@ -1897,7 +1892,7 @@ class TerminalInstanceService {
   private isHibernationEligible(tier: TerminalRefreshTier, managed: ManagedTerminal): boolean {
     if (tier !== TerminalRefreshTier.BACKGROUND) return false;
     return (
-      !managed.agentId ||
+      !managed.launchAgentId ||
       managed.canonicalAgentState === "completed" ||
       managed.canonicalAgentState === "exited"
     );

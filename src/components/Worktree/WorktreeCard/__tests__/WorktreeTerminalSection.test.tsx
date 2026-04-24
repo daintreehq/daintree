@@ -59,7 +59,6 @@ function makeTerminal(overrides: Partial<TerminalInstance> = {}): TerminalInstan
     id: `term-${Math.random().toString(36).slice(2, 7)}`,
     pid: 1234,
     title: "Test Terminal",
-    type: "terminal",
     kind: "terminal",
     location: "grid",
     worktreeId: "wt-1",
@@ -75,8 +74,8 @@ const baseCounts: WorktreeTerminalSectionProps["counts"] = {
 
 function renderSection(overrides: Partial<WorktreeTerminalSectionProps> = {}) {
   const terminals = overrides.terminals ?? [
-    makeTerminal({ agentId: "claude" }),
-    makeTerminal({ agentId: "claude" }),
+    makeTerminal({ detectedAgentId: "claude" }),
+    makeTerminal({ detectedAgentId: "claude" }),
   ];
   return render(
     <TooltipProvider>
@@ -94,48 +93,57 @@ function renderSection(overrides: Partial<WorktreeTerminalSectionProps> = {}) {
 }
 
 describe("WorktreeTerminalSection summary icon", () => {
-  it("shows agent icon when all terminals share the same agentId (collapsed)", () => {
+  it("shows agent icon when all terminals share the same detectedAgentId (collapsed)", () => {
     renderSection({
       isExpanded: false,
-      terminals: [makeTerminal({ agentId: "claude" }), makeTerminal({ agentId: "claude" })],
+      terminals: [
+        makeTerminal({ detectedAgentId: "claude" }),
+        makeTerminal({ detectedAgentId: "claude" }),
+      ],
     });
     expect(screen.getByTestId("agent-icon")).toBeDefined();
   });
 
-  it("shows agent icon when all terminals share the same agentId (expanded)", () => {
+  it("shows agent icon when all terminals share the same detectedAgentId (expanded)", () => {
     renderSection({
       isExpanded: true,
-      terminals: [makeTerminal({ agentId: "claude" }), makeTerminal({ agentId: "claude" })],
+      terminals: [
+        makeTerminal({ detectedAgentId: "claude" }),
+        makeTerminal({ detectedAgentId: "claude" }),
+      ],
     });
     expect(screen.getByTestId("agent-icon")).toBeDefined();
   });
 
   it("falls back to SquareTerminal when agents are mixed", () => {
     const { container } = renderSection({
-      terminals: [makeTerminal({ agentId: "claude" }), makeTerminal({ agentId: "gemini" })],
+      terminals: [
+        makeTerminal({ detectedAgentId: "claude" }),
+        makeTerminal({ detectedAgentId: "gemini" }),
+      ],
     });
     expect(screen.queryByTestId("agent-icon")).toBeNull();
     expect(container.querySelector("svg.lucide-square-terminal")).toBeTruthy();
   });
 
-  it("falls back to SquareTerminal when no terminals have agentId", () => {
+  it("falls back to SquareTerminal when no terminals have detectedAgentId", () => {
     const { container } = renderSection({
-      terminals: [makeTerminal({ type: "terminal" }), makeTerminal({ type: "terminal" })],
+      terminals: [makeTerminal(), makeTerminal()],
     });
     expect(screen.queryByTestId("agent-icon")).toBeNull();
     expect(container.querySelector("svg.lucide-square-terminal")).toBeTruthy();
   });
 
-  it("falls back to SquareTerminal when some terminals have agentId and some don't", () => {
+  it("falls back to SquareTerminal when some terminals have detectedAgentId and some don't", () => {
     renderSection({
-      terminals: [makeTerminal({ agentId: "claude" }), makeTerminal({ type: "terminal" })],
+      terminals: [makeTerminal({ detectedAgentId: "claude" }), makeTerminal()],
     });
     expect(screen.queryByTestId("agent-icon")).toBeNull();
   });
 
-  it("shows agent icon for single terminal with agentId", () => {
+  it("shows agent icon for single terminal with detectedAgentId", () => {
     renderSection({
-      terminals: [makeTerminal({ agentId: "claude" })],
+      terminals: [makeTerminal({ detectedAgentId: "claude" })],
       counts: { ...baseCounts, total: 1 },
     });
     expect(screen.getByTestId("agent-icon")).toBeDefined();
@@ -143,45 +151,39 @@ describe("WorktreeTerminalSection summary icon", () => {
 
   it("falls back to SquareTerminal for unknown agent", () => {
     renderSection({
-      terminals: [makeTerminal({ agentId: "unknown-agent" })],
+      terminals: [makeTerminal({ detectedAgentId: "unknown-agent" as never })],
       counts: { ...baseCounts, total: 1 },
     });
     expect(screen.queryByTestId("agent-icon")).toBeNull();
   });
 
-  it("does not resolve agent from type alone (identity requires agentId or detectedAgentId)", () => {
-    // Post-#5805 sweep: the summary icon reads through `resolveEffectiveAgentId`,
-    // which looks at `detectedAgentId` and `agentId` only. A terminal whose only
-    // agent signal is a legacy `type: "claude"` (no `agentId`, no detection) no
-    // longer claims an agent identity here — the panel-creation path now
-    // normalizes `type` → `agentId` at launch, so this arrangement shouldn't
-    // occur in live data anyway.
+  it("does not resolve agent from launchAgentId alone (everDetectedAgent=true demotes to plain shell)", () => {
     const { container } = renderSection({
       terminals: [
-        makeTerminal({ agentId: undefined, type: "claude" as TerminalInstance["type"] }),
-        makeTerminal({ agentId: undefined, type: "claude" as TerminalInstance["type"] }),
+        makeTerminal({ launchAgentId: "claude", everDetectedAgent: true }),
+        makeTerminal({ launchAgentId: "claude", everDetectedAgent: true }),
       ],
     });
     expect(screen.queryByTestId("agent-icon")).toBeNull();
     expect(container.querySelector("svg.lucide-square-terminal")).toBeTruthy();
   });
 
-  it("prefers detectedAgentId over agentId when both are set", () => {
+  it("prefers detectedAgentId over launchAgentId when both are set", () => {
     renderSection({
       terminals: [
-        makeTerminal({ agentId: "claude", detectedAgentId: "gemini" }),
-        makeTerminal({ agentId: "claude", detectedAgentId: "gemini" }),
+        makeTerminal({ launchAgentId: "claude", detectedAgentId: "gemini" }),
+        makeTerminal({ launchAgentId: "claude", detectedAgentId: "gemini" }),
       ],
     });
     // Distinct mock icons per agent lock in precedence: a swapped-arg regression
-    // (agentId-wins) would surface the Claude icon instead.
+    // (launchAgentId-wins) would surface the Claude icon instead.
     const icon = screen.getByTestId("agent-icon");
     expect(icon.getAttribute("data-agent")).toBe("gemini");
   });
 
   it("uses detectedAgentId to classify a plain shell that entered agent mode", () => {
     renderSection({
-      terminals: [makeTerminal({ agentId: undefined, detectedAgentId: "claude" })],
+      terminals: [makeTerminal({ detectedAgentId: "claude" })],
       counts: { ...baseCounts, total: 1 },
     });
     expect(screen.getByTestId("agent-icon")).toBeDefined();
@@ -189,7 +191,7 @@ describe("WorktreeTerminalSection summary icon", () => {
 
   it("does not pass brandColor to the agent icon (renders in currentColor)", () => {
     renderSection({
-      terminals: [makeTerminal({ agentId: "claude" })],
+      terminals: [makeTerminal({ detectedAgentId: "claude" })],
       counts: { ...baseCounts, total: 1 },
     });
     const icon = screen.getByTestId("agent-icon");
@@ -209,7 +211,12 @@ describe("WorktreeTerminalSection arming click handlers", () => {
   });
 
   it("plain click on an eligible agent tile arms it", () => {
-    const term = makeTerminal({ id: "a1", agentId: "claude", kind: "terminal", hasPty: true });
+    const term = makeTerminal({
+      id: "a1",
+      detectedAgentId: "claude",
+      kind: "terminal",
+      hasPty: true,
+    });
     const onSelect = vi.fn();
     renderSection({
       isExpanded: true,
@@ -230,9 +237,24 @@ describe("WorktreeTerminalSection arming click handlers", () => {
     // The grid uses Shift = single add; the sidebar mirrors the same model
     // so the gesture is consistent across surfaces. There is no range
     // extension on either surface.
-    const t1 = makeTerminal({ id: "a1", agentId: "claude", kind: "terminal", hasPty: true });
-    const t2 = makeTerminal({ id: "a2", agentId: "claude", kind: "terminal", hasPty: true });
-    const t3 = makeTerminal({ id: "a3", agentId: "claude", kind: "terminal", hasPty: true });
+    const t1 = makeTerminal({
+      id: "a1",
+      detectedAgentId: "claude",
+      kind: "terminal",
+      hasPty: true,
+    });
+    const t2 = makeTerminal({
+      id: "a2",
+      detectedAgentId: "claude",
+      kind: "terminal",
+      hasPty: true,
+    });
+    const t3 = makeTerminal({
+      id: "a3",
+      detectedAgentId: "claude",
+      kind: "terminal",
+      hasPty: true,
+    });
     renderSection({
       isExpanded: true,
       terminals: [t1, t2, t3],
@@ -248,8 +270,18 @@ describe("WorktreeTerminalSection arming click handlers", () => {
   });
 
   it("cmd-click (metaKey) toggles the armed state without clearing others", () => {
-    const t1 = makeTerminal({ id: "a1", agentId: "claude", kind: "terminal", hasPty: true });
-    const t2 = makeTerminal({ id: "a2", agentId: "claude", kind: "terminal", hasPty: true });
+    const t1 = makeTerminal({
+      id: "a1",
+      detectedAgentId: "claude",
+      kind: "terminal",
+      hasPty: true,
+    });
+    const t2 = makeTerminal({
+      id: "a2",
+      detectedAgentId: "claude",
+      kind: "terminal",
+      hasPty: true,
+    });
     renderSection({
       isExpanded: true,
       terminals: [t1, t2],
@@ -270,7 +302,6 @@ describe("WorktreeTerminalSection arming click handlers", () => {
     const plain = makeTerminal({
       id: "p1",
       kind: "terminal",
-      agentId: undefined,
       hasPty: true,
     });
     const onSelect = vi.fn();
@@ -289,7 +320,12 @@ describe("WorktreeTerminalSection arming click handlers", () => {
   });
 
   it("armed tile gets aria-selected=true", () => {
-    const term = makeTerminal({ id: "a1", agentId: "claude", kind: "terminal", hasPty: true });
+    const term = makeTerminal({
+      id: "a1",
+      detectedAgentId: "claude",
+      kind: "terminal",
+      hasPty: true,
+    });
     renderSection({
       isExpanded: true,
       terminals: [term],
@@ -304,7 +340,12 @@ describe("WorktreeTerminalSection arming click handlers", () => {
   });
 
   it("scroll container has aria-multiselectable", () => {
-    const term = makeTerminal({ id: "a1", agentId: "claude", kind: "terminal", hasPty: true });
+    const term = makeTerminal({
+      id: "a1",
+      detectedAgentId: "claude",
+      kind: "terminal",
+      hasPty: true,
+    });
     const { container } = renderSection({
       isExpanded: true,
       terminals: [term],

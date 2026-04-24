@@ -3,9 +3,12 @@
  */
 
 import { z } from "zod";
-import { TerminalTypeSchema } from "./agent.js";
 import { panelKindHasPty } from "../../shared/config/panelKindRegistry.js";
 import { BUILT_IN_AGENT_IDS } from "../../shared/config/agentIds.js";
+
+/** Schema for a launch hint — built-in agent id or plugin-provided string. */
+const LaunchAgentIdSchema = z.union([z.enum(BUILT_IN_AGENT_IDS), z.string().min(1)]);
+const TitleModeSchema = z.enum(["default", "custom"]);
 
 // ============================================================================
 // Terminal Entry Validation Schemas
@@ -26,7 +29,7 @@ export const TerminalLocationSchema = z.enum(["grid", "dock", "trash", "backgrou
  * Schema for panel/terminal kind - distinguishes built-in panel types.
  */
 export const PanelKindSchema = z.union([
-  z.enum(["terminal", "agent", "browser", "dev-preview"]),
+  z.enum(["terminal", "browser", "dev-preview"]),
   z.string(), // Allow extension-provided kinds
 ]);
 
@@ -43,8 +46,9 @@ export const AppStateTerminalEntrySchema = z
   .object({
     id: z.string().min(1),
     kind: PanelKindSchema.optional(),
-    type: TerminalTypeSchema.optional(),
+    launchAgentId: LaunchAgentIdSchema.optional(),
     title: z.string(),
+    titleMode: TitleModeSchema.optional(),
     cwd: z.string().optional(),
     worktreeId: z.string().optional(),
     location: AppStateTerminalLocationSchema,
@@ -89,30 +93,27 @@ export const AppStateTerminalEntrySchema = z
       }
 
       if (panelKindHasPty(kind)) {
-        return data.type !== undefined && data.cwd !== undefined;
+        return data.cwd !== undefined;
       }
       return true;
     },
     {
-      message: "PTY-backed panels require 'type' and 'cwd' fields",
+      message: "PTY-backed panels require a 'cwd' field",
     }
   );
 
 /**
  * Schema for terminal snapshots in ProjectState.terminals (per-project state).
- * Matches the TerminalSnapshot interface from shared/types/project.ts.
+ * Matches the PanelSnapshot interface from shared/types/project.ts.
  * Uses passthrough() to preserve unknown fields for forward compatibility with extensions.
- *
- * PTY-backed panels (terminal, agent, dev-preview) require `type` and `cwd`.
- * Non-PTY panels (browser) have these fields optional since they don't spawn processes.
  */
 export const TerminalSnapshotSchema = z
   .object({
     id: z.string().min(1),
     kind: PanelKindSchema.optional(),
-    type: TerminalTypeSchema.optional(),
-    agentId: z.string().optional(),
+    launchAgentId: LaunchAgentIdSchema.optional(),
     title: z.string(),
+    titleMode: TitleModeSchema.optional(),
     cwd: z.string().optional(),
     worktreeId: z.string().optional(),
     location: TerminalLocationSchema,
@@ -152,12 +153,12 @@ export const TerminalSnapshotSchema = z
       }
 
       if (panelKindHasPty(kind)) {
-        return data.type !== undefined && data.cwd !== undefined;
+        return data.cwd !== undefined;
       }
       return true;
     },
     {
-      message: "PTY-backed panels require 'type' and 'cwd' fields",
+      message: "PTY-backed panels require a 'cwd' field",
     }
   );
 
@@ -224,7 +225,7 @@ export function filterValidTerminalEntries<T>(
 export const TerminalSpawnOptionsSchema = z.object({
   id: z.string().optional(),
   kind: PanelKindSchema.optional(),
-  agentId: z.string().optional(),
+  launchAgentId: LaunchAgentIdSchema.optional(),
   projectId: z.string().optional(),
   cwd: z.string().optional(),
   shell: z.string().optional(),
@@ -232,8 +233,8 @@ export const TerminalSpawnOptionsSchema = z.object({
   rows: z.number().int().positive(),
   command: z.string().optional(),
   env: z.record(z.string(), z.string()).optional(),
-  type: TerminalTypeSchema.optional(),
   title: z.string().optional(),
+  titleMode: TitleModeSchema.optional(),
   restore: z.boolean().optional(),
   isEphemeral: z.boolean().optional(),
   agentLaunchFlags: z.array(z.string()).optional(),

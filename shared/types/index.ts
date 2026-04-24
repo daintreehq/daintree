@@ -41,7 +41,7 @@ export type {
   PanelInstance,
   TabGroupLocation,
   TabGroup,
-  TerminalType,
+  PanelTitleMode,
   TerminalRestartError,
   TerminalReconnectError,
   TerminalRuntimeStatus,

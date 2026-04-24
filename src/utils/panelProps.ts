@@ -63,11 +63,10 @@ export function buildPanelProps({
     onClose: overrides.onClose!,
 
     // Terminal-specific
-    type: terminal.type,
+    type: undefined,
     everDetectedAgent: terminal.everDetectedAgent,
-    agentId: terminal.agentId,
+    agentId: terminal.launchAgentId,
     detectedAgentId: terminal.detectedAgentId,
-    capabilityAgentId: terminal.capabilityAgentId,
     agentPresetId: terminal.agentPresetId,
     presetColor: terminal.agentPresetColor,
     agentLaunchFlags: terminal.agentLaunchFlags,

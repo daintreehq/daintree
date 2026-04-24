@@ -30,7 +30,7 @@ import { getMergedPresets } from "@/config/agents";
 import { TerminalContextMenu } from "@/components/Terminal/TerminalContextMenu";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { getTerminalFocusTarget } from "@/components/Terminal/terminalFocus";
-import { resolveEffectiveAgentId } from "@/utils/agentIdentity";
+import { resolveChromeAgentId } from "@/utils/agentIdentity";
 import {
   getEffectiveStateIcon,
   getEffectiveStateColor,
@@ -367,14 +367,14 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
     return new Map(
       panels.map((p) => {
         const fallbackColor = getBrandColorHex(
-          resolveEffectiveAgentId(p.detectedAgentId, p.agentId) ?? p.type
+          resolveChromeAgentId(p.detectedAgentId, p.launchAgentId, p.everDetectedAgent) ?? undefined
         );
-        if (!p.agentPresetId || !p.agentId) return [p.id, fallbackColor] as const;
+        if (!p.agentPresetId || !p.launchAgentId) return [p.id, fallbackColor] as const;
         const presets = getMergedPresets(
-          p.agentId,
-          agentSettingsAll?.agents?.[p.agentId]?.customPresets,
-          ccrPresetsByAgent[p.agentId],
-          projectPresetsByAgent[p.agentId]
+          p.launchAgentId,
+          agentSettingsAll?.agents?.[p.launchAgentId]?.customPresets,
+          ccrPresetsByAgent[p.launchAgentId],
+          projectPresetsByAgent[p.launchAgentId]
         );
         const preset = presets.find((f) => f.id === p.agentPresetId);
         return [p.id, preset?.color ?? p.agentPresetColor ?? fallbackColor] as const;
@@ -393,7 +393,11 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
   const brandColor =
     panelPresetColors.get(activePanel.id) ??
     getBrandColorHex(
-      resolveEffectiveAgentId(activePanel.detectedAgentId, activePanel.agentId) ?? activePanel.type
+      resolveChromeAgentId(
+        activePanel.detectedAgentId,
+        activePanel.launchAgentId,
+        activePanel.everDetectedAgent
+      ) ?? undefined
     );
   const agentState = activePanel.agentState;
   const displayTitle = getBaseTitle(activePanel.title);
@@ -442,8 +446,9 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
             <div className="flex items-center justify-center shrink-0">
               <TerminalIcon
                 kind={activePanel.kind}
-                agentId={activePanel.agentId}
+                agentId={activePanel.launchAgentId}
                 detectedAgentId={activePanel.detectedAgentId}
+                everDetectedAgent={activePanel.everDetectedAgent}
                 detectedProcessId={activePanel.detectedProcessId}
                 className="w-3.5 h-3.5"
                 brandColor={brandColor}
@@ -513,11 +518,9 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
         onOpenAutoFocus={(event) => {
           event.preventDefault();
           const focusTarget = getTerminalFocusTarget({
-            // #5804: capability mode (sealed at spawn) — not the broader
-            // runtime-detect predicate. The HybridInputBar only renders for
-            // cold-launched built-in agents, so observational shells must
-            // fall through to xterm focus to keep clicks responsive.
-            hasFullAgentCapability: activePanel.capabilityAgentId !== undefined,
+            // Focus routing follows live detection — HybridInputBar renders when
+            // an agent is actually running, so route focus there only then.
+            hasChromeAgentIdentity: activePanel.detectedAgentId !== undefined,
             isInputDisabled: backendStatus === "disconnected" || backendStatus === "recovering",
             hybridInputEnabled,
             hybridInputAutoFocus,
@@ -550,9 +553,9 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
                   key={panel.id}
                   id={panel.id}
                   title={getBaseTitle(panel.title)}
-                  type={panel.type}
-                  agentId={panel.agentId}
+                  agentId={panel.launchAgentId}
                   detectedAgentId={panel.detectedAgentId}
+                  everDetectedAgent={panel.everDetectedAgent}
                   detectedProcessId={panel.detectedProcessId}
                   kind={panel.kind ?? "terminal"}
                   agentState={panel.agentState}

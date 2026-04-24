@@ -84,7 +84,6 @@ describe("Terminal Store Integration", () => {
 
       await mockAddTerminal({
         id: "test-id-1",
-        type: "terminal",
         cwd: "/test",
         cols: 80,
         rows: 24,
@@ -132,7 +131,6 @@ describe("Terminal Store Integration", () => {
 
       await usePanelStore.getState().addPanel({
         id: "test-id-3",
-        type: "terminal",
         cwd: "/test",
         cols: 80,
         rows: 24,
@@ -158,7 +156,6 @@ describe("Terminal Store Integration", () => {
 
       await usePanelStore.getState().addPanel({
         id: "test-id-4",
-        type: "terminal",
         cwd: "/test",
         cols: 80,
         rows: 24,
@@ -175,7 +172,6 @@ describe("Terminal Store Integration", () => {
       setTerminals([
         {
           id: "term-1",
-          type: "terminal",
           title: "Shell 1",
           cwd: "/test",
           cols: 80,
@@ -184,7 +180,6 @@ describe("Terminal Store Integration", () => {
         },
         {
           id: "term-2",
-          type: "terminal",
           title: "Shell 2",
           cwd: "/test",
           cols: 80,
@@ -229,7 +224,6 @@ describe("Terminal Store Integration", () => {
       setTerminals([
         {
           id: "term-1",
-          type: "terminal",
           title: "Shell 1",
           cwd: "/test",
           cols: 80,
@@ -267,7 +261,6 @@ describe("Terminal Store Integration", () => {
       setTerminals([
         {
           id: "term-1",
-          type: "terminal",
           title: "Shell 1",
           cwd: "/test",
           cols: 80,
@@ -276,7 +269,6 @@ describe("Terminal Store Integration", () => {
         },
         {
           id: "term-2",
-          type: "terminal",
           title: "Shell 2",
           cwd: "/test",
           cols: 80,
@@ -321,7 +313,6 @@ describe("Terminal Store Integration", () => {
       setTerminals([
         {
           id: "term-1",
-          type: "terminal",
           title: "Shell 1",
           cwd: "/test",
           cols: 80,
@@ -356,7 +347,6 @@ describe("Terminal Store Integration", () => {
       setTerminals([
         {
           id: "term-1",
-          type: "terminal",
           title: "Shell 1",
           cwd: "/test",
           cols: 80,
@@ -406,7 +396,6 @@ describe("Terminal Store Integration", () => {
       setTerminals([
         {
           id: "term-1",
-          type: "claude",
           title: "Claude",
           cwd: "/test",
           cols: 80,
@@ -476,7 +465,6 @@ describe("Terminal Store Integration", () => {
       setTerminals([
         {
           id: "term-1",
-          type: "terminal",
           title: "Shell 1",
           cwd: "/test",
           cols: 80,
@@ -485,7 +473,6 @@ describe("Terminal Store Integration", () => {
         },
         {
           id: "term-2",
-          type: "terminal",
           title: "Shell 2",
           cwd: "/test",
           cols: 80,
@@ -525,7 +512,6 @@ describe("Terminal Store Integration", () => {
       setTerminals([
         {
           id: "term-1",
-          type: "claude",
           title: "Claude Agent",
           cwd: "/test/worktree",
           cols: 120,
@@ -537,7 +523,7 @@ describe("Terminal Store Integration", () => {
       ]);
 
       const terminal = usePanelStore.getState().panelsById["term-1"]!;
-      expect(terminal.type).toBe("claude");
+      expect(undefined).toBe("claude");
       expect(terminal.title).toBe("Claude Agent");
       expect(terminal.worktreeId).toBe("worktree-1");
       expect(terminal.agentState).toBe("working");
@@ -547,7 +533,6 @@ describe("Terminal Store Integration", () => {
       setTerminals([
         {
           id: "term-1",
-          type: "terminal",
           title: "Shell",
           cwd: "/test",
           cols: 80,
@@ -559,7 +544,6 @@ describe("Terminal Store Integration", () => {
       setTerminals([
         {
           id: "term-1",
-          type: "terminal",
           title: "Updated Title",
           cwd: "/test",
           cols: 100,

@@ -2,8 +2,8 @@ import type { AgentId, AgentState } from "./agent.js";
 import type { BrowserHistory } from "./browser.js";
 import type {
   PanelKind,
-  TerminalType,
   PanelLocation,
+  PanelTitleMode,
   TabGroup,
   PanelExitBehavior,
   ViewportPresetId,
@@ -56,19 +56,15 @@ export interface PanelSnapshot {
   /** Terminal category */
   kind?: PanelKind;
   /**
-   * @deprecated Legacy terminal classification retained for snapshot
-   * compatibility. See `docs/architecture/terminal-identity.md`. Prefer
-   * `agentId` (launch intent).
-   */
-  type?: TerminalType;
-  /**
-   * Launch intent — the agent identity this terminal was spawned as. Persisted
-   * so crash recovery respawns the terminal as the same agent. See
+   * Launch hint — agent this terminal was launched to run. Persisted so
+   * restart re-injects the same command. Not identity. See
    * `docs/architecture/terminal-identity.md`.
    */
-  agentId?: AgentId;
+  launchAgentId?: AgentId;
   /** Display title */
   title: string;
+  /** How the title is owned. Absent defaults to "default". */
+  titleMode?: PanelTitleMode;
   /** Working directory - only present for PTY panels */
   cwd?: string;
   /** Associated worktree ID */

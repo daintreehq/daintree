@@ -31,8 +31,6 @@ function defaultSpawnContext(overrides?: Partial<SpawnContext>): SpawnContext {
   return {
     shell: "/bin/zsh",
     args: ["-l"],
-    isAgentTerminal: false,
-    agentId: undefined,
     env: {},
     ...overrides,
   };
@@ -46,15 +44,9 @@ function createTerminal(options?: Partial<TerminalProcessOptions>): TerminalProc
     cols: 80,
     rows: 24,
     kind: "terminal" as const,
-    type: "terminal" as const,
     ...options,
   };
-  const isAgent =
-    merged.kind === "agent" || !!merged.agentId || (!!merged.type && merged.type !== "terminal");
-  const ctx = defaultSpawnContext({
-    isAgentTerminal: isAgent,
-    agentId: isAgent ? ((merged as any).agentId ?? merged.type) : undefined,
-  });
+  const ctx = defaultSpawnContext();
   return new TerminalProcess(
     "t1",
     merged,
@@ -119,7 +111,7 @@ describe("TerminalProcess.submit", () => {
 
   it("does not use bracketed paste for Gemini; uses soft newlines and then sends CR", async () => {
     vi.useFakeTimers();
-    const terminal = createTerminal({ kind: "terminal", type: "gemini" });
+    const terminal = createTerminal({ kind: "terminal", launchAgentId: "gemini" });
 
     terminal.submit("line1\nline2");
 
@@ -132,7 +124,7 @@ describe("TerminalProcess.submit", () => {
 
   it("sends Enter immediately for Copilot with submitEnterDelayMs: 0", async () => {
     vi.useFakeTimers();
-    const terminal = createTerminal({ kind: "terminal", type: "copilot" });
+    const terminal = createTerminal({ kind: "terminal", launchAgentId: "copilot" });
 
     terminal.submit("test");
 

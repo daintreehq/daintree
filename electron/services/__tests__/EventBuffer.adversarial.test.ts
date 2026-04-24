@@ -22,7 +22,6 @@ describe("EventBuffer adversarial", () => {
       events.emit("agent:spawned", {
         agentId: `agent-${i}`,
         terminalId: `term-${i}`,
-        type: "claude",
         timestamp: i + 1,
       });
     }
@@ -36,7 +35,6 @@ describe("EventBuffer adversarial", () => {
     events.emit("agent:spawned", {
       agentId: "agent-3",
       terminalId: "term-3",
-      type: "claude",
       timestamp: 4,
     });
 
@@ -69,13 +67,11 @@ describe("EventBuffer adversarial", () => {
     events.emit("agent:spawned", {
       agentId: "agent-a",
       terminalId: "term-a",
-      type: "claude",
       timestamp: 1,
     });
     events.emit("agent:spawned", {
       agentId: "agent-b",
       terminalId: "term-b",
-      type: "claude",
       timestamp: 2,
     });
 

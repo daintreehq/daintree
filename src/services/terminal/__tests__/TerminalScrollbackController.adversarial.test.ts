@@ -75,7 +75,7 @@ describe("TerminalScrollbackController adversarial", () => {
     const terminalManaged = createManagedTerminal();
     const agentManaged = createManagedTerminal({
       kind: "terminal",
-      type: "claude",
+      launchAgentId: "claude",
     });
 
     restoreScrollback(terminalManaged);

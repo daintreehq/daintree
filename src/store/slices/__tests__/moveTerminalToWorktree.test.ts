@@ -46,7 +46,6 @@ function createMockTerminal(
 ): TerminalInstance {
   return {
     id,
-    type: "terminal",
     title: `Terminal ${id}`,
     cwd: "/test",
     cols: 80,

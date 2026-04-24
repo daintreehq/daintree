@@ -107,8 +107,7 @@ describe("optimistic panel spawn (#5789)", () => {
     const { addPanel } = usePanelStore.getState();
     const id = await addPanel({
       kind: "terminal",
-      agentId: "claude",
-      type: "terminal",
+      launchAgentId: "claude",
       command: "claude",
       requestedId: "opt-1",
       cwd: "/",
@@ -148,8 +147,7 @@ describe("optimistic panel spawn (#5789)", () => {
     const launches = Array.from({ length: 6 }, (_, i) =>
       addPanel({
         kind: "terminal",
-        agentId: "claude",
-        type: "terminal",
+        launchAgentId: "claude",
         command: "claude",
         requestedId: `concurrent-${i}`,
         cwd: "/",
@@ -197,8 +195,7 @@ describe("optimistic panel spawn (#5789)", () => {
     const { addPanel } = usePanelStore.getState();
     const id = await addPanel({
       kind: "terminal",
-      agentId: "claude",
-      type: "terminal",
+      launchAgentId: "claude",
       command: "claude",
       requestedId: "will-fail",
       cwd: "/",
@@ -224,7 +221,7 @@ describe("optimistic panel spawn (#5789)", () => {
     const { addPanel } = usePanelStore.getState();
     const id = await addPanel({
       kind: "terminal",
-      agentId: "claude",
+      launchAgentId: "claude",
       command: "claude",
       existingId: "reconnect-1",
       cwd: "/",
@@ -257,8 +254,7 @@ describe("optimistic panel spawn (#5789)", () => {
     // Panel A (will fail).
     await addPanel({
       kind: "terminal",
-      agentId: "claude",
-      type: "terminal",
+      launchAgentId: "claude",
       command: "claude",
       requestedId: "shared-id",
       cwd: "/",
@@ -271,7 +267,7 @@ describe("optimistic panel spawn (#5789)", () => {
     // Reconnect path reuses the id (spawnStatus: "ready", spawn is skipped).
     await addPanel({
       kind: "terminal",
-      agentId: "claude",
+      launchAgentId: "claude",
       command: "claude",
       existingId: "shared-id",
       cwd: "/",
@@ -310,8 +306,7 @@ describe("optimistic panel spawn (#5789)", () => {
     const { addPanel, removePanel } = usePanelStore.getState();
     await addPanel({
       kind: "terminal",
-      agentId: "claude",
-      type: "terminal",
+      launchAgentId: "claude",
       command: "claude",
       requestedId: "orphan-id",
       cwd: "/",
@@ -361,8 +356,7 @@ describe("optimistic panel spawn (#5789)", () => {
     const { addPanel } = usePanelStore.getState();
     const id = await addPanel({
       kind: "terminal",
-      agentId: "claude",
-      type: "terminal",
+      launchAgentId: "claude",
       command: "claude",
       requestedId: "env-latent",
       cwd: "/",
@@ -387,8 +381,7 @@ describe("optimistic panel spawn (#5789)", () => {
     const { addPanel } = usePanelStore.getState();
     await addPanel({
       kind: "terminal",
-      agentId: "claude",
-      type: "terminal",
+      launchAgentId: "claude",
       command: "claude",
       requestedId: "stable-id",
       cwd: "/",

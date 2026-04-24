@@ -7,7 +7,6 @@ initBuiltInPanelKinds();
 
 const createMockTerminal = (overrides: Partial<TerminalInstance> = {}): TerminalInstance => ({
   id: "test-1",
-  type: "terminal",
   title: "Test Terminal",
   cwd: "/test/path",
   cols: 80,
@@ -166,8 +165,7 @@ describe("PanelPersistence", () => {
       const terminal = createMockTerminal({
         id: "test-1",
         kind: "terminal",
-        type: "claude",
-        agentId: "claude",
+        launchAgentId: "claude",
         title: "Claude",
         cwd: "/test",
         worktreeId: "wt-1",
@@ -185,8 +183,7 @@ describe("PanelPersistence", () => {
         {
           id: "test-1",
           kind: "terminal",
-          type: "claude",
-          agentId: "claude",
+          launchAgentId: "claude",
           title: "Claude",
           cwd: "/test",
           worktreeId: "wt-1",
@@ -219,11 +216,11 @@ describe("PanelPersistence", () => {
       const client = createMockProjectClient();
       const persistence = new PanelPersistence(client, {
         debounceMs: 100,
-        filter: (t) => t.type === "claude",
+        filter: (t) => t.launchAgentId === "claude",
       });
 
-      const shellTerminal = createMockTerminal({ id: "shell-1", type: "terminal" });
-      const claudeTerminal = createMockTerminal({ id: "claude-1", type: "claude" });
+      const shellTerminal = createMockTerminal({ id: "shell-1" });
+      const claudeTerminal = createMockTerminal({ id: "claude-1", launchAgentId: "claude" });
 
       persistence.save([shellTerminal, claudeTerminal], projectId);
       await vi.advanceTimersByTimeAsync(100);
@@ -453,7 +450,6 @@ describe("PanelPersistence", () => {
       const ptyPanel = createMockTerminal({
         id: "pty-ext",
         kind: "terminal",
-        type: "terminal",
         cwd: "/test",
         extensionState: { config: true },
       });

@@ -302,8 +302,7 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
       const options: AddPanelOptions = isAgent
         ? {
             kind: "terminal",
-            type: agentId as import("@shared/types/panel").TerminalType,
-            agentId,
+            launchAgentId: agentId,
             command: command as string,
             title: presetTitle,
             cwd,
@@ -317,7 +316,6 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
           }
         : {
             kind: "terminal",
-            type: "terminal",
             title,
             cwd,
             worktreeId: targetWorktreeId || undefined,

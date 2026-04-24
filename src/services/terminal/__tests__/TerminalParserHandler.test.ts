@@ -40,9 +40,8 @@ describe("TerminalParserHandler", () => {
 
     mockManaged = {
       terminal: mockTerminal,
-      kind: "terminal", // Default to agent for blocking tests
-      agentId: "codex",
-      type: "codex",
+      kind: "terminal",
+      launchAgentId: "codex",
     } as any;
   });
 
@@ -59,8 +58,7 @@ describe("TerminalParserHandler", () => {
   });
 
   it("should NOT block TUI sequences for Claude agent terminals", () => {
-    mockManaged.agentId = "claude";
-    mockManaged.type = "claude";
+    mockManaged.launchAgentId = "claude";
 
     new TerminalParserHandler(mockManaged);
 
@@ -95,7 +93,7 @@ describe("TerminalParserHandler", () => {
 
   it("should NOT block for regular terminals", () => {
     mockManaged.kind = "terminal";
-    mockManaged.agentId = undefined;
+    mockManaged.launchAgentId = undefined;
 
     new TerminalParserHandler(mockManaged);
     expect(escHandlers).toHaveLength(0);
@@ -108,7 +106,7 @@ describe("TerminalParserHandler", () => {
 
   it("should block DECRQM queries to prevent xterm.js parser crash", () => {
     mockManaged.kind = "terminal";
-    mockManaged.agentId = undefined;
+    mockManaged.launchAgentId = undefined;
 
     new TerminalParserHandler(mockManaged);
 
@@ -126,8 +124,7 @@ describe("TerminalParserHandler", () => {
   });
 
   it("should NOT register alt screen blocker for OpenCode agent", () => {
-    mockManaged.agentId = "opencode";
-    mockManaged.type = "opencode";
+    mockManaged.launchAgentId = "opencode";
 
     new TerminalParserHandler(mockManaged);
 
@@ -136,8 +133,7 @@ describe("TerminalParserHandler", () => {
   });
 
   it("should register alt screen blocker for Codex agent (blockAltScreen: true)", () => {
-    mockManaged.agentId = "codex";
-    mockManaged.type = "codex";
+    mockManaged.launchAgentId = "codex";
 
     new TerminalParserHandler(mockManaged);
 
@@ -167,7 +163,7 @@ describe("TerminalParserHandler", () => {
 
   it("should block OSC 52 clipboard write on regular terminals", () => {
     mockManaged.kind = "terminal";
-    mockManaged.agentId = undefined;
+    mockManaged.launchAgentId = undefined;
 
     new TerminalParserHandler(mockManaged);
 

@@ -186,7 +186,7 @@ export function TrashGroupItem({
                 >
                   <TerminalIcon
                     kind={terminal.kind}
-                    agentId={terminal.agentId}
+                    agentId={terminal.launchAgentId}
                     detectedAgentId={terminal.detectedAgentId}
                     detectedProcessId={terminal.detectedProcessId}
                     className="w-2.5 h-2.5 opacity-60"

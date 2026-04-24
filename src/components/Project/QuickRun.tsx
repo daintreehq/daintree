@@ -16,7 +16,6 @@ import { usePanelStore } from "@/store/panelStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useWorktrees } from "@/hooks/useWorktrees";
 import { cn } from "@/lib/utils";
-import { detectTerminalTypeFromCommand } from "@/utils/terminalType";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 import type { RunCommand } from "@/types";
 import { RunningTaskList } from "./RunningTaskList";
@@ -307,9 +306,8 @@ export function QuickRun({ projectId }: QuickRunProps) {
       setInput("");
       setFocusedSuggestionIndex(-1);
 
-      const terminalType = detectTerminalTypeFromCommand(cmd);
       await addPanel({
-        type: terminalType,
+        kind: "terminal",
         title: cmd,
         cwd: cwd,
         command: cmd,
@@ -569,6 +567,7 @@ export function QuickRun({ projectId }: QuickRunProps) {
                                 </span>
                               )}
                               {(item.type === "script" || item.type === "saved") &&
+                                "description" in item &&
                                 item.description && (
                                   <span className="mt-0.5 block truncate text-[11px] font-sans text-text-muted">
                                     {item.description}

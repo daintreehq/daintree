@@ -97,7 +97,7 @@ export function useNewTerminalPalette({
         const result = await actionService.dispatch(
           "agent.launch",
           {
-            agentId: option.type,
+            agentId: option.launchAgentId,
             worktreeId: targetWorktreeId || undefined,
             cwd,
             location: "grid",
@@ -105,11 +105,11 @@ export function useNewTerminalPalette({
           { source: "user" }
         );
         if (!result.ok) {
-          console.error(`Failed to launch ${option.type} terminal:`, result.error);
+          console.error(`Failed to launch ${option.launchAgentId} terminal:`, result.error);
         }
         close();
       } catch (error) {
-        console.error(`Failed to launch ${option.type} terminal:`, error);
+        console.error(`Failed to launch ${option.launchAgentId} terminal:`, error);
       }
     },
     [activeWorktreeId, worktreeMap, currentProject, addPanel, close]

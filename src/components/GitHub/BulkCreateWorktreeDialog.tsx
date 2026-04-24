@@ -814,17 +814,18 @@ export function BulkCreateWorktreeDialog({
                         devCommand: t.devCommand?.trim() || undefined,
                       });
                     } else if (isAgent) {
-                      const agentConfig = getAgentConfig(t.type);
-                      const baseCommand = agentConfig?.command || t.type;
-                      const entry = cloneAgentSettings?.agents?.[t.type] ?? {};
-                      const command = generateAgentCommand(baseCommand, entry, t.type, {
+                      const agentId = t.type;
+                      const agentConfig = getAgentConfig(agentId);
+                      const baseCommand = agentConfig?.command ?? "";
+                      const entry = cloneAgentSettings?.agents?.[agentId] ?? {};
+                      const command = generateAgentCommand(baseCommand, entry, agentId, {
                         clipboardDirectory: cloneClipboardDirectory,
                         modelId: t.agentModelId,
                       });
 
                       panelId = await usePanelStore.getState().addPanel({
                         kind: "terminal",
-                        agentId: t.type,
+                        launchAgentId: agentId,
                         command,
                         title: t.title,
                         cwd: worktreePath,

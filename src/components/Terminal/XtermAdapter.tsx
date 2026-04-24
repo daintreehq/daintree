@@ -11,7 +11,6 @@ import "@xterm/xterm/css/xterm.css";
 import { cn } from "@/lib/utils";
 import { terminalClient } from "@/clients";
 import { TerminalRefreshTier } from "@/types";
-import type { TerminalType } from "@/types";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { useTerminalAppearance } from "@/hooks/useTerminalAppearance";
 import { getScrollbackForType, PERFORMANCE_MODE_SCROLLBACK } from "@/utils/scrollbackConfig";
@@ -24,7 +23,7 @@ import { useTerminalFileTransfer } from "./useTerminalFileTransfer";
 
 export interface XtermAdapterProps {
   terminalId: string;
-  terminalType?: TerminalType;
+  launchAgentId?: string;
   isInputLocked?: boolean;
   onReady?: () => void;
   onExit?: (exitCode: number) => void;
@@ -40,7 +39,7 @@ const MIN_CONTAINER_SIZE = 50;
 
 function XtermAdapterComponent({
   terminalId,
-  terminalType = "terminal",
+  launchAgentId,
   isInputLocked,
   onReady,
   onExit,
@@ -95,10 +94,10 @@ function XtermAdapterComponent({
     if (performanceMode) {
       return PERFORMANCE_MODE_SCROLLBACK;
     }
-    const isAgent = terminalType !== "terminal";
+    const isAgent = launchAgentId !== undefined;
     const baseScrollback = !isAgent && projectScrollback ? projectScrollback : scrollbackLines;
-    return getScrollbackForType(terminalType, baseScrollback);
-  }, [performanceMode, scrollbackLines, projectScrollback, terminalType]);
+    return getScrollbackForType(isAgent, baseScrollback);
+  }, [performanceMode, scrollbackLines, projectScrollback, launchAgentId]);
 
   // Alt buffer state for TUI applications (OpenCode, vim, htop, etc.)
   // When in alt buffer, we remove padding and let the TUI fill the entire space
@@ -215,7 +214,7 @@ function XtermAdapterComponent({
 
     const managed = terminalInstanceService.getOrCreate(
       terminalId,
-      terminalType,
+      launchAgentId,
       terminalOptions,
       stableRefreshTierProvider,
       onInput,
@@ -350,7 +349,7 @@ function XtermAdapterComponent({
             // "Soft" newline for agent CLIs.
             // Codex CLI commonly expects LF (\n / Ctrl+J) for a newline without submit.
             // Other agent CLIs use the legacy ESC+CR sequence.
-            const softNewline = getSoftNewlineSequence(terminalType);
+            const softNewline = getSoftNewlineSequence(launchAgentId);
             terminalClient.write(terminalId, softNewline);
             terminalInstanceService.notifyUserInput(terminalId);
             onInput?.(softNewline);
@@ -422,7 +421,7 @@ function XtermAdapterComponent({
     };
   }, [
     terminalId,
-    terminalType,
+    launchAgentId,
     isInputLocked,
     terminalOptions,
     onExit,

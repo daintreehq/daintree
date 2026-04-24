@@ -2,7 +2,6 @@ import type { StoreApi } from "zustand";
 import type {
   TerminalInstance as TerminalInstanceType,
   AgentState,
-  TerminalType,
   AgentStateChangeTrigger,
   TerminalFlowStatus,
   TerminalRuntimeStatus,
@@ -141,7 +140,6 @@ export interface PanelRegistrySlice {
   setRuntimeStatus: (id: string, status: TerminalRuntimeStatus) => void;
   setInputLocked: (id: string, locked: boolean) => void;
   toggleInputLocked: (id: string) => void;
-  convertTerminalType: (id: string, newType: TerminalType, newAgentId?: string) => Promise<void>;
   /**
    * Kill the current PTY and respawn it in the same panel slot using a
    * different preset. Fires as part of the fallback chain when a preset's

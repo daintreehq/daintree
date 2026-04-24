@@ -1323,12 +1323,12 @@ describe("BulkCreateWorktreeDialog", () => {
       })
     );
 
-    // Agent-running terminals are now kind: "terminal" with agentId set.
-    const agentCall = mockAddPanel.mock.calls.find((c) => c[0].agentId === "claude");
+    // Agent-running terminals are now kind: "terminal" with launchAgentId set.
+    const agentCall = mockAddPanel.mock.calls.find((c) => c[0].launchAgentId === "claude");
     expect(agentCall).toBeDefined();
     expect(agentCall?.[0].kind).toBe("terminal");
     expect(agentCall?.[0].command).toBe("claude --fresh-generated");
-    expect(agentCall?.[0].agentId).toBe("claude");
+    expect(agentCall?.[0].launchAgentId).toBe("claude");
     expect(agentCall?.[0].command).not.toContain("stale-session");
     // Per-panel agent overrides survive the clone-layout projection.
     expect(agentCall?.[0].agentModelId).toBe("claude-opus-4-7");
@@ -1337,7 +1337,7 @@ describe("BulkCreateWorktreeDialog", () => {
     // Plain terminal command is passed through verbatim (it's a user-authored
     // shell command, not a path-scoped agent invocation).
     const terminalCall = mockAddPanel.mock.calls.find(
-      (c) => c[0].kind === "terminal" && !c[0].agentId
+      (c) => c[0].kind === "terminal" && !c[0].launchAgentId
     );
     expect(terminalCall).toBeDefined();
     expect(terminalCall?.[0].command).toBe("npm test");
@@ -1375,7 +1375,7 @@ describe("BulkCreateWorktreeDialog", () => {
       "claude",
       expect.objectContaining({ clipboardDirectory: undefined })
     );
-    const agentCall = mockAddPanel.mock.calls.find((c) => c[0].agentId === "claude");
+    const agentCall = mockAddPanel.mock.calls.find((c) => c[0].launchAgentId === "claude");
     expect(agentCall?.[0].command).toBe("claude --default");
   });
 

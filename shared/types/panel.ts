@@ -6,19 +6,14 @@ import type { BrowserHistory } from "./browser.js";
 export type BuiltInPanelKind = "terminal" | "browser" | "dev-preview";
 
 /**
- * Panel kind: distinguishes between default terminals, browser panels, and
- * extension-provided panel types. Agent identity is represented via `agentId`
- * on PTY panels rather than a distinct panel kind.
+ * Panel kind: distinguishes between terminals, browser panels, and
+ * extension-provided panel types. Agent-ness is a dynamic state of a terminal,
+ * NOT a distinct panel kind — see `docs/architecture/terminal-identity.md`.
  *
  * Built-in kinds: "terminal" | "browser" | "dev-preview"
  * Extensions can register additional kinds as strings.
  */
 export type PanelKind = BuiltInPanelKind | (string & {});
-
-/**
- * @deprecated Use PanelKind + agentId instead. This is kept for backward compatibility/migrations.
- */
-export type TerminalType = "terminal" | BuiltInAgentId;
 
 /** Location of a panel instance in the UI */
 export type PanelLocation = "grid" | "dock" | "trash" | "background";
@@ -104,6 +99,18 @@ export type TerminalRuntimeStatus = TerminalFlowStatus | "background" | "exited"
 /** Origin that spawned a terminal */
 export type TerminalSpawnSource = "quickrun" | "recipe" | "agent" | "palette";
 
+/**
+ * How a panel's title is currently owned.
+ *
+ * - `"default"` — title is derived from the live chrome identity
+ *   (`resolveChromeAgentId`) and is free to flip as detection promotes/demotes.
+ * - `"custom"` — the user renamed this panel; title is frozen and must not be
+ *   overwritten by detection events.
+ *
+ * Absent defaults to `"default"` for hydration compatibility.
+ */
+export type PanelTitleMode = "default" | "custom";
+
 /** Structured error state for terminal restart failures */
 export interface TerminalRestartError {
   /** Human-readable error message */
@@ -154,6 +161,8 @@ interface BasePanelData {
   kind: PanelKind;
   /** Display title for the panel tab */
   title: string;
+  /** How the title is owned. Absent = "default". */
+  titleMode?: PanelTitleMode;
   /** Location in the UI - grid (main view) or dock (minimized) */
   location: PanelLocation;
   /** ID of the worktree this panel is associated with */
@@ -174,27 +183,18 @@ interface BasePanelData {
 export interface PtyPanelData extends BasePanelData {
   kind: "terminal";
   /**
-   * @deprecated Legacy terminal classification. Predates the canonical identity
-   * model; conflates launch intent with UI classification. Kept for compatibility
-   * with `TerminalPane` and persisted state.
+   * Launch hint — the agent this terminal was *launched to run*, if any.
    *
-   * Do not use for new identity decisions. Prefer `agentId` (launch intent),
-   * `detectedAgentId` (live detection), or `capabilityAgentId` (capability mode).
-   * See `docs/architecture/terminal-identity.md`.
+   * This is NOT an identity claim. It is the "which agent's command did we
+   * inject at spawn time" record, kept so:
+   *   - Restart can re-inject the same command.
+   *   - Session resume can look up the agent's resume flags.
+   *   - Persisted settings (model, preset, launch flags) have a key.
+   *
+   * Never read by chrome. Never gates fleet/hybrid-input/focus. Absent for
+   * plain-shell launches. See `docs/architecture/terminal-identity.md`.
    */
-  type: TerminalType;
-  /**
-   * Launch intent — the agent identity this terminal was spawned as, if any.
-   *
-   * Sealed at spawn time; must not be rewritten by runtime process detection
-   * (see "Known violations" in `docs/architecture/terminal-identity.md`). Drives
-   * spawn-sealed behavior: environment shaping, non-interactive shell
-   * configuration, PTY pool selection, scrollback sizing, graceful shutdown,
-   * and restart semantics. Persisted so crash recovery respawns as the same agent.
-   *
-   * Absent for plain shells.
-   */
-  agentId?: AgentId;
+  launchAgentId?: AgentId;
   /** Current working directory of the terminal */
   cwd: string;
   /** Process ID of the underlying PTY process */
@@ -203,7 +203,7 @@ export interface PtyPanelData extends BasePanelData {
   cols: number;
   /** Number of rows in the terminal */
   rows: number;
-  /** Current agent lifecycle state (for agent-type terminals) */
+  /** Current agent lifecycle state (only meaningful while an agent is detected) */
   agentState?: AgentState;
   /** Timestamp when agentState last changed (milliseconds since epoch) */
   lastStateChange?: number;
@@ -263,32 +263,24 @@ export interface PtyPanelData extends BasePanelData {
   detectedProcessId?: string;
   /**
    * Sticky live-session flag. True once runtime detection fires in this session,
-   * even if no agent is currently detected. Used at exit time to preserve plain
-   * terminals that hosted an agent mid-session.
+   * even if no agent is currently detected. Enables "this terminal hosted an
+   * agent at some point" decisions (exit preservation, chrome demotion).
    *
-   * Live-only convenience signal. Not persisted; rehydrated from backend
-   * reconnect payload. Not launch intent; not capability mode.
+   * Not persisted; rehydrated from backend reconnect payload.
    */
   everDetectedAgent?: boolean;
   /**
-   * Live detected identity — the agent currently running in this terminal as
-   * identified by the backend process detector. Volatile UI signal for icon,
-   * badge, activity headline, and live state events.
+   * Live detected identity — the agent currently running in this terminal.
    *
-   * Cleared when the detected agent exits. Not persisted; rehydrated from
-   * backend reconnect payload. See `docs/architecture/terminal-identity.md`.
+   * This is the ONE field that drives UI chrome: icon, title, brand color,
+   * fleet eligibility, hybrid-input visibility, focus routing. When it is
+   * set, the terminal *is* an agent terminal. When it is cleared, the
+   * terminal *is* a plain shell. There is no other kind of terminal.
+   *
+   * Not persisted; rehydrated from backend reconnect payload.
+   * See `docs/architecture/terminal-identity.md`.
    */
   detectedAgentId?: BuiltInAgentId;
-  /**
-   * Capability mode — the agent capability surface this terminal is allowed to
-   * participate in (fleet membership, orchestration, hybrid input). Sealed at
-   * spawn time from launch intent (`agentId` narrowed to `BuiltInAgentId`);
-   * never touched by runtime detection. Absent on plain shells and on
-   * terminals where an agent was only runtime-detected. Not persisted —
-   * re-derived on every spawn from the same launch context. See
-   * `docs/architecture/terminal-identity.md`.
-   */
-  capabilityAgentId?: BuiltInAgentId;
   /** Captured agent session ID from graceful shutdown (used for session resume) */
   agentSessionId?: string;
   /** Process-level flags captured at launch time, persisted for session resume */
@@ -390,17 +382,13 @@ export interface TerminalInstance {
   worktreeId?: string;
   kind?: PanelKind;
   /**
-   * @deprecated Legacy terminal classification. See `PtyPanelData.type` and
-   * `docs/architecture/terminal-identity.md`. Prefer `agentId` (launch intent),
-   * `detectedAgentId` (live detection), or `capabilityAgentId` (capability mode).
+   * Launch hint — the agent this terminal was *launched to run*. Not identity.
+   * See `PtyPanelData.launchAgentId` for the full contract.
    */
-  type?: TerminalType;
-  /**
-   * Launch intent — the agent identity this terminal was spawned as.
-   * Sealed at spawn time. See `PtyPanelData.agentId` for full contract.
-   */
-  agentId?: AgentId;
+  launchAgentId?: AgentId;
   title: string;
+  /** How the title is owned. Absent = "default". */
+  titleMode?: PanelTitleMode;
   /** Last meaningful OSC title observed from the running agent — survives the trash window for display. */
   lastObservedTitle?: string;
   /** Working directory - only present for PTY panels */
@@ -475,11 +463,6 @@ export interface TerminalInstance {
    * See `PtyPanelData.detectedAgentId` for full contract.
    */
   detectedAgentId?: BuiltInAgentId;
-  /**
-   * Capability mode — sealed-at-spawn agent capability surface. See
-   * `PtyPanelData.capabilityAgentId` for the full contract.
-   */
-  capabilityAgentId?: BuiltInAgentId;
   /** Captured agent session ID from graceful shutdown (used for session resume) */
   agentSessionId?: string;
   /** Process-level flags captured at launch time, persisted for session resume */

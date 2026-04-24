@@ -19,7 +19,7 @@ export function DockPlaceholder({ className }: DockPlaceholderProps) {
     return <div className={cn("min-w-[100px] h-full", className)} aria-hidden="true" />;
   }
 
-  const { kind, agentId } = activeTerminal;
+  const { kind, launchAgentId } = activeTerminal;
 
   return (
     <div
@@ -30,7 +30,7 @@ export function DockPlaceholder({ className }: DockPlaceholderProps) {
       )}
       aria-hidden="true"
     >
-      <PlaceholderContent kind={kind ?? "terminal"} agentId={agentId} compact />
+      <PlaceholderContent kind={kind ?? "terminal"} agentId={launchAgentId} compact />
     </div>
   );
 }

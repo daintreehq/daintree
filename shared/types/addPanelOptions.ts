@@ -1,20 +1,21 @@
 import type {
   PanelKind,
   PanelLocation,
-  TerminalType,
   PanelExitBehavior,
+  PanelTitleMode,
   ViewportPresetId,
 } from "./panel.js";
 import type { BrowserHistory } from "./browser.js";
-import type { AgentState } from "./agent.js";
+import type { AgentState, AgentId } from "./agent.js";
 import type { TerminalSpawnSource } from "./panel.js";
 import type { BuiltInAgentId } from "../config/agentIds.js";
 
 /** Fields shared by all panel creation requests */
 export interface AddPanelOptionsBase {
   kind?: PanelKind;
-  type?: TerminalType;
   title?: string;
+  /** How the title is owned. Absent defaults to "default". */
+  titleMode?: PanelTitleMode;
   worktreeId?: string;
   cwd?: string;
   location?: PanelLocation;
@@ -39,8 +40,11 @@ export interface AddPanelOptionsBase {
   // --- PTY-related fields (optional on all types, only used by PTY panel kinds) ---
   shell?: string;
   command?: string;
-  /** Agent identity, when spawning an agent-running terminal. Absent for plain shells. */
-  agentId?: string;
+  /**
+   * Launch hint — agent this terminal was launched to run. Not identity.
+   * Drives nothing UI-facing. See `docs/architecture/terminal-identity.md`.
+   */
+  launchAgentId?: AgentId;
   agentState?: AgentState;
   lastStateChange?: number;
   /** Store command on instance but don't execute it on spawn */
@@ -63,13 +67,6 @@ export interface AddPanelOptionsBase {
   detectedAgentId?: BuiltInAgentId;
   /** Runtime-detected non-agent process icon id (npm, yarn, etc.) at hydration time; cleared when the process exits. */
   detectedProcessId?: string;
-  /**
-   * Capability mode — sealed-at-spawn agent capability surface. See
-   * `PtyPanelData.capabilityAgentId` for the full contract. Carried here so
-   * hydration paths (project switch, reconnect, orphaned terminal recovery) can
-   * preserve the backend-written value without re-deriving it from `agentId`.
-   */
-  capabilityAgentId?: BuiltInAgentId;
   /** Preset ID selected at launch time for per-panel preset selection */
   agentPresetId?: string;
   /** Preset brand color (hex) captured at launch time for per-panel icon tinting */
@@ -85,8 +82,9 @@ export interface AddPanelOptionsBase {
 /**
  * Options for creating a terminal panel.
  *
- * Agent-running terminals set `agentId` (and typically `command`). There is no
- * separate "agent" panel kind — agent identity lives on the `agentId` field.
+ * A "Claude terminal" is just a terminal with `launchAgentId: "claude"` and
+ * `command: "claude"`; there is no separate panel kind. See
+ * `docs/architecture/terminal-identity.md`.
  */
 export interface TerminalPanelOptions extends AddPanelOptionsBase {
   kind?: "terminal";

@@ -20,6 +20,7 @@ import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { useNotificationStore } from "@/store/notificationStore";
 import { isBuiltInAgentId } from "@shared/config/agentIds";
+import { getDefaultTitle } from "./slices/panelRegistry/helpers";
 
 function normalizeCrashType(value: unknown): CrashType | null {
   const validTypes: CrashType[] = [
@@ -267,18 +268,9 @@ export function setupTerminalStoreListeners() {
       terminalRegistryController.onAgentDetected((data) => {
         const { terminalId, processIconId, agentType } = data;
         if (!terminalId) return;
-        // When a runtime agent is detected, mirror the backend sticky flag so the exit
-        // preservation guard in the renderer survives even if the snapshot IPC is
-        // reordered relative to the exit event.
         const nextEverDetectedAgent = agentType ? true : undefined;
         const nextDetectedAgentId = isBuiltInAgentId(agentType) ? agentType : undefined;
         if (!processIconId && !nextEverDetectedAgent && !nextDetectedAgentId) return;
-
-        // Snapshot the persisted agentId before mutation so we can detect
-        // runtime promotion of a plain terminal (no agentId) that just started
-        // hosting a built-in agent. Cold-spawned agent panels (agentId set at
-        // spawn) already use the agent scrollback policy and do not need repair.
-        const priorAgentId = usePanelStore.getState().panelsById[terminalId]?.agentId;
 
         usePanelStore.setState((state) => {
           const terminal = state.panelsById[terminalId];
@@ -290,8 +282,30 @@ export function setupTerminalStoreListeners() {
             nextEverDetectedAgent === true && terminal.everDetectedAgent !== true;
           const needsAgentIdUpdate =
             nextDetectedAgentId !== undefined && terminal.detectedAgentId !== nextDetectedAgentId;
+          // Compute the new default title from the resolved chrome identity.
+          const titleMode = terminal.titleMode ?? "default";
+          const computedTitle = needsAgentIdUpdate
+            ? getDefaultTitle(terminal.kind, {
+                detectedAgentId: nextDetectedAgentId,
+                launchAgentId: terminal.launchAgentId,
+                everDetectedAgent: terminal.everDetectedAgent,
+              })
+            : undefined;
+          const needsTitleUpdate =
+            titleMode === "default" &&
+            computedTitle !== undefined &&
+            computedTitle.length > 0 &&
+            terminal.title !== computedTitle;
 
-          if (!needsIconUpdate && !needsStickyUpdate && !needsAgentIdUpdate) return state;
+          if (!needsIconUpdate && !needsStickyUpdate && !needsAgentIdUpdate && !needsTitleUpdate) {
+            return state;
+          }
+
+          // Plain terminals (no launchAgentId) promoted at runtime need scrollback
+          // policy applied in-process — cold-spawned agents already have it sealed at spawn.
+          if (needsAgentIdUpdate && nextDetectedAgentId && !terminal.launchAgentId) {
+            terminalInstanceService.applyAgentPromotion(terminalId, nextDetectedAgentId);
+          }
 
           return {
             panelsById: {
@@ -301,17 +315,11 @@ export function setupTerminalStoreListeners() {
                 ...(needsIconUpdate && { detectedProcessId: processIconId }),
                 ...(needsStickyUpdate && { everDetectedAgent: true }),
                 ...(needsAgentIdUpdate && { detectedAgentId: nextDetectedAgentId }),
+                ...(needsTitleUpdate && { title: computedTitle }),
               },
             },
           };
         });
-
-        // Runtime promotion: a panel spawned without an agentId cannot get the
-        // agent env/pool repaired in-process, but the live xterm scrollback
-        // grows to the agent policy so recent output isn't clipped.
-        if (priorAgentId === undefined && nextDetectedAgentId !== undefined) {
-          terminalInstanceService.applyAgentPromotion(terminalId, nextDetectedAgentId);
-        }
       })
     )
   );
@@ -323,17 +331,31 @@ export function setupTerminalStoreListeners() {
         if (!terminalId) return;
 
         // `agent:exited` is a subcommand/demotion signal — the shell PTY is
-        // still alive. Clear only the LIVE detection fields. `agentId` is
-        // sealed launch intent (#5803) and must never be cleared here:
-        // restart decisions read it to decide whether to relaunch as agent
-        // vs plain shell, and clearing it would corrupt that decision on a
-        // cold-launched agent terminal whose user typed `/quit`. #5807
+        // still alive. Clear live-detection fields and re-sync the default
+        // title. `launchAgentId` is immutable and is not touched here; a
+        // cold-launched agent terminal whose agent has exited demotes to
+        // plain shell chrome (see resolveChromeAgentId's demotion rule),
+        // but the launch hint is still available for manual restart.
         usePanelStore.setState((state) => {
           const terminal = state.panelsById[terminalId];
           if (!terminal) return state;
           const clearProcess = terminal.detectedProcessId !== undefined;
           const clearDetectedAgent = terminal.detectedAgentId !== undefined;
-          if (!clearProcess && !clearDetectedAgent) return state;
+          // After demotion, detectedAgentId is cleared and everDetectedAgent stays
+          // true, so resolveChromeAgentId returns undefined → title reverts to "Terminal".
+          const titleMode = terminal.titleMode ?? "default";
+          const computedTitle = clearDetectedAgent
+            ? getDefaultTitle(terminal.kind, {
+                detectedAgentId: undefined,
+                launchAgentId: terminal.launchAgentId,
+                everDetectedAgent: true,
+              })
+            : undefined;
+          const needsTitleUpdate =
+            titleMode === "default" &&
+            computedTitle !== undefined &&
+            terminal.title !== computedTitle;
+          if (!clearProcess && !clearDetectedAgent && !needsTitleUpdate) return state;
 
           return {
             panelsById: {
@@ -342,6 +364,7 @@ export function setupTerminalStoreListeners() {
                 ...terminal,
                 ...(clearProcess && { detectedProcessId: undefined }),
                 ...(clearDetectedAgent && { detectedAgentId: undefined }),
+                ...(needsTitleUpdate && { title: computedTitle }),
               },
             },
           };
@@ -492,10 +515,7 @@ export function setupTerminalStoreListeners() {
         // Preserve successfully completed agent terminals to enable reboot and output review.
         // Also preserve plain terminals that ran an agent mid-session (runtime detection);
         // everDetectedAgent is sticky in the PTY host so it survives past the inner agent exit.
-        if (
-          isAgentTerminal(terminal.kind ?? terminal.type, terminal.agentId) ||
-          terminal.everDetectedAgent === true
-        ) {
+        if (isAgentTerminal(terminal) || terminal.everDetectedAgent === true) {
           return;
         }
 

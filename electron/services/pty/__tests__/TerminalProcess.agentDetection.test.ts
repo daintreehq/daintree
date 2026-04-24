@@ -94,14 +94,11 @@ function createAgentTerminal(deps?: Partial<TerminalProcessDeps>): TerminalProce
     cols: 80,
     rows: 24,
     kind: "terminal",
-    type: "claude",
-    agentId: "claude",
+    launchAgentId: "claude",
   } as TerminalProcessOptions;
   const ctx: SpawnContext = {
     shell: "/bin/zsh",
     args: ["-l"],
-    isAgentTerminal: true,
-    agentId: "claude",
     env: {},
   };
   return new TerminalProcess(
@@ -129,13 +126,10 @@ function createPlainTerminal(id = "t-plain", deps?: Partial<TerminalProcessDeps>
     cols: 80,
     rows: 24,
     kind: "terminal",
-    type: "terminal",
   } as TerminalProcessOptions;
   const ctx: SpawnContext = {
     shell: "/bin/zsh",
     args: ["-l"],
-    isAgentTerminal: false,
-    agentId: undefined,
     env: {},
   };
   return new TerminalProcess(
@@ -380,10 +374,10 @@ describe("TerminalProcess.handleAgentDetection — polling loop teardown", () =>
 // the agent's longer output. Cold agent terminals already start at 10k and
 // must be untouched.
 describe("TerminalProcess.handleAgentDetection — runtime promotion scrollback", () => {
-  it("grows scrollback to AGENT_SCROLLBACK when a plain terminal first detects an agent", () => {
+  it("plain terminal starts at DEFAULT_SCROLLBACK and agent detection does not change it", () => {
     const terminal = createPlainTerminal();
     try {
-      expect(getScrollback(terminal)).toBe(1000);
+      expect(getScrollback(terminal)).toBe(10000);
 
       callHandleAgentDetection(
         terminal,
@@ -490,12 +484,10 @@ describe("TerminalProcess shell-command identity fallback", () => {
       await vi.advanceTimersByTimeAsync(2000);
 
       const info = terminal.getInfo();
-      expect(info.detectedAgentType).toBe("claude");
-      // Launch identity is sealed at spawn — runtime detection must not
-      // rewrite `agentId`. Runtime identity flows via `detectedAgentType`. #5803
-      expect(info.agentId).toBeUndefined();
+      expect(info.detectedAgentId).toBe("claude");
+      // Plain terminal — no launchAgentId; runtime detection must not set it.
+      expect(info.launchAgentId).toBeUndefined();
       expect(info.analysisEnabled).toBe(true);
-      expect(info.type).toBe("claude");
       expect(info.everDetectedAgent).toBe(true);
     } finally {
       terminal.dispose();
@@ -512,18 +504,17 @@ describe("TerminalProcess shell-command identity fallback", () => {
       pty.__emitData("Claude Code ready.\r\n");
 
       await vi.advanceTimersByTimeAsync(2000);
-      expect(terminal.getInfo().detectedAgentType).toBe("claude");
+      expect(terminal.getInfo().detectedAgentId).toBe("claude");
 
       pty.__emitData("\r\ngpriday@macbook canopy-app % ");
       await vi.advanceTimersByTimeAsync(600);
 
       const info = terminal.getInfo();
-      expect(info.detectedAgentType).toBeUndefined();
-      // Launch identity survives demotion — the PTY was born as claude, and
+      expect(info.detectedAgentId).toBeUndefined();
+      // Launch hint survives demotion — the PTY was born as claude, and
       // that historical fact must persist across the agent exiting. #5803
-      expect(info.agentId).toBe("claude");
+      expect(info.launchAgentId).toBe("claude");
       expect(info.analysisEnabled).toBe(false);
-      expect(info.type).toBe("terminal");
     } finally {
       terminal.dispose();
     }
@@ -545,7 +536,7 @@ describe("TerminalProcess shell-command identity fallback", () => {
       await vi.advanceTimersByTimeAsync(600);
 
       expect(terminal.getInfo().detectedProcessIconId).toBeUndefined();
-      expect(terminal.getInfo().detectedAgentType).toBeUndefined();
+      expect(terminal.getInfo().detectedAgentId).toBeUndefined();
     } finally {
       terminal.dispose();
     }
@@ -563,10 +554,9 @@ describe("TerminalProcess shell-command identity fallback", () => {
       await vi.advanceTimersByTimeAsync(2500);
 
       const info = terminal.getInfo();
-      expect(info.detectedAgentType).toBeUndefined();
+      expect(info.detectedAgentId).toBeUndefined();
       expect(info.detectedProcessIconId).toBeUndefined();
-      expect(info.agentId).toBeUndefined();
-      expect(info.type).toBe("terminal");
+      expect(info.launchAgentId).toBeUndefined();
     } finally {
       terminal.dispose();
     }
@@ -702,15 +692,14 @@ describe("TerminalProcess.handleAgentDetection — plain process icon badge emis
   });
 });
 
-// #5803: launch identity (`terminal.agentId`) is sealed at spawn time and must
-// never be rewritten by runtime process detection. Runtime-detected identity
-// flows through `detectedAgentType`; consumers observe the live agent via
-// `agentId ?? detectedAgentType`. See `docs/architecture/terminal-identity.md`.
+// #5803: launchAgentId is sealed at spawn time and must never be rewritten by
+// runtime process detection. Runtime-detected identity flows through
+// `detectedAgentId`. See `docs/architecture/terminal-identity.md`.
 describe("TerminalProcess.handleAgentDetection — launch identity immutability (#5803)", () => {
-  it("plain terminal promotion does not mutate agentId", () => {
+  it("plain terminal promotion does not set launchAgentId", () => {
     const terminal = createPlainTerminal("t-immut-promote");
     try {
-      expect(terminal.getInfo().agentId).toBeUndefined();
+      expect(terminal.getInfo().launchAgentId).toBeUndefined();
 
       callHandleAgentDetection(
         terminal,
@@ -719,14 +708,14 @@ describe("TerminalProcess.handleAgentDetection — launch identity immutability 
       );
 
       const info = terminal.getInfo();
-      expect(info.agentId).toBeUndefined();
-      expect(info.detectedAgentType).toBe("claude");
+      expect(info.launchAgentId).toBeUndefined();
+      expect(info.detectedAgentId).toBe("claude");
     } finally {
       terminal.dispose();
     }
   });
 
-  it("plain terminal demotion does not clear or rewrite agentId", () => {
+  it("plain terminal demotion does not set launchAgentId", () => {
     const terminal = createPlainTerminal("t-immut-demote-plain");
     try {
       callHandleAgentDetection(
@@ -734,7 +723,7 @@ describe("TerminalProcess.handleAgentDetection — launch identity immutability 
         makeAgentResult({ agentType: "claude" as const, processIconId: "claude" }),
         getSpawnedAt(terminal)
       );
-      expect(terminal.getInfo().agentId).toBeUndefined();
+      expect(terminal.getInfo().launchAgentId).toBeUndefined();
 
       // Demotion via non-agent icon.
       callHandleAgentDetection(
@@ -742,18 +731,18 @@ describe("TerminalProcess.handleAgentDetection — launch identity immutability 
         makeAgentResult({ processIconId: "npm", processName: "npm" }),
         getSpawnedAt(terminal)
       );
-      expect(terminal.getInfo().agentId).toBeUndefined();
-      expect(terminal.getInfo().detectedAgentType).toBeUndefined();
+      expect(terminal.getInfo().launchAgentId).toBeUndefined();
+      expect(terminal.getInfo().detectedAgentId).toBeUndefined();
 
       // Demotion via no-detection.
       callHandleAgentDetection(terminal, makeNoAgentResult({}), getSpawnedAt(terminal));
-      expect(terminal.getInfo().agentId).toBeUndefined();
+      expect(terminal.getInfo().launchAgentId).toBeUndefined();
     } finally {
       terminal.dispose();
     }
   });
 
-  it("spawn-sealed agent preserves agentId across a non-agent-icon demotion", () => {
+  it("spawn-sealed agent preserves launchAgentId across a non-agent-icon demotion", () => {
     const terminal = createAgentTerminal();
     try {
       callHandleAgentDetection(
@@ -761,7 +750,7 @@ describe("TerminalProcess.handleAgentDetection — launch identity immutability 
         makeAgentResult({ agentType: "claude" as const, processIconId: "claude" }),
         getSpawnedAt(terminal)
       );
-      expect(terminal.getInfo().agentId).toBe("claude");
+      expect(terminal.getInfo().launchAgentId).toBe("claude");
 
       callHandleAgentDetection(
         terminal,
@@ -770,14 +759,14 @@ describe("TerminalProcess.handleAgentDetection — launch identity immutability 
       );
 
       const info = terminal.getInfo();
-      expect(info.agentId).toBe("claude");
-      expect(info.detectedAgentType).toBeUndefined();
+      expect(info.launchAgentId).toBe("claude");
+      expect(info.detectedAgentId).toBeUndefined();
     } finally {
       terminal.dispose();
     }
   });
 
-  it("spawn-sealed agent preserves agentId across a no-detection demotion", () => {
+  it("spawn-sealed agent preserves launchAgentId across a no-detection demotion", () => {
     const terminal = createAgentTerminal();
     try {
       callHandleAgentDetection(
@@ -785,13 +774,13 @@ describe("TerminalProcess.handleAgentDetection — launch identity immutability 
         makeAgentResult({ agentType: "claude" as const, processIconId: "claude" }),
         getSpawnedAt(terminal)
       );
-      expect(terminal.getInfo().agentId).toBe("claude");
+      expect(terminal.getInfo().launchAgentId).toBe("claude");
 
       callHandleAgentDetection(terminal, makeNoAgentResult({}), getSpawnedAt(terminal));
 
       const info = terminal.getInfo();
-      expect(info.agentId).toBe("claude");
-      expect(info.detectedAgentType).toBeUndefined();
+      expect(info.launchAgentId).toBe("claude");
+      expect(info.detectedAgentId).toBeUndefined();
     } finally {
       terminal.dispose();
     }
@@ -816,99 +805,16 @@ describe("TerminalProcess.handleAgentDetection — launch identity immutability 
       );
       expect(detectedEvents).toHaveLength(1);
       expect(detectedEvents[0].agentType).toBe("claude");
-      expect(terminal.getInfo().agentId).toBeUndefined();
+      expect(terminal.getInfo().launchAgentId).toBeUndefined();
 
       callHandleAgentDetection(terminal, makeNoAgentResult({}), getSpawnedAt(terminal));
       expect(exitedEvents).toHaveLength(1);
       expect(exitedEvents[0].agentType).toBe("claude");
-      expect(terminal.getInfo().agentId).toBeUndefined();
+      expect(terminal.getInfo().launchAgentId).toBeUndefined();
     } finally {
       unsubDetected();
       unsubExited();
       terminal.dispose();
-    }
-  });
-});
-
-// #5804: capability mode is sealed at spawn time from launch intent. Cold-launched
-// built-in agents get `capabilityAgentId`; plain shells do not, even when an agent
-// is later detected at runtime. Runtime detection (and the bridge-write violation
-// in `handleAgentDetection` that mutates `agentId`) must never touch this field.
-describe("TerminalProcess — capabilityAgentId sealed at spawn (#5804)", () => {
-  it("cold-launched built-in agent terminal has capabilityAgentId set to its agentId", () => {
-    const terminal = createAgentTerminal();
-    try {
-      expect(terminal.getInfo().capabilityAgentId).toBe("claude");
-    } finally {
-      terminal.dispose();
-    }
-  });
-
-  it("plain terminal has no capabilityAgentId at construction", () => {
-    const terminal = createPlainTerminal("t-cap-plain");
-    try {
-      expect(terminal.getInfo().capabilityAgentId).toBeUndefined();
-    } finally {
-      terminal.dispose();
-    }
-  });
-
-  it("runtime promotion to a detected agent does not set capabilityAgentId on a plain shell", () => {
-    const terminal = createPlainTerminal("t-cap-promotion");
-    try {
-      callHandleAgentDetection(
-        terminal,
-        makeAgentResult({ agentType: "claude" as const, processIconId: "claude" }),
-        getSpawnedAt(terminal)
-      );
-
-      const info = terminal.getInfo();
-      // Live identity flows through detectedAgentType. Capability mode does not.
-      expect(info.detectedAgentType).toBe("claude");
-      expect(info.capabilityAgentId).toBeUndefined();
-    } finally {
-      terminal.dispose();
-    }
-  });
-
-  it("runtime detection events on a cold-launched agent do not change capabilityAgentId", () => {
-    const terminal = createAgentTerminal();
-    try {
-      expect(terminal.getInfo().capabilityAgentId).toBe("claude");
-
-      // Spurious re-detection of the same agent.
-      callHandleAgentDetection(
-        terminal,
-        makeAgentResult({ agentType: "claude" as const, processIconId: "claude" }),
-        getSpawnedAt(terminal)
-      );
-      expect(terminal.getInfo().capabilityAgentId).toBe("claude");
-
-      // Demotion to a non-agent process.
-      callHandleAgentDetection(
-        terminal,
-        makeAgentResult({ processIconId: "npm", processName: "npm" }),
-        getSpawnedAt(terminal)
-      );
-      expect(terminal.getInfo().capabilityAgentId).toBe("claude");
-
-      // Full demotion.
-      callHandleAgentDetection(terminal, makeNoAgentResult({}), getSpawnedAt(terminal));
-      expect(terminal.getInfo().capabilityAgentId).toBe("claude");
-    } finally {
-      terminal.dispose();
-    }
-  });
-
-  it("getPublicState() emits capabilityAgentId — IPC-safe consumers must see it", () => {
-    const agent = createAgentTerminal();
-    const plain = createPlainTerminal("t-cap-public-plain");
-    try {
-      expect(agent.getPublicState().capabilityAgentId).toBe("claude");
-      expect(plain.getPublicState().capabilityAgentId).toBeUndefined();
-    } finally {
-      agent.dispose();
-      plain.dispose();
     }
   });
 });
@@ -930,7 +836,7 @@ describe("TerminalProcess.handleAgentDetection — unknown/ambiguous hold state 
         { detectionState: "agent", detected: true, agentType: "claude", processIconId: "claude" },
         getSpawnedAt(terminal)
       );
-      expect(terminal.getInfo().detectedAgentType).toBe("claude");
+      expect(terminal.getInfo().detectedAgentId).toBe("claude");
 
       callHandleAgentDetection(
         terminal,
@@ -938,8 +844,7 @@ describe("TerminalProcess.handleAgentDetection — unknown/ambiguous hold state 
         getSpawnedAt(terminal)
       );
 
-      expect(terminal.getInfo().detectedAgentType).toBe("claude");
-      expect(terminal.getInfo().type).toBe("claude");
+      expect(terminal.getInfo().detectedAgentId).toBe("claude");
       expect(exitedEvents).toBe(0);
     } finally {
       unsubscribe();
@@ -960,7 +865,7 @@ describe("TerminalProcess.handleAgentDetection — unknown/ambiguous hold state 
         { detectionState: "agent", detected: true, agentType: "claude", processIconId: "claude" },
         getSpawnedAt(terminal)
       );
-      expect(terminal.getInfo().detectedAgentType).toBe("claude");
+      expect(terminal.getInfo().detectedAgentId).toBe("claude");
 
       callHandleAgentDetection(
         terminal,
@@ -968,8 +873,7 @@ describe("TerminalProcess.handleAgentDetection — unknown/ambiguous hold state 
         getSpawnedAt(terminal)
       );
 
-      expect(terminal.getInfo().detectedAgentType).toBe("claude");
-      expect(terminal.getInfo().type).toBe("claude");
+      expect(terminal.getInfo().detectedAgentId).toBe("claude");
       expect(exitedEvents).toBe(0);
     } finally {
       unsubscribe();
@@ -986,7 +890,7 @@ describe("TerminalProcess.handleAgentDetection — unknown/ambiguous hold state 
         { detected: true, agentType: "claude", processIconId: "claude" } as never,
         getSpawnedAt(terminal)
       );
-      expect(terminal.getInfo().detectedAgentType).toBe("claude");
+      expect(terminal.getInfo().detectedAgentId).toBe("claude");
     } finally {
       terminal.dispose();
     }

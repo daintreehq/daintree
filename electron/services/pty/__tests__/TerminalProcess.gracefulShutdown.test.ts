@@ -63,8 +63,6 @@ function defaultSpawnContext(overrides?: Partial<SpawnContext>): SpawnContext {
   return {
     shell: "/bin/zsh",
     args: ["-l"],
-    isAgentTerminal: true,
-    agentId: "claude",
     env: {},
     ...overrides,
   };
@@ -78,8 +76,7 @@ function createAgentTerminal(handles: MockPtyHandles): TerminalProcess {
     cols: 80,
     rows: 24,
     kind: "terminal",
-    type: "claude",
-    agentId: "claude",
+    launchAgentId: "claude",
   };
   return new TerminalProcess(
     "t1",
@@ -230,7 +227,6 @@ describe("TerminalProcess.gracefulShutdown — input-clear prelude", () => {
         cols: 80,
         rows: 24,
         kind: "terminal",
-        type: "terminal",
       },
       { emitData: () => {}, onExit: () => {} },
       {
@@ -242,7 +238,7 @@ describe("TerminalProcess.gracefulShutdown — input-clear prelude", () => {
         ptyPool: null,
         processTreeCache: null,
       },
-      defaultSpawnContext({ isAgentTerminal: false, agentId: undefined }),
+      defaultSpawnContext(),
       handles.pty
     );
 

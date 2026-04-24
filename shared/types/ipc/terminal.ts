@@ -1,4 +1,4 @@
-import type { TerminalType, PanelKind, PanelLocation } from "../panel.js";
+import type { PanelKind, PanelLocation, PanelTitleMode } from "../panel.js";
 import type { AgentId } from "../agent.js";
 import type { AgentState } from "../agent.js";
 import type { BuiltInAgentId } from "../../config/agentIds.js";
@@ -7,14 +7,16 @@ import type { BuiltInAgentId } from "../../config/agentIds.js";
 export interface TerminalSpawnOptions {
   /** Optional custom ID for the terminal */
   id?: string;
-  /** Terminal category */
+  /** Terminal category (only "terminal" makes sense for PTY spawns) */
   kind?: PanelKind;
   /**
-   * Launch intent — the agent identity this terminal will be spawned as.
-   * Sealed for the lifetime of the terminal. See
-   * `docs/architecture/terminal-identity.md` for the full contract.
+   * Launch hint — the agent this terminal is being launched to run. Used
+   * only to key agent-specific settings (model, preset, flags, session
+   * resume) and to derive the command to auto-inject. NOT an identity.
+   * Absent for plain-shell launches. See
+   * `docs/architecture/terminal-identity.md`.
    */
-  agentId?: AgentId;
+  launchAgentId?: AgentId;
   /** Project ID to associate with the terminal (captured at action time to avoid race conditions) */
   projectId?: string;
   /** Working directory for the terminal */
@@ -27,14 +29,10 @@ export interface TerminalSpawnOptions {
   cols: number;
   /** Initial number of rows */
   rows: number;
-  /**
-   * @deprecated Legacy terminal classification. See
-   * `docs/architecture/terminal-identity.md`. Prefer `agentId` for launch
-   * intent, `capabilityAgentId` for capability mode.
-   */
-  type?: TerminalType;
   /** Display title for the terminal */
   title?: string;
+  /** How the title is owned. Absent defaults to "default". */
+  titleMode?: PanelTitleMode;
   /** Command to execute after shell starts (e.g., 'claude' for AI agents) */
   command?: string;
   /** Whether to restore previous session content (default: true). Set to false on restart. */
@@ -51,16 +49,6 @@ export interface TerminalSpawnOptions {
   agentPresetId?: string;
   /** Original user-selected preset ID; unchanged across fallback hops. */
   originalAgentPresetId?: string;
-  /**
-   * Capability mode override for this spawn request. Currently expected to
-   * follow `agentId`; reserved for future consumers.
-   *
-   * NOTE: This field is intentionally NOT present in `TerminalSpawnOptionsSchema`
-   * (the Zod validation schema at `electron/schemas/ipc.ts`) and is not
-   * consumed by the spawn IPC handler. See
-   * `docs/architecture/terminal-identity.md`.
-   */
-  capabilityAgentId?: BuiltInAgentId;
 }
 
 /** Terminal state for app state persistence */
@@ -70,19 +58,15 @@ export interface TerminalState {
   /** Terminal category */
   kind?: PanelKind;
   /**
-   * @deprecated Legacy terminal classification retained for persisted-state
-   * compatibility. See `docs/architecture/terminal-identity.md`. New code
-   * should rely on `agentId` (launch intent).
+   * Launch hint — the agent this terminal was launched to run. Persisted so
+   * restart/crash-recovery can re-inject the right command. Not identity.
+   * See `docs/architecture/terminal-identity.md`.
    */
-  type?: TerminalType;
-  /**
-   * Launch intent — the agent identity this terminal was spawned as. Persisted
-   * so crash recovery respawns the terminal as the same agent. See
-   * `docs/architecture/terminal-identity.md`.
-   */
-  agentId?: AgentId;
+  launchAgentId?: AgentId;
   /** Display title */
   title: string;
+  /** How the title is owned. Absent defaults to "default". */
+  titleMode?: PanelTitleMode;
   /** Current working directory (required for PTY panels, optional for non-PTY) */
   cwd?: string;
   /** Associated worktree ID */
@@ -91,10 +75,6 @@ export interface TerminalState {
   location?: PanelLocation;
   /** Command to execute after shell starts (e.g., 'claude' for AI agents) */
   command?: string;
-  /** Last detected agent type (for restoration hints) */
-  lastDetectedAgent?: TerminalType;
-  /** Last detected agent title (for restoration hints) */
-  lastDetectedAgentTitle?: string;
   isInputLocked?: boolean;
   /** Current URL for browser/dev-preview panes */
   browserUrl?: string;
@@ -167,18 +147,10 @@ export interface BackendTerminalInfo {
   id: string;
   projectId?: string;
   kind?: PanelKind;
-  /**
-   * @deprecated Legacy terminal classification. See
-   * `docs/architecture/terminal-identity.md`. Prefer `agentId` (launch intent),
-   * `detectedAgentId` (live detection), or `capabilityAgentId` (capability mode).
-   */
-  type?: TerminalType;
-  /**
-   * Launch intent — the agent identity this terminal was spawned as. Sealed
-   * at spawn time. See `docs/architecture/terminal-identity.md`.
-   */
-  agentId?: AgentId;
+  /** Launch hint — agent this terminal was launched to run. See `docs/architecture/terminal-identity.md`. */
+  launchAgentId?: AgentId;
   title?: string;
+  titleMode?: PanelTitleMode;
   cwd: string;
   agentState?: AgentState;
   lastStateChange?: number;
@@ -196,24 +168,17 @@ export interface BackendTerminalInfo {
   /** Model ID selected at launch time */
   agentModelId?: string;
   /**
-   * Sticky live-session flag. True once runtime detection fires in this session,
-   * even if no agent is currently detected. Not persisted; rehydrated here on
-   * reconnect. See `docs/architecture/terminal-identity.md`.
+   * Sticky live-session flag. True once runtime detection fires in this
+   * session, even if no agent is currently detected. Not persisted;
+   * rehydrated here on reconnect.
    */
   everDetectedAgent?: boolean;
   /**
-   * Live detected identity — the agent currently running in this terminal as
-   * identified by the backend process detector. Cleared when the detected
-   * agent exits. Not persisted; rehydrated here on reconnect. See
-   * `docs/architecture/terminal-identity.md`.
+   * Live detected identity — the agent currently running in this terminal.
+   * The single source of truth for chrome. Not persisted; rehydrated here on
+   * reconnect. See `docs/architecture/terminal-identity.md`.
    */
   detectedAgentId?: BuiltInAgentId;
-  /**
-   * Capability mode — sealed-at-spawn agent capability surface. Set when the
-   * terminal was cold-launched as a built-in agent. See
-   * `docs/architecture/terminal-identity.md`.
-   */
-  capabilityAgentId?: BuiltInAgentId;
   /** Runtime-detected non-agent process icon id (npm, yarn, etc.). Cleared when the process exits. */
   detectedProcessId?: string;
 }
@@ -224,18 +189,10 @@ export interface TerminalReconnectResult {
   id?: string;
   projectId?: string;
   kind?: PanelKind;
-  /**
-   * @deprecated Legacy terminal classification. See
-   * `docs/architecture/terminal-identity.md`. Prefer `agentId` (launch intent),
-   * `detectedAgentId` (live detection), or `capabilityAgentId` (capability mode).
-   */
-  type?: TerminalType;
-  /**
-   * Launch intent — the agent identity this terminal was spawned as. Sealed
-   * at spawn time. See `docs/architecture/terminal-identity.md`.
-   */
-  agentId?: AgentId;
+  /** Launch hint — agent this terminal was launched to run. See `docs/architecture/terminal-identity.md`. */
+  launchAgentId?: AgentId;
   title?: string;
+  titleMode?: PanelTitleMode;
   cwd?: string;
   agentState?: AgentState;
   lastStateChange?: number;
@@ -245,55 +202,26 @@ export interface TerminalReconnectResult {
   agentSessionId?: string;
   agentLaunchFlags?: string[];
   agentModelId?: string;
-  /**
-   * Sticky live-session flag. True once runtime detection fired in this
-   * session, even if no agent is currently detected. Rehydrated on reconnect.
-   * See `docs/architecture/terminal-identity.md`.
-   */
+  /** Sticky live-session flag. Rehydrated on reconnect. */
   everDetectedAgent?: boolean;
-  /**
-   * Live detected identity — the agent currently running in this terminal
-   * as identified by the backend process detector. Cleared when the detected
-   * agent exits. See `docs/architecture/terminal-identity.md`.
-   */
+  /** Live detected identity; the single chrome source of truth. See `docs/architecture/terminal-identity.md`. */
   detectedAgentId?: BuiltInAgentId;
-  /**
-   * Capability mode — sealed-at-spawn agent capability surface. Carried on
-   * reconnect so the renderer can re-derive session-capability gates without
-   * waiting for a fresh snapshot. See
-   * `docs/architecture/terminal-identity.md`.
-   */
-  capabilityAgentId?: BuiltInAgentId;
   /** Runtime-detected non-agent process icon id (npm, yarn, etc.). Cleared when the process exits. */
   detectedProcessId?: string;
 }
 
 /**
  * Terminal information payload for diagnostic display.
- *
- * Consumed exclusively by `TerminalInfoDialog.tsx`. Intentionally omits
- * `capabilityAgentId` — capability mode is sealed-at-spawn from `agentId`
- * (narrowed to `BuiltInAgentId`), so the dialog does not need to render it
- * separately. Diagnostic readers that need the value should consume it via
- * `BackendTerminalInfo` / `TerminalReconnectResult`.
- * See `docs/architecture/terminal-identity.md`.
+ * Consumed exclusively by `TerminalInfoDialog.tsx`.
  */
 export interface TerminalInfoPayload {
   id: string;
   projectId?: string;
   kind?: PanelKind;
-  /**
-   * @deprecated Legacy terminal classification. See
-   * `docs/architecture/terminal-identity.md`. Prefer `agentId` (launch intent)
-   * or `detectedAgentId` (live detection).
-   */
-  type?: TerminalType;
-  /**
-   * Launch intent — the agent identity this terminal was spawned as. Sealed
-   * at spawn time. See `docs/architecture/terminal-identity.md`.
-   */
-  agentId?: AgentId;
+  /** Launch hint — agent this terminal was launched to run. Not identity. */
+  launchAgentId?: AgentId;
   title?: string;
+  titleMode?: PanelTitleMode;
   cwd: string;
   shell?: string;
   agentState?: AgentState;
@@ -307,20 +235,7 @@ export interface TerminalInfoPayload {
   restartCount: number;
   /** Whether this terminal has an active PTY process (false for orphaned terminals that exited) */
   hasPty?: boolean;
-  /** Whether this terminal is classified as an agent terminal */
-  isAgentTerminal?: boolean;
-  /**
-   * Live detected identity — internal PTY-side alias for the agent currently
-   * running in this terminal. Equivalent to `detectedAgentId`; retained here
-   * for diagnostic display of the PTY-side name. See
-   * `docs/architecture/terminal-identity.md`.
-   */
-  detectedAgentType?: TerminalType;
-  /**
-   * Live detected identity — the agent currently running in this terminal as
-   * identified by the backend process detector. Cleared when the detected
-   * agent exits. See `docs/architecture/terminal-identity.md`.
-   */
+  /** Live detected identity — the agent currently running. Source of truth for chrome. */
   detectedAgentId?: BuiltInAgentId;
   /** Whether semantic analysis is enabled for this terminal */
   analysisEnabled?: boolean;
@@ -346,9 +261,7 @@ export interface TerminalInfoPayload {
   exitCode?: number;
   /**
    * Sticky live-session flag. True once runtime detection fires in this
-   * session, even if no agent is currently detected. Not persisted; not
-   * launch intent; not capability mode. See
-   * `docs/architecture/terminal-identity.md`.
+   * session, even if no agent is currently detected.
    */
   everDetectedAgent?: boolean;
 }

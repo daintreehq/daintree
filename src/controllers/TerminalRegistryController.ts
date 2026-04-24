@@ -14,7 +14,7 @@
 
 import { terminalClient } from "@/clients";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
-import type { TerminalType, PanelLocation, AgentState } from "@/types";
+import type { PanelLocation, AgentState } from "@/types";
 import type {
   TerminalSpawnOptions,
   AgentStateChangePayload,
@@ -25,7 +25,7 @@ import type {
   TerminalStatusPayload,
   SpawnResult,
 } from "@shared/types";
-import { isRegisteredAgent, getAgentConfig } from "@/config/agents";
+import { getAgentConfig } from "@/config/agents";
 import { getTerminalAppearanceSnapshot } from "@/hooks/useTerminalAppearance";
 import { getScrollbackForType, PERFORMANCE_MODE_SCROLLBACK } from "@/utils/scrollbackConfig";
 import { getXtermOptions } from "@/config/xtermConfig";
@@ -47,9 +47,9 @@ const DOCK_PREWARM_HEIGHT_PX = 800;
  */
 export interface SpawnTerminalOptions {
   id?: string;
-  kind?: "terminal" | "agent";
-  type?: TerminalType;
-  agentId?: string;
+  kind?: "terminal";
+  /** Launch hint — agent this terminal will run. Not identity. */
+  launchAgentId?: string;
   title?: string;
   worktreeId?: string;
   cwd: string;
@@ -65,24 +65,16 @@ export interface SpawnTerminalOptions {
 export interface SpawnTerminalResult {
   id: string;
   kind: "terminal";
-  type: TerminalType;
-  agentId?: string;
+  /** Launch hint — agent this terminal was launched to run, if any. */
+  launchAgentId?: string;
   title: string;
   agentState?: AgentState;
 }
 
-function getDefaultTitle(type?: TerminalType, agentId?: string): string {
-  if (agentId) {
-    const config = getAgentConfig(agentId);
-    if (config) {
-      return config.name;
-    }
-  }
-  if (type && type !== "terminal") {
-    const config = getAgentConfig(type);
-    if (config) {
-      return config.name;
-    }
+function getDefaultTitle(launchAgentId?: string): string {
+  if (launchAgentId) {
+    const config = getAgentConfig(launchAgentId);
+    if (config) return config.name;
   }
   return "Terminal";
 }
@@ -97,10 +89,9 @@ class TerminalRegistryController {
    * Returns spawn result with derived values (kind, agentId, title, etc.)
    */
   async spawn(options: SpawnTerminalOptions): Promise<SpawnTerminalResult> {
-    const legacyType: TerminalType = options.type || "terminal";
-    const agentId = options.agentId ?? (isRegisteredAgent(legacyType) ? legacyType : undefined);
+    const launchAgentId = options.launchAgentId;
     const kind = "terminal" as const;
-    const title = options.title || getDefaultTitle(legacyType, agentId);
+    const title = options.title || getDefaultTitle(launchAgentId);
 
     const commandToExecute = options.skipCommandExecution ? undefined : options.command;
 
@@ -112,8 +103,7 @@ class TerminalRegistryController {
       rows: 24,
       command: commandToExecute,
       kind,
-      type: legacyType,
-      agentId,
+      launchAgentId,
       title,
     };
 
@@ -122,10 +112,9 @@ class TerminalRegistryController {
     return {
       id,
       kind,
-      type: legacyType,
-      agentId,
+      launchAgentId,
       title,
-      agentState: agentId ? "idle" : undefined,
+      agentState: launchAgentId ? "idle" : undefined,
     };
   }
 
@@ -133,17 +122,17 @@ class TerminalRegistryController {
    * Prewarm a terminal's renderer-side xterm instance.
    * Call this after spawning to ensure no output is lost.
    */
-  prewarm(id: string, type: TerminalType, location: PanelLocation, agentId?: string): void {
-    const isAgent = Boolean(agentId);
+  prewarm(id: string, location: PanelLocation, launchAgentId?: string): void {
+    const isAgent = Boolean(launchAgentId);
     try {
       const appearance = getTerminalAppearanceSnapshot();
       const { fontSize, fontFamily, performanceMode } = appearance;
 
-      // Project-level scrollback override applies to non-agent terminals only
+      // Project-level scrollback override applies to plain terminals only
       const projectScrollback = isAgent ? undefined : appearance.projectScrollback;
       const effectiveScrollback = performanceMode
         ? PERFORMANCE_MODE_SCROLLBACK
-        : getScrollbackForType(type, projectScrollback ?? appearance.scrollbackLines);
+        : getScrollbackForType(isAgent, projectScrollback ?? appearance.scrollbackLines);
 
       const terminalOptions = getXtermOptions({
         fontSize,
@@ -158,7 +147,7 @@ class TerminalRegistryController {
       const widthPx = location === "dock" ? DOCK_PREWARM_WIDTH_PX : DOCK_TERM_WIDTH;
       const heightPx = location === "dock" ? DOCK_PREWARM_HEIGHT_PX : DOCK_TERM_HEIGHT;
 
-      terminalInstanceService.prewarmTerminal(id, type, terminalOptions, {
+      terminalInstanceService.prewarmTerminal(id, launchAgentId, terminalOptions, {
         offscreen,
         widthPx,
         heightPx,

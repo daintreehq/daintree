@@ -257,22 +257,15 @@ export interface AgentConfig {
     sessionIdPattern: string;
   };
   /**
-   * Environment variables to set for this agent at spawn time.
-   *
-   * Precedence order (lowest to highest):
-   * 1. process.env (system environment)
-   * 2. options.env (passed to spawn)
-   * 3. buildNonInteractiveEnv defaults (CI=1, FORCE_COLOR=3, etc.)
-   * 4. agentConfig.env (this field - highest priority)
-   *
-   * Note: Agent-specific exclusions (e.g., CI/NONINTERACTIVE for Gemini)
-   * are enforced and cannot be overridden by this field.
-   */
-  /**
    * Approximate context window size in tokens for this agent's model.
    * Used to warn when context usage is high.
    */
   contextWindow?: number;
+  /**
+   * Per-agent env vars (reserved for future use; currently unused because all
+   * terminals share a universal env — see
+   * `docs/architecture/terminal-identity.md`).
+   */
   env?: Record<string, string>;
   /**
    * Resume configuration for restoring a previous agent session.

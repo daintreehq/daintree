@@ -9,8 +9,6 @@ import type {
 import { terminalClient, projectClient } from "@/clients";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { TerminalRefreshTier } from "@/types";
-import { isRegisteredAgent } from "@/config/agents";
-import { isBuiltInAgentId } from "@shared/config/agentIds";
 import {
   panelKindHasPty,
   panelKindUsesTerminalUi,
@@ -220,7 +218,6 @@ export const createCorePanelActions = (
     }
 
     const requestedKind = options.kind ?? "terminal";
-    const legacyType = options.type || "terminal";
 
     // Handle panels that use custom UI (browser, dev-preview, extensions) separately
     if (!panelKindUsesTerminalUi(requestedKind)) {
@@ -291,13 +288,12 @@ export const createCorePanelActions = (
       return id;
     }
 
-    // PTY panels: terminal / dev-preview. Agent identity lives on `agentId`.
-    // Derive agentId: explicit option, or from legacy type if it's a registered agent.
-    const agentId = options.agentId ?? (isRegisteredAgent(legacyType) ? legacyType : undefined);
+    // PTY panels: terminal / dev-preview. Agent identity lives on `launchAgentId`.
+    const launchAgentId = options.launchAgentId;
     // Determine kind for PTY handling (dev-preview keeps its own kind)
     const kind: "terminal" | "dev-preview" =
       requestedKind === "dev-preview" ? "dev-preview" : "terminal";
-    const title = options.title || getDefaultTitle(kind, legacyType, agentId);
+    const title = options.title || getDefaultTitle(kind, { launchAgentId });
 
     // Auto-dock if grid is full and user requested grid location
     // Use dynamic capacity based on current viewport dimensions
@@ -361,7 +357,7 @@ export const createCorePanelActions = (
     const capturedProjectId = projectStore.getState().currentProject?.id;
 
     const isReconnect = !!options.existingId;
-    const isAgent = Boolean(agentId);
+    const isAgent = Boolean(launchAgentId);
     // Reserve the id up front so the panel can be committed to the store before
     // any async work (env fetch, spawn IPC). #5789: commit-then-spawn collapses
     // six rapid agent clicks from serialized spawns into six parallel placeholders.
@@ -388,8 +384,7 @@ export const createCorePanelActions = (
     const terminal: TerminalInstance = {
       id,
       kind,
-      type: legacyType,
-      agentId,
+      launchAgentId,
       title,
       worktreeId: options.worktreeId,
       cwd: options.cwd ?? "",
@@ -411,22 +406,6 @@ export const createCorePanelActions = (
       everDetectedAgent: options.everDetectedAgent,
       detectedAgentId: options.detectedAgentId,
       detectedProcessId: options.detectedProcessId,
-      // Capability mode (#5804). On reconnect/hydration, trust the backend
-      // payload directly — it's the source of truth for sealed-at-spawn
-      // identity. We must NOT re-derive from `agentId` here, because the
-      // `handleAgentDetection` bridge-write violation can rewrite `agentId`
-      // (and the legacy `type` field carried in IPC snapshots) to a runtime-
-      // detected agent on observed shells; deriving from that would mint
-      // false `full` capability and expose features (HybridInputBar, fleet
-      // membership) to terminals that were never cold-launched as the agent.
-      // For fresh spawns (no `existingId`), mirror the backend's spawn-time
-      // derivation so the renderer can gate features immediately, before the
-      // post-spawn snapshot lands; the backend writes the same value from the
-      // same launch intent.
-      capabilityAgentId: isReconnect
-        ? options.capabilityAgentId
-        : (options.capabilityAgentId ??
-          (isAgent && isBuiltInAgentId(agentId) ? agentId : undefined)),
       agentPresetId: options.agentPresetId,
       agentPresetColor: options.agentPresetColor,
       originalPresetId: options.originalPresetId ?? options.agentPresetId,
@@ -463,7 +442,6 @@ export const createCorePanelActions = (
                 detectedProcessId: terminal.detectedProcessId ?? existing.detectedProcessId,
                 // Capability is sealed at spawn — values should match — but
                 // preserve the existing entry if a partial reconnect omits it.
-                capabilityAgentId: terminal.capabilityAgentId ?? existing.capabilityAgentId,
               }
             : terminal;
         return { panelsById: { ...state.panelsById, [id]: preservedTerminal } };
@@ -491,7 +469,6 @@ export const createCorePanelActions = (
                 detectedProcessId: terminal.detectedProcessId ?? existing.detectedProcessId,
                 // Capability is sealed at spawn — values should match — but
                 // preserve the existing entry if a partial reconnect omits it.
-                capabilityAgentId: terminal.capabilityAgentId ?? existing.capabilityAgentId,
               }
             : terminal;
           const newById = { ...state.panelsById, [id]: preservedTerminal };
@@ -518,7 +495,7 @@ export const createCorePanelActions = (
 
       const effectiveScrollback = performanceMode
         ? PERFORMANCE_MODE_SCROLLBACK
-        : getScrollbackForType(legacyType, projectScrollback ?? appearance.scrollbackLines);
+        : getScrollbackForType(isAgent, projectScrollback ?? appearance.scrollbackLines);
 
       const terminalOptions = getXtermOptions({
         fontSize,
@@ -542,7 +519,7 @@ export const createCorePanelActions = (
           (options.worktreeId ?? null) !== (currentActiveWorktreeId ?? null));
 
       if (!isAgent) {
-        terminalInstanceService.prewarmTerminal(id, legacyType, terminalOptions, {
+        terminalInstanceService.prewarmTerminal(id, launchAgentId, terminalOptions, {
           offscreen: offscreenOrInactive,
           widthPx: location === "dock" ? DOCK_PREWARM_WIDTH_PX : DOCK_TERM_WIDTH,
           heightPx: location === "dock" ? DOCK_PREWARM_HEIGHT_PX : DOCK_TERM_HEIGHT,
@@ -553,7 +530,7 @@ export const createCorePanelActions = (
         const widthPx = location === "dock" ? DOCK_PREWARM_WIDTH_PX : DOCK_TERM_WIDTH;
         const heightPx = location === "dock" ? DOCK_PREWARM_HEIGHT_PX : DOCK_TERM_HEIGHT;
 
-        terminalInstanceService.prewarmTerminal(id, legacyType, terminalOptions, {
+        terminalInstanceService.prewarmTerminal(id, launchAgentId, terminalOptions, {
           offscreen: offscreenOrInactive,
           widthPx,
           heightPx,
@@ -636,8 +613,7 @@ export const createCorePanelActions = (
         rows: 24,
         command: commandToExecute,
         kind,
-        type: legacyType,
-        agentId,
+        launchAgentId,
         title,
         env: mergedEnv,
         restore: options.restore,
@@ -769,8 +745,7 @@ export const createCorePanelActions = (
       const terminal = state.panelsById[id];
       if (!terminal) return state;
 
-      const effectiveTitle =
-        newTitle.trim() || getDefaultTitle(terminal.kind, terminal.type, terminal.agentId);
+      const effectiveTitle = newTitle.trim() || getDefaultTitle(terminal.kind, terminal);
       const newById = { ...state.panelsById, [id]: { ...terminal, title: effectiveTitle } };
       saveNormalized(newById, state.panelIds);
       return { panelsById: newById };

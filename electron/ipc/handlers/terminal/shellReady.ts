@@ -26,8 +26,13 @@ export interface WaitForShellReadyOptions {
   quiescenceMs?: number;
 }
 
-const DEFAULT_TIMEOUT_MS = 10_000;
-const DEFAULT_QUIESCENCE_MS = 200;
+// Aggressive defaults — the previous 200ms/10s pair was safe but sluggish for
+// users with fast RC files. 50ms quiescence still absorbs p10k's two-phase
+// instant-prompt/real-prompt handoff (the on-data reset re-arms on any new
+// output), and a 1.5s ceiling keeps the worst case (e.g. nvm sourcing many
+// profile fragments) responsive without hanging on a pathological rc.
+const DEFAULT_TIMEOUT_MS = 1_500;
+const DEFAULT_QUIESCENCE_MS = 50;
 
 // End-anchored patterns: a real prompt places the cursor immediately after the
 // prompt character. This is stricter than a start-anchored match, so stray RC

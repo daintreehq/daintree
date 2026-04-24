@@ -226,7 +226,7 @@ export class TaskOrchestrator {
     const availableTerminals = await this.ptyClient.getAvailableTerminalsAsync();
     const terminal = availableTerminals.find(
       (t) =>
-        (t.agentId === routedAgentId || t.detectedAgentId === routedAgentId) &&
+        (t.launchAgentId === routedAgentId || t.detectedAgentId === routedAgentId) &&
         isAgentAvailable(t.agentState) &&
         !this.agentToRunMap.has(t.id) &&
         (!worktreeId || t.worktreeId === worktreeId)
@@ -249,7 +249,7 @@ export class TaskOrchestrator {
     // are available. Lock check is keyed by terminalId so two panels of the
     // same named agent type can be tracked independently.
     const availableAgent = availableTerminals.find((t) => {
-      const logicalAgentId = t.agentId ?? t.detectedAgentId;
+      const logicalAgentId = t.launchAgentId ?? t.detectedAgentId;
       return (
         logicalAgentId &&
         isAgentAvailable(t.agentState) &&
@@ -259,7 +259,7 @@ export class TaskOrchestrator {
     });
 
     if (!availableAgent) return null;
-    const logicalAgentId = availableAgent.agentId ?? availableAgent.detectedAgentId;
+    const logicalAgentId = availableAgent.launchAgentId ?? availableAgent.detectedAgentId;
     if (!logicalAgentId) return null;
 
     return { terminalId: availableAgent.id, agentId: logicalAgentId };

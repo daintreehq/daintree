@@ -1,6 +1,4 @@
-import type { TerminalType } from "@/types";
-import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
-import { AGENT_REGISTRY } from "@/config/agents";
+export const PERFORMANCE_MODE_SCROLLBACK = 100;
 
 interface ScrollbackPolicy {
   multiplier: number;
@@ -8,34 +6,22 @@ interface ScrollbackPolicy {
   minLines: number;
 }
 
-export const PERFORMANCE_MODE_SCROLLBACK = 100;
-
-const AGENT_SCROLLBACK_POLICY: ScrollbackPolicy = {
-  multiplier: 1.5,
-  maxLines: 5000,
-  minLines: 500,
-};
-
-const SCROLLBACK_POLICIES: Record<string, ScrollbackPolicy> = {
-  terminal: { multiplier: 0.3, maxLines: 2000, minLines: 200 },
-  ...Object.fromEntries(BUILT_IN_AGENT_IDS.map((id) => [id, AGENT_SCROLLBACK_POLICY])),
-};
+const AGENT_POLICY: ScrollbackPolicy = { multiplier: 1.5, maxLines: 5000, minLines: 500 };
+const PLAIN_POLICY: ScrollbackPolicy = { multiplier: 0.3, maxLines: 2000, minLines: 200 };
 
 /**
- * Get appropriate scrollback lines for a terminal type based on the user's
- * base scrollback setting. Agent terminals get 1.5x base, standard terminals get 30%,
- * all clamped to type-specific min/max limits.
+ * Get appropriate scrollback lines based on whether an agent is live in the
+ * terminal. Agent terminals (or terminals launched to run an agent) get the
+ * larger scrollback policy; plain shells get the smaller one.
  */
-export function getScrollbackForType(type: TerminalType, baseScrollback: number): number {
-  const policy = SCROLLBACK_POLICIES[type] ||
-    SCROLLBACK_POLICIES.terminal || { multiplier: 0.3, maxLines: 2000, minLines: 200 };
+export function getScrollbackForType(isAgent: boolean, baseScrollback: number): number {
+  const policy = isAgent ? AGENT_POLICY : PLAIN_POLICY;
 
-  // Handle unlimited (0) by using maxLines for the type
+  // Handle unlimited (0) by using the policy's maxLines
   if (baseScrollback === 0) {
     return policy.maxLines;
   }
 
-  // Calculate from base with multiplier, clamped to policy limits
   const calculated = Math.floor(baseScrollback * policy.multiplier);
   return Math.max(policy.minLines, Math.min(policy.maxLines, calculated));
 }
@@ -43,30 +29,22 @@ export function getScrollbackForType(type: TerminalType, baseScrollback: number)
 const BYTES_PER_LINE = 250; // Average with ANSI codes
 
 /**
- * Estimate memory usage for terminals based on type counts and base scrollback.
+ * Estimate memory usage for a mix of agent/plain terminals at the given
+ * base scrollback setting.
  */
 export function estimateMemoryUsage(
-  terminalCounts: Partial<Record<TerminalType, number>>,
+  terminalCounts: { agent: number; plain: number },
   baseScrollback: number
-): { perType: Record<TerminalType, number>; total: number } {
-  const perType = {} as Record<TerminalType, number>;
-  let total = 0;
-
-  const allTypes: TerminalType[] = ["terminal", ...BUILT_IN_AGENT_IDS];
-
-  for (const type of allTypes) {
-    const count = terminalCounts[type] ?? 0;
-    const lines = getScrollbackForType(type, baseScrollback);
-    const bytes = lines * BYTES_PER_LINE * count;
-    perType[type] = bytes;
-    total += bytes;
-  }
-
-  return { perType, total };
+): { agent: number; plain: number; total: number } {
+  const agentBytes =
+    getScrollbackForType(true, baseScrollback) * BYTES_PER_LINE * terminalCounts.agent;
+  const plainBytes =
+    getScrollbackForType(false, baseScrollback) * BYTES_PER_LINE * terminalCounts.plain;
+  return { agent: agentBytes, plain: plainBytes, total: agentBytes + plainBytes };
 }
 
 /**
- * Format bytes as human-readable string (e.g., "25 MB").
+ * Format bytes as a human-readable string (e.g., "25 MB").
  */
 export function formatBytes(bytes: number): string {
   if (bytes === 0) return "0 B";
@@ -76,17 +54,15 @@ export function formatBytes(bytes: number): string {
 }
 
 /**
- * Get scrollback limit summary for a terminal type given base setting.
- * Returns the actual limit that will be used.
+ * Get scrollback limit summary given base setting. Returns the limit that
+ * will be used for an agent or plain terminal along with a display label.
  */
 export function getScrollbackSummary(
-  type: TerminalType,
+  isAgent: boolean,
   baseScrollback: number
 ): { limit: number; label: string } {
-  const limit = getScrollbackForType(type, baseScrollback);
-
-  const agentConfig = AGENT_REGISTRY[type];
-  const label = type === "terminal" ? "Terminal" : (agentConfig?.name ?? type);
-
-  return { limit, label };
+  return {
+    limit: getScrollbackForType(isAgent, baseScrollback),
+    label: isAgent ? "Agent" : "Terminal",
+  };
 }

@@ -55,7 +55,6 @@ function makePanel(overrides: Partial<TerminalInstance> = {}): TerminalInstance 
     title: "Test Panel",
     location: "grid",
     kind: "terminal",
-    type: "terminal",
     cwd: "/home/user",
     ...overrides,
   } as TerminalInstance;
@@ -84,7 +83,6 @@ describe("buildPanelSnapshotOptions", () => {
 
     expect(result).toMatchObject({
       kind: "terminal",
-      type: "terminal",
       cwd: "/home/user",
       worktreeId: "wt-1",
       exitBehavior: "keep",
@@ -122,13 +120,13 @@ describe("buildPanelSnapshotOptions", () => {
 
   it("copies agent fields for agent terminals", () => {
     const panel = makePanel({
-      agentId: "claude",
+      launchAgentId: "claude",
       command: "claude --flag",
       agentModelId: "opus",
       agentLaunchFlags: ["--verbose"],
     });
     const result = buildPanelSnapshotOptions(panel);
-    expect(result!.agentId).toBe("claude");
+    expect(result!.launchAgentId).toBe("claude");
     expect(result!.agentModelId).toBe("opus");
     expect(result!.agentLaunchFlags).toEqual(["--verbose"]);
   });
@@ -142,27 +140,26 @@ describe("buildPanelSnapshotOptions", () => {
   it("returns null for broken agent terminals (missing command)", () => {
     const panel = makePanel({
       kind: "terminal",
-      agentId: "claude",
+      launchAgentId: "claude",
       command: undefined,
     });
     expect(buildPanelSnapshotOptions(panel)).toBeNull();
   });
 
-  it("returns a plain terminal snapshot when agentId is absent", () => {
+  it("returns a plain terminal snapshot when launchAgentId is absent", () => {
     const panel = makePanel({
       kind: "terminal",
-      agentId: undefined,
       command: "bash",
     });
     const result = buildPanelSnapshotOptions(panel);
     expect(result).toMatchObject({ kind: "terminal", command: "bash" });
-    expect(result!.agentId).toBeUndefined();
+    expect(result!.launchAgentId).toBeUndefined();
   });
 
   it("returns a valid agent terminal snapshot when command and agentId are present", () => {
     const panel = makePanel({
       kind: "terminal",
-      agentId: "claude",
+      launchAgentId: "claude",
       command: "claude --flag",
       agentModelId: "opus",
       agentLaunchFlags: ["--verbose"],
@@ -170,7 +167,7 @@ describe("buildPanelSnapshotOptions", () => {
     const result = buildPanelSnapshotOptions(panel);
     expect(result).toMatchObject({
       kind: "terminal",
-      agentId: "claude",
+      launchAgentId: "claude",
       command: "claude --flag",
       agentModelId: "opus",
       agentLaunchFlags: ["--verbose"],
@@ -226,7 +223,6 @@ describe("panelDuplicationService", () => {
 
     expect(result).toMatchObject({
       kind: "terminal",
-      type: "terminal",
       cwd: "/home/user",
       worktreeId: "wt-1",
       location: "grid",
@@ -248,7 +244,7 @@ describe("panelDuplicationService", () => {
       agents: { claude: { model: "opus" } },
     });
 
-    const panel = makePanel({ kind: "terminal", agentId: "claude", command: "old-cmd" });
+    const panel = makePanel({ kind: "terminal", launchAgentId: "claude", command: "old-cmd" });
     const result = await buildPanelDuplicateOptions(panel, "grid");
 
     expect(result.command).toBe("generated-claude-command");
@@ -260,20 +256,20 @@ describe("panelDuplicationService", () => {
       new Error("network error")
     );
 
-    const panel = makePanel({ agentId: "claude", command: "fallback-cmd" });
+    const panel = makePanel({ launchAgentId: "claude", command: "fallback-cmd" });
     const result = await buildPanelDuplicateOptions(panel, "grid");
 
     expect(result.command).toBe("fallback-cmd");
   });
 
   it("uses existing command for unregistered agents", async () => {
-    const panel = makePanel({ agentId: "custom-agent", command: "my-cmd" });
+    const panel = makePanel({ launchAgentId: "custom-agent", command: "my-cmd" });
     const result = await buildPanelDuplicateOptions(panel, "grid");
     expect(result.command).toBe("my-cmd");
   });
 
   it("uses existing command for non-agent panels", async () => {
-    const panel = makePanel({ agentId: undefined, command: "zsh" });
+    const panel = makePanel({ command: "zsh" });
     const result = await buildPanelDuplicateOptions(panel, "grid");
     expect(result.command).toBe("zsh");
   });
@@ -321,7 +317,7 @@ describe("panelDuplicationService", () => {
 
     const panel = makePanel({
       kind: "terminal",
-      agentId: "unknown-agent",
+      launchAgentId: "unknown-agent",
       command: undefined,
     });
     await expect(buildPanelDuplicateOptions(panel, "grid")).rejects.toThrow(
@@ -329,15 +325,14 @@ describe("panelDuplicationService", () => {
     );
   });
 
-  it("duplicates without agent identity when agentId is missing (plain terminal path)", async () => {
+  it("duplicates without agent identity when launchAgentId is absent (plain terminal path)", async () => {
     const panel = makePanel({
       kind: "terminal",
-      agentId: undefined,
       command: "claude --flag",
     });
     const result = await buildPanelDuplicateOptions(panel, "grid");
     expect(result.kind).toBe("terminal");
-    expect(result.agentId).toBeUndefined();
+    expect(result.launchAgentId).toBeUndefined();
     expect(result.command).toBe("claude --flag");
   });
 
@@ -372,7 +367,7 @@ describe("panelDuplicationService", () => {
 
     const panel = makePanel({
       kind: "terminal",
-      agentId: "claude",
+      launchAgentId: "claude",
       agentPresetId: "user-abc",
     });
     const result = await buildPanelDuplicateOptions(panel, "grid");
@@ -389,7 +384,7 @@ describe("panelDuplicationService", () => {
 
     const panel = makePanel({
       kind: "terminal",
-      agentId: "claude",
+      launchAgentId: "claude",
       agentPresetId: "user-abc",
     });
     const result = await buildPanelDuplicateOptions(panel, "grid");
@@ -403,7 +398,11 @@ describe("panelDuplicationService", () => {
       agents: { claude: {} },
     });
 
-    const panel = makePanel({ kind: "terminal", agentId: "claude", agentPresetId: undefined });
+    const panel = makePanel({
+      kind: "terminal",
+      launchAgentId: "claude",
+      agentPresetId: undefined,
+    });
     const result = await buildPanelDuplicateOptions(panel, "grid");
 
     expect(result.env).toBeUndefined();
@@ -423,7 +422,11 @@ describe("panelDuplicationService", () => {
       },
     });
 
-    const panel = makePanel({ kind: "terminal", agentId: "claude", agentPresetId: undefined });
+    const panel = makePanel({
+      kind: "terminal",
+      launchAgentId: "claude",
+      agentPresetId: undefined,
+    });
     const result = await buildPanelDuplicateOptions(panel, "grid");
 
     expect(result.env).toEqual({ ANTHROPIC_BASE_URL: "https://proxy.example.com" });
@@ -444,7 +447,11 @@ describe("panelDuplicationService", () => {
       env: { SHARED_KEY: "preset-wins", PRESET_ONLY: "yes" },
     });
 
-    const panel = makePanel({ kind: "terminal", agentId: "claude", agentPresetId: "user-abc" });
+    const panel = makePanel({
+      kind: "terminal",
+      launchAgentId: "claude",
+      agentPresetId: "user-abc",
+    });
     const result = await buildPanelDuplicateOptions(panel, "grid");
 
     expect(result.env).toEqual({
@@ -468,7 +475,7 @@ describe("panelDuplicationService", () => {
 
     const panel = makePanel({
       kind: "terminal",
-      agentId: "claude",
+      launchAgentId: "claude",
       agentPresetId: "user-deleted",
       agentPresetColor: "#ff00ff",
       title: "Claude (Deleted Preset)",
@@ -520,7 +527,11 @@ describe("adversarial: behavioral overrides flow to generateAgentCommand in dupl
       dangerousEnabled: true,
     });
 
-    const panel = makePanel({ kind: "terminal", agentId: "claude", agentPresetId: "user-abc" });
+    const panel = makePanel({
+      kind: "terminal",
+      launchAgentId: "claude",
+      agentPresetId: "user-abc",
+    });
     await buildPanelDuplicateOptions(panel, "grid");
 
     expect(spy).toHaveBeenCalled();
@@ -540,7 +551,11 @@ describe("adversarial: behavioral overrides flow to generateAgentCommand in dupl
       customFlags: "--extra-flag",
     });
 
-    const panel = makePanel({ kind: "terminal", agentId: "claude", agentPresetId: "user-abc" });
+    const panel = makePanel({
+      kind: "terminal",
+      launchAgentId: "claude",
+      agentPresetId: "user-abc",
+    });
     await buildPanelDuplicateOptions(panel, "grid");
 
     const entry = spy.mock.calls[0]![1] as Record<string, unknown>;
@@ -555,7 +570,11 @@ describe("adversarial: behavioral overrides flow to generateAgentCommand in dupl
     });
     getMergedPresetMock.mockReturnValue({ id: "user-abc", name: "NoInline", inlineMode: false });
 
-    const panel = makePanel({ kind: "terminal", agentId: "claude", agentPresetId: "user-abc" });
+    const panel = makePanel({
+      kind: "terminal",
+      launchAgentId: "claude",
+      agentPresetId: "user-abc",
+    });
     await buildPanelDuplicateOptions(panel, "grid");
 
     const entry = spy.mock.calls[0]![1] as Record<string, unknown>;
@@ -570,7 +589,11 @@ describe("adversarial: behavioral overrides flow to generateAgentCommand in dupl
     });
     getMergedPresetMock.mockReturnValue({ id: "user-abc", name: "NoOverride" });
 
-    const panel = makePanel({ kind: "terminal", agentId: "claude", agentPresetId: "user-abc" });
+    const panel = makePanel({
+      kind: "terminal",
+      launchAgentId: "claude",
+      agentPresetId: "user-abc",
+    });
     await buildPanelDuplicateOptions(panel, "grid");
 
     const entry = spy.mock.calls[0]![1] as Record<string, unknown>;
@@ -589,7 +612,11 @@ describe("adversarial: behavioral overrides flow to generateAgentCommand in dupl
       args: ["--verbose", "--trace"],
     });
 
-    const panel = makePanel({ kind: "terminal", agentId: "claude", agentPresetId: "user-abc" });
+    const panel = makePanel({
+      kind: "terminal",
+      launchAgentId: "claude",
+      agentPresetId: "user-abc",
+    });
     await buildPanelDuplicateOptions(panel, "grid");
 
     const opts = spy.mock.calls[0]![3] as Record<string, unknown>;
@@ -604,7 +631,11 @@ describe("adversarial: behavioral overrides flow to generateAgentCommand in dupl
     });
     getMergedPresetMock.mockReturnValue({ id: "user-abc", name: "NoArgs" });
 
-    const panel = makePanel({ kind: "terminal", agentId: "claude", agentPresetId: "user-abc" });
+    const panel = makePanel({
+      kind: "terminal",
+      launchAgentId: "claude",
+      agentPresetId: "user-abc",
+    });
     await buildPanelDuplicateOptions(panel, "grid");
 
     const opts = spy.mock.calls[0]![3] as Record<string, unknown>;

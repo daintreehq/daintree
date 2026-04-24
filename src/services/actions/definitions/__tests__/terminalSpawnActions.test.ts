@@ -47,9 +47,8 @@ function setupActions() {
 type MockPanel = {
   id: string;
   location: "grid" | "dock" | "trash";
-  kind?: "agent" | "terminal" | "browser" | "notes" | "dev-preview";
-  type?: string;
-  agentId?: string;
+  kind?: "terminal" | "browser" | "notes" | "dev-preview";
+  launchAgentId?: string;
   title?: string;
 };
 
@@ -81,8 +80,7 @@ beforeEach(() => {
       const kind = panel.kind ?? "terminal";
       const base = {
         kind,
-        type: panel.type,
-        agentId: panel.agentId,
+        launchAgentId: panel.launchAgentId,
         location,
         cwd: "",
       };
@@ -98,7 +96,7 @@ describe("terminal.duplicate (copy) suffix", () => {
     setPanelState({
       focusedId: "p1",
       panels: [
-        { id: "p1", location: "grid", kind: "terminal", agentId: "claude", title: "Claude" },
+        { id: "p1", location: "grid", kind: "terminal", launchAgentId: "claude", title: "Claude" },
       ],
       addPanel,
     });
@@ -114,7 +112,13 @@ describe("terminal.duplicate (copy) suffix", () => {
     setPanelState({
       focusedId: "p1",
       panels: [
-        { id: "p1", location: "grid", kind: "terminal", agentId: "claude", title: "API work" },
+        {
+          id: "p1",
+          location: "grid",
+          kind: "terminal",
+          launchAgentId: "claude",
+          title: "API work",
+        },
       ],
       addPanel,
     });
@@ -128,9 +132,7 @@ describe("terminal.duplicate (copy) suffix", () => {
     const addPanel = vi.fn().mockResolvedValue(undefined);
     setPanelState({
       focusedId: "p1",
-      panels: [
-        { id: "p1", location: "grid", kind: "terminal", type: "terminal", title: "Terminal" },
-      ],
+      panels: [{ id: "p1", location: "grid", kind: "terminal", title: "Terminal" }],
       addPanel,
     });
     const run = setupActions();
@@ -144,7 +146,13 @@ describe("terminal.duplicate (copy) suffix", () => {
     setPanelState({
       focusedId: "p1",
       panels: [
-        { id: "p1", location: "grid", kind: "terminal", agentId: "gemini", title: "Refactor run" },
+        {
+          id: "p1",
+          location: "grid",
+          kind: "terminal",
+          launchAgentId: "gemini",
+          title: "Refactor run",
+        },
       ],
       addPanel,
     });
@@ -158,7 +166,7 @@ describe("terminal.duplicate (copy) suffix", () => {
     const addPanel = vi.fn().mockResolvedValue(undefined);
     setPanelState({
       focusedId: "p1",
-      panels: [{ id: "p1", location: "grid", kind: "terminal", type: "terminal" }],
+      panels: [{ id: "p1", location: "grid", kind: "terminal" }],
       addPanel,
     });
     const run = setupActions();
@@ -189,8 +197,7 @@ describe("terminal.duplicate (copy) suffix", () => {
     const addPanel = vi.fn().mockResolvedValue(undefined);
     buildPanelDuplicateOptionsMock.mockResolvedValueOnce({
       kind: "terminal",
-      agentId: "claude",
-      type: "claude",
+      launchAgentId: "claude",
       title: "Claude", // normalized by service (stale preset dropped)
       location: "grid",
       cwd: "",
@@ -202,7 +209,7 @@ describe("terminal.duplicate (copy) suffix", () => {
           id: "p1",
           location: "grid",
           kind: "terminal",
-          agentId: "claude",
+          launchAgentId: "claude",
           title: "Claude (Deleted Preset)",
         },
       ],

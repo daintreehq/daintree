@@ -170,13 +170,13 @@ describe.skipIf(shouldSkip)("PtyManager Integration", () => {
   });
 
   describe("Terminal Metadata", () => {
-    it("should store terminal type", async () => {
-      const id = await spawnShellTerminal(manager, { type: "claude" });
+    it("should store launchAgentId when spawned with agent hint", async () => {
+      const id = await spawnShellTerminal(manager, { launchAgentId: "claude" });
 
       const terminal = manager.getTerminal(id);
 
       expect(terminal).toBeDefined();
-      expect(terminal?.type).toBe("claude");
+      expect(terminal?.launchAgentId).toBe("claude");
     }, 10000);
 
     it("should spawn successfully without worktreeId (renderer-owned layout state, #5139)", async () => {

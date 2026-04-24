@@ -237,7 +237,7 @@ export function registerAppStateHandlers(): () => void {
     }
 
     return {
-      appState,
+      appState: appState as import("../../../../shared/types/ipc/app.js").AppState,
       terminalConfig: store.get("terminalConfig"),
       project: currentProject,
       agentSettings: store.get("agentSettings"),
@@ -253,7 +253,7 @@ export function registerAppStateHandlers(): () => void {
   handlers.push(typedHandle(CHANNELS.APP_HYDRATE, handleAppHydrate));
 
   const handleAppGetState = async () => {
-    return store.get("appState");
+    return store.get("appState") as import("../../../../shared/types/ipc/app.js").AppState;
   };
   handlers.push(typedHandle(CHANNELS.APP_GET_STATE, handleAppGetState));
 

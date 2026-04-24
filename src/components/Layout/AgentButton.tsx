@@ -80,8 +80,8 @@ export function AgentButton({
       const p = panelsById[pid];
       if (
         !p ||
-        !p.agentId ||
-        p.agentId !== type ||
+        !p.launchAgentId ||
+        p.launchAgentId !== type ||
         p.location === "trash" ||
         p.location === "background"
       )

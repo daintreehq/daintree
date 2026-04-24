@@ -142,7 +142,6 @@ function makeManaged(overrides: Partial<ManagedTerminal> = {}): ManagedTerminal 
       dispose: vi.fn(),
       options: {},
     } as unknown as ManagedTerminal["terminal"],
-    type: "terminal",
     kind: "terminal",
     agentStateSubscribers: new Set(),
     fitAddon: { fit: vi.fn() } as unknown as ManagedTerminal["fitAddon"],
@@ -261,15 +260,13 @@ describe("TerminalInstanceService adversarial", () => {
 
     const managedA = makeManaged({
       kind: "terminal",
-      agentId: "claude",
-      type: "claude",
+      launchAgentId: "claude",
       isOpened: false,
       lastAppliedTier: TerminalRefreshTier.FOCUSED,
     });
     const managedB = makeManaged({
       kind: "terminal",
-      agentId: "claude",
-      type: "codex",
+      launchAgentId: "codex",
       isOpened: false,
       lastAppliedTier: TerminalRefreshTier.FOCUSED,
     });
@@ -289,8 +286,7 @@ describe("TerminalInstanceService adversarial", () => {
   it("ATTACH_AFTER_DESTROY_RETURNS_NULL", () => {
     const managed = makeManaged({
       kind: "terminal",
-      agentId: "claude",
-      type: "claude",
+      launchAgentId: "claude",
       isOpened: false,
       lastAppliedTier: TerminalRefreshTier.FOCUSED,
     });

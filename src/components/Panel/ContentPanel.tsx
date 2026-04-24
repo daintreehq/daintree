@@ -5,8 +5,7 @@ import { useIsDragging } from "@/components/DragDrop";
 import { TitleEditingProvider, useTitleEditing } from "./TitleEditingContext";
 import { TerminalHeaderContent } from "@/components/Terminal/TerminalHeaderContent";
 import { TerminalContextMenu } from "@/components/Terminal/TerminalContextMenu";
-import type { PanelKind, TerminalType, AgentState } from "@/types";
-import type { BuiltInAgentId } from "@shared/config/agentIds";
+import type { PanelKind, AgentState } from "@/types";
 import type { ActivityState } from "@/components/Terminal/TerminalPane";
 import type { TabInfo } from "./TabButton";
 import { useDockBlockedState } from "@/components/Layout/useDockBlockedState";
@@ -54,12 +53,11 @@ export interface ContentPanelProps extends BasePanelProps {
   "aria-selected"?: boolean;
 
   // Terminal-specific header props (optional, only used for terminal/agent panels)
-  type?: TerminalType;
   agentId?: string;
   /** Runtime-detected agent identity (cleared on agent exit). Drives panel chrome. */
   detectedAgentId?: string;
-  /** Sealed at spawn for full-mode agent terminals. Absent for runtime-detected agents in plain shells. */
-  capabilityAgentId?: BuiltInAgentId;
+  /** Sticky: has an agent ever been live-detected. Drives demotion in resolveChromeAgentId. */
+  everDetectedAgent?: boolean;
   detectedProcessId?: string;
   presetColor?: string;
   agentLaunchFlags?: string[];
@@ -131,10 +129,9 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
     role,
     "aria-label": ariaLabel,
     "aria-selected": ariaSelected,
-    type,
     agentId,
     detectedAgentId,
-    capabilityAgentId,
+    everDetectedAgent,
     detectedProcessId,
     presetColor,
     agentLaunchFlags,
@@ -208,7 +205,6 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
         <TerminalHeaderContent
           id={id}
           kind={kind}
-          type={type}
           agentState={agentState}
           activity={activity}
           activityStatus={activityStatus}
@@ -225,7 +221,6 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
     headerContent,
     kind,
     id,
-    type,
     agentState,
     activity,
     activityStatus,
@@ -294,7 +289,10 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
         data-panel-id={id}
         data-panel-location={location}
         data-detected-process-id={detectedProcessId || undefined}
-        data-capability-agent-id={capabilityAgentId || undefined}
+        data-detected-agent-id={detectedAgentId || undefined}
+        data-launch-agent-id={agentId || undefined}
+        data-ever-detected-agent={everDetectedAgent ? "true" : undefined}
+        data-chrome-agent-id={detectedAgentId || undefined}
         data-selected={isSelected || undefined}
         style={{
           contain: "content",
@@ -335,10 +333,9 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
           id={id}
           title={title}
           kind={kind}
-          type={type}
           agentId={agentId}
           detectedAgentId={detectedAgentId}
-          capabilityAgentId={capabilityAgentId}
+          everDetectedAgent={everDetectedAgent}
           detectedProcessId={detectedProcessId}
           presetColor={presetColor}
           agentLaunchFlags={agentLaunchFlags}

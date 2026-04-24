@@ -1,5 +1,4 @@
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
-import { TerminalTypeSchema } from "./schemas";
 import { z } from "zod";
 import { usePanelStore } from "@/store/panelStore";
 import { useLayoutUndoStore } from "@/store/layoutUndoStore";
@@ -21,7 +20,6 @@ export function registerTerminalSpawnActions(
       const addPanel = usePanelStore.getState().addPanel;
       const terminalId = await addPanel({
         kind: "terminal",
-        type: "terminal",
         cwd: callbacks.getDefaultCwd(),
         location: "grid",
         worktreeId: callbacks.getActiveWorktreeId(),
@@ -57,7 +55,9 @@ export function registerTerminalSpawnActions(
           terminal.location === "grid" || terminal.location === "dock" ? terminal.location : "grid";
         const options = await buildPanelDuplicateOptions(terminal, location);
         if (options.title) {
-          const defaultTitle = getDefaultTitle(terminal.kind, terminal.type, terminal.agentId);
+          const defaultTitle = getDefaultTitle(terminal.kind, {
+            launchAgentId: terminal.launchAgentId,
+          });
           if (options.title !== defaultTitle) {
             options.title = `${options.title} (copy)`;
           }
@@ -74,7 +74,6 @@ export function registerTerminalSpawnActions(
         } else {
           await state.addPanel({
             kind: "terminal",
-            type: "terminal",
             cwd: callbacks.getDefaultCwd(),
             location: "grid",
             worktreeId: callbacks.getActiveWorktreeId(),
@@ -141,31 +140,6 @@ export function registerTerminalSpawnActions(
       const targetId = terminalId ?? state.focusedId;
       if (!targetId) return;
       state.moveToNewWorktreeAndTransfer(targetId);
-    },
-  }));
-
-  actions.set("terminal.convertType", () => ({
-    id: "terminal.convertType",
-    title: "Convert Terminal Type",
-    description: "Convert terminal to a different type",
-    category: "terminal",
-    kind: "command",
-    danger: "safe",
-    scope: "renderer",
-    argsSchema: z.object({
-      terminalId: z.string().optional(),
-      type: TerminalTypeSchema,
-    }),
-    run: async (args: unknown) => {
-      const { terminalId, type } = args as { terminalId?: string; type: string };
-      const state = usePanelStore.getState();
-      const targetId = terminalId ?? state.focusedId;
-      if (targetId) {
-        state.convertTerminalType(
-          targetId,
-          type as "terminal" | "claude" | "gemini" | "codex" | "opencode"
-        );
-      }
     },
   }));
 }

@@ -21,7 +21,7 @@ type TerminalShape = {
   id: string;
   type?: string;
   cwd?: string;
-  agentId?: string;
+  launchAgentId?: string;
 };
 
 function makeTerminal(overrides: Partial<TerminalShape> = {}): TerminalShape {
@@ -29,7 +29,7 @@ function makeTerminal(overrides: Partial<TerminalShape> = {}): TerminalShape {
     id: "term-1",
     type: "terminal",
     cwd: undefined,
-    agentId: undefined,
+    launchAgentId: undefined,
     ...overrides,
   };
 }
@@ -54,7 +54,7 @@ describe("terminalValidation", () => {
     const result = await validateTerminalConfig(
       makeTerminal({
         cwd: "/repo",
-        agentId: "claude",
+        launchAgentId: "claude",
       }) as never
     );
 
@@ -70,7 +70,7 @@ describe("terminalValidation", () => {
     const result = await validateTerminalConfig(
       makeTerminal({
         cwd: "/missing",
-        agentId: "codex",
+        launchAgentId: "codex",
       }) as never
     );
 
@@ -123,7 +123,7 @@ describe("terminalValidation", () => {
 
     const result = await validateTerminalConfig(
       makeTerminal({
-        agentId: "gemini",
+        launchAgentId: "gemini",
       }) as never
     );
 
@@ -139,7 +139,7 @@ describe("terminalValidation", () => {
   it("uses registry command when it differs from agentId", async () => {
     const result = await validateTerminalConfig(
       makeTerminal({
-        agentId: "cursor",
+        launchAgentId: "cursor",
       }) as never
     );
 
@@ -150,7 +150,7 @@ describe("terminalValidation", () => {
   it("falls back to agentId when agent is not in registry", async () => {
     const result = await validateTerminalConfig(
       makeTerminal({
-        agentId: "unknown-agent",
+        launchAgentId: "unknown-agent",
       }) as never
     );
 
@@ -165,7 +165,7 @@ describe("terminalValidation", () => {
     const results = await validateTerminals([
       makeTerminal({ id: "ok", cwd: "/repo", type: "terminal" }) as never,
       makeTerminal({ id: "bad-cwd", cwd: "/missing", type: "terminal" }) as never,
-      makeTerminal({ id: "bad-cli", agentId: "broken-agent" }) as never,
+      makeTerminal({ id: "bad-cli", launchAgentId: "broken-agent" }) as never,
     ]);
 
     expect(results.has("ok")).toBe(false);

@@ -14,9 +14,8 @@ export interface QuickSwitcherItem {
   type: QuickSwitcherItemType;
   title: string;
   subtitle?: string;
-  terminalType?: TerminalInstance["type"];
   terminalKind?: TerminalInstance["kind"];
-  agentId?: TerminalInstance["agentId"];
+  launchAgentId?: TerminalInstance["launchAgentId"];
   detectedAgentId?: TerminalInstance["detectedAgentId"];
   detectedProcessId?: TerminalInstance["detectedProcessId"];
   worktreeId?: string;
@@ -87,9 +86,8 @@ export function useQuickSwitcher(): UseQuickSwitcherReturn {
             ? `${baseSubtitle} · Backgrounded`
             : "Backgrounded"
           : baseSubtitle,
-        terminalType: t.type,
         terminalKind: t.kind,
-        agentId: t.agentId,
+        launchAgentId: t.launchAgentId,
         detectedAgentId: t.detectedAgentId,
         detectedProcessId: t.detectedProcessId,
         worktreeId: t.worktreeId,

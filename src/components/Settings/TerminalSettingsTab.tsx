@@ -35,7 +35,7 @@ import {
   useTwoPaneSplitStore,
 } from "@/store";
 import type { ScreenReaderMode } from "@/store";
-import type { PanelLayoutStrategy, TerminalType } from "@/types";
+import type { PanelLayoutStrategy } from "@/types";
 import {
   getScrollbackForType,
   estimateMemoryUsage,
@@ -90,12 +90,9 @@ const CACHED_VIEWS_OPTIONS = [
   { value: 5, label: "5 projects", description: "Max cache" },
 ] as const;
 
-const TYPICAL_TERMINAL_COUNTS: Partial<Record<TerminalType, number>> = {
-  claude: 2,
-  gemini: 2,
-  codex: 2,
-  opencode: 2,
-  terminal: 8,
+const TYPICAL_TERMINAL_COUNTS: { agent: number; plain: number } = {
+  agent: 8,
+  plain: 8,
 };
 
 const TERMINAL_SUBTABS: SettingsSubtabItem[] = [
@@ -174,15 +171,15 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
 
   const scrollbackLimits = useMemo(() => {
     const effectiveBase = performanceMode ? PERFORMANCE_MODE_SCROLLBACK : scrollbackLines;
-    const types: Array<{ type: TerminalType; label: string }> = [
-      { type: "claude", label: "Agent (Claude/Gemini/Codex/OpenCode)" },
-      { type: "terminal", label: "Terminal" },
+    const types: Array<{ isAgent: boolean; label: string }> = [
+      { isAgent: true, label: "Agent (Claude/Gemini/Codex/OpenCode)" },
+      { isAgent: false, label: "Terminal" },
     ];
-    return types.map(({ type, label }) => ({
+    return types.map(({ isAgent, label }) => ({
       label,
       limit: performanceMode
         ? PERFORMANCE_MODE_SCROLLBACK
-        : getScrollbackForType(type, effectiveBase),
+        : getScrollbackForType(isAgent, effectiveBase),
     }));
   }, [performanceMode, scrollbackLines]);
 
@@ -832,18 +829,13 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
               <div className="flex justify-between">
                 <span>Agent terminals (8)</span>
                 <span className="font-mono text-daintree-text/70">
-                  {formatBytes(
-                    (memoryEstimate.perType.claude ?? 0) +
-                      (memoryEstimate.perType.gemini ?? 0) +
-                      (memoryEstimate.perType.codex ?? 0) +
-                      (memoryEstimate.perType.opencode ?? 0)
-                  )}
+                  {formatBytes(memoryEstimate.agent)}
                 </span>
               </div>
               <div className="flex justify-between">
                 <span>Terminals (8)</span>
                 <span className="font-mono text-daintree-text/70">
-                  {formatBytes(memoryEstimate.perType.terminal ?? 0)}
+                  {formatBytes(memoryEstimate.plain)}
                 </span>
               </div>
               <div className="flex justify-between pt-1.5 border-t border-daintree-border mt-1.5">

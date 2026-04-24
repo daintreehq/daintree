@@ -15,7 +15,6 @@ describe("TerminalFocusSlice - Layout Snapshot", () => {
     {
       id: "term-1",
       title: "Terminal 1",
-      type: "claude",
       cwd: "/test",
       location: "grid",
       agentState: "idle",
@@ -27,7 +26,6 @@ describe("TerminalFocusSlice - Layout Snapshot", () => {
     {
       id: "term-2",
       title: "Terminal 2",
-      type: "terminal",
       cwd: "/test",
       location: "grid",
       agentState: "idle",
@@ -136,7 +134,6 @@ describe("TerminalFocusSlice - Tab Group Maximize", () => {
     {
       id: "term-1",
       title: "Terminal 1",
-      type: "claude",
       cwd: "/test",
       location: "grid",
       agentState: "idle",
@@ -148,7 +145,6 @@ describe("TerminalFocusSlice - Tab Group Maximize", () => {
     {
       id: "term-2",
       title: "Terminal 2",
-      type: "terminal",
       cwd: "/test",
       location: "grid",
       agentState: "idle",
@@ -160,7 +156,6 @@ describe("TerminalFocusSlice - Tab Group Maximize", () => {
     {
       id: "term-3",
       title: "Terminal 3",
-      type: "terminal",
       cwd: "/test",
       location: "grid",
       agentState: "idle",
@@ -660,8 +655,7 @@ describe("TerminalFocusSlice - focusNextAgent / focusPreviousAgent runtime ident
     id: string,
     opts: {
       kind?: "agent" | "terminal";
-      type?: string;
-      agentId?: string;
+      launchAgentId?: string;
       detectedAgentId?: string;
       everDetectedAgent?: boolean;
     } = {}
@@ -669,9 +663,8 @@ describe("TerminalFocusSlice - focusNextAgent / focusPreviousAgent runtime ident
     ({
       id,
       title: id,
-      type: (opts.type ?? "terminal") as TerminalInstance["type"],
       kind: opts.kind,
-      agentId: opts.agentId,
+      launchAgentId: opts.launchAgentId,
       detectedAgentId: opts.detectedAgentId,
       everDetectedAgent: opts.everDetectedAgent,
       cwd: "/test",
@@ -717,9 +710,9 @@ describe("TerminalFocusSlice - focusNextAgent / focusPreviousAgent runtime ident
   const validWorktrees = new Set(["worktree-1"]);
 
   it("includes a freshly-spawned agent panel before the detector fires (boot window)", () => {
-    // detectedAgentId is undefined during boot; kind/agentId fallback keeps it in cycle
+    // detectedAgentId is undefined during boot; launchAgentId fallback keeps it in cycle
     terminals = [
-      makeTerminal("fresh-agent", { kind: "terminal", agentId: "claude" }),
+      makeTerminal("fresh-agent", { kind: "terminal", launchAgentId: "claude" }),
       makeTerminal("shell-1", { kind: "terminal" }),
     ];
     state.focusedId = "shell-1";
@@ -729,31 +722,17 @@ describe("TerminalFocusSlice - focusNextAgent / focusPreviousAgent runtime ident
     expect(state.focusedId).toBe("fresh-agent");
   });
 
-  it("includes legacy type-only agents (no kind, TerminalType='claude')", () => {
-    // Legacy persisted panels predate `kind`; their identity comes from `type`.
-    // isAgentTerminal(kind ?? type, agentId) must still classify them as agents.
-    terminals = [
-      makeTerminal("legacy-agent", { kind: undefined, type: "claude" }),
-      makeTerminal("shell-1", { kind: "terminal" }),
-    ];
-    state.focusedId = "shell-1";
-
-    state.focusNextAgent(neverInTrash, validWorktrees);
-
-    expect(state.focusedId).toBe("legacy-agent");
-  });
-
   it("excludes an ex-agent panel whose runtime identity has cleared", () => {
     // Spawned as agent, detector fired then cleared on exit — no longer in cycle.
     terminals = [
       makeTerminal("ex-agent", {
         kind: "terminal",
-        agentId: "claude",
+        launchAgentId: "claude",
         everDetectedAgent: true,
       }),
       makeTerminal("live-agent", {
         kind: "terminal",
-        agentId: "gemini",
+        launchAgentId: "gemini",
         detectedAgentId: "gemini",
       }),
     ];
@@ -783,11 +762,23 @@ describe("TerminalFocusSlice - focusNextAgent / focusPreviousAgent runtime ident
 
   it("focusPreviousAgent wraps across a mixed set using runtime identity", () => {
     terminals = [
-      makeTerminal("agent-1", { kind: "terminal", agentId: "claude", detectedAgentId: "claude" }),
+      makeTerminal("agent-1", {
+        kind: "terminal",
+        launchAgentId: "claude",
+        detectedAgentId: "claude",
+      }),
       // Demoted: kind agent but detection fired and cleared → skipped
-      makeTerminal("demoted", { kind: "terminal", agentId: "gemini", everDetectedAgent: true }),
+      makeTerminal("demoted", {
+        kind: "terminal",
+        launchAgentId: "gemini",
+        everDetectedAgent: true,
+      }),
       makeTerminal("shell", { kind: "terminal" }),
-      makeTerminal("agent-2", { kind: "terminal", agentId: "codex", detectedAgentId: "codex" }),
+      makeTerminal("agent-2", {
+        kind: "terminal",
+        launchAgentId: "codex",
+        detectedAgentId: "codex",
+      }),
     ];
     state.focusedId = "agent-1";
 
@@ -801,7 +792,7 @@ describe("TerminalFocusSlice - focusNextAgent / focusPreviousAgent runtime ident
     terminals = [
       makeTerminal("ex-agent", {
         kind: "terminal",
-        agentId: "claude",
+        launchAgentId: "claude",
         everDetectedAgent: true,
       }),
     ];
@@ -820,7 +811,6 @@ describe("TerminalFocusSlice - setFocused ping gating", () => {
     {
       id: "term-1",
       title: "Terminal 1",
-      type: "claude",
       cwd: "/test",
       location: "grid",
       agentState: "idle",
@@ -832,7 +822,6 @@ describe("TerminalFocusSlice - setFocused ping gating", () => {
     {
       id: "term-2",
       title: "Terminal 2",
-      type: "terminal",
       cwd: "/test",
       location: "grid",
       agentState: "idle",

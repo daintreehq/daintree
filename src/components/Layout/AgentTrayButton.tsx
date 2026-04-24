@@ -332,12 +332,12 @@ export function AgentTrayButton({
       // Using `isRuntimeAgentTerminal` here would silently exclude freshly-spawned
       // agents during the boot window and demote ex-agents that outlived their
       // process — neither matches the tray's "sessions grouped by launch agent" model.
-      if (!p || !p.agentId || p.location === "trash" || p.location === "background") continue;
+      if (!p || !p.launchAgentId || p.location === "trash" || p.location === "background") continue;
       if (activeWorktreeId && p.worktreeId !== activeWorktreeId) continue;
       if (!ACTIVE_AGENT_STATES.has(p.agentState)) continue;
-      const arr = statesPerAgent.get(p.agentId) ?? [];
+      const arr = statesPerAgent.get(p.launchAgentId) ?? [];
       arr.push(p.agentState);
-      statesPerAgent.set(p.agentId, arr);
+      statesPerAgent.set(p.launchAgentId, arr);
     }
     const result = new Map<string, AgentState | null>();
     for (const [agentId, states] of statesPerAgent) {

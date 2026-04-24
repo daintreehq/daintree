@@ -11,19 +11,14 @@ import type { AgentState } from "@/types";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { TerminalRefreshTier } from "@/types";
 import { validateTerminalConfig } from "@/utils/terminalValidation";
-import {
-  isRegisteredAgent,
-  getAgentConfig,
-  getMergedPreset,
-  sanitizeAgentEnv,
-} from "@/config/agents";
+import { getAgentConfig, getMergedPreset, sanitizeAgentEnv } from "@/config/agents";
 import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 import { markTerminalRestarting, unmarkTerminalRestarting } from "@/store/restartExitSuppression";
 import { useLayoutConfigStore } from "@/store/layoutConfigStore";
 import { saveNormalized } from "./persistence";
 import { optimizeForDock } from "./layout";
-import { deriveRuntimeStatus, getDefaultTitle } from "./helpers";
+import { deriveRuntimeStatus } from "./helpers";
 import { logDebug, logWarn, logError } from "@/utils/logger";
 
 // Lazy accessor to break circular dependency: restart -> projectStore -> panelPersistence -> core.
@@ -99,7 +94,6 @@ export const createRestartActions = (
   | "setRuntimeStatus"
   | "setInputLocked"
   | "toggleInputLocked"
-  | "convertTerminalType"
   | "activateFallbackPreset"
 > => ({
   restartTerminal: async (id) => {
@@ -200,14 +194,9 @@ export const createRestartActions = (
     // For agent terminals, regenerate command from current settings
     // For other terminals, use the saved command
     let commandToRun = currentTerminal.command;
-    // Get effective agentId - handles both new agentId and legacy type-based detection
-    const effectiveAgentId =
-      currentTerminal.agentId ??
-      (currentTerminal.type && isRegisteredAgent(currentTerminal.type)
-        ? currentTerminal.type
-        : undefined);
+    const effectiveAgentId = currentTerminal.launchAgentId;
     // Gate on launch intent (`effectiveAgentId`, derived from the sealed
-    // `agentId` from #5803 with a legacy `type` fallback) plus two demotion
+    // `launchAgentId`) plus two demotion
     // signals:
     //   - `exitCode !== undefined` — the PTY has truly exited (onExit path).
     //   - `agentState === "exited"` — the FSM saw the detected agent quit
@@ -374,14 +363,10 @@ export const createRestartActions = (
         cwd: currentTerminal.cwd,
         cols: spawnCols,
         rows: spawnRows,
-        // Demoted panels must spawn as plain terminals. Every agent-adjacent
-        // field must be cleared — the IPC handler re-derives agent-ness from
-        // `type` and `agentId` (electron/ipc/handlers/terminal/lifecycle.ts),
-        // so forcing only `kind` is not enough (issue #5764). All PTY panels
-        // use `kind: "terminal"`; agent identity lives on `agentId`.
+        // Demoted panels spawn as plain terminals — launchAgentId cleared so the
+        // IPC handler does not treat them as agent spawns (issue #5764).
         kind: "terminal",
-        type: isAgent ? currentTerminal.type : "terminal",
-        agentId: isAgent ? currentTerminal.agentId : undefined,
+        launchAgentId: isAgent ? currentTerminal.launchAgentId : undefined,
         title: currentTerminal.title,
         command: isAgent ? spawnCommand : undefined,
         restore: false,
@@ -548,9 +533,7 @@ export const createRestartActions = (
     if (terminal.isRestarting) return;
 
     // Determine if this is an agent terminal before any async work
-    const effectiveAgentId =
-      terminal.agentId ??
-      (terminal.type && isRegisteredAgent(terminal.type) ? terminal.type : undefined);
+    const effectiveAgentId = terminal.launchAgentId;
     const isAgent = !!effectiveAgentId;
 
     // Capture the terminal buffer BEFORE any teardown (xterm instance is still alive)
@@ -686,192 +669,6 @@ export const createRestartActions = (
     });
   },
 
-  convertTerminalType: async (id, newType, newAgentId) => {
-    const terminal = get().panelsById[id];
-    if (!terminal) {
-      logWarn("[TerminalStore] Cannot convert: terminal not found", { id });
-      return;
-    }
-
-    if (terminal.isRestarting) {
-      logWarn("[TerminalStore] Terminal is already restarting, ignoring convert", { id });
-      return;
-    }
-
-    // Mark as restarting SYNCHRONOUSLY first to prevent exit event race condition.
-    markTerminalRestarting(id);
-
-    // Set store flag immediately to prevent overlapping operations
-    set((state) =>
-      updateTerminal(state, id, (t) => ({
-        ...t,
-        restartError: undefined,
-        isRestarting: true,
-      }))
-    );
-
-    const effectiveAgentId = newAgentId ?? (isRegisteredAgent(newType) ? newType : undefined);
-    // All PTY panels use `kind: "terminal"`; agent identity lives on `agentId`.
-    const newKind = "terminal" as const;
-    const newTitle = getDefaultTitle(newKind, newType, effectiveAgentId);
-
-    let commandToRun: string | undefined;
-    if (effectiveAgentId) {
-      try {
-        const [agentSettings, tmpDir] = await Promise.all([
-          agentSettingsClient.get(),
-          systemClient.getTmpDir().catch(() => ""),
-        ]);
-        if (agentSettings) {
-          const agentConfig = getAgentConfig(effectiveAgentId);
-          const baseCommand = agentConfig?.command || effectiveAgentId;
-          const clipboardDirectory = tmpDir ? `${tmpDir}/daintree-clipboard` : undefined;
-          commandToRun = generateAgentCommand(
-            baseCommand,
-            agentSettings.agents?.[effectiveAgentId] ?? {},
-            effectiveAgentId,
-            { clipboardDirectory }
-          );
-        }
-      } catch (error) {
-        logWarn("[TerminalStore] Failed to load agent settings for convert, using default", {
-          error,
-        });
-        const agentConfig = getAgentConfig(effectiveAgentId);
-        commandToRun = agentConfig?.command || effectiveAgentId;
-      }
-    }
-
-    // Snapshot pre-mutation identity for rollback on spawn failure. If the
-    // spawn rejects after we kill the old PTY, leaving the optimistic write
-    // in place would falsely mark the panel as fleet-eligible (via the
-    // capability-id fallback to `agentId`) while the PTY is actually dead.
-    const previousIdentity = {
-      kind: terminal.kind,
-      type: terminal.type,
-      agentId: terminal.agentId,
-      title: terminal.title,
-      agentState: terminal.agentState,
-      lastStateChange: terminal.lastStateChange,
-      stateChangeTrigger: terminal.stateChangeTrigger,
-      stateChangeConfidence: terminal.stateChangeConfidence,
-      command: terminal.command,
-    };
-
-    try {
-      const managedInstance = terminalInstanceService.get(id);
-      let spawnCols = terminal.cols || 80;
-      let spawnRows = terminal.rows || 24;
-      if (managedInstance?.terminal) {
-        spawnCols = managedInstance.terminal.cols || spawnCols;
-        spawnRows = managedInstance.terminal.rows || spawnRows;
-      }
-
-      terminalInstanceService.destroy(id);
-      terminalInstanceService.suppressNextExit(id);
-      await terminalClient.kill(id);
-
-      const isAgentConvert = !!effectiveAgentId;
-
-      set((state) => {
-        const t = state.panelsById[id];
-        if (!t) return state;
-        const updated = {
-          ...t,
-          kind: newKind,
-          type: newType,
-          agentId: effectiveAgentId,
-          title: newTitle,
-          restartKey: (t.restartKey ?? 0) + 1,
-          agentState: isAgentConvert ? ("working" as const) : undefined,
-          lastStateChange: isAgentConvert ? Date.now() : undefined,
-          stateChangeTrigger: undefined,
-          stateChangeConfidence: undefined,
-          command: commandToRun,
-          isRestarting: true,
-          restartError: undefined,
-        };
-        const newById = { ...state.panelsById, [id]: updated };
-        saveNormalized(newById, state.panelIds);
-        return { panelsById: newById };
-      });
-
-      await new Promise((resolve) => setTimeout(resolve, 50));
-
-      // Capture project ID before async work to avoid race conditions (issue #3690).
-      const projectStoreForConvert = await resolveProjectStore();
-      const capturedProjectId = projectStoreForConvert.getState().currentProject?.id;
-
-      // Fetch project environment variables for conversion
-      let convertEnv: Record<string, string> | undefined;
-      try {
-        if (capturedProjectId) {
-          const projectSettings = await projectClient.getSettings(capturedProjectId);
-          if (
-            projectSettings?.environmentVariables &&
-            Object.keys(projectSettings.environmentVariables).length > 0
-          ) {
-            convertEnv = projectSettings.environmentVariables;
-          }
-        }
-      } catch (error) {
-        logWarn("[TerminalStore] Failed to fetch project env for conversion", { error });
-      }
-
-      await terminalClient.spawn({
-        id,
-        projectId: capturedProjectId,
-        cwd: terminal.cwd,
-        cols: spawnCols,
-        rows: spawnRows,
-        kind: newKind,
-        type: newType,
-        agentId: effectiveAgentId,
-        title: newTitle,
-        command: commandToRun,
-        restore: false,
-        env: convertEnv,
-      });
-
-      await new Promise((resolve) => setTimeout(resolve, 50));
-
-      if (terminal.location === "dock") {
-        optimizeForDock(id);
-      } else {
-        terminalInstanceService.fit(id);
-      }
-
-      unmarkTerminalRestarting(id);
-      set((state) => updateTerminal(state, id, (t) => ({ ...t, isRestarting: false })));
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      const errorCode = (error as { code?: string })?.code;
-
-      const restartError = {
-        message: errorMessage,
-        code: errorCode,
-        timestamp: Date.now(),
-        recoverable: false,
-        context: {
-          failedCwd: terminal.cwd,
-          command: commandToRun,
-        },
-      };
-
-      unmarkTerminalRestarting(id);
-      set((state) =>
-        updateTerminal(state, id, (t) => ({
-          ...t,
-          ...previousIdentity,
-          isRestarting: false,
-          restartError,
-        }))
-      );
-
-      logError("[TerminalStore] Failed to convert terminal", error, { id });
-    }
-  },
-
   activateFallbackPreset: async (id, nextPresetId, originalPresetId) => {
     const terminal = get().panelsById[id];
     if (!terminal) {
@@ -881,9 +678,7 @@ export const createRestartActions = (
       return { success: false, error: "already restarting" };
     }
 
-    const effectiveAgentId =
-      terminal.agentId ??
-      (terminal.type && isRegisteredAgent(terminal.type) ? terminal.type : undefined);
+    const effectiveAgentId = terminal.launchAgentId;
     if (!effectiveAgentId) {
       return { success: false, error: "panel is not an agent" };
     }
@@ -1042,8 +837,7 @@ export const createRestartActions = (
         cols: spawnCols,
         rows: spawnRows,
         kind: "terminal",
-        type: terminal.type,
-        agentId: terminal.agentId,
+        launchAgentId: terminal.launchAgentId,
         title: terminal.title,
         command: commandToRun,
         restore: false,

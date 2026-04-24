@@ -1089,7 +1089,7 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
           throw new Error("No resource connect command configured for this worktree");
 
         await callbacks.onAddTerminal({
-          type: "terminal",
+          kind: "terminal",
           cwd: worktree.path,
           command: connectCommand,
           title: `Connect: ${worktree.name}`,

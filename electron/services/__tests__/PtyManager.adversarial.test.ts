@@ -17,7 +17,6 @@ const shared = vi.hoisted(() => ({
 
 interface SpawnOptionsShape extends PtyHostSpawnOptions {
   kind: "terminal" | "agent";
-  type: "terminal" | "claude";
   spawnedAt?: number;
 }
 
@@ -34,9 +33,8 @@ interface TerminalInfoShape {
   cols: number;
   rows: number;
   kind: string;
-  type: string;
+  launchAgentId?: string;
   projectId?: string;
-  agentId?: string;
   spawnedAt: number;
   isExited: boolean;
   wasKilled: boolean;
@@ -50,7 +48,7 @@ interface TerminalInfoShape {
   lastInputTime?: number;
   lastOutputTime?: number;
   lastStateChange?: number;
-  detectedAgentType?: string;
+  detectedAgentId?: string;
   analysisEnabled?: boolean;
   exitCode?: number;
   spawnArgs?: string[];
@@ -91,9 +89,8 @@ class MockTerminalProcess {
       cols: options.cols,
       rows: options.rows,
       kind: options.kind,
-      type: options.type,
+      launchAgentId: options.launchAgentId,
       projectId: options.projectId,
-      agentId: options.agentId,
       spawnedAt: options.spawnedAt ?? Date.now(),
       isExited: false,
       wasKilled: false,
@@ -113,8 +110,8 @@ class MockTerminalProcess {
     return this.info;
   }
 
-  getIsAgentTerminal(): boolean {
-    return !!this.info.agentId;
+  isAgentCurrentlyLive(): boolean {
+    return !!this.info.detectedAgentId;
   }
 
   shouldPreserveOnExit(): boolean {
@@ -251,7 +248,6 @@ function spawnOptions(overrides?: Partial<SpawnOptionsShape>): SpawnOptionsShape
     cols: 80,
     rows: 24,
     kind: "terminal",
-    type: "terminal",
     ...overrides,
   };
 }
@@ -265,7 +261,6 @@ describe("PtyManager adversarial", () => {
       env: {},
       shell: "/bin/zsh",
       args: ["-l"],
-      isAgentTerminal: false,
     });
     shared.acquirePtyProcess.mockImplementation(() => createPtyProcess());
     shared.agentTransitionState.mockReturnValue(true);
@@ -394,9 +389,8 @@ describe("PtyManager adversarial", () => {
       "agent-1",
       spawnOptions({
         kind: "terminal",
-        type: "claude",
+        launchAgentId: "claude",
         projectId: "project-a",
-        agentId: "agent-1",
         spawnedAt,
       })
     );
@@ -407,7 +401,7 @@ describe("PtyManager adversarial", () => {
     expect(shared.agentTransitionState).toHaveBeenCalledWith(
       expect.objectContaining({
         id: "agent-1",
-        agentId: "agent-1",
+        launchAgentId: "claude",
         spawnedAt,
       }),
       event,
@@ -422,19 +416,19 @@ describe("PtyManager adversarial", () => {
       env: {},
       shell: "/usr/local/bin/claude",
       args: ["--dangerously-skip-permissions", "--model", "claude-opus-4-7"],
-      isAgentTerminal: true,
     });
 
     const manager = new PtyManager();
 
     manager.spawn(
       "agent-1",
-      spawnOptions({ kind: "terminal", type: "claude", agentId: "agent-1", projectId: "project-a" })
+      spawnOptions({ kind: "terminal", launchAgentId: "claude", projectId: "project-a" })
     );
 
     const created = shared.created[0]!;
     created.info.agentLaunchFlags = ["--dangerously-skip-permissions"];
     created.info.agentModelId = "claude-opus-4-7";
+    created.info.detectedAgentId = "claude";
 
     const payload = manager.getTerminalInfo("agent-1");
 
@@ -447,7 +441,7 @@ describe("PtyManager adversarial", () => {
     ]);
     expect(payload!.agentLaunchFlags).toEqual(["--dangerously-skip-permissions"]);
     expect(payload!.agentModelId).toBe("claude-opus-4-7");
-    expect(payload!.isAgentTerminal).toBe(true);
+    expect(payload!.detectedAgentId).toBe("claude");
   });
 
   it("GET_TERMINAL_INFO_FORWARDS_DEFAULT_SHELL_ARGS_FOR_PLAIN_TERMINAL", () => {
@@ -473,7 +467,7 @@ describe("PtyManager adversarial", () => {
 
     manager.spawn(
       "agent-1",
-      spawnOptions({ kind: "terminal", type: "claude", agentId: "agent-1", projectId: "project-a" })
+      spawnOptions({ kind: "terminal", launchAgentId: "claude", projectId: "project-a" })
     );
     manager.spawn("term-1", spawnOptions({ projectId: "project-a" }));
 
@@ -481,7 +475,7 @@ describe("PtyManager adversarial", () => {
 
     expect(shared.agentEmitKilled).toHaveBeenCalledTimes(1);
     expect(shared.agentEmitKilled).toHaveBeenCalledWith(
-      expect.objectContaining({ id: "agent-1", agentId: "agent-1" }),
+      expect.objectContaining({ id: "agent-1", launchAgentId: "claude" }),
       "cleanup"
     );
     expect(shared.created[0]!.dispose).toHaveBeenCalledTimes(1);

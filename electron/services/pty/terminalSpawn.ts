@@ -1,49 +1,38 @@
 import * as pty from "node-pty";
-import { getEffectiveAgentConfig } from "../../../shared/config/agentRegistry.js";
 import {
   filterEnvironment,
   injectDaintreeMetadata,
   ensureUtf8Locale,
 } from "./EnvironmentFilter.js";
-import {
-  buildNonInteractiveEnv,
-  AGENT_ENV_EXCLUSIONS,
-  getDefaultShell,
-  getDefaultShellArgs,
-} from "./terminalShell.js";
+import { getDefaultShell, getDefaultShellArgs } from "./terminalShell.js";
 import type { PtySpawnOptions } from "./types.js";
 import type { PtyPool } from "../PtyPool.js";
 
 export interface SpawnContext {
   shell: string;
   args: string[];
-  isAgentTerminal: boolean;
-  agentId: string | undefined;
   env: Record<string, string>;
 }
 
 export function computeSpawnContext(id: string, options: PtySpawnOptions): SpawnContext {
   const shell = options.shell || getDefaultShell();
   const args = options.args || getDefaultShellArgs(shell);
-
-  const isAgentByAgentId = !!options.agentId;
-  const isAgentByType = !!(options.type && options.type !== "terminal");
-  const isAgentTerminal = isAgentByAgentId || isAgentByType;
-  const agentId = isAgentTerminal
-    ? (options.agentId ?? (options.type !== "terminal" ? options.type : id))
-    : undefined;
-
-  const env = buildTerminalEnv(options, id, shell, isAgentTerminal, agentId);
-
-  return { shell, args, isAgentTerminal, agentId, env };
+  const env = buildTerminalEnv(options, id, shell);
+  return { shell, args, env };
 }
 
+/**
+ * Build the environment for a terminal PTY.
+ *
+ * All terminals get the same baseline. There is no "agent terminal" env tier —
+ * every PTY is a plain interactive shell that may later have a command injected
+ * (see `docs/architecture/terminal-identity.md`). Agent CLIs detect the TTY and
+ * colour support from standard env variables; no per-agent shaping is required.
+ */
 export function buildTerminalEnv(
   options: PtySpawnOptions,
   id: string,
-  shell: string,
-  isAgentTerminal: boolean,
-  agentId: string | undefined
+  _shell: string
 ): Record<string, string> {
   const baseEnv = process.env as Record<string, string | undefined>;
 
@@ -67,26 +56,13 @@ export function buildTerminalEnv(
     }
   );
 
-  // For agent terminals, use non-interactive environment to suppress prompts
-  // (oh-my-zsh updates, Homebrew notifications, etc.)
-  // Pass agentId for agent-specific exclusions (e.g., Gemini CLI is sensitive to CI=1)
-  // Then merge agent-specific env vars from the agent registry config,
-  // filtering out any excluded vars to prevent bypassing agent-specific safeguards
-  const agentConfig = agentId ? getEffectiveAgentConfig(agentId) : undefined;
-  const agentEnv = agentConfig?.env ?? {};
-  const normalizedAgentId = agentId?.toLowerCase();
-  const exclusions = new Set(
-    normalizedAgentId ? (AGENT_ENV_EXCLUSIONS[normalizedAgentId] ?? []) : []
-  );
-  const filteredAgentEnv = Object.fromEntries(
-    Object.entries(agentEnv).filter(([key]) => !exclusions.has(key) && !key.startsWith("DAINTREE_"))
-  ) as Record<string, string>;
+  // Universal colour hints — xterm.js supports truecolor, and most CLIs
+  // (chalk, supports-color, termenv, ink) honour these. Plain shells and
+  // agent CLIs both benefit; neither suffers.
+  mergedEnv.FORCE_COLOR = mergedEnv.FORCE_COLOR ?? "3";
+  mergedEnv.COLORTERM = mergedEnv.COLORTERM ?? "truecolor";
 
-  return ensureUtf8Locale(
-    isAgentTerminal
-      ? { ...buildNonInteractiveEnv(mergedEnv, shell, agentId), ...filteredAgentEnv }
-      : mergedEnv
-  );
+  return ensureUtf8Locale(mergedEnv);
 }
 
 export function acquirePtyProcess(
@@ -95,7 +71,6 @@ export function acquirePtyProcess(
   env: Record<string, string>,
   shell: string,
   args: string[],
-  isAgentTerminal: boolean,
   ptyPool: PtyPool | null,
   onWriteError: (error: unknown, context: { operation: string }) => void
 ): pty.IPty {
@@ -108,12 +83,15 @@ export function acquirePtyProcess(
   const canUsePool =
     ptyPool &&
     poolCwdMatches &&
-    !isAgentTerminal &&
     !options.shell &&
     !options.env &&
     !options.args &&
     options.kind !== "dev-preview";
   let pooledPty = canUsePool ? ptyPool!.acquire() : null;
+  // Suppress unused-parameter lint for the write-error callback; kept in the
+  // signature so future pool-acquisition logic (e.g. agent-preamble writes) can
+  // still report through the same channel.
+  void onWriteError;
 
   if (pooledPty) {
     try {
@@ -137,16 +115,10 @@ export function acquirePtyProcess(
     // `cwd` option (kernel-level chdir before exec), so no shell-level
     // `cd` write is needed and user `cd` overrides (zoxide, oh-my-zsh)
     // cannot interfere. See issue #5097.
-    if (process.platform !== "win32") {
-      try {
-        // Clear any pooled-shell init noise so the user sees a clean prompt.
-        // \033[H cursor home, \033[2J clear screen, \033[3J clear scrollback.
-        pooledPty.write(`printf '\\033[H\\033[2J\\033[3J'\r`);
-      } catch (error) {
-        onWriteError(error, { operation: "write(clear)" });
-      }
-    }
-
+    //
+    // No clear-screen preamble is written here. The shell's RC output is
+    // what the user should see first — it's the prompt. Hiding it
+    // historically produced visible escape-garbage on slow pools.
     if (process.env.DAINTREE_VERBOSE) {
       console.log(`[TerminalProcess] Acquired terminal ${id} from pool (instant spawn)`);
     }

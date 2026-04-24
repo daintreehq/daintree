@@ -51,11 +51,11 @@ export function registerPanelActions(actions: ActionRegistry, callbacks: ActionC
         panels: panels.map((p) => ({
           id: p.id,
           kind: p.kind,
-          type: p.type,
+          type: undefined,
           worktreeId: p.worktreeId ?? null,
           title: p.title ?? null,
           location: p.location ?? "grid",
-          agentId: p.agentId ?? null,
+          agentId: p.launchAgentId ?? null,
           agentState: p.agentState ?? null,
         })),
         dock: {

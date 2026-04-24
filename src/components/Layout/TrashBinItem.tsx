@@ -60,10 +60,10 @@ export function TrashBinItem({ terminal, trashedInfo, worktreeName }: TrashBinIt
     if (observed && !isUselessTitle(observed)) return observed;
     // Launch-intent only: trash labels should read the stable launch identity
     // so a terminal's name doesn't change as runtime detection flips after trashing.
-    if (terminal.agentId) {
+    if (terminal.launchAgentId) {
       if (terminal.title && !isUselessTitle(terminal.title)) return terminal.title;
-      const agentConfig = getEffectiveAgentConfig(terminal.agentId);
-      return agentConfig?.name ?? terminal.agentId;
+      const agentConfig = getEffectiveAgentConfig(terminal.launchAgentId);
+      return agentConfig?.name ?? terminal.launchAgentId;
     }
     return terminal.title || "Terminal";
   })();
@@ -73,7 +73,7 @@ export function TrashBinItem({ terminal, trashedInfo, worktreeName }: TrashBinIt
       <div className="shrink-0 opacity-60 group-hover:opacity-100 transition-opacity">
         <TerminalIcon
           kind={terminal.kind}
-          agentId={terminal.agentId}
+          agentId={terminal.launchAgentId}
           detectedAgentId={terminal.detectedAgentId}
           detectedProcessId={terminal.detectedProcessId}
           className="w-3 h-3"

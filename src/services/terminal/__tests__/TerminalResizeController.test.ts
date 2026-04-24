@@ -295,7 +295,7 @@ describe("TerminalResizeController", () => {
 
   it("settled strategy batches rapid resizes into a single PTY resize", () => {
     const managed = createManagedTerminal();
-    managed.agentId = "codex";
+    managed.launchAgentId = "codex";
 
     getEffectiveAgentConfigMock.mockReturnValue({
       capabilities: { resizeStrategy: "settled" },
@@ -324,7 +324,7 @@ describe("TerminalResizeController", () => {
 
   it("default strategy sends PTY resize immediately", () => {
     const managed = createManagedTerminal();
-    managed.agentId = "claude";
+    managed.launchAgentId = "claude";
 
     getEffectiveAgentConfigMock.mockReturnValue({
       capabilities: { resizeStrategy: "default" },
@@ -346,7 +346,7 @@ describe("TerminalResizeController", () => {
 
   it("clearSettledTimer cancels a pending settled resize", () => {
     const managed = createManagedTerminal();
-    managed.agentId = "codex";
+    managed.launchAgentId = "codex";
 
     getEffectiveAgentConfigMock.mockReturnValue({
       capabilities: { resizeStrategy: "settled" },
@@ -371,7 +371,7 @@ describe("TerminalResizeController", () => {
 
   it("forceImmediateResize sends an immediate resize and cancels pending settled timer", () => {
     const managed = createManagedTerminal();
-    managed.agentId = "codex";
+    managed.launchAgentId = "codex";
     managed.latestCols = 132;
     managed.latestRows = 41;
     const dataBuffer = {

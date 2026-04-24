@@ -40,16 +40,8 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
     const cols = Math.max(1, Math.min(500, Math.floor(validatedOptions.cols) || 80));
     const rows = Math.max(1, Math.min(500, Math.floor(validatedOptions.rows) || 30));
 
-    const type = validatedOptions.type || "terminal";
-
-    // Agent identity now lives on agentId; panel kind is always "terminal"
-    // for PTY-backed panels. Derive agentId from a registered agent type when
-    // the renderer omitted it (legacy spawn path).
-    const { isRegisteredAgent } = await import("../../../../shared/config/agentRegistry.js");
-    const isAgentType = type !== "terminal" && isRegisteredAgent(type);
-
     const kind = "terminal";
-    const agentId = validatedOptions.agentId || (isAgentType ? type : undefined);
+    const launchAgentId = validatedOptions.launchAgentId;
     const title = validatedOptions.title;
 
     const id = validatedOptions.id || crypto.randomUUID();
@@ -70,11 +62,14 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
     const projectId = resolvedProject?.id;
     const projectPath = resolvedProject?.path;
 
-    // Fetch project-level terminal overrides for non-agent terminals
+    // Fetch project-level terminal overrides when there's no agent launch
+    // hint. Agent launches intentionally use the default shell configuration
+    // (user shell + default args) to keep behaviour predictable — project
+    // overrides can shape plain-shell UX without leaking into agent launches.
     let projectShell: string | undefined;
     let projectArgs: string[] | undefined;
     let projectCwd: string | undefined;
-    if (projectId && !agentId) {
+    if (projectId && !launchAgentId) {
       const projSettings = await projectStore.getProjectSettings(projectId);
       const ts = projSettings.terminalSettings;
       if (ts) {
@@ -126,7 +121,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
         projectId: projectId?.slice(0, 8) ?? "undefined",
         projectName: resolvedProject?.name ?? "none",
         kind,
-        type,
+        launchAgentId,
       });
     }
 
@@ -143,7 +138,6 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
     const resolvedArgs = projectArgs;
 
     const trimmedCommand = validatedOptions.command?.trim() || "";
-    const isAgent = Boolean(agentId);
     const hasMultilineCommand =
       trimmedCommand.length > 0 && (trimmedCommand.includes("\n") || trimmedCommand.includes("\r"));
 
@@ -153,15 +147,11 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
     const safeCommand = hasMultilineCommand ? "" : trimmedCommand;
 
     try {
-      // Spawn a plain interactive shell for every terminal — agent or not.
-      // Previously, agent terminals used `zsh -lic "exec ${command}"` so the
-      // shell was replaced by the agent process; when the agent exited, the
-      // PTY died and the panel greyed out. The new model ("terminals are the
-      // unit; agents are a wrapper") requires the shell to survive: when the
-      // user Ctrl+Cs out of claude, the shell reclaims the foreground and the
-      // panel demotes to a plain terminal instead of dying. Signals still
-      // route correctly — the kernel's TTY line discipline delivers SIGINT to
-      // the foreground process group (the agent), leaving the shell pristine.
+      // Every terminal is an interactive shell. Agent launches inject their
+      // command after the shell's first prompt renders — never `exec`'d over
+      // the shell, so when the agent exits the shell reclaims the foreground.
+      // SIGINT routes to the agent (the foreground process group) via the
+      // kernel's TTY line discipline; the shell stays pristine.
       ptyClient.spawn(id, {
         cwd,
         shell: resolvedShell,
@@ -170,8 +160,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
         rows,
         env: validatedOptions.env,
         kind,
-        type,
-        agentId,
+        launchAgentId,
         title,
         projectId,
         restore: validatedOptions.restore,
@@ -190,15 +179,14 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
         // (oh-my-zsh, p10k, nvm, direnv). Fire-and-forget so the IPC
         // response returns immediately; `hasTerminal` guards against the
         // terminal being killed mid-wait.
+        //
+        // No clear-screen preamble is written. Users see their shell prompt
+        // momentarily before the agent takes over — that is the honest
+        // "first-class terminal" UX and it eliminates the escape-garbage
+        // some shells echoed when the preamble's `printf` text was visible
+        // before execution.
         void waitForShellReady(ptyClient, id).then(() => {
           if (!ptyClient.hasTerminal(id)) return;
-          if (isAgent && process.platform !== "win32") {
-            // Clear any shell init noise so the agent opens to a clean
-            // screen, matching what spawn-sealed agents previously looked
-            // like. \x1b[H cursor home, \x1b[2J clear screen,
-            // \x1b[3J clear scrollback.
-            ptyClient.write(id, "printf '\\x1b[H\\x1b[2J\\x1b[3J'\r");
-          }
           ptyClient.write(id, `${safeCommand}\r`);
         });
       }

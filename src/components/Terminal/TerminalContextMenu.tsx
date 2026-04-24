@@ -1,19 +1,15 @@
 import { useCallback, useMemo, useState } from "react";
 import { isMac } from "@/lib/platform";
 import type React from "react";
-import { type PanelLocation, type TerminalType } from "@/types";
+import { type PanelLocation } from "@/types";
 import { usePanelStore } from "@/store";
 import { useShallow } from "zustand/react/shallow";
 import { useWorktrees } from "@/hooks/useWorktrees";
 import { useFleetArmingStore, isFleetArmEligible } from "@/store/fleetArmingStore";
-import { AGENT_IDS, getAgentConfig } from "@/config/agents";
 import { isValidBrowserUrl } from "@/components/Browser/browserUtils";
 import { actionService } from "@/services/ActionService";
-import { isRegisteredPanelKind, panelKindHasPty } from "@shared/config/panelKindRegistry";
+import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
-import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
-import { resolveEffectiveAgentId } from "@/utils/agentIdentity";
-import { computeGridSelectedAgentIds } from "./contentGridAgentFilter";
 import {
   ArrowDownFromLine,
   Bell,
@@ -34,19 +30,12 @@ import {
   Radio,
   RadioTower,
   RefreshCw,
-  Repeat2,
   RotateCcw,
   Send,
-  SquareTerminal,
   Trash2,
   Unlock,
 } from "lucide-react";
-import {
-  MoveToDockIcon,
-  MoveToGridIcon,
-  DaintreeAgentIcon,
-  WorktreeIcon,
-} from "@/components/icons";
+import { MoveToDockIcon, MoveToGridIcon, WorktreeIcon } from "@/components/icons";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -103,9 +92,6 @@ export function TerminalContextMenu({
   // `multiSelectGestures`.
   const fleetEligible = isFleetArmEligible(terminal);
 
-  const availability = useCliAvailabilityStore((s) => s.availability);
-  const hasRealData = useCliAvailabilityStore((s) => s.hasRealData);
-
   const [hasSelection, setHasSelection] = useState(false);
   const [hoveredUrl, setHoveredUrl] = useState<string | null>(null);
 
@@ -153,18 +139,6 @@ export function TerminalContextMenu({
           { terminalId, worktreeId },
           { source: "context-menu" }
         );
-        return;
-      }
-
-      if (actionId.startsWith("convert-to:")) {
-        const targetType = actionId.slice("convert-to:".length);
-        if (targetType === "terminal" || AGENT_IDS.includes(targetType)) {
-          void actionService.dispatch(
-            "terminal.convertType",
-            { terminalId, type: targetType as TerminalType },
-            { source: "context-menu" }
-          );
-        }
         return;
       }
 
@@ -315,29 +289,6 @@ export function TerminalContextMenu({
     [terminal, terminalId]
   );
 
-  // Runtime-detected identity wins over launch-time `agentId`; legacy
-  // `type: "<agent>"` with no `agentId` is kept as a final tail so the
-  // "Convert to" submenu can still highlight the current agent for panels
-  // that predate the identity-normalization pass.
-  const currentAgentId =
-    resolveEffectiveAgentId(terminal?.detectedAgentId, terminal?.agentId) ??
-    (terminal?.type !== "terminal" ? terminal?.type : null);
-  const isPlainTerminal = terminal?.type === "terminal" || terminal?.kind === "terminal";
-
-  const visibleAgentIds = useMemo(() => {
-    const filtered = computeGridSelectedAgentIds(hasRealData, availability, AGENT_IDS);
-    if (!currentAgentId || filtered === undefined) return filtered;
-    return new Set([...filtered, currentAgentId]);
-  }, [hasRealData, availability, currentAgentId]);
-
-  const isKnownKind = terminal?.kind ? isRegisteredPanelKind(terminal.kind) : true;
-  const showConvertTo =
-    isKnownKind &&
-    (!isPlainTerminal ||
-      !!currentAgentId ||
-      hasRealData === false ||
-      (visibleAgentIds?.size ?? 0) > 0);
-
   if (!terminal) {
     return <div className="contents">{children}</div>;
   }
@@ -373,7 +324,7 @@ export function TerminalContextMenu({
           </ContextMenuSubContent>
         </ContextMenuSub>
       )}
-      {terminal.agentId && (
+      {terminal.launchAgentId && (
         <ContextMenuItem
           onSelect={() =>
             void actionService.dispatch(
@@ -513,32 +464,6 @@ export function TerminalContextMenu({
     );
   }
 
-  const convertToItems = (
-    <>
-      {(!isPlainTerminal || !!currentAgentId) && (
-        <ContextMenuItem onSelect={() => handleAction("convert-to:terminal")}>
-          <SquareTerminal className={ICON_CLASS} aria-hidden="true" />
-          Terminal
-        </ContextMenuItem>
-      )}
-      {[...(visibleAgentIds ?? AGENT_IDS)].map((agentId) => {
-        const config = getAgentConfig(agentId);
-        if (!config) return null;
-        const isCurrent = currentAgentId === agentId;
-        return (
-          <ContextMenuItem
-            key={agentId}
-            disabled={isCurrent}
-            onSelect={() => handleAction(`convert-to:${agentId}`)}
-          >
-            <DaintreeAgentIcon className={ICON_CLASS} />
-            {config.name}
-          </ContextMenuItem>
-        );
-      })}
-    </>
-  );
-
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>
@@ -644,7 +569,7 @@ export function TerminalContextMenu({
           )}
           {terminal.isInputLocked ? "Unlock Input" : "Lock Input"}
         </ContextMenuItem>
-        {terminal.agentId && (
+        {terminal.launchAgentId && (
           <ContextMenuItem onSelect={() => handleAction("toggle-watch")}>
             {isWatched ? (
               <BellOff className={ICON_CLASS} aria-hidden="true" />
@@ -654,15 +579,6 @@ export function TerminalContextMenu({
             {isWatched ? "Cancel Watch" : "Watch Terminal"}
             <ContextMenuShortcut>{mac ? "⌘⇧W" : "Ctrl+⇧W"}</ContextMenuShortcut>
           </ContextMenuItem>
-        )}
-        {showConvertTo && (
-          <ContextMenuSub>
-            <ContextMenuSubTrigger>
-              <Repeat2 className={ICON_CLASS} aria-hidden="true" />
-              Convert to
-            </ContextMenuSubTrigger>
-            <ContextMenuSubContent>{convertToItems}</ContextMenuSubContent>
-          </ContextMenuSub>
         )}
         <ContextMenuSeparator />
         <ContextMenuItem onSelect={() => handleAction("duplicate")}>

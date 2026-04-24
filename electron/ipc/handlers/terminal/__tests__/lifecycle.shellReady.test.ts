@@ -132,7 +132,7 @@ describe("agent command injection via stdin write", () => {
       cols: 80,
       rows: 24,
       kind: "terminal",
-      agentId: "claude",
+      launchAgentId: "claude",
       command: "claude --dangerously-skip-permissions",
     });
 
@@ -142,18 +142,17 @@ describe("agent command injection via stdin write", () => {
     const id = ptyClient.spawn.mock.calls[0][0];
 
     // No prompt yet → no write.
-    await flush(50);
+    await flush(20);
     expect(ptyClient.write).not.toHaveBeenCalled();
 
     ptyClient.emit("data", id, "$ ");
-    await flush(199);
+    await flush(49);
     expect(ptyClient.write).not.toHaveBeenCalled();
 
     await flush(1);
-    expect(ptyClient.write).toHaveBeenCalledTimes(2);
+    expect(ptyClient.write).toHaveBeenCalledTimes(1);
     const writes = ptyClient.write.mock.calls.map((c) => c[1] as string);
-    expect(writes[0]).toContain("\\x1b[2J");
-    expect(writes[1]).toBe("claude --dangerously-skip-permissions\r");
+    expect(writes[0]).toBe("claude --dangerously-skip-permissions\r");
   });
 
   it("tolerates a slow shell (1200ms RC delay) before the first prompt", async () => {
@@ -176,7 +175,7 @@ describe("agent command injection via stdin write", () => {
     expect(ptyClient.write).not.toHaveBeenCalled();
 
     ptyClient.emit("data", id, "$ ");
-    await flush(200);
+    await flush(50);
     expect(ptyClient.write).toHaveBeenCalledTimes(1);
     expect(ptyClient.write.mock.calls[0][1]).toBe("ls -la\r");
   });
@@ -195,12 +194,12 @@ describe("agent command injection via stdin write", () => {
     const id = ptyClient.spawn.mock.calls[0][0];
 
     ptyClient.emit("data", id, "❯ "); // instant prompt
-    await flush(100);
-    ptyClient.emit("data", id, "\r\n❯ "); // real prompt redraw
-    await flush(100);
+    await flush(40);
+    ptyClient.emit("data", id, "\r\n❯ "); // real prompt redraw — resets quiescence
+    await flush(40);
     expect(ptyClient.write).not.toHaveBeenCalled();
 
-    await flush(100);
+    await flush(20);
     expect(ptyClient.write).toHaveBeenCalledTimes(1);
     expect(ptyClient.write.mock.calls[0][1]).toBe("echo hi\r");
   });
@@ -216,14 +215,14 @@ describe("agent command injection via stdin write", () => {
       cols: 80,
       rows: 24,
       kind: "terminal",
-      agentId: "claude",
+      launchAgentId: "claude",
       command: "claude",
     });
 
     const id = ptyClient.spawn.mock.calls[0][0];
 
     ptyClient.emit("data", id, "> ");
-    await flush(200);
+    await flush(50);
     expect(ptyClient.write).toHaveBeenCalledTimes(1);
     expect(ptyClient.write.mock.calls[0][1]).toBe("claude\r");
   });
@@ -237,7 +236,7 @@ describe("agent command injection via stdin write", () => {
       cols: 80,
       rows: 24,
       kind: "terminal",
-      agentId: "claude",
+      launchAgentId: "claude",
       command: "claude",
     });
 
@@ -263,7 +262,7 @@ describe("agent command injection via stdin write", () => {
       command: "ls",
     });
 
-    await flush(10_000);
+    await flush(1_500);
     expect(ptyClient.write).toHaveBeenCalledTimes(1);
     expect(ptyClient.write.mock.calls[0][1]).toBe("ls\r");
   });
@@ -278,7 +277,7 @@ describe("agent command injection via stdin write", () => {
       cols: 80,
       rows: 24,
       kind: "terminal",
-      agentId: "claude",
+      launchAgentId: "claude",
       command: "claude\nmalicious",
     });
 
@@ -288,7 +287,7 @@ describe("agent command injection via stdin write", () => {
     expect(spawnArgs.args).toBeUndefined();
 
     // Multi-line commands don't get written to stdin; no listeners registered.
-    await flush(10_000);
+    await flush(1_500);
     expect(ptyClient.write).not.toHaveBeenCalled();
     expect(ptyClient.listenerCount("data")).toBe(0);
     expect(ptyClient.listenerCount("exit")).toBe(0);

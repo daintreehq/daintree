@@ -1,11 +1,5 @@
 import { EventEmitter } from "events";
-import type {
-  NotificationPayload,
-  AgentState,
-  TaskState,
-  TerminalType,
-  EventCategory,
-} from "../types/index.js";
+import type { NotificationPayload, AgentState, TaskState, EventCategory } from "../types/index.js";
 import type { EventContext } from "../../shared/types/events.js";
 import type { WorktreeSnapshot as WorktreeState } from "../../shared/types/workspace-host.js";
 import type { TerminalReliabilityMetricPayload } from "../../shared/types/pty-host.js";
@@ -495,7 +489,6 @@ export type DaintreeEventMap = {
   "agent:spawned": WithContext<{
     agentId: string;
     terminalId: string;
-    type: TerminalType;
     worktreeId?: string;
   }>;
 
@@ -525,13 +518,16 @@ export type DaintreeEventMap = {
   };
 
   /**
-   * Emitted when an agent CLI is detected running in a terminal.
+   * Emitted when an agent CLI (or a recognised plain process) is detected
+   * running in a terminal. `defaultTitle` lets the renderer sync its default
+   * title to the live chrome identity in lockstep with the store update.
    */
   "agent:detected": {
     terminalId: string;
     agentType?: string;
     processIconId?: string;
     processName: string;
+    defaultTitle?: string;
     timestamp: number;
   };
 
@@ -540,11 +536,12 @@ export type DaintreeEventMap = {
    * a terminal. PTY-level exits use the separate `agent:completed` channel —
    * this channel only fires while the shell PTY is still alive.
    * `exitKind: "subcommand"` distinguishes an actual agent exit from a plain
-   * process-icon clearing; see `AgentExitedPayload` for full semantics. #5807
+   * process-icon clearing.
    */
   "agent:exited": {
     terminalId: string;
     agentType?: string;
+    defaultTitle?: string;
     timestamp: number;
     exitKind?: "subcommand";
   };

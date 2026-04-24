@@ -532,6 +532,7 @@ events.on("agent:detected", (payload) => {
     agentType: payload.agentType,
     processIconId: payload.processIconId,
     processName: payload.processName,
+    defaultTitle: payload.defaultTitle,
     timestamp: payload.timestamp,
   });
 });
@@ -541,6 +542,7 @@ events.on("agent:exited", (payload) => {
     type: "agent-exited",
     terminalId: payload.terminalId,
     agentType: payload.agentType,
+    defaultTitle: payload.defaultTitle,
     timestamp: payload.timestamp,
     exitKind: payload.exitKind,
   });
@@ -552,7 +554,6 @@ events.on("agent:spawned", (payload) => {
     payload: {
       agentId: payload.agentId,
       terminalId: payload.terminalId,
-      type: payload.type,
       timestamp: payload.timestamp,
     },
   });
@@ -1135,8 +1136,16 @@ port.on("message", async (rawMsg: any) => {
       }
 
       case "get-project-stats": {
-        const stats = ptyManager.getProjectStats(msg.projectId);
-        sendEvent({ type: "project-stats", requestId: msg.requestId, stats });
+        const rawStats = ptyManager.getProjectStats(msg.projectId);
+        sendEvent({
+          type: "project-stats",
+          requestId: msg.requestId,
+          stats: {
+            terminalCount: rawStats.terminalCount,
+            processIds: rawStats.processIds,
+            detectedAgents: rawStats.terminalTypes,
+          },
+        });
         break;
       }
 
@@ -1209,8 +1218,8 @@ port.on("message", async (rawMsg: any) => {
             lastInputTime: s.lastInputTime,
             lastOutputTime: s.lastOutputTime,
             lastCheckTime: s.lastCheckTime,
-            type: s.type,
-            agentId: s.agentId,
+
+            launchAgentId: s.launchAgentId,
             agentState: s.agentState,
             lastStateChange: s.lastStateChange,
             spawnedAt: s.spawnedAt,
@@ -1314,8 +1323,8 @@ port.on("message", async (rawMsg: any) => {
                 id: terminal.id,
                 projectId: terminal.projectId,
                 kind: terminal.kind,
-                type: terminal.type,
-                agentId: terminal.agentId,
+
+                launchAgentId: terminal.launchAgentId,
                 title: terminal.title,
                 cwd: terminal.cwd,
                 agentState: terminal.agentState,
@@ -1330,9 +1339,8 @@ port.on("message", async (rawMsg: any) => {
                 agentLaunchFlags: terminal.agentLaunchFlags,
                 agentModelId: terminal.agentModelId,
                 everDetectedAgent: terminal.everDetectedAgent,
-                detectedAgentId: narrowDetectedAgentId(terminal.detectedAgentType),
+                detectedAgentId: narrowDetectedAgentId(terminal.detectedAgentId),
                 detectedProcessId: terminal.detectedProcessIconId,
-                capabilityAgentId: terminal.capabilityAgentId,
               }
             : null,
         });
@@ -1439,8 +1447,8 @@ port.on("message", async (rawMsg: any) => {
             id: t.id,
             projectId: t.projectId,
             kind: t.kind,
-            type: t.type,
-            agentId: t.agentId,
+
+            launchAgentId: t.launchAgentId,
             title: t.title,
             cwd: t.cwd,
             agentState: t.agentState,
@@ -1455,9 +1463,8 @@ port.on("message", async (rawMsg: any) => {
             agentLaunchFlags: t.agentLaunchFlags,
             agentModelId: t.agentModelId,
             everDetectedAgent: t.everDetectedAgent,
-            detectedAgentId: narrowDetectedAgentId(t.detectedAgentType),
+            detectedAgentId: narrowDetectedAgentId(t.detectedAgentId),
             detectedProcessId: t.detectedProcessIconId,
-            capabilityAgentId: t.capabilityAgentId,
           })),
         });
         break;
@@ -1472,8 +1479,8 @@ port.on("message", async (rawMsg: any) => {
             id: t.id,
             projectId: t.projectId,
             kind: t.kind,
-            type: t.type,
-            agentId: t.agentId,
+
+            launchAgentId: t.launchAgentId,
             title: t.title,
             cwd: t.cwd,
             agentState: t.agentState,
@@ -1488,9 +1495,8 @@ port.on("message", async (rawMsg: any) => {
             agentLaunchFlags: t.agentLaunchFlags,
             agentModelId: t.agentModelId,
             everDetectedAgent: t.everDetectedAgent,
-            detectedAgentId: narrowDetectedAgentId(t.detectedAgentType),
+            detectedAgentId: narrowDetectedAgentId(t.detectedAgentId),
             detectedProcessId: t.detectedProcessIconId,
-            capabilityAgentId: t.capabilityAgentId,
           })),
         });
         break;
@@ -1505,8 +1511,8 @@ port.on("message", async (rawMsg: any) => {
             id: t.id,
             projectId: t.projectId,
             kind: t.kind,
-            type: t.type,
-            agentId: t.agentId,
+
+            launchAgentId: t.launchAgentId,
             title: t.title,
             cwd: t.cwd,
             agentState: t.agentState,
@@ -1521,9 +1527,8 @@ port.on("message", async (rawMsg: any) => {
             agentLaunchFlags: t.agentLaunchFlags,
             agentModelId: t.agentModelId,
             everDetectedAgent: t.everDetectedAgent,
-            detectedAgentId: narrowDetectedAgentId(t.detectedAgentType),
+            detectedAgentId: narrowDetectedAgentId(t.detectedAgentId),
             detectedProcessId: t.detectedProcessIconId,
-            capabilityAgentId: t.capabilityAgentId,
           })),
         });
         break;

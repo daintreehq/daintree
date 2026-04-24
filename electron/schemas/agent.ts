@@ -1,7 +1,8 @@
 import { z } from "zod";
-import { BUILT_IN_TERMINAL_TYPES } from "../../shared/config/agentIds.js";
+import { BUILT_IN_AGENT_IDS } from "../../shared/config/agentIds.js";
 
-export const TerminalTypeSchema = z.enum(BUILT_IN_TERMINAL_TYPES);
+/** Schema for a built-in agent identity (claude, gemini, codex, opencode, …). */
+export const BuiltInAgentIdSchema = z.enum(BUILT_IN_AGENT_IDS);
 
 export const AgentStateSchema = z.preprocess(
   (value) => (value === "running" ? "working" : value),
@@ -33,15 +34,13 @@ export const AgentStateChangeTriggerSchema = z.enum([
 export const AgentSpawnedSchema = EventContextSchema.extend({
   agentId: z.string().min(1),
   terminalId: z.string().min(1),
-  type: TerminalTypeSchema,
   timestamp: z.number().int().positive(),
   traceId: z.string().optional(),
 });
 
 export const AgentStateChangedSchema = EventContextSchema.extend({
-  // Optional: runtime-detected agents (no persisted launch-time agentId) identify
-  // themselves via terminal.detectedAgentType, which the state service maps into
-  // this field. Consumers should fall back to terminalId when agentId is absent.
+  // Optional: runtime-detected-only flows may emit state changes without a
+  // persisted launch hint. Consumers should fall back to terminalId.
   agentId: z.string().min(1).optional(),
   state: AgentStateSchema,
   previousState: AgentStateSchema,

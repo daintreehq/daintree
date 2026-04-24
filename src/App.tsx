@@ -133,7 +133,6 @@ import { MotionConfig } from "framer-motion";
 import { useMacroFocusStore } from "./store/macroFocusStore";
 import { useSafeModeStore } from "./store/safeModeStore";
 import type { BuiltInPanelKind } from "./types";
-import type { TerminalType } from "@shared/types";
 import { actionService } from "./services/ActionService";
 import { voiceRecordingService } from "./services/VoiceRecordingService";
 import { useRenderProfiler } from "./utils/renderProfiler";
@@ -584,8 +583,7 @@ function App() {
               if (command && agentConfig) {
                 addPanel({
                   kind: "terminal",
-                  type: session.agentId as TerminalType,
-                  agentId: session.agentId,
+                  launchAgentId: session.agentId,
                   title: agentConfig.name,
                   cwd: defaultTerminalCwd,
                   worktreeId: activeWorktreeId ?? undefined,
@@ -622,8 +620,7 @@ function App() {
               if (command && agentConfig) {
                 addPanel({
                   kind: "terminal",
-                  type: session.agentId as TerminalType,
-                  agentId: session.agentId,
+                  launchAgentId: session.agentId,
                   title: agentConfig.name,
                   cwd: defaultTerminalCwd,
                   worktreeId: activeWorktreeId ?? undefined,

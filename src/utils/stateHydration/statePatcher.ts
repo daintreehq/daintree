@@ -1,4 +1,4 @@
-import type { PanelKind, TerminalType, AgentState } from "@/types";
+import type { PanelKind, AgentState } from "@/types";
 import { coerceAgentState } from "@shared/types/agent";
 import type { BrowserHistory } from "@shared/types/browser";
 import type { PanelExitBehavior } from "@shared/types/panel";
@@ -40,8 +40,11 @@ export interface AddTerminalArgs extends AddPanelOptionsBase {
 export interface SavedTerminalData {
   id: string;
   kind?: PanelKind;
-  type?: TerminalType;
+  /** Legacy persisted discriminator — read-only migration field, never written. */
+  type?: string;
+  /** Legacy persisted agent hint — superseded by launchAgentId. Read at hydration boundary only. */
   agentId?: string;
+  launchAgentId?: string;
   title?: string;
   cwd?: string;
   worktreeId?: string;
@@ -81,8 +84,7 @@ function readPresetColor(saved: SavedTerminalData): string | undefined {
 interface BackendTerminalData {
   id: string;
   kind?: PanelKind;
-  type?: TerminalType;
-  agentId?: string;
+  launchAgentId?: string;
   title?: string;
   cwd: string;
   agentState?: AgentState;
@@ -94,14 +96,12 @@ interface BackendTerminalData {
   everDetectedAgent?: boolean;
   detectedAgentId?: BuiltInAgentId;
   detectedProcessId?: string;
-  capabilityAgentId?: BuiltInAgentId;
 }
 
 interface ReconnectedTerminalData {
   id?: string;
   kind?: PanelKind;
-  type?: TerminalType;
-  agentId?: string;
+  launchAgentId?: string;
   title?: string;
   cwd?: string;
   agentState?: AgentState;
@@ -113,7 +113,6 @@ interface ReconnectedTerminalData {
   everDetectedAgent?: boolean;
   detectedAgentId?: BuiltInAgentId;
   detectedProcessId?: string;
-  capabilityAgentId?: BuiltInAgentId;
 }
 
 interface AgentSettingsData {
@@ -172,13 +171,16 @@ export function buildArgsForBackendTerminal(
   projectRoot: string
 ): AddTerminalArgs {
   const cwd = backendTerminal.cwd || projectRoot || "";
-  // Fall back to saved.agentId when the backend record lost it (e.g. PTY-host
+  // Fall back to saved.launchAgentId when the backend record lost it (e.g. PTY-host
   // restart before persistence flushed) — mirrors buildArgsForReconnectedFallback.
-  let agentId = resolveAgentId(backendTerminal.agentId, saved.agentId);
-  agentId = inferAgentIdFromTitle(
+  // Also fall back to legacy saved.agentId for on-disk state written before this migration.
+  const savedLaunchAgentId =
+    saved.launchAgentId ?? (saved.type === "claude" ? "claude" : saved.agentId);
+  let launchAgentId = resolveAgentId(backendTerminal.launchAgentId, savedLaunchAgentId);
+  launchAgentId = inferAgentIdFromTitle(
     backendTerminal.title,
     backendTerminal.kind,
-    agentId,
+    launchAgentId,
     backendTerminal.id,
     "Backend"
   );
@@ -189,8 +191,7 @@ export function buildArgsForBackendTerminal(
 
   return {
     kind: normalizePtyKind(backendTerminal.kind),
-    type: backendTerminal.type,
-    agentId,
+    launchAgentId,
     title: saved.title ?? backendTerminal.title,
     cwd,
     worktreeId: saved.worktreeId,
@@ -210,7 +211,6 @@ export function buildArgsForBackendTerminal(
     everDetectedAgent: backendTerminal.everDetectedAgent,
     detectedAgentId: backendTerminal.detectedAgentId,
     detectedProcessId: backendTerminal.detectedProcessId,
-    capabilityAgentId: backendTerminal.capabilityAgentId,
     agentPresetId: readPresetId(saved),
     agentPresetColor: readPresetColor(saved),
     extensionState: saved.extensionState,
@@ -224,13 +224,16 @@ export function buildArgsForReconnectedFallback(
   projectRoot: string
 ): AddTerminalArgs {
   const cwd = reconnectedTerminal.cwd || saved.cwd || projectRoot || "";
-  let agentId = resolveAgentId(reconnectedTerminal.agentId, saved.agentId);
+  // Migrate legacy on-disk agentId/type to launchAgentId at the read boundary.
+  const savedLaunchAgentId =
+    saved.launchAgentId ?? (saved.type === "claude" ? "claude" : saved.agentId);
+  let launchAgentId = resolveAgentId(reconnectedTerminal.launchAgentId, savedLaunchAgentId);
 
   const reconnectedKind = reconnectedTerminal.kind ?? saved.kind;
-  agentId = inferAgentIdFromTitle(
+  launchAgentId = inferAgentIdFromTitle(
     reconnectedTerminal.title ?? saved.title,
     reconnectedKind,
-    agentId,
+    launchAgentId,
     saved.id,
     "Reconnected"
   );
@@ -241,8 +244,7 @@ export function buildArgsForReconnectedFallback(
 
   return {
     kind: normalizePtyKind(reconnectedKind),
-    type: reconnectedTerminal.type ?? saved.type,
-    agentId,
+    launchAgentId,
     title: saved.title ?? reconnectedTerminal.title,
     cwd,
     worktreeId: saved.worktreeId,
@@ -262,7 +264,6 @@ export function buildArgsForReconnectedFallback(
     everDetectedAgent: reconnectedTerminal.everDetectedAgent,
     detectedAgentId: reconnectedTerminal.detectedAgentId,
     detectedProcessId: reconnectedTerminal.detectedProcessId,
-    capabilityAgentId: reconnectedTerminal.capabilityAgentId,
     agentPresetId: readPresetId(saved),
     agentPresetColor: readPresetColor(saved),
     extensionState: saved.extensionState,
@@ -278,7 +279,10 @@ export function buildArgsForRespawn(
   reconnectTimedOut: boolean,
   clipboardDirectory: string | undefined
 ): AddTerminalArgs {
-  let effectiveAgentId = resolveAgentId(saved.agentId);
+  // Migrate legacy on-disk agentId/type to launchAgentId at the read boundary.
+  const savedLaunchAgentId =
+    saved.launchAgentId ?? (saved.type === "claude" ? "claude" : saved.agentId);
+  let effectiveAgentId = resolveAgentId(savedLaunchAgentId);
   effectiveAgentId = inferAgentIdFromTitle(
     saved.title,
     kind,
@@ -376,8 +380,7 @@ export function buildArgsForRespawn(
 
   return {
     kind: respawnKind,
-    type: saved.type,
-    agentId,
+    launchAgentId: agentId,
     title: respawnTitle,
     cwd: saved.cwd || projectRoot || "",
     worktreeId: saved.worktreeId,
@@ -458,13 +461,18 @@ export function buildArgsForOrphanedTerminal(
   projectRoot: string
 ): AddTerminalArgs {
   const cwd = terminal.cwd || projectRoot || "";
-  let agentId = resolveAgentId(terminal.agentId);
-  agentId = inferAgentIdFromTitle(terminal.title, terminal.kind, agentId, terminal.id, "Orphaned");
+  let launchAgentId = resolveAgentId(terminal.launchAgentId);
+  launchAgentId = inferAgentIdFromTitle(
+    terminal.title,
+    terminal.kind,
+    launchAgentId,
+    terminal.id,
+    "Orphaned"
+  );
 
   return {
     kind: normalizePtyKind(terminal.kind),
-    type: terminal.type,
-    agentId,
+    launchAgentId,
     title: terminal.title,
     cwd,
     location: "grid",
@@ -477,6 +485,5 @@ export function buildArgsForOrphanedTerminal(
     everDetectedAgent: terminal.everDetectedAgent,
     detectedAgentId: terminal.detectedAgentId,
     detectedProcessId: terminal.detectedProcessId,
-    capabilityAgentId: terminal.capabilityAgentId,
   };
 }

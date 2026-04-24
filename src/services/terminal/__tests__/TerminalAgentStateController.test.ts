@@ -19,7 +19,7 @@ vi.mock("@/utils/logger", () => ({
 function makeMockManaged(overrides: Partial<ManagedTerminal> = {}): ManagedTerminal {
   return {
     kind: "terminal",
-    agentId: "claude",
+    launchAgentId: "claude",
     agentState: undefined,
     canonicalAgentState: undefined,
     agentStateSubscribers: new Set(),
@@ -125,7 +125,7 @@ describe("TerminalAgentStateController", () => {
     it("does not set directing for non-agent terminals", () => {
       const managed = makeMockManaged({
         kind: "terminal",
-        agentId: undefined,
+        launchAgentId: undefined,
         canonicalAgentState: "waiting",
         agentState: "waiting",
       });
@@ -507,7 +507,7 @@ describe("TerminalAgentStateController", () => {
     it("no-ops for non-agent terminals", () => {
       const managed = makeMockManaged({
         kind: "terminal",
-        agentId: undefined,
+        launchAgentId: undefined,
         canonicalAgentState: "waiting",
         agentState: "waiting",
       });

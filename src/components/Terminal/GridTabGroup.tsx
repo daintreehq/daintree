@@ -72,8 +72,9 @@ export function gridTabGroupPropsAreEqual(
           a.title !== b.title ||
           a.worktreeId !== b.worktreeId ||
           a.kind !== b.kind ||
-          a.type !== b.type ||
-          a.agentId !== b.agentId ||
+          a.launchAgentId !== b.launchAgentId ||
+          a.detectedAgentId !== b.detectedAgentId ||
+          a.everDetectedAgent !== b.everDetectedAgent ||
           a.cwd !== b.cwd ||
           a.agentState !== b.agentState ||
           a.activityHeadline !== b.activityHeadline ||
@@ -165,12 +166,12 @@ export const GridTabGroup = React.memo(function GridTabGroup({
     return panels.map((p) => {
       let presetColor = p.agentPresetColor;
       let fallbackTooltip: string | undefined;
-      if (p.agentId && p.agentPresetId) {
+      if (p.launchAgentId && p.agentPresetId) {
         const presets = getMergedPresets(
-          p.agentId,
-          agentSettings?.agents?.[p.agentId]?.customPresets,
-          ccrPresetsByAgent[p.agentId],
-          projectPresetsByAgent[p.agentId]
+          p.launchAgentId,
+          agentSettings?.agents?.[p.launchAgentId]?.customPresets,
+          ccrPresetsByAgent[p.launchAgentId],
+          projectPresetsByAgent[p.launchAgentId]
         );
         const live = presets.find((f) => f.id === p.agentPresetId);
         if (live) presetColor = live.color ?? presetColor;
@@ -188,9 +189,9 @@ export const GridTabGroup = React.memo(function GridTabGroup({
       return {
         id: p.id,
         title: p.title,
-        type: p.type,
-        agentId: p.agentId,
+        agentId: p.launchAgentId,
         detectedAgentId: p.detectedAgentId,
+        everDetectedAgent: p.everDetectedAgent,
         detectedProcessId: p.detectedProcessId,
         kind: p.kind ?? "terminal",
         agentState: p.agentState,

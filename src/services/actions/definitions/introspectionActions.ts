@@ -109,7 +109,6 @@ export function registerIntrospectionActions(
         focusedWorktreeId: worktreeSelection.focusedWorktreeId ?? undefined,
         focusedTerminalId: focusedId ?? undefined,
         focusedTerminalKind: focusedTerminal?.kind,
-        focusedTerminalType: focusedTerminal?.type,
         focusedTerminalTitle: focusedTerminal?.title,
       };
 

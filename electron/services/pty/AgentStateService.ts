@@ -11,12 +11,12 @@ import type { TerminalInfo } from "./types.js";
 import { ActivityHeadlineGenerator } from "../ActivityHeadlineGenerator.js";
 import type { WaitingReason } from "../../../shared/types/agent.js";
 
-// Live agent identity — launch intent (`agentId`) takes precedence; runtime
-// detection (`detectedAgentType`) backs it. Matches the helper in
-// `TerminalProcess.ts` so lifecycle events observe the running agent without
-// `handleAgentDetection()` having to mutate the sealed `agentId` field. #5803
+// Live agent identity — detection wins; falls back to the launch hint during
+// the boot window (before the process-tree poll has caught up). Matches the
+// renderer's `resolveChromeAgentId` rule so lifecycle events name the right
+// agent. See `docs/architecture/terminal-identity.md`.
 function getLiveAgentId(terminal: TerminalInfo): string | undefined {
-  return terminal.agentId ?? terminal.detectedAgentType;
+  return terminal.detectedAgentId ?? terminal.launchAgentId;
 }
 
 /**
@@ -118,10 +118,8 @@ export class AgentStateService {
     sessionCost?: number,
     sessionTokens?: number
   ): boolean {
-    // Runtime-detected agents (plain terminals where a CLI was detected at
-    // runtime, no persisted launch-time agentId) flow through the state machine
-    // using their detected type as the identity. #5773
-    const effectiveAgentId = terminal.agentId ?? terminal.detectedAgentType;
+    // Detection wins; fall back to the launch hint during the boot window.
+    const effectiveAgentId = terminal.detectedAgentId ?? terminal.launchAgentId;
     if (!effectiveAgentId) {
       return false;
     }
@@ -311,9 +309,7 @@ export class AgentStateService {
       sessionTokens?: number;
     }
   ): void {
-    // Runtime-detected agents without a persisted agentId still flow through
-    // the state machine via terminal.detectedAgentType. #5773
-    if (!terminal.agentId && !terminal.detectedAgentType) {
+    if (!terminal.detectedAgentId && !terminal.launchAgentId) {
       return;
     }
 
@@ -351,10 +347,7 @@ export class AgentStateService {
   emitTerminalActivity(terminal: TerminalInfo): void {
     const { headline, status, type } = this.headlineGenerator.generate({
       terminalId: terminal.id,
-      terminalType: terminal.type,
-      // Runtime-detected agents identify via detectedAgentType; persisted
-      // agent panels via agentId. Both drive agent-style headlines. #5773
-      agentId: terminal.agentId ?? terminal.detectedAgentType,
+      agentId: terminal.detectedAgentId ?? terminal.launchAgentId,
       agentState: terminal.agentState,
       waitingReason: terminal.waitingReason,
     });

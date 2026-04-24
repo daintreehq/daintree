@@ -8,7 +8,7 @@
  */
 
 import type { AgentState, AgentId, WaitingReason } from "./agent.js";
-import type { TerminalType, PanelKind, TerminalFlowStatus } from "./panel.js";
+import type { PanelKind, TerminalFlowStatus, PanelTitleMode } from "./panel.js";
 import type { ResourceProfile } from "./resourceProfile.js";
 import type { BuiltInAgentId } from "../config/agentIds.js";
 
@@ -23,8 +23,13 @@ export interface PtyHostSpawnOptions {
   cols: number;
   rows: number;
   kind?: PanelKind;
-  type?: TerminalType;
-  agentId?: AgentId;
+  /**
+   * Launch hint — the agent this terminal is being launched to run. NOT an
+   * identity. Used only to key agent-specific settings (model, flags, session
+   * resume) and to pick the right auto-inject command. See
+   * `docs/architecture/terminal-identity.md`.
+   */
+  launchAgentId?: AgentId;
   title?: string;
   projectId?: string;
   /** Whether to restore previous session content (default: true). Set to false on restart. */
@@ -131,16 +136,8 @@ export interface PtyHostTerminalSnapshot {
   lastOutputTime: number;
   lastCheckTime: number;
   kind?: PanelKind;
-  /**
-   * @deprecated Legacy terminal classification. See
-   * `docs/architecture/terminal-identity.md`. Prefer `agentId` (launch intent).
-   */
-  type?: TerminalType;
-  /**
-   * Launch intent — the agent identity this terminal was spawned as.
-   * See `docs/architecture/terminal-identity.md`.
-   */
-  agentId?: AgentId;
+  /** Launch hint — agent this terminal was launched to run. Not identity. */
+  launchAgentId?: AgentId;
   agentState?: AgentState;
   lastStateChange?: number;
   spawnedAt: number;
@@ -166,7 +163,11 @@ export type PtyHostEvent =
   | {
       type: "project-stats";
       requestId: string;
-      stats: { terminalCount: number; processIds: number[]; terminalTypes: Record<string, number> };
+      stats: {
+        terminalCount: number;
+        processIds: number[];
+        detectedAgents: Record<string, number>;
+      };
     }
   | {
       type: "agent-state";
@@ -187,15 +188,21 @@ export type PtyHostEvent =
   | {
       type: "agent-detected";
       terminalId: string;
+      /** Detected agent identity (lowercase built-in agent id) if a known agent is running. */
       agentType?: string;
+      /** Non-agent process icon id (npm, yarn, etc.) if a recognised plain process is running. */
       processIconId?: string;
       processName: string;
+      /** Default title derived from detection — written into panel.title when titleMode === "default". */
+      defaultTitle?: string;
       timestamp: number;
     }
   | {
       type: "agent-exited";
       terminalId: string;
       agentType?: string;
+      /** Default title derived from the demoted/launched identity — written into panel.title when titleMode === "default". */
+      defaultTitle?: string;
       timestamp: number;
       exitKind?: "subcommand";
     }
@@ -269,9 +276,10 @@ export interface PtyHostTerminalInfo {
   id: string;
   projectId?: string;
   kind?: PanelKind;
-  type?: TerminalType;
-  agentId?: AgentId;
+  /** Launch hint — agent this terminal was launched to run. Not identity. */
+  launchAgentId?: AgentId;
   title?: string;
+  titleMode?: PanelTitleMode;
   cwd: string;
   agentState?: AgentState;
   waitingReason?: WaitingReason;
@@ -301,22 +309,12 @@ export interface PtyHostTerminalInfo {
   detectedAgentId?: BuiltInAgentId;
   /** Runtime-detected non-agent process icon id (npm, yarn, etc.). Cleared when the process exits. */
   detectedProcessId?: string;
-  /**
-   * Capability mode — the agent capability surface this terminal is allowed to
-   * participate in (fleet membership, hybrid input, orchestration). Sealed at
-   * spawn time from launch intent (`agentId` narrowed to `BuiltInAgentId`); never
-   * touched by runtime detection. Absent on plain shells and on agent terminals
-   * launched with a non-built-in `agentId`. See
-   * `docs/architecture/terminal-identity.md`.
-   */
-  capabilityAgentId?: BuiltInAgentId;
 }
 
 /** Payload for agent:spawned event */
 export interface AgentSpawnedPayload {
   agentId: string;
   terminalId: string;
-  type: TerminalType;
   timestamp: number;
 }
 

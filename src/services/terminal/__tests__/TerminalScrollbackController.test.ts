@@ -136,7 +136,7 @@ describe("TerminalScrollbackController", () => {
 
     it("ignores project override for agent terminals", () => {
       mockProjectSettingsStore.settings = { terminalSettings: { scrollbackLines: 2000 } };
-      const managed = makeMockManaged({ type: "claude", kind: "terminal", agentId: "claude" });
+      const managed = makeMockManaged({ kind: "terminal", launchAgentId: "claude" });
       managed.terminal.options.scrollback = 100;
 
       restoreScrollback(managed);

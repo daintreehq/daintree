@@ -32,7 +32,6 @@ import { computeSpawnContext, acquirePtyProcess } from "./pty/terminalSpawn.js";
 import { disposeTerminalSerializerService } from "./pty/TerminalSerializerService.js";
 import { deleteSessionFile } from "./pty/terminalSessionPersistence.js";
 import { persistAgentSession } from "./pty/agentSessionHistory.js";
-import { isBuiltInAgentId } from "../../shared/config/agentIds.js";
 
 /**
  * PtyManager - Facade for terminal process management.
@@ -208,7 +207,9 @@ export class PtyManager extends EventEmitter {
       );
       this.kill(id);
     }
-    logInfo(`Spawning terminal ${id} (kind: ${options.kind}, type: ${options.type})`);
+    logInfo(
+      `Spawning terminal ${id} (kind: ${options.kind}, launchAgentId: ${options.launchAgentId})`
+    );
 
     const spawnContext = computeSpawnContext(id, options);
     const ptyProcess = acquirePtyProcess(
@@ -217,7 +218,6 @@ export class PtyManager extends EventEmitter {
       spawnContext.env,
       spawnContext.shell,
       spawnContext.args,
-      spawnContext.isAgentTerminal,
       this.ptyPool,
       (error, context) => {
         console.error(
@@ -351,10 +351,10 @@ export class PtyManager extends EventEmitter {
       void (async () => {
         try {
           const sessionId = await this.gracefulKill(termId);
-          if (sessionId && info?.agentId) {
+          if (sessionId && info?.launchAgentId) {
             await persistAgentSession({
               sessionId,
-              agentId: info.agentId,
+              agentId: info.launchAgentId,
               worktreeId: info.worktreeId ?? null,
               title: info.lastObservedTitle ?? info.title ?? null,
               projectId: info.projectId ?? null,
@@ -496,8 +496,7 @@ export class PtyManager extends EventEmitter {
       id: terminalInfo.id,
       projectId: terminalInfo.projectId,
       kind: terminalInfo.kind,
-      type: terminalInfo.type,
-      agentId: terminalInfo.agentId,
+      launchAgentId: terminalInfo.launchAgentId,
       title: terminalInfo.title,
       cwd: terminalInfo.cwd,
       shell: terminalInfo.shell,
@@ -511,11 +510,7 @@ export class PtyManager extends EventEmitter {
       semanticBufferLines: terminalInfo.semanticBuffer.length,
       restartCount: terminalInfo.restartCount,
       hasPty,
-      isAgentTerminal: terminal.getIsAgentTerminal(),
-      detectedAgentType: terminalInfo.detectedAgentType,
-      detectedAgentId: isBuiltInAgentId(terminalInfo.detectedAgentType)
-        ? terminalInfo.detectedAgentType
-        : undefined,
+      detectedAgentId: terminalInfo.detectedAgentId,
       analysisEnabled: terminalInfo.analysisEnabled,
       resizeStrategy: terminal.getResizeStrategy(),
       ptyPid: ptyProcess?.pid,
@@ -810,7 +805,7 @@ export class PtyManager extends EventEmitter {
   dispose(): void {
     for (const [_id, terminal] of this.registry.entries()) {
       const terminalInfo = terminal.getInfo();
-      if (terminalInfo.agentId) {
+      if (terminalInfo.launchAgentId) {
         this.agentStateService.emitAgentKilled(terminalInfo, "cleanup");
       }
       terminal.dispose();

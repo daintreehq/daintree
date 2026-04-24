@@ -15,7 +15,6 @@ import { getAgentSettingsEntry } from "@shared/types";
 import { ASSISTANT_FAST_MODELS } from "@shared/config/agentRegistry";
 import { actionService } from "@/services/ActionService";
 import { TerminalRefreshTier } from "@/types";
-import type { TerminalType } from "@/types";
 
 const RESIZE_STEP = 10;
 
@@ -278,7 +277,7 @@ export function HelpPanel() {
             <Suspense fallback={null}>
               <XtermAdapter
                 terminalId={terminalId}
-                terminalType={(agentId ?? "terminal") as TerminalType}
+                launchAgentId={agentId ?? undefined}
                 getRefreshTier={getRefreshTier}
                 cwd={terminal.cwd}
               />

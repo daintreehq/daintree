@@ -204,7 +204,6 @@ export type BuiltInActionId =
   | "terminal.kill"
   | "terminal.moveToWorktree"
   | "terminal.moveToNewWorktree"
-  | "terminal.convertType"
   | "terminal.watch"
   | "terminal.viewInfo"
   | "browser.reload"

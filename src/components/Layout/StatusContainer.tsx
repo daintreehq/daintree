@@ -131,7 +131,7 @@ export function StatusContainer({ config, terminals, compact = false }: StatusCo
                   <div className="shrink-0 opacity-60 group-hover:opacity-100 transition-opacity">
                     <TerminalIcon
                       kind={terminal.kind}
-                      agentId={terminal.agentId}
+                      agentId={terminal.launchAgentId}
                       detectedAgentId={terminal.detectedAgentId}
                       detectedProcessId={terminal.detectedProcessId}
                       className="h-3 w-3"

@@ -208,7 +208,7 @@ export function BackgroundContainer({ compact = false }: BackgroundContainerProp
                     <div className="shrink-0 opacity-60 group-hover:opacity-100 transition-opacity">
                       <TerminalIcon
                         kind={item.terminal.kind}
-                        agentId={item.terminal.agentId}
+                        agentId={item.terminal.launchAgentId}
                         detectedAgentId={item.terminal.detectedAgentId}
                         detectedProcessId={item.terminal.detectedProcessId}
                         className="h-3 w-3"
@@ -309,7 +309,7 @@ function BackgroundGroupItem({
                 >
                   <TerminalIcon
                     kind={terminal.kind}
-                    agentId={terminal.agentId}
+                    agentId={terminal.launchAgentId}
                     detectedAgentId={terminal.detectedAgentId}
                     detectedProcessId={terminal.detectedProcessId}
                     className="w-2.5 h-2.5 opacity-60"

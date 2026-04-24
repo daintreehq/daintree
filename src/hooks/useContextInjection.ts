@@ -214,7 +214,7 @@ export function useContextInjection(targetTerminalId?: string): UseContextInject
 
       // Gate injection for agent terminals that are not ready
       // Non-agent terminals (agentState undefined) inject immediately
-      if (terminal.agentId && !isAgentReady(terminal.agentState)) {
+      if (terminal.launchAgentId && !isAgentReady(terminal.agentState)) {
         logDebug("[useContextInjection] Agent not ready, waiting for idle", {
           agentState: terminal.agentState,
         });
@@ -275,7 +275,7 @@ export function useContextInjection(targetTerminalId?: string): UseContextInject
         }
 
         // Verify agent is still ready (could have changed during race)
-        if (updatedTerminal.agentId && !isAgentReady(updatedTerminal.agentState)) {
+        if (updatedTerminal.launchAgentId && !isAgentReady(updatedTerminal.agentState)) {
           logDebug("[useContextInjection] Agent state changed while waiting, aborting injection", {
             agentState: updatedTerminal.agentState,
           });

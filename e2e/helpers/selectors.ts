@@ -174,8 +174,8 @@ export const SEL = {
     panel: '[aria-label^="Claude agent:"]',
     startButton: '[aria-label="Start Claude Agent"]',
     trayButton: '[aria-label^="Agent tray"]',
-    observationalChip: '[data-testid="panel-observational-chip"]',
-    capabilityPanel: (agentId: string) => `[data-capability-agent-id="${agentId}"]`,
+    chromeAgentPanel: (agentId: string) => `[data-chrome-agent-id="${agentId}"]`,
+    everDetectedAgentPanel: '[data-ever-detected-agent="true"]',
   },
   opencodeAgent: {
     panel: '[aria-label^="OpenCode agent:"]',

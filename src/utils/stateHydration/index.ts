@@ -5,7 +5,6 @@ import { useLayoutConfigStore } from "@/store";
 import { useUserAgentRegistryStore } from "@/store/userAgentRegistryStore";
 import { notify } from "@/lib/notify";
 import type {
-  TerminalType,
   AgentState,
   PanelKind,
   PanelSnapshot,
@@ -115,8 +114,7 @@ function scheduleScrollbackRestore(
 export interface HydrationOptions {
   addPanel: (options: {
     kind?: PanelKind;
-    type?: TerminalType;
-    agentId?: string;
+    launchAgentId?: string;
     title?: string;
     cwd: string;
     worktreeId?: string;
@@ -381,7 +379,7 @@ export async function hydrateAppState(
             terminals: backendTerminals.map((t) => ({
               id: t.id.slice(0, 8),
               kind: t.kind,
-              agentId: t.agentId,
+              agentId: t.launchAgentId,
               projectId: t.projectId?.slice(0, 8),
             })),
           });
@@ -462,13 +460,9 @@ export async function hydrateAppState(
               execute: async () => {
                 if (backendTerminal) {
                   // Skip dead agent backend terminals — they create phantom idle panels.
-                  // capabilityAgentId is sealed at spawn for cold-launched agents, so
-                  // a dead PTY with capabilityAgentId set is still an agent backend
-                  // even if agentId got cleared on PTY teardown.
                   const isDeadAgentBackend =
                     backendTerminal.hasPty === false &&
-                    (resolveAgentId(backendTerminal.agentId) !== undefined ||
-                      !!backendTerminal.capabilityAgentId);
+                    resolveAgentId(backendTerminal.launchAgentId) !== undefined;
                   if (isDeadAgentBackend) {
                     logHydrationInfo(`Skipping dead agent backend terminal: ${backendTerminal.id}`);
                     backendTerminalMap.delete(saved.id);
@@ -491,7 +485,7 @@ export async function hydrateAppState(
                   logHydrationInfo(`[HYDRATION] Adding terminal from backend:`, {
                     id: backendTerminal.id,
                     kind: args.kind,
-                    agentId: args.agentId,
+                    launchAgentId: args.launchAgentId,
                     location,
                     worktreeId: args.worktreeId,
                     title: backendTerminal.title,
@@ -602,7 +596,7 @@ export async function hydrateAppState(
                       const inferredAgentId = inferAgentIdFromTitle(
                         saved.title,
                         kind,
-                        resolveAgentId(saved.agentId),
+                        resolveAgentId(saved.launchAgentId),
                         saved.id,
                         "switch-guard"
                       );
@@ -633,13 +627,13 @@ export async function hydrateAppState(
                       }
 
                       logHydrationInfo(
-                        `Respawning PTY panel: ${saved.id} (${respawnArgs.agentId ? "agent" : "terminal"})`
+                        `Respawning PTY panel: ${saved.id} (${respawnArgs.launchAgentId ? "agent" : "terminal"})`
                       );
 
                       logHydrationInfo(`[HYDRATION-RESPAWN] Adding terminal:`, {
                         id: saved.id,
                         kind: respawnArgs.kind,
-                        agentId: respawnArgs.agentId,
+                        launchAgentId: respawnArgs.launchAgentId,
                         location: respawnArgs.location,
                         savedLocation: saved.location,
                         worktreeId: saved.worktreeId,

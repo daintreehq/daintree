@@ -5,7 +5,7 @@ import { getBrandColorHex } from "@/lib/colorUtils";
 import { WorktreeIcon } from "@/components/icons";
 import type { QuickSwitcherItem as QuickSwitcherItemData } from "@/hooks/useQuickSwitcher";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
-import { resolveEffectiveAgentId } from "@/utils/agentIdentity";
+import { resolveChromeAgentId } from "@/utils/agentIdentity";
 
 export interface QuickSwitcherItemProps {
   item: QuickSwitcherItemData;
@@ -41,11 +41,14 @@ export const QuickSwitcherItem = React.memo(function QuickSwitcherItem({
         {item.type === "terminal" ? (
           <TerminalIcon
             kind={item.terminalKind}
-            agentId={item.agentId}
+            agentId={item.launchAgentId}
             detectedAgentId={item.detectedAgentId}
             detectedProcessId={item.detectedProcessId}
             brandColor={getBrandColorHex(
-              resolveEffectiveAgentId(item.detectedAgentId, item.agentId) ?? item.terminalType
+              resolveChromeAgentId({
+                detectedAgentId: item.detectedAgentId,
+                launchAgentId: item.launchAgentId,
+              }) ?? undefined
             )}
           />
         ) : (
@@ -65,9 +68,10 @@ export const QuickSwitcherItem = React.memo(function QuickSwitcherItem({
             )}
           >
             {item.type === "terminal"
-              ? (resolveEffectiveAgentId(item.detectedAgentId, item.agentId) ??
-                item.terminalType ??
-                "terminal")
+              ? (resolveChromeAgentId({
+                  detectedAgentId: item.detectedAgentId,
+                  launchAgentId: item.launchAgentId,
+                }) ?? "terminal")
               : "worktree"}
           </span>
         </div>

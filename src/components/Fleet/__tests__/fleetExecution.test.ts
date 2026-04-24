@@ -24,9 +24,8 @@ function makeAgent(id: string, overrides: Partial<TerminalInstance> = {}): Termi
   return {
     id,
     title: id,
-    type: "terminal",
     kind: "terminal",
-    agentId: "claude",
+    detectedAgentId: "claude",
     worktreeId: "wt-1",
     projectId: "proj-1",
     location: "grid",

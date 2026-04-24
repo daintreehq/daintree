@@ -11,12 +11,7 @@ import React, {
 import { useShallow } from "zustand/react/shallow";
 import { AlertTriangle, RefreshCw, Settings } from "lucide-react";
 import { Spinner } from "@/components/ui/Spinner";
-import type {
-  TerminalType,
-  TerminalRestartError,
-  SpawnError,
-  TerminalReconnectError,
-} from "@/types";
+import type { TerminalRestartError, SpawnError, TerminalReconnectError } from "@/types";
 import { cn } from "@/lib/utils";
 import { XtermAdapter } from "./XtermAdapter";
 import { ArtifactOverlay } from "./ArtifactOverlay";
@@ -46,7 +41,7 @@ import type { BuiltInAgentId } from "@shared/config/agentIds";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { actionService } from "@/services/ActionService";
 import { InputTracker } from "@/services/clearCommandDetection";
-import { getAgentConfig, getMergedPresets, isRegisteredAgent } from "@/config/agents";
+import { getAgentConfig, getMergedPresets } from "@/config/agents";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
 import { useProjectPresetsStore } from "@/store/projectPresetsStore";
@@ -58,11 +53,11 @@ const LazyHybridInputBar = lazy(() =>
 import { getTerminalFocusTarget, shouldSuppressUnfocusedClick } from "./terminalFocus";
 import { decideChromeAction } from "./multiSelectGestures";
 import { registerPanelFocusHandler } from "./terminalFocusRegistry";
-import { resolveEffectiveAgentId } from "@/utils/agentIdentity";
+import { resolveChromeAgentId } from "@/utils/agentIdentity";
 
 import { DropdownMenuItem } from "@/components/ui/dropdown-menu";
 
-export type { TerminalType };
+export type {};
 
 export interface ActivityState {
   headline: string;
@@ -73,19 +68,12 @@ export interface ActivityState {
 export interface TerminalPaneProps {
   id: string;
   title: string;
-  type?: TerminalType;
-  /** Persisted agent identity set at spawn or after an explicit agent convert. Absent on plain terminals (including ones where an agent was only detected at runtime). */
+  /** Launch hint — the agent this terminal was launched to run, if any. */
   agentId?: string;
   /** Runtime-detected agent identity (cleared on agent exit). Drives panel chrome (icons, badges). */
   detectedAgentId?: BuiltInAgentId;
-  /**
-   * Sealed-at-spawn capability mode (#5804). Set when the terminal was
-   * cold-launched as a built-in agent; absent on plain shells and on terminals
-   * where an agent was only runtime-detected. Drives session-capability gates
-   * (HybridInputBar, fleet membership) — distinct from `detectedAgentId`,
-   * which only drives chrome.
-   */
-  capabilityAgentId?: BuiltInAgentId;
+  /** Sticky flag: has an agent ever been live-detected. Drives the chrome demotion rule. */
+  everDetectedAgent?: boolean;
   agentPresetId?: string;
   presetColor?: string;
   worktreeId?: string;
@@ -126,10 +114,9 @@ export interface TerminalPaneProps {
 function TerminalPaneComponent({
   id,
   title,
-  type,
   agentId,
   detectedAgentId,
-  capabilityAgentId,
+  everDetectedAgent,
   agentPresetId,
   presetColor,
   worktreeId,
@@ -269,18 +256,12 @@ function TerminalPaneComponent({
   const hybridInputEnabled = useTerminalInputStore((state) => state.hybridInputEnabled);
   const hybridInputAutoFocus = useTerminalInputStore((state) => state.hybridInputAutoFocus);
   // Effective agent identity for chrome (icons, badges, presets) — prefers
-  // runtime-detected over launch-intent so chrome reflects what's actually
-  // running. Distinct from `capabilityAgentId`, which gates session-only
-  // features and never includes runtime-detected agents.
-  const effectiveAgentId = (resolveEffectiveAgentId(detectedAgentId, agentId) ??
-    (type && isRegisteredAgent(type) ? type : undefined)) as BuiltInAgentId | undefined;
-  // HybridInputBar is gated on capability mode (#5804), not on
-  // `effectiveAgentId`. Cold-launched agent terminals get the bar; plain shells
-  // where an agent was merely detected at runtime do not — those terminals lack
-  // the spawn-time env/pool/scrollback shaping the bar's submit semantics
-  // assume. Chrome (icons/badges) still uses `effectiveAgentId` so live
-  // detection drives visual feedback.
-  const showHybridInputBar = capabilityAgentId !== undefined && hybridInputEnabled;
+  // runtime-detected over launch-intent so chrome reflects what's actually running.
+  const effectiveAgentId = resolveChromeAgentId(detectedAgentId, agentId, everDetectedAgent) as
+    | BuiltInAgentId
+    | undefined;
+  // HybridInputBar is shown when an agent is currently detected as live.
+  const showHybridInputBar = detectedAgentId !== undefined && hybridInputEnabled;
 
   const queueCount = usePanelStore((state) => state.commandQueueCountById[id] ?? 0);
 
@@ -603,7 +584,7 @@ function TerminalPaneComponent({
       if (!xtermElement) return;
 
       const focusTarget = getTerminalFocusTarget({
-        hasFullAgentCapability: capabilityAgentId !== undefined,
+        hasChromeAgentIdentity: detectedAgentId !== undefined,
         isInputDisabled: isBackendDisconnected || isBackendRecovering || isInputLocked,
         hybridInputEnabled,
         hybridInputAutoFocus,
@@ -633,7 +614,7 @@ function TerminalPaneComponent({
     [
       id,
       location,
-      capabilityAgentId,
+      detectedAgentId,
       hybridInputEnabled,
       hybridInputAutoFocus,
       isBackendDisconnected,
@@ -667,7 +648,7 @@ function TerminalPaneComponent({
     if (!isFocused) return;
 
     const focusTarget = getTerminalFocusTarget({
-      hasFullAgentCapability: capabilityAgentId !== undefined,
+      hasChromeAgentIdentity: detectedAgentId !== undefined,
       isInputDisabled: isBackendDisconnected || isBackendRecovering || isInputLocked,
       hybridInputEnabled,
       hybridInputAutoFocus,
@@ -691,7 +672,7 @@ function TerminalPaneComponent({
   }, [
     id,
     isFocused,
-    capabilityAgentId,
+    detectedAgentId,
     hybridInputEnabled,
     hybridInputAutoFocus,
     isBackendDisconnected,
@@ -703,7 +684,7 @@ function TerminalPaneComponent({
     if (!showHybridInputBar) return;
     return registerPanelFocusHandler(id, () => {
       const focusTarget = getTerminalFocusTarget({
-        hasFullAgentCapability: capabilityAgentId !== undefined,
+        hasChromeAgentIdentity: detectedAgentId !== undefined,
         isInputDisabled: isBackendDisconnected || isBackendRecovering || isInputLocked,
         hybridInputEnabled,
         hybridInputAutoFocus,
@@ -714,7 +695,7 @@ function TerminalPaneComponent({
   }, [
     id,
     showHybridInputBar,
-    capabilityAgentId,
+    detectedAgentId,
     isBackendDisconnected,
     isBackendRecovering,
     isInputLocked,
@@ -760,10 +741,9 @@ function TerminalPaneComponent({
       id={id}
       title={title}
       kind={kind}
-      type={type}
       agentId={agentId}
       detectedAgentId={detectedAgentId}
-      capabilityAgentId={capabilityAgentId}
+      everDetectedAgent={everDetectedAgent}
       presetColor={livePresetColor}
       isFocused={isFocused}
       isMaximized={isMaximized}
@@ -897,7 +877,7 @@ function TerminalPaneComponent({
               <XtermAdapter
                 key={`${id}-${restartKey}`}
                 terminalId={id}
-                terminalType={type}
+                launchAgentId={agentId}
                 isInputLocked={isInputLocked}
                 onReady={handleReady}
                 onExit={handleExit}

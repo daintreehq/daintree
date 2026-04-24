@@ -1,12 +1,7 @@
 import { Suspense, lazy, type ComponentType } from "react";
 import type { PanelKindConfig } from "@shared/config/panelKindRegistry";
 import { getPanelKindConfig } from "@shared/config/panelKindRegistry";
-import type {
-  PtyPanelData,
-  BrowserPanelData,
-  DevPreviewPanelData,
-  TerminalType,
-} from "@shared/types/panel";
+import type { PtyPanelData, BrowserPanelData, DevPreviewPanelData } from "@shared/types/panel";
 import type {
   TerminalPanelOptions,
   BrowserPanelOptions,
@@ -77,17 +72,14 @@ function DevPreviewPaneWrapper(props: any) {
 }
 
 /**
- * Maps each built-in panel kind to its panel data variant. `PtyPanelData` covers
- * all PTY-backed terminals (agent identity lives on `agentId`); dev-preview
- * carries an optional `type` that originates from the legacy `TerminalInstance`
- * shape. `createdAt` is intentionally widened on the PTY and dev-preview entries
- * so serializers can read the legacy field without modifying the shared variant
- * interfaces.
+ * Maps each built-in panel kind to its panel data variant. `createdAt` is
+ * intentionally widened on the PTY and dev-preview entries so serializers can
+ * read the legacy field without modifying the shared variant interfaces.
  */
 interface BuiltInPanelMap {
   terminal: PtyPanelData & { createdAt?: number };
   browser: BrowserPanelData;
-  "dev-preview": DevPreviewPanelData & { createdAt?: number; type?: TerminalType };
+  "dev-preview": DevPreviewPanelData & { createdAt?: number };
 }
 
 interface BuiltInPanelOptionsMap {

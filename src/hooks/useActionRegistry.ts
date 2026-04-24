@@ -90,7 +90,6 @@ export function useActionRegistry(options: ActionCallbacks): void {
         focusedWorktreeId: useWorktreeSelectionStore.getState().focusedWorktreeId ?? undefined,
         focusedTerminalId: focusedId ?? undefined,
         focusedTerminalKind: focusedTerminal?.kind,
-        focusedTerminalType: focusedTerminal?.type,
         focusedTerminalTitle: focusedTerminal?.title,
         isSettingsOpen: callbacksRef.current.getIsSettingsOpen(),
       };

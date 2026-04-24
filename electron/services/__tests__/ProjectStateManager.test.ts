@@ -23,7 +23,6 @@ function makeState(overrides?: Partial<ProjectState>): ProjectState {
         title: "Terminal 1",
         location: "grid" as const,
         kind: "terminal" as const,
-        type: "terminal" as const,
         cwd: "/tmp",
       },
       {
@@ -31,7 +30,6 @@ function makeState(overrides?: Partial<ProjectState>): ProjectState {
         title: "Terminal 2",
         location: "dock" as const,
         kind: "terminal" as const,
-        type: "terminal" as const,
         cwd: "/tmp",
       },
     ],
