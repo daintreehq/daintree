@@ -19,7 +19,7 @@
     "dev": "node scripts/dev.mjs",
     "dev:fresh": "cross-env DAINTREE_RESET_DATA=1 node scripts/dev.mjs",
     "dev:perf": "cross-env DAINTREE_PERF_CAPTURE=1 DAINTREE_PERF_METRICS_FILE=perf-metrics.ndjson node scripts/dev.mjs",
-    "dev:electron": "nodemon --delay 500ms --watch dist-electron/.build-ready.js --ext js --exec \"cross-env NODE_ENV=development electron .\"",
+    "dev:electron": "cross-env NODE_ENV=development electron .",
     "build:main": "cross-env NODE_ENV=production node scripts/build-main.mjs",
     "watch:main": "node scripts/build-main.mjs --watch",
     "build": "tsc && vite build && npm run build:main",

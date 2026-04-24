@@ -226,6 +226,44 @@ describe("ProcessDetector", () => {
     );
   });
 
+  it.each([
+    { wrapper: "npx @anthropic-ai/claude-code", expectedAgent: "claude" },
+    { wrapper: "pnpm dlx @anthropic-ai/claude-code", expectedAgent: "claude" },
+    { wrapper: "bunx @anthropic-ai/claude-code", expectedAgent: "claude" },
+    { wrapper: "npx @google/gemini-cli", expectedAgent: "gemini" },
+    { wrapper: "pnpm dlx @google/gemini-cli", expectedAgent: "gemini" },
+    { wrapper: "npx @openai/codex", expectedAgent: "codex" },
+  ])(
+    "detects $expectedAgent via npm-package-tail alias ($wrapper)",
+    ({ wrapper, expectedAgent }) => {
+      // npx/dlx/bunx typically show the package name in argv after the runner.
+      // The extractor strips `@scope/` to the tail, so `claude-code`,
+      // `gemini-cli`, `codex` must all resolve back to the right agent id.
+      const cache = createCacheMock();
+      const [runner] = wrapper.split(/\s+/);
+      cache.setChildren(100, [{ pid: 200, comm: runner, command: wrapper }]);
+      const callback = vi.fn();
+
+      const detector = new ProcessDetector(
+        `terminal-wrapper-${expectedAgent}`,
+        Date.now(),
+        100,
+        callback,
+        cache as never
+      );
+      detector.start();
+      cache.emitRefresh();
+
+      expect(callback).toHaveBeenCalledWith(
+        expect.objectContaining({
+          detected: true,
+          agentType: expectedAgent,
+        }),
+        expect.any(Number)
+      );
+    }
+  );
+
   it("prefers native-binary claude over argv-derived claude when both would match", () => {
     const cache = createCacheMock();
     cache.setChildren(100, [

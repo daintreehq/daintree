@@ -709,18 +709,11 @@ describe("TerminalFocusSlice - focusNextAgent / focusPreviousAgent runtime ident
   const neverInTrash = () => false;
   const validWorktrees = new Set(["worktree-1"]);
 
-  it("includes a freshly-spawned agent panel before the detector fires (boot window)", () => {
-    // detectedAgentId is undefined during boot; launchAgentId fallback keeps it in cycle
-    terminals = [
-      makeTerminal("fresh-agent", { kind: "terminal", launchAgentId: "claude" }),
-      makeTerminal("shell-1", { kind: "terminal" }),
-    ];
-    state.focusedId = "shell-1";
-
-    state.focusNextAgent(neverInTrash, validWorktrees);
-
-    expect(state.focusedId).toBe("fresh-agent");
-  });
+  // RETIRED: boot-window launchAgentId fallback for focusNextAgent.
+  // focusNextAgent now filters strictly by detectedAgentId (isRuntimeAgentTerminal).
+  // A freshly-spawned panel with only launchAgentId is NOT included in the agent
+  // cycle until the process detector fires. The old test encoded the retired model
+  // where launchAgentId alone counted during the boot window.
 
   it("excludes an ex-agent panel whose runtime identity has cleared", () => {
     // Spawned as agent, detector fired then cleared on exit — no longer in cycle.

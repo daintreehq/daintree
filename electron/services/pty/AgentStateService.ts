@@ -11,10 +11,12 @@ import type { TerminalInfo } from "./types.js";
 import { ActivityHeadlineGenerator } from "../ActivityHeadlineGenerator.js";
 import type { WaitingReason } from "../../../shared/types/agent.js";
 
-// Live agent identity — detection wins; falls back to the launch hint during
-// the boot window (before the process-tree poll has caught up). Matches the
-// renderer's `resolveChromeAgentId` rule so lifecycle events name the right
-// agent. See `docs/architecture/terminal-identity.md`.
+// Backend-side identity used when routing agent-state events (who is this
+// event about?). Detection wins; during the boot window the launch hint is
+// used so a cold-launched agent's first state transitions carry a stable
+// agentType. This helper is NOT chrome — chrome is detection-only and lives
+// in the renderer's `resolveChromeAgentId`. See
+// `docs/architecture/terminal-identity.md`.
 function getLiveAgentId(terminal: TerminalInfo): string | undefined {
   return terminal.detectedAgentId ?? terminal.launchAgentId;
 }

@@ -55,9 +55,7 @@ export function registerTerminalSpawnActions(
           terminal.location === "grid" || terminal.location === "dock" ? terminal.location : "grid";
         const options = await buildPanelDuplicateOptions(terminal, location);
         if (options.title) {
-          const defaultTitle = getDefaultTitle(terminal.kind, {
-            launchAgentId: terminal.launchAgentId,
-          });
+          const defaultTitle = getDefaultTitle(terminal.kind, terminal);
           if (options.title !== defaultTitle) {
             options.title = `${options.title} (copy)`;
           }

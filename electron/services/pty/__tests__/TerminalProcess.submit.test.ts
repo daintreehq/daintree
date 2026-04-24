@@ -112,6 +112,11 @@ describe("TerminalProcess.submit", () => {
   it("does not use bracketed paste for Gemini; uses soft newlines and then sends CR", async () => {
     vi.useFakeTimers();
     const terminal = createTerminal({ kind: "terminal", launchAgentId: "gemini" });
+    // Input protocol is driven by detectedAgentId (live process), not the launch hint.
+    // Simulate the process detector firing for Gemini.
+    (
+      terminal as unknown as { terminalInfo: { detectedAgentId: string } }
+    ).terminalInfo.detectedAgentId = "gemini";
 
     terminal.submit("line1\nline2");
 
@@ -125,6 +130,11 @@ describe("TerminalProcess.submit", () => {
   it("sends Enter immediately for Copilot with submitEnterDelayMs: 0", async () => {
     vi.useFakeTimers();
     const terminal = createTerminal({ kind: "terminal", launchAgentId: "copilot" });
+    // Input protocol is driven by detectedAgentId (live process), not the launch hint.
+    // Simulate the process detector firing for Copilot.
+    (
+      terminal as unknown as { terminalInfo: { detectedAgentId: string } }
+    ).terminalInfo.detectedAgentId = "copilot";
 
     terminal.submit("test");
 

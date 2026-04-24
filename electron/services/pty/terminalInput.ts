@@ -38,7 +38,10 @@ export function splitTrailingNewlines(text: string): { body: string; enterCount:
 }
 
 function getEffectiveAgentId(terminal: TerminalInfo): string | undefined {
-  return terminal.detectedAgentId ?? terminal.launchAgentId;
+  // Input protocol follows the live process. A demoted shell returns plain
+  // behavior (no agent-specific submit delay, bracketed-paste, soft-newline)
+  // regardless of what this terminal was originally launched as.
+  return terminal.detectedAgentId;
 }
 
 export function supportsBracketedPaste(terminal: TerminalInfo): boolean {

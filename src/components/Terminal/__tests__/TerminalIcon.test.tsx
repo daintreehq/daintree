@@ -34,8 +34,14 @@ describe("TerminalIcon", () => {
     const npmDetected = render(<TerminalIcon kind="terminal" detectedProcessId="npm" />).container
       .innerHTML;
 
+    // detectedAgentId is required for agent chrome; agentId (launch hint) alone is inert.
     const explicitAgent = render(
-      <TerminalIcon kind="agent" agentId="claude" detectedProcessId="npm" />
+      <TerminalIcon
+        kind="agent"
+        agentId="claude"
+        detectedAgentId="claude"
+        detectedProcessId="npm"
+      />
     ).container.innerHTML;
 
     const fallback = renderDefaultTerminalIcon();
@@ -45,11 +51,17 @@ describe("TerminalIcon", () => {
   });
 
   it("prefers detectedAgentId over launch-time agentId", () => {
-    const claudeLaunch = render(<TerminalIcon kind="agent" agentId="claude" />).container.innerHTML;
+    // Both renders supply detectedAgentId so chrome lights up; the one with
+    // detectedAgentId="gemini" must win over agentId="claude".
+    const claudeLaunch = render(
+      <TerminalIcon kind="agent" agentId="claude" detectedAgentId="claude" />
+    ).container.innerHTML;
     const geminiDetected = render(
       <TerminalIcon kind="agent" agentId="claude" detectedAgentId="gemini" />
     ).container.innerHTML;
-    const geminiOnly = render(<TerminalIcon kind="agent" agentId="gemini" />).container.innerHTML;
+    const geminiOnly = render(
+      <TerminalIcon kind="agent" agentId="gemini" detectedAgentId="gemini" />
+    ).container.innerHTML;
 
     expect(geminiDetected).not.toBe(claudeLaunch);
     expect(geminiDetected).toBe(geminiOnly);

@@ -33,6 +33,88 @@ function normalizeCrashType(value: unknown): CrashType | null {
   return validTypes.includes(value as CrashType) ? (value as CrashType) : null;
 }
 
+// Circular log of identity events for live diagnostics. Open devtools and
+// call `__daintreeIdentityEvents()` to inspect the last N detected/exited
+// events per terminal. Off by default outside dev tools inspection — the log
+// is append-only, capped, and has no effect on store behavior.
+const IDENTITY_LOG_CAP = 200;
+interface IdentityEventEntry {
+  at: number;
+  kind: "detected" | "exited";
+  terminalId: string;
+  agentType?: string;
+  processIconId?: string;
+}
+const _identityLog: IdentityEventEntry[] = [];
+
+function recordIdentityEvent(
+  kind: "detected" | "exited",
+  terminalId: string,
+  detail: { agentType?: string; processIconId?: string }
+): void {
+  const entry: IdentityEventEntry = {
+    at: Date.now(),
+    kind,
+    terminalId,
+    agentType: detail.agentType,
+    processIconId: detail.processIconId,
+  };
+  _identityLog.push(entry);
+  if (_identityLog.length > IDENTITY_LOG_CAP) _identityLog.shift();
+
+  // Every detection/exit event lands in the browser devtools console so a
+  // user reporting "chrome didn't update" can dump the live trail without
+  // needing to open the main-process log. Prefix stays searchable.
+  if (typeof console !== "undefined") {
+    console.log(
+      `[IdentityDebug] ${kind} term=${terminalId.slice(-8)} agent=${detail.agentType ?? "<none>"} icon=${detail.processIconId ?? "<none>"}`
+    );
+  }
+
+  if (typeof window !== "undefined") {
+    const w = window as unknown as {
+      __daintreeIdentityEvents?: () => IdentityEventEntry[];
+      __daintreeIdentityState?: () => Array<{
+        terminalId: string;
+        title: string;
+        launchAgentId?: string;
+        detectedAgentId?: string;
+        everDetectedAgent?: boolean;
+        detectedProcessId?: string;
+        agentState?: string;
+      }>;
+    };
+    if (!w.__daintreeIdentityEvents) {
+      w.__daintreeIdentityEvents = () => _identityLog.slice();
+    }
+    if (!w.__daintreeIdentityState) {
+      w.__daintreeIdentityState = () => {
+        const panels = usePanelStore.getState().panelsById;
+        return Object.values(panels).map((p) => {
+          const terminal = p as {
+            id: string;
+            title: string;
+            launchAgentId?: string;
+            detectedAgentId?: string;
+            everDetectedAgent?: boolean;
+            detectedProcessId?: string;
+            agentState?: string;
+          };
+          return {
+            terminalId: terminal.id,
+            title: terminal.title,
+            launchAgentId: terminal.launchAgentId,
+            detectedAgentId: terminal.detectedAgentId,
+            everDetectedAgent: terminal.everDetectedAgent,
+            detectedProcessId: terminal.detectedProcessId,
+            agentState: terminal.agentState,
+          };
+        });
+      };
+    }
+  }
+}
+
 let store: DisposableStore | null = null;
 // Managed dynamically inside backendCrashed / backendReady callbacks — set and
 // cleared mid-flight, so it cannot be registered with `store` at setup time.
@@ -268,13 +350,24 @@ export function setupTerminalStoreListeners() {
       terminalRegistryController.onAgentDetected((data) => {
         const { terminalId, processIconId, agentType } = data;
         if (!terminalId) return;
+        recordIdentityEvent("detected", terminalId, { agentType, processIconId });
         const nextEverDetectedAgent = agentType ? true : undefined;
         const nextDetectedAgentId = isBuiltInAgentId(agentType) ? agentType : undefined;
-        if (!processIconId && !nextEverDetectedAgent && !nextDetectedAgentId) return;
+        if (!processIconId && !nextEverDetectedAgent && !nextDetectedAgentId) {
+          console.log(
+            `[IdentityDebug] detected IGNORED term=${terminalId.slice(-8)} reason=no-icon-and-no-agent`
+          );
+          return;
+        }
 
         usePanelStore.setState((state) => {
           const terminal = state.panelsById[terminalId];
-          if (!terminal) return state;
+          if (!terminal) {
+            console.log(
+              `[IdentityDebug] detected IGNORED term=${terminalId.slice(-8)} reason=panel-not-found`
+            );
+            return state;
+          }
 
           const needsIconUpdate =
             processIconId !== undefined && terminal.detectedProcessId !== processIconId;
@@ -298,8 +391,21 @@ export function setupTerminalStoreListeners() {
             terminal.title !== computedTitle;
 
           if (!needsIconUpdate && !needsStickyUpdate && !needsAgentIdUpdate && !needsTitleUpdate) {
+            console.log(
+              `[IdentityDebug] detected NOOP term=${terminalId.slice(-8)} ` +
+                `already detectedAgentId=${terminal.detectedAgentId ?? "<none>"} ` +
+                `detectedProcessId=${terminal.detectedProcessId ?? "<none>"} ` +
+                `everDetected=${terminal.everDetectedAgent ?? false}`
+            );
             return state;
           }
+
+          console.log(
+            `[IdentityDebug] detected APPLY term=${terminalId.slice(-8)} ` +
+              `prev.detectedAgentId=${terminal.detectedAgentId ?? "<none>"} → ${nextDetectedAgentId ?? "<none>"} ` +
+              `prev.detectedProcessId=${terminal.detectedProcessId ?? "<none>"} → ${processIconId ?? "<none>"} ` +
+              `launchAgentId=${terminal.launchAgentId ?? "<none>"}`
+          );
 
           // Plain terminals (no launchAgentId) promoted at runtime need scrollback
           // policy applied in-process — cold-spawned agents already have it sealed at spawn.
@@ -329,6 +435,9 @@ export function setupTerminalStoreListeners() {
       terminalRegistryController.onAgentExited((data) => {
         const { terminalId } = data;
         if (!terminalId) return;
+        recordIdentityEvent("exited", terminalId, {
+          agentType: (data as { agentType?: string }).agentType,
+        });
 
         // `agent:exited` is a subcommand/demotion signal — the shell PTY is
         // still alive. Clear live-detection fields and re-sync the default
@@ -338,7 +447,12 @@ export function setupTerminalStoreListeners() {
         // but the launch hint is still available for manual restart.
         usePanelStore.setState((state) => {
           const terminal = state.panelsById[terminalId];
-          if (!terminal) return state;
+          if (!terminal) {
+            console.log(
+              `[IdentityDebug] exited IGNORED term=${terminalId.slice(-8)} reason=panel-not-found`
+            );
+            return state;
+          }
           const clearProcess = terminal.detectedProcessId !== undefined;
           const clearDetectedAgent = terminal.detectedAgentId !== undefined;
           // After demotion, detectedAgentId is cleared and everDetectedAgent stays
@@ -355,7 +469,16 @@ export function setupTerminalStoreListeners() {
             titleMode === "default" &&
             computedTitle !== undefined &&
             terminal.title !== computedTitle;
-          if (!clearProcess && !clearDetectedAgent && !needsTitleUpdate) return state;
+          if (!clearProcess && !clearDetectedAgent && !needsTitleUpdate) {
+            console.log(`[IdentityDebug] exited NOOP term=${terminalId.slice(-8)} already cleared`);
+            return state;
+          }
+
+          console.log(
+            `[IdentityDebug] exited APPLY term=${terminalId.slice(-8)} ` +
+              `prev.detectedAgentId=${terminal.detectedAgentId ?? "<none>"} → <none> ` +
+              `prev.detectedProcessId=${terminal.detectedProcessId ?? "<none>"} → <none>`
+          );
 
           return {
             panelsById: {
@@ -658,4 +781,18 @@ export function setupTerminalStoreListeners() {
   );
 
   return cleanupTerminalStoreListeners;
+}
+
+// This module registers IPC listeners via `setupTerminalStoreListeners` at app
+// bootstrap (see `src/hooks/app/usePanelStoreBootstrap.ts`). Without an HMR
+// accept boundary, any edit here — or to any of its imports — cascades into a
+// full page reload because Vite can't prove the replacement is safe. Self-
+// accepting is safe because the listener registry (`store`) is module-level
+// and we drop it on dispose; the React effect in `usePanelStoreBootstrap`
+// then re-invokes `setupTerminalStoreListeners` on its next run.
+if (import.meta.hot) {
+  import.meta.hot.dispose(() => {
+    cleanupTerminalStoreListeners();
+  });
+  import.meta.hot.accept();
 }

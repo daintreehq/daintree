@@ -18,6 +18,10 @@ export function GridPlaceholder({ className }: GridPlaceholderProps) {
   }
 
   const { title, kind, launchAgentId, detectedAgentId, detectedProcessId } = activeTerminal;
+  // Drag visuals mirror chrome: live detection only. A demoted shell dragged
+  // across the grid shows plain-terminal styling even though it was launched
+  // as an agent — matches what the tab looks like right now.
+  const chromeAgentId = detectedAgentId;
 
   return (
     <div
@@ -40,7 +44,7 @@ export function GridPlaceholder({ className }: GridPlaceholderProps) {
           <TerminalIcon
             kind={kind}
             agentId={launchAgentId}
-            detectedAgentId={detectedAgentId}
+            detectedAgentId={chromeAgentId}
             detectedProcessId={detectedProcessId}
             className="w-3.5 h-3.5"
           />
@@ -50,7 +54,7 @@ export function GridPlaceholder({ className }: GridPlaceholderProps) {
 
       {/* Panel-specific placeholder body */}
       <div className="flex-1 w-full p-3">
-        <PlaceholderContent kind={kind ?? "terminal"} agentId={launchAgentId} />
+        <PlaceholderContent kind={kind ?? "terminal"} agentId={chromeAgentId} />
       </div>
     </div>
   );

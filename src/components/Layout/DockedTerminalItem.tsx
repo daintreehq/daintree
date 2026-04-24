@@ -196,11 +196,7 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
   );
   const brandColor = useMemo(() => {
     const fallbackColor = getBrandColorHex(
-      resolveChromeAgentId(
-        terminal.detectedAgentId,
-        terminal.launchAgentId,
-        terminal.everDetectedAgent
-      ) ?? undefined
+      resolveChromeAgentId(terminal.detectedAgentId) ?? undefined
     );
     if (!terminal.agentPresetId || !terminal.launchAgentId) return fallbackColor;
     const preset = getMergedPresets(
@@ -213,7 +209,6 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
   }, [
     terminal.launchAgentId,
     terminal.detectedAgentId,
-    undefined,
     terminal.agentPresetId,
     terminal.agentPresetColor,
     presetCustomPresets,

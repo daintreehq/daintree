@@ -18,11 +18,26 @@ interface DetectedProcessCandidate {
   order: number;
 }
 
+// npm-package-tail aliases cover wrapper invocations where the binary name
+// isn't in argv but the package tail is (`npx @anthropic-ai/claude-code`,
+// `node /usr/local/lib/node_modules/@anthropic-ai/claude-code/cli.js`).
+// extractCommandNameCandidates strips the scope prefix to the tail, so
+// mapping the tail → agent id here is enough to close that hole.
+function packageTail(pkg: string | undefined): string | undefined {
+  if (!pkg) return undefined;
+  const tail = pkg.split("/").pop();
+  return tail && tail.length > 0 ? tail : undefined;
+}
+
 const AGENT_CLI_NAMES: Record<string, BuiltInAgentId> = Object.fromEntries(
   Object.entries(AGENT_REGISTRY).flatMap(([id, config]) => {
     const entries: [string, BuiltInAgentId][] = [[config.command, id as BuiltInAgentId]];
     if (config.command !== id) {
       entries.push([id, id as BuiltInAgentId]);
+    }
+    const tail = packageTail(config.npmGlobalPackage);
+    if (tail && tail !== config.command && tail !== id) {
+      entries.push([tail, id as BuiltInAgentId]);
     }
     return entries;
   })
@@ -35,6 +50,10 @@ const PROCESS_ICON_MAP: Record<string, string> = {
       const entries: [string, string][] = [[id, config.iconId]];
       if (config.command !== id) {
         entries.push([config.command, config.iconId]);
+      }
+      const tail = packageTail(config.npmGlobalPackage);
+      if (tail && tail !== config.command && tail !== id) {
+        entries.push([tail, config.iconId]);
       }
       return entries;
     })
@@ -113,6 +132,18 @@ export function extractScriptBasenameFromCommand(command: string | undefined): s
   // Previous behaviour: skip argv[0], return argv[1]. Preserved so older
   // tests that assume "only the script, not the runtime" still pass.
   return all[1] ?? null;
+}
+
+// Diagnostic logs must never carry full argv — users can legitimately pass
+// secrets inline (e.g. `claude --api-key=…`, `gh auth --token …`). Keep only
+// argv[0]'s basename so log noise still identifies the runtime without
+// leaking credentials into console or into window.__daintreeIdentityEvents().
+export function redactArgv(command: string | undefined): string {
+  if (!command) return "";
+  const first = command.trim().split(/\s+/)[0];
+  if (!first) return "";
+  const basename = first.split(/[\\/]/).pop() ?? first;
+  return JSON.stringify(basename);
 }
 
 export interface CommandIdentity {
@@ -278,6 +309,7 @@ export class ProcessDetector {
   private offStreak: number = 0;
   private pendingDetected: { agentType?: BuiltInAgentId; processIconId?: string } | null = null;
   private lastUnknownSignature: string | null = null;
+  private lastPassSignature: string | null = null;
 
   // Shell-command evidence injected by TerminalProcess when a command is
   // submitted through the PTY. Merges with process-tree evidence inside
@@ -319,6 +351,13 @@ export class ProcessDetector {
     this.shellCommandText = commandText;
     this.shellCommandStickyUntil = observedAt + ProcessDetector.SHELL_COMMAND_STICKY_MS;
     this.shellCommandExpiresAt = observedAt + ProcessDetector.SHELL_COMMAND_EXPIRY_MS;
+
+    console.log(
+      `[IdentityDebug] shell-evidence term=${this.terminalId.slice(-8)} ` +
+        `agent=${identity.agentType ?? "<none>"} icon=${identity.processIconId ?? "<none>"} ` +
+        `name=${JSON.stringify(identity.processName)}`
+    );
+    this.lastPassSignature = null;
 
     // Only run the sync detect pass once attached — before start() the cache
     // callback is not wired and invoking detect() early emits from a detector
@@ -377,11 +416,16 @@ export class ProcessDetector {
 
   start(): void {
     if (this.isStarted) {
+      console.log(
+        `[IdentityDebug] detector START-SKIPPED term=${this.terminalId.slice(-8)} pid=${this.ptyPid} reason=already-started`
+      );
       logWarn(`ProcessDetector for terminal ${this.terminalId} already started`);
       return;
     }
 
-    logDebug(`Starting ProcessDetector for terminal ${this.terminalId}, PID ${this.ptyPid}`);
+    console.log(
+      `[IdentityDebug] detector START term=${this.terminalId.slice(-8)} pid=${this.ptyPid}`
+    );
 
     this.isStarted = true;
     this.detect();
@@ -390,12 +434,8 @@ export class ProcessDetector {
     this.unsubscribe = this.cache.onRefresh(() => {
       if (firstRefresh) {
         firstRefresh = false;
-        // One-shot verbose-gated log on first cache refresh callback —
-        // confirms the detector is actually being ticked by the cache,
-        // independent of whether any state transitions are committed by the
-        // hysteresis gate. Gated so normal runs stay quiet. #5813
-        logDebug(
-          `ProcessDetector ${this.terminalId.slice(0, 8)} first refresh pid=${this.ptyPid} children=${this.cache.getChildren(this.ptyPid).length}`
+        console.log(
+          `[IdentityDebug] detector FIRST-TICK term=${this.terminalId.slice(-8)} pid=${this.ptyPid} children=${this.cache.getChildren(this.ptyPid).length}`
         );
       }
       this.detect();
@@ -453,6 +493,28 @@ export class ProcessDetector {
       }
 
       const result = this.detectAgent();
+
+      // Per-pass log is gated behind DAINTREE_IDENTITY_DEBUG_PASS=1 so the hot
+      // path is silent by default. Enable when diagnosing "detector ran but
+      // didn't match" cases. The START, commit, and shell-evidence logs below
+      // cover the common transition signals without hammering stdout.
+      if (process.env.DAINTREE_IDENTITY_DEBUG_PASS === "1") {
+        try {
+          const children = this.cache.getChildren(this.ptyPid);
+          const procs = children.map((p) => `${p.comm}(${p.pid})`).join(",") || "<none>";
+          const passSignature = `${result.detectionState}|${result.agentType ?? ""}|${result.evidenceSource ?? ""}|${procs}`;
+          if (passSignature !== this.lastPassSignature) {
+            this.lastPassSignature = passSignature;
+            console.log(
+              `[IdentityDebug] pass term=${this.terminalId.slice(-8)} pid=${this.ptyPid} ` +
+                `state=${result.detectionState} agent=${result.agentType ?? "<none>"} ` +
+                `src=${result.evidenceSource ?? "<none>"} procs=[${procs}]`
+            );
+          }
+        } catch {
+          // Diagnostic path must never throw into the detect loop.
+        }
+      }
 
       // `unknown` and `ambiguous` are first-class HOLD states — no committed-
       // state transitions and no side-channel emissions. A blind `ps` or a
@@ -590,7 +652,7 @@ export class ProcessDetector {
         // side-channel change).
         if (gatedCommitted) {
           console.log(
-            `[ProcessDetector ${this.terminalId.slice(0, 8)}] commit pid=${this.ptyPid} state=${result.detectionState} agent=${result.agentType ?? "null"} icon=${result.processIconId ?? "null"} src=${result.evidenceSource ?? "process_tree"}`
+            `[IdentityDebug] commit term=${this.terminalId.slice(-8)} pid=${this.ptyPid} state=${result.detectionState} agent=${result.agentType ?? "null"} icon=${result.processIconId ?? "null"} src=${result.evidenceSource ?? "process_tree"}`
           );
         }
         this.callback(result, this.spawnedAt);
@@ -685,11 +747,10 @@ export class ProcessDetector {
       if (signature !== this.lastUnknownSignature) {
         this.lastUnknownSignature = signature;
         console.warn(
-          `[ProcessDetector ${this.terminalId.slice(0, 8)}] unmatched children of pid ${this.ptyPid}:`,
+          `[ProcessDetector ${this.terminalId.slice(-8)}] unmatched children of pid ${this.ptyPid}:`,
           processes
             .map(
-              (p) =>
-                `pid=${p.pid} comm=${JSON.stringify(p.name)} cmd=${JSON.stringify(p.command ?? "")}`
+              (p) => `pid=${p.pid} comm=${JSON.stringify(p.name)} argv0=${redactArgv(p.command)}`
             )
             .join(" | ")
         );

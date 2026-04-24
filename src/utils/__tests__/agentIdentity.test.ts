@@ -1,33 +1,56 @@
 import { describe, expect, it } from "vitest";
-import { resolveChromeAgentId } from "../agentIdentity";
+import { resolveChromeAgentId, isAgentTerminalLive } from "../agentIdentity";
 
 describe("resolveChromeAgentId", () => {
-  it("prefers detectedAgentId when both are present", () => {
+  it("returns detectedAgentId when it is set", () => {
+    expect(resolveChromeAgentId("claude", undefined)).toBe("claude");
     expect(resolveChromeAgentId("gemini", "claude")).toBe("gemini");
   });
 
-  it("falls back to agentId when detectedAgentId is absent", () => {
-    expect(resolveChromeAgentId(undefined, "claude")).toBe("claude");
-  });
-
-  it("returns detectedAgentId when agentId is absent", () => {
-    expect(resolveChromeAgentId("claude", undefined)).toBe("claude");
+  it("returns undefined when detectedAgentId is absent — launchAgentId is NOT a chrome fallback", () => {
+    expect(resolveChromeAgentId(undefined, "claude")).toBeUndefined();
+    expect(resolveChromeAgentId(undefined, "claude", true)).toBeUndefined();
+    expect(resolveChromeAgentId(undefined, "claude", false)).toBeUndefined();
   });
 
   it("returns undefined when neither is present", () => {
     expect(resolveChromeAgentId(undefined, undefined)).toBeUndefined();
   });
 
-  it("empty-string launchAgentId passes through when detectedAgentId is absent", () => {
-    // launchAgentId is string-typed so "" is valid at the type level; the caller
-    // is responsible for treating empty strings as absent if needed.
-    expect(resolveChromeAgentId(undefined, "")).toBe("");
+  it("panel-form: chrome mirrors detectedAgentId, ignores launchAgentId/everDetectedAgent", () => {
+    expect(resolveChromeAgentId({ detectedAgentId: "claude", launchAgentId: undefined })).toBe(
+      "claude"
+    );
+    expect(
+      resolveChromeAgentId({
+        detectedAgentId: undefined,
+        launchAgentId: "claude",
+        everDetectedAgent: true,
+      })
+    ).toBeUndefined();
+    expect(
+      resolveChromeAgentId({
+        detectedAgentId: undefined,
+        launchAgentId: "claude",
+        everDetectedAgent: false,
+      })
+    ).toBeUndefined();
   });
+});
 
-  it("ignores the runtime-detected identity when it is explicitly null-ish", () => {
-    // Callers that clear `detectedAgentId` on exit must get the launch-time
-    // fallback back, not a stale detection.
-    expect(resolveChromeAgentId(undefined, "claude")).toBe("claude");
-    expect(resolveChromeAgentId(null as unknown as undefined, "claude")).toBe("claude");
+describe("isAgentTerminalLive", () => {
+  it("is true only when detectedAgentId is set", () => {
+    expect(isAgentTerminalLive({ detectedAgentId: "claude" })).toBe(true);
+    expect(isAgentTerminalLive({ detectedAgentId: undefined, launchAgentId: "claude" })).toBe(
+      false
+    );
+    expect(
+      isAgentTerminalLive({
+        detectedAgentId: undefined,
+        launchAgentId: "claude",
+        everDetectedAgent: true,
+      })
+    ).toBe(false);
+    expect(isAgentTerminalLive(undefined)).toBe(false);
   });
 });

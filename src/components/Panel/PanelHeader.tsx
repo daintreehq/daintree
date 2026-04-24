@@ -559,6 +559,8 @@ function PanelHeaderComponent({
                           id={tab.id}
                           title={getBaseTitle(tab.title)}
                           agentId={tab.agentId}
+                          detectedAgentId={tab.detectedAgentId}
+                          everDetectedAgent={tab.everDetectedAgent}
                           detectedProcessId={tab.detectedProcessId}
                           kind={tab.kind}
                           agentState={tab.agentState}
@@ -659,6 +661,8 @@ function PanelHeaderComponent({
                       id={tab.id}
                       title={getBaseTitle(tab.title)}
                       agentId={tab.agentId}
+                      detectedAgentId={tab.detectedAgentId}
+                      everDetectedAgent={tab.everDetectedAgent}
                       detectedProcessId={tab.detectedProcessId}
                       kind={tab.kind}
                       agentState={tab.agentState}

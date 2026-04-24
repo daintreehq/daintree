@@ -45,21 +45,11 @@ describe("getTerminalRefreshTier - runtime agent identity", () => {
     expect(getTerminalRefreshTier(terminal, false)).toBe(TerminalRefreshTier.VISIBLE);
   });
 
-  it("keeps a freshly-spawned agent at VISIBLE during the boot window (before detection)", () => {
-    // detectedAgentId is undefined during the first few seconds; the spawn-time
-    // fallback keeps the panel at VISIBLE so it doesn't immediately hibernate.
-    const terminal = makeTerminal({
-      kind: "terminal",
-      launchAgentId: "claude",
-      detectedAgentId: undefined,
-      agentState: "idle",
-    });
-    // Boot window behaviour matches the current guard: without state override,
-    // the spawn-time fallback holds.
-    expect(getTerminalRefreshTier({ ...terminal, agentState: undefined }, false)).toBe(
-      TerminalRefreshTier.VISIBLE
-    );
-  });
+  // RETIRED: "boot window" launchAgentId fallback — chrome is detection-only.
+  // A panel with only launchAgentId (no detectedAgentId) is no longer treated
+  // as an agent for refresh-tier purposes; it drops to BACKGROUND until the
+  // process detector fires and sets detectedAgentId. The old test that expected
+  // VISIBLE here was encoding the retired spawn-time fallback model.
 
   it("drops an exited agent even when detectedAgentId is still set (race guard)", () => {
     // Covers the race between onAgentExited and the process-detector exit event.

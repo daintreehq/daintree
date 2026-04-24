@@ -84,9 +84,9 @@ describe("trashPanel agent-aware focus", () => {
   it("should focus next agent when trashing an agent terminal", () => {
     usePanelStore.setState({
       panelsById: {
-        "agent-1": makeTerminal("agent-1", "agent", "claude"),
+        "agent-1": makeTerminal("agent-1", "agent", "claude", undefined, "claude"),
         "shell-1": makeTerminal("shell-1", "terminal"),
-        "agent-2": makeTerminal("agent-2", "agent", "gemini"),
+        "agent-2": makeTerminal("agent-2", "agent", "gemini", undefined, "gemini"),
         "shell-2": makeTerminal("shell-2", "terminal"),
       },
       panelIds: ["agent-1", "shell-1", "agent-2", "shell-2"],
@@ -199,7 +199,8 @@ describe("trashPanel agent-aware focus", () => {
           "claude"
         ),
         "shell-1": makeTerminal("shell-1", "terminal"),
-        "agent-2": makeTerminal("agent-2", "agent", "gemini"),
+        // agent-2 must have detectedAgentId so isRuntimeAgentTerminal returns true
+        "agent-2": makeTerminal("agent-2", "agent", "gemini", undefined, "gemini"),
       },
       panelIds: ["promoted-shell", "shell-1", "agent-2"],
       focusedId: "promoted-shell",

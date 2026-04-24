@@ -2,11 +2,8 @@ import type { PanelKind } from "@/types";
 import type { BuiltInAgentId } from "@shared/config/agentIds";
 
 /**
- * Whether this terminal is currently hosting an agent. Under the unified
- * identity model (see `docs/architecture/terminal-identity.md`), agent-ness
- * is a live state: detection wins; if detection has ever fired and is now
- * cleared, the terminal is a plain shell; otherwise the launch hint stands
- * in during the boot window.
+ * Is this terminal currently hosting an agent? Detection-only. Launch hints
+ * do not count. See `docs/architecture/terminal-identity.md`.
  */
 export function isAgentTerminal(terminal: {
   detectedAgentId?: BuiltInAgentId;
@@ -14,14 +11,14 @@ export function isAgentTerminal(terminal: {
   launchAgentId?: string;
   kind?: PanelKind;
 }): boolean {
-  if (terminal.detectedAgentId) return true;
-  if (terminal.everDetectedAgent) return false;
-  return Boolean(terminal.launchAgentId);
+  return Boolean(terminal.detectedAgentId);
 }
 
-/**
- * Runtime-aware agent terminal predicate — alias of `isAgentTerminal` kept
- * for call-site readability where "runtime" emphasises that detection drives
- * the decision.
- */
 export const isRuntimeAgentTerminal = isAgentTerminal;
+
+// Pure utility — accept HMR in place so edits don't propagate into a full
+// page reload. Consumers call these functions at render time; the new
+// definitions are picked up on the next render automatically.
+if (import.meta.hot) {
+  import.meta.hot.accept();
+}

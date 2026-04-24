@@ -24,6 +24,9 @@ import { useTerminalFileTransfer } from "./useTerminalFileTransfer";
 export interface XtermAdapterProps {
   terminalId: string;
   launchAgentId?: string;
+  /** Runtime-detected agent identity. Drives agent-specific input protocol
+   *  (soft-newline sequences, bracketed paste) when a live agent is running. */
+  detectedAgentId?: string;
   isInputLocked?: boolean;
   onReady?: () => void;
   onExit?: (exitCode: number) => void;
@@ -40,6 +43,7 @@ const MIN_CONTAINER_SIZE = 50;
 function XtermAdapterComponent({
   terminalId,
   launchAgentId,
+  detectedAgentId,
   isInputLocked,
   onReady,
   onExit,
@@ -349,7 +353,10 @@ function XtermAdapterComponent({
             // "Soft" newline for agent CLIs.
             // Codex CLI commonly expects LF (\n / Ctrl+J) for a newline without submit.
             // Other agent CLIs use the legacy ESC+CR sequence.
-            const softNewline = getSoftNewlineSequence(launchAgentId);
+            // Soft-newline sequence follows the live process. If a Codex
+            // session is currently running, use its sequence even if this
+            // terminal was launched as Claude or as a plain shell.
+            const softNewline = getSoftNewlineSequence(detectedAgentId ?? launchAgentId);
             terminalClient.write(terminalId, softNewline);
             terminalInstanceService.notifyUserInput(terminalId);
             onInput?.(softNewline);
@@ -422,6 +429,7 @@ function XtermAdapterComponent({
   }, [
     terminalId,
     launchAgentId,
+    detectedAgentId,
     isInputLocked,
     terminalOptions,
     onExit,

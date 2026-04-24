@@ -49,6 +49,7 @@ type MockPanel = {
   location: "grid" | "dock" | "trash";
   kind?: "terminal" | "browser" | "notes" | "dev-preview";
   launchAgentId?: string;
+  detectedAgentId?: string;
   title?: string;
 };
 
@@ -96,7 +97,14 @@ describe("terminal.duplicate (copy) suffix", () => {
     setPanelState({
       focusedId: "p1",
       panels: [
-        { id: "p1", location: "grid", kind: "terminal", launchAgentId: "claude", title: "Claude" },
+        {
+          id: "p1",
+          location: "grid",
+          kind: "terminal",
+          launchAgentId: "claude",
+          detectedAgentId: "claude",
+          title: "Claude",
+        },
       ],
       addPanel,
     });
@@ -210,6 +218,7 @@ describe("terminal.duplicate (copy) suffix", () => {
           location: "grid",
           kind: "terminal",
           launchAgentId: "claude",
+          detectedAgentId: "claude",
           title: "Claude (Deleted Preset)",
         },
       ],

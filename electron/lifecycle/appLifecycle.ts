@@ -39,11 +39,15 @@ export function registerAppLifecycleHandlers(opts: AppLifecycleOptions): void {
   // Initialize crash recovery only in the winning instance
   getCrashRecoveryService();
 
-  // Graceful shutdown on OS signals (macOS/Linux SIGTERM/SIGINT, Windows Ctrl+C).
-  // Triggers `before-quit` via `app.quit()` so the shutdown handler runs the full
-  // cleanup chain. A hard timeout ensures the process exits even if cleanup stalls.
-  // On Windows, `taskkill /F` (TerminateProcess) bypasses all Node.js shutdown hooks —
-  // that case is handled by CrashRecoveryService on next startup.
+  // Graceful shutdown on OS signals (macOS/Linux SIGTERM/SIGINT, Windows Ctrl+C,
+  // plus SIGUSR2 — nodemon's restart signal in dev). Triggers `before-quit` via
+  // `app.quit()` so the shutdown handler runs the full cleanup chain, including
+  // `CrashLoopGuard.markCleanExit()`. Without the SIGUSR2 entry, every nodemon
+  // restart bypassed `before-quit` and CrashLoopGuard counted it as a crash —
+  // after three rebuilds in a minute the dev app booted into safe mode for no
+  // reason. A hard timeout ensures the process exits even if cleanup stalls.
+  // On Windows, `taskkill /F` (TerminateProcess) bypasses all Node.js shutdown
+  // hooks — that case is handled by CrashRecoveryService on next startup.
   let signalHandled = false;
   const signalHandler = () => {
     if (signalHandled) return;
@@ -54,6 +58,7 @@ export function registerAppLifecycleHandlers(opts: AppLifecycleOptions): void {
   };
   process.on("SIGTERM", signalHandler);
   process.on("SIGINT", signalHandler);
+  process.on("SIGUSR2", signalHandler);
 
   app.on("second-instance", (_event, commandLine, _workingDirectory) => {
     console.log("[MAIN] Second instance detected");

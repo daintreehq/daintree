@@ -10,7 +10,8 @@ interface TerminalDragPreviewProps {
 }
 
 export function TerminalDragPreview({ terminal, groupTabCount }: TerminalDragPreviewProps) {
-  const brandColor = getPanelKindColor(terminal.kind ?? "terminal", terminal.launchAgentId);
+  // Drag visual color mirrors live chrome — detection only, not launch hint.
+  const brandColor = getPanelKindColor(terminal.kind ?? "terminal", terminal.detectedAgentId);
   const isWorking = terminal.agentState === "working";
   const isGroupDrag = (groupTabCount ?? 0) > 1;
 
@@ -113,7 +114,7 @@ export function TerminalDragPreview({ terminal, groupTabCount }: TerminalDragPre
           flexDirection: "column",
         }}
       >
-        <PlaceholderContent kind={terminal.kind ?? "terminal"} agentId={terminal.launchAgentId} />
+        <PlaceholderContent kind={terminal.kind ?? "terminal"} agentId={terminal.detectedAgentId} />
       </div>
     </div>
   );

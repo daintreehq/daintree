@@ -107,10 +107,11 @@ const OSC_10_QUERY_STRIP_RE = /\x1b\]10;\?(?:\x07|\x1b\\)/g;
 // eslint-disable-next-line no-control-regex
 const OSC_11_QUERY_STRIP_RE = /\x1b\]11;\?(?:\x07|\x1b\\)/g;
 
-// Live agent identity for internal decisions (activity monitor pattern lookup,
-// event routing). Detection takes precedence; if no agent is live yet, fall
-// back to the launch hint so cold-launched terminals start monitoring before
-// the process-tree poll has caught up.
+// Backend-side identity for internal decisions (activity monitor pattern
+// lookup, event routing). Detection wins; during the boot window the launch
+// hint is used so cold-launched terminals start monitoring before the
+// process-tree poll has caught up. This helper is NOT chrome — chrome is
+// detection-only. See `docs/architecture/terminal-identity.md`.
 function getLiveAgentId(terminal: TerminalInfo): string | undefined {
   return terminal.detectedAgentId ?? terminal.launchAgentId;
 }

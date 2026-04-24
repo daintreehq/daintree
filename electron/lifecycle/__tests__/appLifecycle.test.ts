@@ -53,7 +53,7 @@ describe("registerAppLifecycleHandlers – signal handling", () => {
     processExitSpy = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
   });
 
-  it("registers SIGTERM and SIGINT handlers regardless of isPackaged", async () => {
+  it("registers SIGTERM, SIGINT, and SIGUSR2 handlers regardless of isPackaged", async () => {
     const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
 
     for (const packaged of [false, true]) {
@@ -61,12 +61,16 @@ describe("registerAppLifecycleHandlers – signal handling", () => {
       appMock.isPackaged = packaged;
       registerAppLifecycleHandlers(makeOpts());
 
-      const signalCalls = processOnSpy.mock.calls.filter(
-        ([sig]: string[]) => sig === "SIGTERM" || sig === "SIGINT"
+      const signalCalls = processOnSpy.mock.calls.filter(([sig]: string[]) =>
+        ["SIGTERM", "SIGINT", "SIGUSR2"].includes(sig)
       );
-      expect(signalCalls).toHaveLength(2);
+      expect(signalCalls).toHaveLength(3);
       expect(signalCalls[0][0]).toBe("SIGTERM");
       expect(signalCalls[1][0]).toBe("SIGINT");
+      // SIGUSR2 is nodemon's restart signal; without this handler every dev-mode
+      // rebuild exited ungracefully, never ran `markCleanExit`, and tripped the
+      // CrashLoopGuard into safe mode. Keep it registered even in packaged.
+      expect(signalCalls[2][0]).toBe("SIGUSR2");
     }
   });
 

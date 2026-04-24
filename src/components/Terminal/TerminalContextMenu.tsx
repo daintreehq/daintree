@@ -569,7 +569,7 @@ export function TerminalContextMenu({
           )}
           {terminal.isInputLocked ? "Unlock Input" : "Lock Input"}
         </ContextMenuItem>
-        {terminal.launchAgentId && (
+        {terminal.detectedAgentId && (
           <ContextMenuItem onSelect={() => handleAction("toggle-watch")}>
             {isWatched ? (
               <BellOff className={ICON_CLASS} aria-hidden="true" />

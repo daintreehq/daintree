@@ -220,7 +220,7 @@ describe("PanelHeader", () => {
     });
 
     it("renders Watch for unwatched agent panels", () => {
-      render(<PanelHeader {...makeProps({ agentId: "claude" })} />);
+      render(<PanelHeader {...makeProps({ agentId: "claude", detectedAgentId: "claude" })} />);
       const menu = screen.getByTestId("overflow-menu");
       expect(findMenuButton(menu, "Watch")).toBeDefined();
       expect(findMenuButton(menu, "Cancel Watch")).toBeUndefined();
@@ -231,7 +231,7 @@ describe("PanelHeader", () => {
         ...mockStoreState,
         watchedPanels: new Set(["test-panel"]),
       };
-      render(<PanelHeader {...makeProps({ agentId: "claude" })} />);
+      render(<PanelHeader {...makeProps({ agentId: "claude", detectedAgentId: "claude" })} />);
       const menu = screen.getByTestId("overflow-menu");
       expect(findMenuButton(menu, "Cancel Watch")).toBeDefined();
       expect(findMenuButton(menu, "Watch")).toBeUndefined();
@@ -310,7 +310,7 @@ describe("PanelHeader", () => {
     });
 
     it("calls watchPanel when clicking Watch on unwatched agent panel", () => {
-      render(<PanelHeader {...makeProps({ agentId: "claude" })} />);
+      render(<PanelHeader {...makeProps({ agentId: "claude", detectedAgentId: "claude" })} />);
       const menu = screen.getByTestId("overflow-menu");
       findMenuButton(menu, "Watch")?.click();
       expect(mockWatchPanel).toHaveBeenCalledWith("test-panel");
@@ -321,7 +321,7 @@ describe("PanelHeader", () => {
         ...mockStoreState,
         watchedPanels: new Set(["test-panel"]),
       };
-      render(<PanelHeader {...makeProps({ agentId: "claude" })} />);
+      render(<PanelHeader {...makeProps({ agentId: "claude", detectedAgentId: "claude" })} />);
       const menu = screen.getByTestId("overflow-menu");
       findMenuButton(menu, "Cancel Watch")?.click();
       expect(mockUnwatchPanel).toHaveBeenCalledWith("test-panel");

@@ -70,6 +70,7 @@ import { initializeTrashedPidCleanup } from "./services/TrashedPidTracker.js";
 import { initializeCrashLoopGuard, getCrashLoopGuard } from "./services/CrashLoopGuardService.js";
 import { initializeDatabaseMaintenance } from "./services/DatabaseMaintenanceService.js";
 import { readLastActiveProjectIdSync } from "./services/persistence/readLastProjectId.js";
+import { emergencyLogMainFatal } from "./utils/emergencyLog.js";
 
 // CRITICAL: Run IPC sender validation before any handlers are registered
 enforceIpcSenderValidation();
@@ -302,6 +303,17 @@ if (!gotTheLock) {
       getCrashLoopGuard().startStabilityTimer();
     } catch (error) {
       console.error("[MAIN] Startup failed:", error);
+      // Startup crashes hard-exit without running before-quit, which means
+      // markCleanExit() never fires and the CrashLoopGuard counts this as a
+      // crash. That is correct — but without an on-disk trace the next
+      // session has no way to diagnose the loop, since main-crash.log never
+      // captures this path (it only logs from globalErrorHandlers). Wire it
+      // here so a repeating startup failure leaves a stack behind.
+      try {
+        emergencyLogMainFatal("STARTUP_FAILED", error);
+      } catch {
+        // best-effort
+      }
       app.exit(1);
     }
   });
