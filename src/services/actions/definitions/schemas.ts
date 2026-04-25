@@ -81,6 +81,11 @@ export const AgentPresetSchema = z.object({
   description: z.string().optional(),
   env: z.record(z.string(), z.string()).optional(),
   args: z.array(z.string()).optional(),
+  dangerousEnabled: z.boolean().optional(),
+  customFlags: z.string().optional(),
+  inlineMode: z.boolean().optional(),
+  color: z.string().optional(),
+  fallbacks: z.array(z.string()).optional(),
 });
 
 export const AgentSettingsEntrySchema = z

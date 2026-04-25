@@ -26,6 +26,39 @@ describe("TerminalIcon", () => {
     ).toBe("terminal");
   });
 
+  it("marks the resolved icon color for automated chrome assertions", () => {
+    const { container } = render(
+      <TerminalIcon
+        kind="terminal"
+        chrome={deriveTerminalChrome({
+          launchAgentId: "claude",
+          presetColor: "#3366ff",
+        })}
+      />
+    );
+
+    const icon = container.querySelector("[data-terminal-icon-id='claude']");
+    expect(icon?.getAttribute("data-terminal-icon-color")).toBe("#3366ff");
+    expect(icon?.querySelector("path")?.getAttribute("fill")).toBe("#3366ff");
+  });
+
+  it("lets an explicit brandColor override the chrome color marker", () => {
+    const { container } = render(
+      <TerminalIcon
+        kind="terminal"
+        chrome={deriveTerminalChrome({
+          launchAgentId: "claude",
+          presetColor: "#3366ff",
+        })}
+        brandColor="#ff6600"
+      />
+    );
+
+    const icon = container.querySelector("[data-terminal-icon-id='claude']");
+    expect(icon?.getAttribute("data-terminal-icon-color")).toBe("#ff6600");
+    expect(icon?.querySelector("path")?.getAttribute("fill")).toBe("#ff6600");
+  });
+
   it("renders AI process icons for detected CLI processes in terminal panels", () => {
     const fallback = renderDefaultTerminalIcon();
     const { container } = render(

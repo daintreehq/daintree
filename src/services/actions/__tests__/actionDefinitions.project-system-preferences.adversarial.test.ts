@@ -724,6 +724,65 @@ describe("preferences action hardening", () => {
     });
   });
 
+  it("preserves custom preset color and runtime fields through agentSettings.set validation", async () => {
+    mocks.agentSettingsClient.set.mockResolvedValueOnce({
+      agents: {
+        claude: {
+          customPresets: [
+            {
+              id: "blue",
+              name: "Blue Provider",
+              env: { ANTHROPIC_BASE_URL: "https://example.test" },
+              args: ["--model", "sonnet"],
+              dangerousEnabled: true,
+              customFlags: "--verbose",
+              inlineMode: true,
+              color: "#3366ff",
+              fallbacks: ["fallback"],
+            },
+          ],
+        },
+      },
+    });
+    const { service } = buildService(registerPreferencesActions);
+
+    const result = await service.dispatch("agentSettings.set", {
+      agentId: "claude",
+      settings: {
+        customPresets: [
+          {
+            id: "blue",
+            name: "Blue Provider",
+            env: { ANTHROPIC_BASE_URL: "https://example.test" },
+            args: ["--model", "sonnet"],
+            dangerousEnabled: true,
+            customFlags: "--verbose",
+            inlineMode: true,
+            color: "#3366ff",
+            fallbacks: ["fallback"],
+          },
+        ],
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(mocks.agentSettingsClient.set).toHaveBeenCalledWith("claude", {
+      customPresets: [
+        {
+          id: "blue",
+          name: "Blue Provider",
+          env: { ANTHROPIC_BASE_URL: "https://example.test" },
+          args: ["--model", "sonnet"],
+          dangerousEnabled: true,
+          customFlags: "--verbose",
+          inlineMode: true,
+          color: "#3366ff",
+          fallbacks: ["fallback"],
+        },
+      ],
+    });
+  });
+
   it("returns override snapshots and propagates stale action ID failures from the keybinding service", async () => {
     mocks.keybindingService.getOverridesSnapshot.mockReturnValue({ "terminal.new": ["Cmd+T"] });
     mocks.keybindingService.setOverride.mockRejectedValueOnce(

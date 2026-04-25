@@ -36,8 +36,13 @@ export function TerminalIcon({ kind, chrome, className, brandColor }: TerminalIc
     );
   }, [kind, iconId, resolvedChrome.agentId, resolvedChrome.processId, resolvedChrome.label]);
 
+  const markerColor = brandColor ?? resolvedChrome.color;
   const withIconMarker = (icon: ReactNode, markerIconId = iconId) => (
-    <span className="contents" data-terminal-icon-id={markerIconId}>
+    <span
+      className="contents"
+      data-terminal-icon-id={markerIconId}
+      data-terminal-icon-color={markerColor}
+    >
       {icon}
     </span>
   );
