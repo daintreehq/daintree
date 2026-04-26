@@ -673,47 +673,51 @@ describe("AgentTrayButton", () => {
     expect(getByTestId("agent-tray-pin-claude").getAttribute("data-pinned")).toBe("false");
   });
 
-  it("suppresses tooltip reopen during focus restoration after dropdown closes (issue #5153)", () => {
-    vi.useFakeTimers();
-    try {
-      const availability = { claude: "ready" } as unknown as CliAvailability;
-      mockSettings = settingsWith({ claude: { pinned: true } });
+  it("suppresses tooltip reopen across dropdown and dialog focus restoration (issue #5153)", () => {
+    const availability = { claude: "ready" } as unknown as CliAvailability;
+    mockSettings = settingsWith({ claude: { pinned: true } });
+    mockSeenAgentIds = ["claude"];
 
-      render(<AgentTrayButton agentAvailability={availability} />);
-      expect(tooltipOpenChangeSpy).toBeTruthy();
-      expect(closeAutoFocusSpy).toBeTruthy();
+    const { getByLabelText } = render(<AgentTrayButton agentAvailability={availability} />);
+    expect(tooltipOpenChangeSpy).toBeTruthy();
+    expect(closeAutoFocusSpy).toBeTruthy();
 
-      // Hover opens the tooltip.
-      act(() => {
-        tooltipOpenChangeSpy!(true);
-      });
-      expect(capturedTooltipOpen).toBe(true);
+    const button = getByLabelText("Agent tray");
 
-      // Dropdown opens — handleOpenChange forces the tooltip closed.
-      act(() => {
-        openChangeSpy!(true);
-      });
-      expect(capturedTooltipOpen).toBe(false);
+    // Hover opens the tooltip.
+    act(() => {
+      tooltipOpenChangeSpy!(true);
+    });
+    expect(capturedTooltipOpen).toBe(true);
 
-      // Dropdown closes; Radix tries to restore focus which would normally
-      // re-fire Tooltip.onOpenChange(true). The suppression ref must gate it.
-      act(() => {
-        closeAutoFocusSpy!({ preventDefault: vi.fn() });
-        tooltipOpenChangeSpy!(true);
-      });
-      expect(capturedTooltipOpen).toBe(false);
+    // Dropdown opens — handleOpenChange forces the tooltip closed.
+    act(() => {
+      openChangeSpy!(true);
+    });
+    expect(capturedTooltipOpen).toBe(false);
 
-      // After the microtask clears, tooltip opens normally again on hover.
-      act(() => {
-        vi.runAllTimers();
-      });
-      act(() => {
-        tooltipOpenChangeSpy!(true);
-      });
-      expect(capturedTooltipOpen).toBe(true);
-    } finally {
-      vi.useRealTimers();
-    }
+    // Dropdown closes; Radix tries to restore focus which would normally
+    // re-fire Tooltip.onOpenChange(true). The suppression ref must gate it.
+    act(() => {
+      closeAutoFocusSpy!({ preventDefault: vi.fn() });
+      tooltipOpenChangeSpy!(true);
+    });
+    expect(capturedTooltipOpen).toBe(false);
+
+    // Suppression must persist across an arbitrary delay — a menu item like
+    // "Customise Toolbar" opens an AppDialog whose own restoreFocus fires
+    // when the user later closes it. A timer-based clear races this.
+    act(() => {
+      tooltipOpenChangeSpy!(true);
+    });
+    expect(capturedTooltipOpen).toBe(false);
+
+    // A genuine pointer hover on the button re-arms the tooltip.
+    act(() => {
+      fireEvent.pointerEnter(button);
+      tooltipOpenChangeSpy!(true);
+    });
+    expect(capturedTooltipOpen).toBe(true);
   });
 
   it("does not call preventDefault in onCloseAutoFocus (preserves a11y focus return)", () => {

@@ -273,13 +273,14 @@ export function AgentTrayButton({
   const lastPinActionAt = useRef(0);
 
   // Radix Tooltip reopens whenever the trigger receives focus, including
-  // programmatic focus restoration from DropdownMenu's onCloseAutoFocus. Gate
-  // the Tooltip via controlled state and suppress open=true for one tick
-  // after the dropdown closes so the refocused button doesn't flash the
-  // tooltip back into view. See issue #5153.
+  // programmatic focus restoration from DropdownMenu's onCloseAutoFocus and
+  // from any AppDialog opened via a menu item (Customise Toolbar, Manage
+  // Agents, etc.) when that dialog closes much later. Gate the Tooltip via
+  // controlled state and hold the suppression open until the next genuine
+  // pointer hover on the button — a timer can't bridge an arbitrarily long
+  // dialog lifetime. See issue #5153.
   const [tooltipOpen, setTooltipOpen] = useState(false);
   const isRestoringFocusRef = useRef(false);
-  const restoreFocusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Re-probe on view visibility changes (Electron LRU reactivation, tab
   // switches). The window-focus trigger is handled once globally in
@@ -299,14 +300,6 @@ export function AgentTrayButton({
     };
   }, [refreshAvailability]);
 
-  useEffect(() => {
-    return () => {
-      if (restoreFocusTimerRef.current != null) {
-        clearTimeout(restoreFocusTimerRef.current);
-      }
-    };
-  }, []);
-
   const handleTooltipOpenChange = (open: boolean) => {
     if (open && isRestoringFocusRef.current) return;
     setTooltipOpen(open);
@@ -315,13 +308,10 @@ export function AgentTrayButton({
   const suppressTooltipDuringFocusRestore = () => {
     setTooltipOpen(false);
     isRestoringFocusRef.current = true;
-    if (restoreFocusTimerRef.current != null) {
-      clearTimeout(restoreFocusTimerRef.current);
-    }
-    restoreFocusTimerRef.current = setTimeout(() => {
-      isRestoringFocusRef.current = false;
-      restoreFocusTimerRef.current = null;
-    }, 0);
+  };
+
+  const clearFocusRestoreSuppression = () => {
+    isRestoringFocusRef.current = false;
   };
 
   const agentDominantStates = useMemo(() => {
@@ -559,6 +549,7 @@ export function AgentTrayButton({
                 data-toolbar-item={dataToolbarItem}
                 className="toolbar-agent-button text-daintree-text hover:text-[var(--toolbar-control-hover-fg,var(--theme-accent-primary))] focus-visible:text-[var(--toolbar-control-hover-fg,var(--theme-accent-primary))] transition-colors"
                 aria-label={showDiscoveryBadge ? "Agent tray — new agents detected" : "Agent tray"}
+                onPointerEnter={clearFocusRestoreSuppression}
               >
                 <span className="relative inline-flex items-center justify-center">
                   <Plug />
