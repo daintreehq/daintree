@@ -697,32 +697,27 @@ function SelectionStep({
   const schemes = [daintreeScheme, bondiScheme] as const;
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-6">
       <SystemRequirementsSection
         onFatalFailureChange={onFatalFailureChange}
         onCheckingChange={onCheckingChange}
       />
 
-      {isFirstRun ? (
-        <div>
+      {isFirstRun && (
+        <section className="pb-6 border-b border-daintree-border">
           <h3 className="text-base font-semibold text-daintree-text mb-2">Welcome to Daintree</h3>
           <p className="text-sm text-daintree-text/60">
             Pick a theme, choose your agents, and you&apos;re ready to go.
           </p>
-        </div>
-      ) : (
-        <div>
-          <h3 className="text-base font-semibold text-daintree-text mb-2">Choose your AI agents</h3>
-          <p className="text-sm text-daintree-text/60">
-            Select the agents you want in your workflow. Already-installed agents are pre-selected.
-            You can change this anytime from{" "}
-            <span className="text-daintree-text/80">Settings &gt; Agents</span>.
-          </p>
-        </div>
+        </section>
       )}
 
       {isFirstRun && onThemeSelect && (
-        <>
+        <section className="pb-6 border-b border-daintree-border">
+          <h3 className="text-base font-semibold text-daintree-text mb-2">Appearance</h3>
+          <p className="text-sm text-daintree-text/60 mb-4">
+            Choose your preferred theme. More options available in Settings.
+          </p>
           <div className="grid grid-cols-2 gap-4">
             {schemes.map((scheme) => {
               const isSelected = selectedSchemeId === scheme.id;
@@ -761,109 +756,115 @@ function SelectionStep({
               );
             })}
           </div>
-          <p className="text-xs text-daintree-text/50 text-center">
+          <p className="text-xs text-daintree-text/50 text-center mt-3">
             More themes available in Settings → Appearance
           </p>
-        </>
+        </section>
       )}
 
-      {isFirstRun && (
-        <div className="flex items-center gap-2 py-1">
-          <div className="h-px flex-1 bg-border-divider" />
-          <span className="text-[11px] text-daintree-text/40 font-medium">Agents</span>
-          <div className="h-px flex-1 bg-border-divider" />
-        </div>
-      )}
+      <section className={cn(isFirstRun && "pb-6 border-b border-daintree-border")}>
+        <h3 className="text-base font-semibold text-daintree-text mb-2">
+          {isFirstRun ? "Agents" : "Choose your AI agents"}
+        </h3>
+        <p className="text-sm text-daintree-text/60 mb-4">
+          Select the agents you want in your workflow. Already-installed agents are pre-selected.
+          You can change this anytime from{" "}
+          <span className="text-daintree-text/80">Settings &gt; Agents</span>.
+        </p>
+        {isLoading ? (
+          <div className="flex items-center justify-center py-8">
+            <Spinner size="lg" className="text-daintree-text/40" />
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {featuredAgents.map((agentId) => (
+              <AgentCard
+                key={agentId}
+                mode="onboarding"
+                agentId={agentId}
+                availability={availability}
+                isChecked={selections[agentId] ?? false}
+                isSaving={isSaving}
+                onToggle={onToggle}
+              />
+            ))}
 
-      {isLoading ? (
-        <div className="flex items-center justify-center py-8">
-          <Spinner size="lg" className="text-daintree-text/40" />
-        </div>
-      ) : (
-        <div className="space-y-2">
-          {featuredAgents.map((agentId) => (
-            <AgentCard
-              key={agentId}
-              mode="onboarding"
-              agentId={agentId}
-              availability={availability}
-              isChecked={selections[agentId] ?? false}
-              isSaving={isSaving}
-              onToggle={onToggle}
-            />
-          ))}
+            {moreAgents.length > 0 && (
+              <>
+                <div className="flex items-center gap-2 py-1">
+                  <div className="h-px flex-1 bg-border-divider" />
+                  <span className="text-[11px] text-daintree-text/40 font-medium">More agents</span>
+                  <div className="h-px flex-1 bg-border-divider" />
+                </div>
 
-          {moreAgents.length > 0 && (
-            <>
-              <div className="flex items-center gap-2 py-1">
-                <div className="h-px flex-1 bg-border-divider" />
-                <span className="text-[11px] text-daintree-text/40 font-medium">More agents</span>
-                <div className="h-px flex-1 bg-border-divider" />
-              </div>
-
-              <div className="space-y-1.5">
-                {moreAgents.map((agentId) => (
-                  <AgentCard
-                    key={agentId}
-                    mode="onboarding"
-                    agentId={agentId}
-                    availability={availability}
-                    isChecked={selections[agentId] ?? false}
-                    isSaving={isSaving}
-                    onToggle={onToggle}
-                    compact
-                  />
-                ))}
-              </div>
-            </>
-          )}
-        </div>
-      )}
+                <div className="space-y-1.5">
+                  {moreAgents.map((agentId) => (
+                    <AgentCard
+                      key={agentId}
+                      mode="onboarding"
+                      agentId={agentId}
+                      availability={availability}
+                      isChecked={selections[agentId] ?? false}
+                      isSaving={isSaving}
+                      onToggle={onToggle}
+                      compact
+                    />
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+        )}
+      </section>
 
       {isFirstRun && onTelemetryChange != null && (
-        <div className="pt-4 border-t border-daintree-border space-y-2">
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <p className="text-sm font-medium text-daintree-text">Help improve Daintree</p>
-              <p className="text-xs text-daintree-text/50">
-                Send anonymous crash reports. No file contents or credentials.
-              </p>
+        <section>
+          <h3 className="text-base font-semibold text-daintree-text mb-2">Privacy</h3>
+          <p className="text-sm text-daintree-text/60 mb-4">
+            Help improve Daintree by sharing anonymous crash reports.
+          </p>
+          <div className="space-y-2">
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-sm font-medium text-daintree-text">Enable crash reporting</p>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={telemetryEnabled}
+                aria-label="Enable crash reporting"
+                onClick={() => onTelemetryChange(!telemetryEnabled)}
+                className={cn(
+                  "relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full transition-colors",
+                  telemetryEnabled ? "bg-daintree-accent" : "bg-daintree-border"
+                )}
+              >
+                <span
+                  className={cn(
+                    "pointer-events-none inline-block h-4 w-4 rounded-full shadow transform transition-transform mt-0.5",
+                    telemetryEnabled
+                      ? "translate-x-4 ml-0.5 bg-text-inverse"
+                      : "translate-x-0 ml-0.5 bg-daintree-text"
+                  )}
+                />
+              </button>
             </div>
+            <p className="text-xs text-daintree-text/50">
+              No file contents or credentials are ever sent.
+            </p>
             <button
               type="button"
-              role="switch"
-              aria-checked={telemetryEnabled}
-              aria-label="Enable crash reporting"
-              onClick={() => onTelemetryChange(!telemetryEnabled)}
-              className={cn(
-                "relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full transition-colors",
-                telemetryEnabled ? "bg-daintree-accent" : "bg-daintree-border"
-              )}
+              className="text-xs text-daintree-accent hover:underline focus-visible:outline-none focus-visible:underline"
+              onClick={() =>
+                void actionService.dispatch(
+                  "telemetry.togglePreview",
+                  { active: true },
+                  { source: "user" }
+                )
+              }
             >
-              <span
-                className={cn(
-                  "pointer-events-none inline-block h-4 w-4 rounded-full shadow transform transition-transform mt-0.5",
-                  telemetryEnabled
-                    ? "translate-x-4 ml-0.5 bg-text-inverse"
-                    : "translate-x-0 ml-0.5 bg-daintree-text"
-                )}
-              />
+              Preview what would be sent
             </button>
           </div>
-          <button
-            type="button"
-            className="text-xs text-daintree-accent hover:underline focus-visible:outline-none focus-visible:underline"
-            onClick={() =>
-              void actionService.dispatch(
-                "telemetry.togglePreview",
-                { active: true },
-                { source: "user" }
-              )
-            }
-          >
-            Preview what would be sent
-          </button>
-        </div>
+        </section>
       )}
     </div>
   );
