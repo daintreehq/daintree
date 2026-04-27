@@ -106,7 +106,7 @@ describe("ActionPaletteItem", () => {
     expect(screen.getByText("⌘K")).toBeTruthy();
   });
 
-  it("applies selected styling", () => {
+  it("applies selected styling with aria-selected and accent indicator", () => {
     const { container } = render(
       <ActionPaletteItem item={makeItem()} isSelected={true} onSelect={onSelect} />
     );
@@ -114,5 +114,6 @@ describe("ActionPaletteItem", () => {
     const button = container.querySelector("button");
     expect(button).toBeTruthy();
     expect(button?.getAttribute("aria-selected")).toBe("true");
+    expect(button?.className).toContain("bg-overlay-soft");
   });
 });
