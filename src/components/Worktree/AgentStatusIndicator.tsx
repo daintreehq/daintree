@@ -145,14 +145,18 @@ export function getDominantAgentState(states: (AgentState | undefined)[]): Agent
   return dominant === "idle" ? null : dominant;
 }
 
-export function agentStateDotColor(state: AgentState): string {
+// Returns null for passive states (working, completed, exited, idle) so the
+// callers skip rendering a badge entirely. Only `waiting` and `directing` —
+// the actionable states a human should attend to — earn a visible dot. Keeping
+// passive sessions unmarked lets the actionable few stand out on a toolbar
+// that may show many running agents at once.
+export function agentStateDotColor(state: AgentState): string | null {
   switch (state) {
-    case "working":
     case "directing":
       return "bg-state-working";
     case "waiting":
       return "bg-state-waiting";
     default:
-      return "bg-daintree-accent";
+      return null;
   }
 }

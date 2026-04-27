@@ -3,7 +3,11 @@
  */
 import { describe, it, expect, afterEach, vi } from "vitest";
 import { act, render, cleanup } from "@testing-library/react";
-import { AgentStatusIndicator, getDominantAgentState } from "../AgentStatusIndicator";
+import {
+  AgentStatusIndicator,
+  agentStateDotColor,
+  getDominantAgentState,
+} from "../AgentStatusIndicator";
 import type { AgentState } from "@/types";
 
 vi.mock("@/components/ui/tooltip", () => ({
@@ -119,4 +123,23 @@ describe("getDominantAgentState", () => {
   it("prefers directing over completed", () => {
     expect(getDominantAgentState(["completed", "directing"])).toBe("directing");
   });
+});
+
+describe("agentStateDotColor", () => {
+  it.each([["waiting"], ["directing"]] as const)(
+    "returns a non-null class for actionable state %s",
+    (state) => {
+      const result = agentStateDotColor(state as AgentState);
+      expect(result).not.toBeNull();
+      expect(typeof result).toBe("string");
+      expect(result?.length).toBeGreaterThan(0);
+    }
+  );
+
+  it.each([["working"], ["completed"], ["exited"], ["idle"]] as const)(
+    "returns null for passive state %s (no dot rendered)",
+    (state) => {
+      expect(agentStateDotColor(state as AgentState)).toBeNull();
+    }
+  );
 });

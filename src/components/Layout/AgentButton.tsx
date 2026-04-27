@@ -198,14 +198,15 @@ export function AgentButton({
     void useAgentSettingsStore.getState().updateWorktreePreset(type, activeWorktreeId, presetId);
   };
 
+  const dotColor = dominantState ? agentStateDotColor(dominantState) : null;
   const iconElement = (
     <div className="relative">
       <config.icon brandColor={getBrandColorHex(type)} />
-      {isSessionActive && dominantState && (
+      {isSessionActive && dotColor && (
         <span
           className={cn(
-            "absolute -bottom-0.5 -right-0.5 h-2 w-2 rounded-full ring-1 ring-daintree-sidebar",
-            agentStateDotColor(dominantState)
+            "absolute -top-0.5 -right-0.5 h-1.5 w-1.5 rounded-full ring-1 ring-daintree-sidebar",
+            dotColor
           )}
           aria-hidden="true"
         />

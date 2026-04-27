@@ -67,9 +67,11 @@ vi.mock("@/store/projectPresetsStore", () => ({
   ) => selector({ presetsByAgent: {} }),
 }));
 
+let mockPanelsById: Record<string, unknown> = {};
+let mockPanelIds: string[] = [];
 vi.mock("@/store/panelStore", () => ({
   usePanelStore: (selector: (s: Record<string, unknown>) => unknown) =>
-    selector({ panelsById: {}, panelIds: [] }),
+    selector({ panelsById: mockPanelsById, panelIds: mockPanelIds }),
 }));
 
 vi.mock("@/store/worktreeStore", () => ({
@@ -98,9 +100,13 @@ vi.mock("@/lib/colorUtils", () => ({
   getBrandColorHex: (id: string) => `#brand-${id}`,
 }));
 
+// Defaults match the historical "ignore the badge in these tests" stance;
+// individual badge tests override these to drive the indicator render path.
+let mockDominantState: string | null = null;
+let mockDotColor: string | null = "";
 vi.mock("@/components/Worktree/AgentStatusIndicator", () => ({
-  getDominantAgentState: () => null,
-  agentStateDotColor: () => "",
+  getDominantAgentState: () => mockDominantState,
+  agentStateDotColor: () => mockDotColor,
 }));
 
 vi.mock("@/components/ui/button", () => ({
@@ -188,6 +194,10 @@ describe("AgentButton preset UX", () => {
     mockCcrPresetsByAgent = {};
     mockMergedPresetsFn = () => [];
     mockCliDetails = {};
+    mockDominantState = null;
+    mockDotColor = "";
+    mockPanelsById = {};
+    mockPanelIds = [];
   });
 
   describe("split threshold", () => {
@@ -456,6 +466,68 @@ describe("AgentButton preset UX", () => {
         { tab: "agents", subtab: "claude" },
         { source: "user" }
       );
+    });
+  });
+
+  describe("status dot badge", () => {
+    function activePanel(state: string): Record<string, unknown> {
+      // `detectedAgentId` is what `getRuntimeOrBootAgentId` reads (via
+      // `deriveTerminalChrome`); plain `agentId` on the panel is not used by
+      // the derivation, so the helper would return undefined and the panel
+      // would never enter the active-session set.
+      return {
+        id: "panel-1",
+        kind: "terminal",
+        detectedAgentId: "claude",
+        worktreeId: "wt-1",
+        location: "grid",
+        agentState: state,
+      };
+    }
+
+    it("renders the badge span when an actionable state returns a non-null color", () => {
+      mockSettings = settingsWith({ claude: {} });
+      mockPanelsById = { "panel-1": activePanel("waiting") };
+      mockPanelIds = ["panel-1"];
+      mockActiveWorktreeId = "wt-1";
+      mockDominantState = "waiting";
+      mockDotColor = "bg-state-waiting";
+
+      const { container } = render(
+        <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
+      );
+
+      const badge = container.querySelector('.relative span[aria-hidden="true"]');
+      expect(badge).not.toBeNull();
+    });
+
+    it("does not render the badge span when the helper returns null (passive state)", () => {
+      mockSettings = settingsWith({ claude: {} });
+      mockPanelsById = { "panel-1": activePanel("working") };
+      mockPanelIds = ["panel-1"];
+      mockActiveWorktreeId = "wt-1";
+      mockDominantState = "working";
+      mockDotColor = null;
+
+      const { container } = render(
+        <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
+      );
+
+      const badge = container.querySelector('.relative span[aria-hidden="true"]');
+      expect(badge).toBeNull();
+    });
+
+    it("does not render the badge span when there is no active session", () => {
+      mockSettings = settingsWith({ claude: {} });
+      mockDominantState = null;
+      mockDotColor = "bg-state-waiting";
+
+      const { container } = render(
+        <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
+      );
+
+      const badge = container.querySelector('.relative span[aria-hidden="true"]');
+      expect(badge).toBeNull();
     });
   });
 });
