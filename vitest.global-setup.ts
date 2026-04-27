@@ -32,8 +32,12 @@ export function setup(): void {
 }
 
 export function teardown(): void {
-  if (shouldRestoreElectronBuild) {
-    console.log("[vitest-teardown] Restoring better-sqlite3 for Electron...");
-    execSync("npx electron-rebuild -f -w better-sqlite3 --silent", { stdio: "inherit" });
-  }
+  if (!shouldRestoreElectronBuild) return;
+  // Skip in CI: each job runs `npm ci` which rebuilds for Electron via postinstall,
+  // so restoring here is redundant. Worse, replacing the .node file on disk while
+  // the same addon is loaded into this vitest process causes a segfault on exit
+  // (exit 139) — the loaded addon's finalizers run against a now-different binary.
+  if (process.env.CI) return;
+  console.log("[vitest-teardown] Restoring better-sqlite3 for Electron...");
+  execSync("npx electron-rebuild -f -w better-sqlite3 --silent", { stdio: "inherit" });
 }
