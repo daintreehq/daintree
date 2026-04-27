@@ -382,7 +382,7 @@ describe("registerShutdownHandler", () => {
       });
     });
 
-    it("waits for closeTelemetry to resolve before app.exit(1) on cleanup error", async () => {
+    it("waits for closeTelemetry to resolve before app.exit(0) on cleanup error (mcpServer error is silently caught)", async () => {
       mcpServerMock.stop.mockReturnValue(Promise.reject(new Error("MCP stop failed")));
       const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
@@ -403,7 +403,7 @@ describe("registerShutdownHandler", () => {
       resolveClose();
 
       await vi.waitFor(() => {
-        expect(appMock.exit).toHaveBeenCalledWith(1);
+        expect(appMock.exit).toHaveBeenCalledWith(0);
       });
 
       consoleSpy.mockRestore();
@@ -465,7 +465,7 @@ describe("registerShutdownHandler", () => {
       expect(appMock.exit).toHaveBeenCalledTimes(1);
     });
 
-    it("cleanup error triggers app.exit(1) via catch handler", async () => {
+    it("mcpServer error is silently caught and cleanup exits with 0", async () => {
       mcpServerMock.stop.mockReturnValue(Promise.reject(new Error("MCP stop failed")));
       const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
@@ -475,8 +475,8 @@ describe("registerShutdownHandler", () => {
 
       await vi.advanceTimersByTimeAsync(100);
 
-      expect(appMock.exit).toHaveBeenCalledWith(1);
-      expect(consoleSpy).toHaveBeenCalledWith(
+      expect(appMock.exit).toHaveBeenCalledWith(0);
+      expect(consoleSpy).not.toHaveBeenCalledWith(
         "[MAIN] Error during cleanup:",
         expect.objectContaining({
           message: "MCP stop failed",
