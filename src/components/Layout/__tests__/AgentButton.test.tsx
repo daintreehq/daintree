@@ -79,8 +79,15 @@ vi.mock("@/store/worktreeStore", () => ({
     selector({ activeWorktreeId: mockActiveWorktreeId }),
 }));
 
+let mockWorktrees: Array<{
+  id: string;
+  name: string;
+  branch?: string | null;
+  isMainWorktree?: boolean;
+}> = [];
+
 vi.mock("@/hooks/useWorktrees", () => ({
-  useWorktrees: () => ({ worktrees: [] }),
+  useWorktrees: () => ({ worktrees: mockWorktrees }),
 }));
 
 vi.mock("@/hooks", () => ({
@@ -166,16 +173,59 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
 vi.mock("@/components/ui/context-menu", () => ({
   ContextMenu: ({ children }: { children: React.ReactNode }) => <>{children}</>,
   ContextMenuTrigger: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-  ContextMenuContent: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-  ContextMenuItem: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  ContextMenuContent: ({ children }: { children: React.ReactNode }) => (
+    <div data-testid="context-menu-content">{children}</div>
+  ),
+  ContextMenuItem: ({
+    children,
+    onSelect,
+    disabled,
+    className,
+    "data-testid": dataTestId,
+  }: {
+    children: React.ReactNode;
+    onSelect?: (e: Event) => void;
+    disabled?: boolean;
+    className?: string;
+    "data-testid"?: string;
+  }) => (
+    <div
+      role="menuitem"
+      data-testid={dataTestId ?? "context-menu-item"}
+      data-disabled={disabled ? "true" : undefined}
+      className={className}
+      onClick={(e) => {
+        if (disabled) return;
+        onSelect?.(e as unknown as Event);
+      }}
+    >
+      {children}
+    </div>
+  ),
   ContextMenuSeparator: () => null,
   ContextMenuSub: ({ children }: { children: React.ReactNode }) => <>{children}</>,
   ContextMenuSubContent: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-  ContextMenuSubTrigger: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  ContextMenuSubTrigger: ({
+    children,
+    disabled,
+  }: {
+    children: React.ReactNode;
+    disabled?: boolean;
+  }) => (
+    <div
+      role="menuitem"
+      data-testid="context-menu-sub-trigger"
+      data-disabled={disabled ? "true" : undefined}
+    >
+      {children}
+    </div>
+  ),
 }));
 
 vi.mock("lucide-react", () => ({
   ChevronDown: () => <span data-testid="chevron-icon" />,
+  LayoutGrid: () => <span data-testid="layout-grid-icon" />,
+  PanelBottom: () => <span data-testid="panel-bottom-icon" />,
   Unplug: () => <span data-testid="unplug-icon" />,
 }));
 
@@ -198,6 +248,7 @@ describe("AgentButton preset UX", () => {
     mockDotColor = "";
     mockPanelsById = {};
     mockPanelIds = [];
+    mockWorktrees = [];
   });
 
   describe("split threshold", () => {
@@ -528,6 +579,113 @@ describe("AgentButton preset UX", () => {
 
       const badge = container.querySelector('.relative span[aria-hidden="true"]');
       expect(badge).toBeNull();
+    });
+  });
+
+  describe("context menu", () => {
+    it("exposes Manage Presets that deep-links to the presets section (no-presets branch)", () => {
+      mockSettings = settingsWith({ claude: {} });
+      mockMergedPresetsFn = () => [];
+
+      const { getByText } = render(
+        <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
+      );
+      fireEvent.click(getByText("Manage Claude Presets..."));
+
+      expect(dispatchMock).toHaveBeenCalledWith(
+        "app.settings.openTab",
+        { tab: "agents", subtab: "claude", sectionId: "agents-presets" },
+        { source: "context-menu" }
+      );
+    });
+
+    it("exposes Manage Presets that deep-links to the presets section (with-presets branch)", () => {
+      mockSettings = settingsWith({ claude: {} });
+      mockMergedPresetsFn = () => [{ id: "user-alpha", name: "Alpha" }];
+
+      const { getByText } = render(
+        <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
+      );
+      fireEvent.click(getByText("Manage Claude Presets..."));
+
+      expect(dispatchMock).toHaveBeenCalledWith(
+        "app.settings.openTab",
+        { tab: "agents", subtab: "claude", sectionId: "agents-presets" },
+        { source: "context-menu" }
+      );
+    });
+
+    it("renders one flat row per worktree (no nested Grid/Dock submenus)", () => {
+      mockSettings = settingsWith({ claude: {} });
+      mockMergedPresetsFn = () => [];
+      mockWorktrees = [
+        { id: "wt-1", name: "Main", isMainWorktree: true },
+        { id: "wt-2", name: "feat/x", branch: "feat/x" },
+      ];
+
+      const { getAllByTestId, queryByText } = render(
+        <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
+      );
+
+      expect(getAllByTestId(/^agent-context-worktree-(wt-1|wt-2)$/)).toHaveLength(2);
+      // No nested Grid/Dock leaf items — only inline buttons.
+      expect(queryByText("Grid")).toBeNull();
+      expect(queryByText("Dock")).toBeNull();
+    });
+
+    it("clicking a worktree row launches in grid (default)", () => {
+      mockSettings = settingsWith({ claude: {} });
+      mockMergedPresetsFn = () => [];
+      mockWorktrees = [{ id: "wt-1", name: "Main", isMainWorktree: true }];
+
+      const { getByTestId } = render(
+        <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
+      );
+      fireEvent.click(getByTestId("agent-context-worktree-wt-1"));
+
+      expect(dispatchMock).toHaveBeenCalledWith(
+        "agent.launch",
+        { agentId: "claude", worktreeId: "wt-1", location: "grid" },
+        { source: "context-menu" }
+      );
+    });
+
+    it("clicking the inline Dock icon launches in dock without firing grid", () => {
+      mockSettings = settingsWith({ claude: {} });
+      mockMergedPresetsFn = () => [];
+      mockWorktrees = [{ id: "wt-1", name: "Main", isMainWorktree: true }];
+
+      const { getByTestId } = render(
+        <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
+      );
+      fireEvent.click(getByTestId("agent-context-worktree-dock-wt-1"));
+
+      // The inline button must stop propagation so the row's onSelect
+      // (which would launch grid) does not also fire.
+      const dockCalls = dispatchMock.mock.calls.filter(
+        (c) => c[0] === "agent.launch" && (c[1] as { location?: string }).location === "dock"
+      );
+      const gridCalls = dispatchMock.mock.calls.filter(
+        (c) => c[0] === "agent.launch" && (c[1] as { location?: string }).location === "grid"
+      );
+      expect(dockCalls).toHaveLength(1);
+      expect(gridCalls).toHaveLength(0);
+      expect(dockCalls[0]).toEqual([
+        "agent.launch",
+        { agentId: "claude", worktreeId: "wt-1", location: "dock" },
+        { source: "context-menu" },
+      ]);
+    });
+
+    it("hides the Launch in Worktree submenu when no worktrees exist", () => {
+      mockSettings = settingsWith({ claude: {} });
+      mockMergedPresetsFn = () => [];
+      mockWorktrees = [];
+
+      const { queryByText } = render(
+        <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
+      );
+      expect(queryByText("Launch in Worktree")).toBeNull();
     });
   });
 });

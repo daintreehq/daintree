@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, type PointerEvent as ReactPointerEvent } from "react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ShortcutRevealChip } from "@/components/ui/ShortcutRevealChip";
@@ -26,7 +26,7 @@ import {
   ContextMenuSubTrigger,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
-import { ChevronDown, Unplug } from "lucide-react";
+import { ChevronDown, LayoutGrid, PanelBottom, Unplug } from "lucide-react";
 import type { BuiltInAgentId } from "@shared/config/agentIds";
 import type { AgentAvailabilityState, AgentState } from "@shared/types";
 import { isAgentReady, isAgentInstalled } from "../../../shared/utils/agentAvailability";
@@ -57,6 +57,86 @@ interface AgentButtonProps {
   type: AgentType;
   availability?: AgentAvailabilityState;
   "data-toolbar-item"?: string;
+}
+
+const stopPointer = (e: ReactPointerEvent) => {
+  e.stopPropagation();
+};
+
+interface WorktreeMenuItemsProps {
+  agentType: AgentType;
+  worktrees: ReturnType<typeof useWorktrees>["worktrees"];
+}
+
+// Flattens the worktree picker from a nested 3-deep submenu (worktree →
+// Grid/Dock) into a single row per worktree. Default click (and keyboard
+// Enter) launches in grid; the inline Dock affordance, mirroring the pin
+// button pattern in AgentTrayButton, gives mouse users the secondary
+// location without a second submenu hop. Both onPointerDown and onClick
+// must stopPropagation — Radix selects the parent ContextMenuItem at
+// pointerdown, so stopping only onClick lets the wrong action fire first.
+function WorktreeMenuItems({ agentType, worktrees }: WorktreeMenuItemsProps) {
+  return (
+    <>
+      {worktrees.map((wt) => {
+        const label = wt.isMainWorktree ? wt.name : wt.branch?.trim() || wt.name;
+        return (
+          <ContextMenuItem
+            key={wt.id}
+            className="group/wt-row pr-1"
+            data-testid={`agent-context-worktree-${wt.id}`}
+            onSelect={() =>
+              void actionService.dispatch(
+                "agent.launch",
+                { agentId: agentType, worktreeId: wt.id, location: "grid" },
+                { source: "context-menu" }
+              )
+            }
+          >
+            <span className="flex-1 truncate">{label}</span>
+            <span
+              role="presentation"
+              aria-hidden="true"
+              data-testid={`agent-context-worktree-grid-${wt.id}`}
+              title="Launch in grid"
+              onPointerDown={stopPointer}
+              onPointerUp={stopPointer}
+              onClick={(e) => {
+                e.stopPropagation();
+                void actionService.dispatch(
+                  "agent.launch",
+                  { agentId: agentType, worktreeId: wt.id, location: "grid" },
+                  { source: "context-menu" }
+                );
+              }}
+              className="ml-2 inline-flex h-5 w-5 items-center justify-center rounded-sm text-daintree-text/50 opacity-0 transition-opacity hover:bg-overlay-emphasis hover:text-daintree-text group-data-[highlighted]/wt-row:opacity-100"
+            >
+              <LayoutGrid className="h-3 w-3" />
+            </span>
+            <span
+              role="presentation"
+              aria-hidden="true"
+              data-testid={`agent-context-worktree-dock-${wt.id}`}
+              title="Launch in dock"
+              onPointerDown={stopPointer}
+              onPointerUp={stopPointer}
+              onClick={(e) => {
+                e.stopPropagation();
+                void actionService.dispatch(
+                  "agent.launch",
+                  { agentId: agentType, worktreeId: wt.id, location: "dock" },
+                  { source: "context-menu" }
+                );
+              }}
+              className="ml-1 inline-flex h-5 w-5 items-center justify-center rounded-sm text-daintree-text/50 opacity-0 transition-opacity hover:bg-overlay-emphasis hover:text-daintree-text group-data-[highlighted]/wt-row:opacity-100"
+            >
+              <PanelBottom className="h-3 w-3" />
+            </span>
+          </ContextMenuItem>
+        );
+      })}
+    </>
+  );
 }
 
 export function AgentButton({
@@ -272,38 +352,7 @@ export function AgentButton({
             <ContextMenuSub>
               <ContextMenuSubTrigger disabled={!isReady}>Launch in Worktree</ContextMenuSubTrigger>
               <ContextMenuSubContent>
-                {worktrees.map((wt) => {
-                  const label = wt.isMainWorktree ? wt.name : wt.branch?.trim() || wt.name;
-                  return (
-                    <ContextMenuSub key={wt.id}>
-                      <ContextMenuSubTrigger>{label}</ContextMenuSubTrigger>
-                      <ContextMenuSubContent>
-                        <ContextMenuItem
-                          onSelect={() =>
-                            void actionService.dispatch(
-                              "agent.launch",
-                              { agentId: type, worktreeId: wt.id, location: "grid" },
-                              { source: "context-menu" }
-                            )
-                          }
-                        >
-                          Grid
-                        </ContextMenuItem>
-                        <ContextMenuItem
-                          onSelect={() =>
-                            void actionService.dispatch(
-                              "agent.launch",
-                              { agentId: type, worktreeId: wt.id, location: "dock" },
-                              { source: "context-menu" }
-                            )
-                          }
-                        >
-                          Dock
-                        </ContextMenuItem>
-                      </ContextMenuSubContent>
-                    </ContextMenuSub>
-                  );
-                })}
+                <WorktreeMenuItems agentType={type} worktrees={worktrees} />
               </ContextMenuSubContent>
             </ContextMenuSub>
           )}
@@ -311,6 +360,17 @@ export function AgentButton({
           <ContextMenuItem onSelect={handleUnpinFromToolbar}>
             <Unplug className="mr-2 h-3.5 w-3.5" />
             Unpin from Toolbar
+          </ContextMenuItem>
+          <ContextMenuItem
+            onSelect={() =>
+              void actionService.dispatch(
+                "app.settings.openTab",
+                { tab: "agents", subtab: type, sectionId: "agents-presets" },
+                { source: "context-menu" }
+              )
+            }
+          >
+            Manage {config.name} Presets...
           </ContextMenuItem>
           <ContextMenuItem
             onSelect={() =>
@@ -521,38 +581,7 @@ export function AgentButton({
           <ContextMenuSub>
             <ContextMenuSubTrigger disabled={!isReady}>Launch in Worktree</ContextMenuSubTrigger>
             <ContextMenuSubContent>
-              {worktrees.map((wt) => {
-                const label = wt.isMainWorktree ? wt.name : wt.branch?.trim() || wt.name;
-                return (
-                  <ContextMenuSub key={wt.id}>
-                    <ContextMenuSubTrigger>{label}</ContextMenuSubTrigger>
-                    <ContextMenuSubContent>
-                      <ContextMenuItem
-                        onSelect={() =>
-                          void actionService.dispatch(
-                            "agent.launch",
-                            { agentId: type, worktreeId: wt.id, location: "grid" },
-                            { source: "context-menu" }
-                          )
-                        }
-                      >
-                        Grid
-                      </ContextMenuItem>
-                      <ContextMenuItem
-                        onSelect={() =>
-                          void actionService.dispatch(
-                            "agent.launch",
-                            { agentId: type, worktreeId: wt.id, location: "dock" },
-                            { source: "context-menu" }
-                          )
-                        }
-                      >
-                        Dock
-                      </ContextMenuItem>
-                    </ContextMenuSubContent>
-                  </ContextMenuSub>
-                );
-              })}
+              <WorktreeMenuItems agentType={type} worktrees={worktrees} />
             </ContextMenuSubContent>
           </ContextMenuSub>
         )}
@@ -560,6 +589,17 @@ export function AgentButton({
         <ContextMenuItem onSelect={handleUnpinFromToolbar}>
           <Unplug className="mr-2 h-3.5 w-3.5" />
           Unpin from Toolbar
+        </ContextMenuItem>
+        <ContextMenuItem
+          onSelect={() =>
+            void actionService.dispatch(
+              "app.settings.openTab",
+              { tab: "agents", subtab: type, sectionId: "agents-presets" },
+              { source: "context-menu" }
+            )
+          }
+        >
+          Manage {config.name} Presets...
         </ContextMenuItem>
         <ContextMenuItem
           onSelect={() =>
