@@ -36,7 +36,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { useToolbarOverflow } from "@/hooks/useToolbarOverflow";
 import { useWorktreeActions } from "@/hooks/useWorktreeActions";
-import { useKeybindingDisplay } from "@/hooks";
+import { useKeybindingDisplay, useShortcutHintHover } from "@/hooks";
 import type { UseProjectSwitcherPaletteReturn } from "@/hooks";
 import type { SearchableProject } from "@/hooks/useProjectSwitcherPalette";
 import { useProjectStore } from "@/store/projectStore";
@@ -71,6 +71,47 @@ const AGENT_TOOLBAR_IDS = new Set<ToolbarButtonId>([
 ]);
 
 type OverflowMenuMeta = { label: string; icon: React.ComponentType<{ className?: string }> };
+
+const toolbarIconButtonClass = "toolbar-icon-button text-daintree-text transition-colors";
+
+export function PluginToolbarButton({
+  pluginId,
+  config,
+  "data-toolbar-item": dataToolbarItem,
+}: {
+  pluginId: string;
+  config: NonNullable<ReturnType<ReturnType<typeof usePluginToolbarButtons>["configs"]["get"]>>;
+  "data-toolbar-item"?: string;
+}) {
+  const hover = useShortcutHintHover(config.actionId as string);
+
+  return (
+    <TooltipProvider>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            {...hover}
+            variant="ghost"
+            size="icon"
+            data-toolbar-item={dataToolbarItem}
+            onClick={() => {
+              void actionService.dispatch(
+                config.actionId as Parameters<typeof actionService.dispatch>[0],
+                undefined,
+                { source: "user" }
+              );
+            }}
+            className={toolbarIconButtonClass}
+            aria-label={config?.label ?? pluginId}
+          >
+            <McpServerIcon />
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent side="bottom">{config?.label ?? pluginId}</TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
+  );
+}
 
 export const OVERFLOW_MENU_META: Partial<Record<AnyToolbarButtonId, OverflowMenuMeta>> = {
   ...(Object.fromEntries(
@@ -171,6 +212,10 @@ export function Toolbar({
   const { handleCopyTree } = useWorktreeActions();
   const sidebarShortcut = useKeybindingDisplay("nav.toggleSidebar");
   const copyTreeShortcut = useKeybindingDisplay("worktree.copyTree");
+
+  const sidebarHintHover = useShortcutHintHover("nav.toggleSidebar");
+  const devServerHintHover = useShortcutHintHover("devServer.start");
+  const copyTreeHintHover = useShortcutHintHover("worktree.copyTree");
 
   const handleOpenProjectSettings = useCallback(() => {
     projectSwitcher.close();
@@ -319,7 +364,6 @@ export function Toolbar({
     [getToolbarItems, syncToolbarTabStops]
   );
 
-  const toolbarIconButtonClass = "toolbar-icon-button text-daintree-text transition-colors";
   const toolbarDividerClass = "toolbar-divider w-px h-5 mx-1";
 
   const { buttonIds: pluginButtonIds, configs: pluginConfigs } = usePluginToolbarButtons();
@@ -334,6 +378,7 @@ export function Toolbar({
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button
+                  {...sidebarHintHover}
                   variant="ghost"
                   size="icon"
                   data-toolbar-item=""
@@ -412,6 +457,7 @@ export function Toolbar({
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button
+                  {...devServerHintHover}
                   variant="ghost"
                   size="icon"
                   data-toolbar-item=""
@@ -457,6 +503,7 @@ export function Toolbar({
             <Tooltip open={treeCopied || undefined} delayDuration={treeCopied ? 0 : 300}>
               <TooltipTrigger asChild>
                 <Button
+                  {...copyTreeHintHover}
                   variant="ghost"
                   size="icon"
                   data-toolbar-item=""
@@ -524,29 +571,7 @@ export function Toolbar({
             pluginId,
             {
               render: () => (
-                <TooltipProvider key={pluginId}>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        data-toolbar-item=""
-                        onClick={() => {
-                          void actionService.dispatch(
-                            config!.actionId as Parameters<typeof actionService.dispatch>[0],
-                            undefined,
-                            { source: "user" }
-                          );
-                        }}
-                        className={toolbarIconButtonClass}
-                        aria-label={config?.label ?? pluginId}
-                      >
-                        <McpServerIcon />
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent side="bottom">{config?.label ?? pluginId}</TooltipContent>
-                  </Tooltip>
-                </TooltipProvider>
+                <PluginToolbarButton key={pluginId} pluginId={pluginId} config={config!} />
               ),
               isAvailable: true,
             },

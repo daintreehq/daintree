@@ -10,7 +10,7 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import { createTooltipWithShortcut } from "@/lib/platform";
-import { useKeybindingDisplay } from "@/hooks";
+import { useKeybindingDisplay, useShortcutHintHover } from "@/hooks";
 import { actionService } from "@/services/ActionService";
 
 const toolbarIconButtonClass = "toolbar-icon-button text-daintree-text transition-colors";
@@ -36,6 +36,7 @@ export const ToolbarSettingsButton = memo(function ToolbarSettingsButton({
   "data-toolbar-item": dataToolbarItem,
 }: ToolbarSettingsButtonProps) {
   const settingsShortcut = useKeybindingDisplay("app.settings");
+  const settingsHover = useShortcutHintHover("app.settings");
 
   return (
     <ContextMenu>
@@ -48,7 +49,11 @@ export const ToolbarSettingsButton = memo(function ToolbarSettingsButton({
                 size="icon"
                 data-toolbar-item={dataToolbarItem}
                 onClick={onSettings}
-                onPointerEnter={onPreloadSettings}
+                onPointerEnter={(e) => {
+                  onPreloadSettings?.();
+                  settingsHover.onPointerEnter(e);
+                }}
+                onPointerLeave={settingsHover.onPointerLeave}
                 className={toolbarIconButtonClass}
                 aria-label="Open settings"
               >

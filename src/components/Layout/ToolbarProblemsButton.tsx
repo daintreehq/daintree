@@ -4,7 +4,7 @@ import { AlertCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { createTooltipWithShortcut } from "@/lib/platform";
-import { useKeybindingDisplay } from "@/hooks";
+import { useKeybindingDisplay, useShortcutHintHover } from "@/hooks";
 
 const toolbarIconButtonClass = "toolbar-icon-button text-daintree-text transition-colors";
 
@@ -20,12 +20,14 @@ export const ToolbarProblemsButton = memo(function ToolbarProblemsButton({
   "data-toolbar-item": dataToolbarItem,
 }: ToolbarProblemsButtonProps) {
   const diagnosticsShortcut = useKeybindingDisplay("panel.toggleDiagnostics");
+  const diagnosticsHover = useShortcutHintHover("panel.toggleDiagnostics");
 
   return (
     <TooltipProvider>
       <Tooltip>
         <TooltipTrigger asChild>
           <Button
+            {...diagnosticsHover}
             variant="ghost"
             size="icon"
             data-toolbar-item={dataToolbarItem}

@@ -3,7 +3,7 @@ import { Button } from "@/components/ui/button";
 import { SquareTerminal, Globe } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { createTooltipWithShortcut } from "@/lib/platform";
-import { useKeybindingDisplay } from "@/hooks";
+import { useKeybindingDisplay, useShortcutHintHover } from "@/hooks";
 
 type LauncherType = "terminal" | "browser";
 
@@ -45,6 +45,7 @@ export const ToolbarLauncherButton = memo(function ToolbarLauncherButton({
 }: ToolbarLauncherButtonProps) {
   const config = LAUNCHER_CONFIG[type];
   const shortcut = useKeybindingDisplay(config.keybindingAction);
+  const launcherHover = useShortcutHintHover(config.keybindingAction);
 
   const handleClick = useCallback(() => {
     onLaunchAgent(type);
@@ -57,6 +58,7 @@ export const ToolbarLauncherButton = memo(function ToolbarLauncherButton({
       <Tooltip>
         <TooltipTrigger asChild>
           <Button
+            {...launcherHover}
             variant="ghost"
             size="icon"
             data-toolbar-item={dataToolbarItem}

@@ -3,7 +3,7 @@ import { Button } from "@/components/ui/button";
 import { PanelRightOpen, PanelRightClose } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { createTooltipWithShortcut } from "@/lib/platform";
-import { useKeybindingDisplay } from "@/hooks";
+import { useKeybindingDisplay, useShortcutHintHover } from "@/hooks";
 import { usePortalStore } from "@/store";
 
 const toolbarIconButtonClass = "toolbar-icon-button text-daintree-text transition-colors";
@@ -16,12 +16,14 @@ export const ToolbarPortalButton = memo(function ToolbarPortalButton({
   const portalOpen = usePortalStore((state) => state.isOpen);
   const togglePortal = usePortalStore((state) => state.toggle);
   const portalShortcut = useKeybindingDisplay("panel.togglePortal");
+  const portalHintHover = useShortcutHintHover("panel.togglePortal");
 
   return (
     <TooltipProvider>
       <Tooltip>
         <TooltipTrigger asChild>
           <Button
+            {...portalHintHover}
             variant="ghost"
             size="icon"
             data-toolbar-item={dataToolbarItem}
