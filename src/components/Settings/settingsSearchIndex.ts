@@ -268,7 +268,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
     section: "Idle Terminal Notifications",
     title: "Idle Terminal Notifications",
     description:
-      "Notify when background project terminals have been idle past a threshold. Includes Close Them / Dismiss actions.",
+      "Notify when background project terminals have been idle past a threshold. Includes Close Them / Mute project actions.",
     keywords: ["idle", "notify", "terminal", "background", "reminder", "inactive", "close"],
   },
   {

@@ -171,6 +171,7 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
     muteForDuration(durationMs);
     notify({
       type: "info",
+      title: "Notifications muted",
       message: `Notifications muted ${label}`,
       priority: "low",
       urgent: true,
@@ -181,6 +182,7 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
     const until = muteUntilNextMorning();
     notify({
       type: "info",
+      title: "Notifications muted",
       message: `Notifications muted until ${timeFormatter.format(new Date(until))}`,
       priority: "low",
       urgent: true,

@@ -387,7 +387,7 @@ describe("notify()", () => {
         type: "info",
         message: "Inline",
         placement: "grid-bar",
-        action: { label: "Dismiss", onClick: () => {} },
+        action: { label: "Acknowledge", onClick: () => {} },
       });
       const notification = useNotificationStore.getState().notifications[0];
       expect(notification!.placement).toBe("grid-bar");
@@ -798,7 +798,7 @@ describe("notify()", () => {
         priority: "high",
         actions: [
           { label: "Close Them", onClick: closeFn },
-          { label: "Dismiss", onClick: dismissFn },
+          { label: "Mute project", onClick: dismissFn },
         ],
         coalesce: {
           key: "idle-like",
@@ -815,7 +815,7 @@ describe("notify()", () => {
         priority: "high",
         actions: [
           { label: "Close Them", onClick: vi.fn() },
-          { label: "Dismiss", onClick: vi.fn() },
+          { label: "Mute project", onClick: vi.fn() },
         ],
         coalesce: {
           key: "idle-like",
