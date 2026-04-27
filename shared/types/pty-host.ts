@@ -455,7 +455,12 @@ export type RendererToPtyHostMessage =
  * Messages sent from Pty Host → Renderer via MessagePort (direct channel).
  * These bypass the Main process for low-latency terminal output.
  */
-export type PtyHostToRendererMessage = { type: "data"; id: string; data: string; bytes: number };
+export type PtyHostToRendererMessage = {
+  type: "data";
+  id: string;
+  data: Uint8Array;
+  bytes: number;
+};
 
 /** Per-process resource breakdown entry */
 export interface TerminalResourceProcess {

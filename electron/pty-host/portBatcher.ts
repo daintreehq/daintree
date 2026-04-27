@@ -6,12 +6,12 @@ import type { PortQueueManager } from "./portQueue.js";
 
 export interface PortBatcherDeps {
   portQueueManager: PortQueueManager;
-  postMessage: (id: string, data: string, bytes: number) => void;
+  postMessage: (id: string, data: Uint8Array, bytes: number) => void;
   onError: (error: unknown) => void;
 }
 
 interface PendingTerminal {
-  chunks: string[];
+  chunks: Uint8Array[];
   bytes: number;
 }
 
@@ -27,7 +27,7 @@ export class PortBatcher {
 
   constructor(private readonly deps: PortBatcherDeps) {}
 
-  write(id: string, data: string, byteCount: number): boolean {
+  write(id: string, data: Uint8Array, byteCount: number): boolean {
     if (this.disposed) return false;
 
     const terminalPending = this.pendingChunks.get(id)?.bytes ?? 0;
@@ -78,8 +78,8 @@ export class PortBatcher {
     this.mode = "idle";
 
     for (const [id, { chunks, bytes }] of snapshot) {
-      const data = chunks.length === 1 ? chunks[0] : chunks.join("");
       try {
+        const data = mergeChunks(chunks, bytes);
         this.deps.postMessage(id, data, bytes);
         this.deps.portQueueManager.addBytes(id, bytes);
         this.deps.portQueueManager.applyBackpressure(
@@ -106,8 +106,8 @@ export class PortBatcher {
       this.mode = "idle";
     }
 
-    const data = entry.chunks.length === 1 ? entry.chunks[0] : entry.chunks.join("");
     try {
+      const data = mergeChunks(entry.chunks, entry.bytes);
       this.deps.postMessage(id, data, entry.bytes);
       this.deps.portQueueManager.addBytes(id, entry.bytes);
       this.deps.portQueueManager.applyBackpressure(
@@ -137,4 +137,19 @@ export class PortBatcher {
       this.timeoutHandle = null;
     }
   }
+}
+
+// Concatenate chunks into a freshly-allocated Uint8Array whose ArrayBuffer is
+// not aliased by any other Buffer. This is required so the caller can place
+// `merged.buffer` in a postMessage transfer list — node-pty Buffers under 4KB
+// share an 8KB pool slab, and transferring a slab-backed buffer would detach
+// the slab and corrupt every other Buffer that aliases it (PR #4639).
+function mergeChunks(chunks: Uint8Array[], totalBytes: number): Uint8Array {
+  const merged = new Uint8Array(totalBytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    merged.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return merged;
 }
