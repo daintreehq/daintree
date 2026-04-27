@@ -135,6 +135,8 @@ A single-knob color input (`overlay-base`) drives the entire opacity ladder.
 | `overlay-selected` | Selected state                    | tint 4%      | tint 5%       |
 | `overlay-elevated` | Elevated hover                    | tint 6%      | tint 8%       |
 
+**See [Canonical Interaction State Recipes](./interaction-state-recipes.md)** for hover/focus implementation patterns using these overlay tokens.
+
 Set `overlay-base` to a hued color to tint all hover and fill states (e.g. Fiordland: icy blue `#B4DCF0`, Arashiyama: warm cream `#FFECE6`).
 
 ## Wash Tokens
