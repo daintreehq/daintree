@@ -93,7 +93,7 @@ export interface TerminalFocusSlice {
   // Dock terminal activation
   openDockTerminal: (id: string) => void;
   closeDockTerminal: () => void;
-  activateTerminal: (id: string) => void;
+  activateTerminal: (id: string | null) => void;
 
   // Agent state navigation
   focusNextWaiting: (isInTrash: (id: string) => boolean, validWorktreeIds: Set<string>) => void;
@@ -386,6 +386,10 @@ export const createTerminalFocusSlice =
       closeDockTerminal: () => set({ activeDockTerminalId: null }),
 
       activateTerminal: (id) => {
+        if (!id) {
+          set({ focusedId: null });
+          return;
+        }
         const terminals = getTerminals();
         const terminal = terminals.find((t) => t.id === id);
         if (!terminal) return;
