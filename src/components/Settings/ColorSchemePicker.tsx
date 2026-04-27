@@ -198,7 +198,7 @@ export function ColorSchemePicker() {
               className={cn(
                 "px-2.5 py-0.5 text-[11px] font-medium transition-colors",
                 typeFilter === "dark"
-                  ? "bg-daintree-accent/15 text-daintree-text"
+                  ? "bg-overlay-selected text-daintree-text"
                   : "text-daintree-text/50 hover:text-daintree-text/70"
               )}
             >
@@ -210,7 +210,7 @@ export function ColorSchemePicker() {
               className={cn(
                 "px-2.5 py-0.5 text-[11px] font-medium transition-colors border-l border-daintree-border",
                 typeFilter === "light"
-                  ? "bg-daintree-accent/15 text-daintree-text"
+                  ? "bg-overlay-selected text-daintree-text"
                   : "text-daintree-text/50 hover:text-daintree-text/70"
               )}
             >

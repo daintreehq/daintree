@@ -1704,7 +1704,9 @@ export function NewWorktreeDialog({
                               {recipe.terminals.length !== 1 ? "s" : ""}
                             </span>
                             {recipe.id === defaultRecipeId && (
-                              <span className="text-xs text-daintree-text shrink-0">(default)</span>
+                              <span className="text-xs text-daintree-text/50 shrink-0">
+                                (default)
+                              </span>
                             )}
                           </div>
                           {recipe.id === selectedRecipeId && (
