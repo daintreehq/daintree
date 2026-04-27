@@ -64,6 +64,11 @@ const REFLOW_THROTTLE_MS = 250;
 // renderer that has no writes, without costing measurable CPU.
 const REFLOW_HEARTBEAT_MS = 3000;
 
+// Debounce on the visibility-driven WebGL restore path. Hide is immediate;
+// show waits this long before re-acquiring so rapid tab/panel toggles don't
+// thrash WebglAddon load/unload (each cycle reallocates GPU resources).
+const WEBGL_RESTORE_DEBOUNCE_MS = 100;
+
 function canAutoInitializeTerminalIngest(): boolean {
   return (
     typeof window !== "undefined" &&
@@ -373,6 +378,26 @@ class TerminalInstanceService {
     }
   }
 
+  /**
+   * Eligibility for visibility-driven WebGL restore. Mirrors the gates in
+   * onTierApplied (agent identity + visible/focused tier) plus liveness
+   * checks (opened, not attaching, not hibernated). Used by the debounced
+   * timer in setVisible() before re-acquiring a context.
+   */
+  private shouldRestoreWebGL(managed: ManagedTerminal): boolean {
+    if (!managed.runtimeAgentId) return false;
+    if (!managed.isOpened) return false;
+    if (!managed.isVisible) return false;
+    if (managed.isAttaching) return false;
+    if (managed.isHibernated) return false;
+    const tier = managed.lastAppliedTier ?? managed.getRefreshTier?.();
+    return (
+      tier === TerminalRefreshTier.FOCUSED ||
+      tier === TerminalRefreshTier.BURST ||
+      tier === TerminalRefreshTier.VISIBLE
+    );
+  }
+
   private onUserInput(id: string, data: string): void {
     const managed = this.instances.get(id);
     if (!managed) return;
@@ -537,6 +562,11 @@ class TerminalInstanceService {
       managed.isVisible = isVisible;
       managed.lastActiveTime = Date.now();
 
+      if (managed.webGLRestoreTimer !== undefined) {
+        clearTimeout(managed.webGLRestoreTimer);
+        managed.webGLRestoreTimer = undefined;
+      }
+
       if (isVisible) {
         // Revealing an on-screen terminal — make sure it doesn't get hibernated.
         // Tier may still be BACKGROUND (non-focused split view), so applying
@@ -574,9 +604,36 @@ class TerminalInstanceService {
             current.terminal.refresh(0, current.terminal.rows - 1);
           }
         });
+
+        // Debounced WebGL restore for same-tier transitions. If
+        // applyRendererPolicy above triggers a tier upgrade (e.g.
+        // BACKGROUND→VISIBLE), onTierApplied loads the addon immediately
+        // and this timer becomes a (harmless) idempotent re-apply. The
+        // debounce only meaningfully gates rapid hide→show toggles where
+        // the tier doesn't change, since same-tier applyRendererPolicy
+        // is a no-op.
+        managed.webGLRestoreTimer = window.setTimeout(() => {
+          const current = this.instances.get(id);
+          if (!current) return;
+          current.webGLRestoreTimer = undefined;
+          if (!this.shouldRestoreWebGL(current)) return;
+          this.webGLManager.ensureContext(id, current);
+          if (current.terminal.rows > 0) {
+            current.terminal.refresh(0, current.terminal.rows - 1);
+          }
+        }, WEBGL_RESTORE_DEBOUNCE_MS);
       } else {
-        // Going offscreen. If we're already in a hibernation-eligible tier,
-        // onTierApplied won't fire to start the timer — do it here instead.
+        // Going offscreen. Release the WebGL context immediately to free a
+        // pool slot — xterm falls back to the DOM renderer until the
+        // terminal becomes visible again.
+        const hadWebGL = this.webGLManager.isActive(id);
+        this.webGLManager.releaseContext(id);
+        if (hadWebGL && managed.terminal.rows > 0) {
+          managed.terminal.refresh(0, managed.terminal.rows - 1);
+        }
+
+        // If we're already in a hibernation-eligible tier, onTierApplied
+        // won't fire to start the timer — do it here instead.
         const tier = managed.lastAppliedTier ?? managed.getRefreshTier?.();
         if (tier !== undefined && this.isHibernationEligible(tier, managed)) {
           this.scheduleHibernation(id, managed);
@@ -1252,6 +1309,20 @@ class TerminalInstanceService {
           if (managed.lastAppliedTier === undefined || currentTier !== managed.lastAppliedTier) {
             this.rendererPolicy.applyRendererPolicy(id, currentTier);
           }
+        }
+
+        // Restore WebGL after a same-tier reparent: setVisible(true) above
+        // returned early because isAttaching was set, so no debounce timer
+        // was armed. If tier didn't change either, applyRendererPolicy
+        // above is a no-op. Re-acquire the context here so an agent
+        // terminal that released WebGL on hide doesn't stay on the DOM
+        // renderer permanently after a project switch or grid reflow.
+        if (
+          managed.isVisible &&
+          !this.webGLManager.isActive(id) &&
+          this.shouldRestoreWebGL(managed)
+        ) {
+          this.webGLManager.ensureContext(id, managed);
         }
 
         if (!managed.terminal.element) {
@@ -2002,6 +2073,10 @@ class TerminalInstanceService {
     if (managed.resizeSuppressionTimer !== undefined) {
       clearTimeout(managed.resizeSuppressionTimer);
       managed.resizeSuppressionTimer = undefined;
+    }
+    if (managed.webGLRestoreTimer !== undefined) {
+      clearTimeout(managed.webGLRestoreTimer);
+      managed.webGLRestoreTimer = undefined;
     }
 
     managed.lastActivityMarker?.dispose();
