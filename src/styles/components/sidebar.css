@@ -9,6 +9,11 @@
   box-shadow: inset 2px 0 0 var(--theme-overlay-selected);
 }
 
+.sidebar-root:not(:focus-within) .sidebar-worktree-card[data-active="true"] {
+  background: var(--sidebar-hover-bg, rgba(255, 255, 255, 0.015));
+  box-shadow: none;
+}
+
 .sidebar-worktree-card[data-hoverable="true"]:hover,
 .sidebar-worktree-card[data-hovered="true"] {
   background: var(--sidebar-hover-bg, rgba(255, 255, 255, 0.015));

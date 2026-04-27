@@ -107,6 +107,7 @@ export function Sidebar({ width, onResize, children, className }: SidebarProps) 
           aria-label="Sidebar"
           data-macro-focus={isMacroFocused ? "true" : undefined}
           className={cn(
+            "sidebar-root",
             "relative shrink-0 flex flex-col outline-none overflow-hidden",
             "surface-chrome",
             "border-r border-divider",

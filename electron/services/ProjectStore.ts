@@ -133,7 +133,7 @@ export class ProjectStore {
       gitRoot = await this.getGitRoot(projectPath);
     } catch (error) {
       const message = formatErrorMessage(error, "Failed to add project");
-      // eslint-disable-next-line no-restricted-syntax -- typed extraction of optional Daintree error cause; undefined fallback is required so the join below skips it.
+
       const causeMessage =
         isDaintreeError(error) && error.cause instanceof Error ? error.cause.message : undefined;
       const combined = [message, causeMessage].filter(Boolean).join("\n");
