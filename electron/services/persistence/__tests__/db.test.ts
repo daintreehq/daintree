@@ -212,5 +212,11 @@ describe("openDb", () => {
       "mmap_size = 10737418240",
       "cache_size = -65536",
     ]);
+
+    // Schema creation must run after the pragma configuration block, otherwise
+    // CREATE TABLE happens with the wrong journal/cache settings.
+    const sixthPragmaOrder = mockPragma.mock.invocationCallOrder[5];
+    const firstExecOrder = mockExec.mock.invocationCallOrder[0];
+    expect(firstExecOrder).toBeGreaterThan(sixthPragmaOrder);
   });
 });
