@@ -2,6 +2,7 @@ import { Mic } from "lucide-react";
 import { Spinner } from "@/components/ui/Spinner";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { ShortcutRevealChip } from "@/components/ui/ShortcutRevealChip";
 import { cn } from "@/lib/utils";
 import { useKeybindingDisplay } from "@/hooks";
 import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
@@ -89,6 +90,7 @@ export function VoiceRecordingToolbarButton({
                 />
               </div>
             )}
+            <ShortcutRevealChip actionId="voiceInput.toggle" />
           </Button>
         </TooltipTrigger>
         <TooltipContent side="bottom" className="text-center">

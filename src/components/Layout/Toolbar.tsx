@@ -27,6 +27,7 @@ import { isMac, isLinux, createTooltipWithShortcut } from "@/lib/platform";
 import { AgentButton } from "./AgentButton";
 import { AgentTrayButton } from "./AgentTrayButton";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { ShortcutRevealChip } from "@/components/ui/ShortcutRevealChip";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -72,7 +73,8 @@ const AGENT_TOOLBAR_IDS = new Set<ToolbarButtonId>([
 
 type OverflowMenuMeta = { label: string; icon: React.ComponentType<{ className?: string }> };
 
-const toolbarIconButtonClass = "toolbar-icon-button text-daintree-text transition-colors";
+const toolbarIconButtonClass =
+  "toolbar-icon-button text-daintree-text transition-colors relative";
 
 export function PluginToolbarButton({
   pluginId,
@@ -388,6 +390,7 @@ export function Toolbar({
                   aria-pressed={!isFocusMode}
                 >
                   {isFocusMode ? <PanelLeftOpen /> : <PanelLeftClose />}
+                  <ShortcutRevealChip actionId="nav.toggleSidebar" />
                 </Button>
               </TooltipTrigger>
               <TooltipContent side="bottom">
@@ -510,7 +513,7 @@ export function Toolbar({
                   onClick={handleCopyTreeClick}
                   disabled={isCopyingTree || !activeWorktree}
                   className={cn(
-                    "toolbar-icon-button transition-colors",
+                    "toolbar-icon-button transition-colors relative",
                     treeCopied ? "text-status-success bg-status-success/10" : "text-daintree-text",
                     isCopyingTree && "cursor-wait opacity-70",
                     !activeWorktree && "opacity-50"
@@ -520,6 +523,9 @@ export function Toolbar({
                   }
                 >
                   {isCopyingTree ? <Spinner /> : treeCopied ? <Check /> : <CopyTreeIcon />}
+                  {!treeCopied && !isCopyingTree && (
+                    <ShortcutRevealChip actionId="worktree.copyTree" />
+                  )}
                 </Button>
               </TooltipTrigger>
               <TooltipContent side="bottom" className="font-medium">

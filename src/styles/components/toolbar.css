@@ -89,3 +89,36 @@
     display: none;
   }
 }
+
+.shortcut-reveal-chip {
+  position: absolute;
+  bottom: 1px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1;
+  pointer-events: none;
+  opacity: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 9px;
+  line-height: 1;
+  padding: 1px 3px;
+  border-radius: 3px;
+  background: var(--toolbar-control-hover-bg, var(--theme-overlay-elevated));
+  border: 1px solid var(--theme-border-subtle);
+  color: var(--theme-text-secondary);
+  max-width: calc(100% - 2px);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: clip;
+  transition: opacity 120ms ease;
+}
+
+html[data-shortcut-reveal] .shortcut-reveal-chip {
+  opacity: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .shortcut-reveal-chip {
+    transition: none;
+  }
+}
