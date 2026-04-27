@@ -605,9 +605,13 @@ class TerminalInstanceService {
           }
         });
 
-        // Debounced WebGL restore. Reflow already woke the DOM renderer's
-        // IntersectionObserver above; the addon load happens after a short
-        // delay so rapid hide→show toggles don't thrash addon lifecycle.
+        // Debounced WebGL restore for same-tier transitions. If
+        // applyRendererPolicy above triggers a tier upgrade (e.g.
+        // BACKGROUND→VISIBLE), onTierApplied loads the addon immediately
+        // and this timer becomes a (harmless) idempotent re-apply. The
+        // debounce only meaningfully gates rapid hide→show toggles where
+        // the tier doesn't change, since same-tier applyRendererPolicy
+        // is a no-op.
         managed.webGLRestoreTimer = window.setTimeout(() => {
           const current = this.instances.get(id);
           if (!current) return;
@@ -1305,6 +1309,20 @@ class TerminalInstanceService {
           if (managed.lastAppliedTier === undefined || currentTier !== managed.lastAppliedTier) {
             this.rendererPolicy.applyRendererPolicy(id, currentTier);
           }
+        }
+
+        // Restore WebGL after a same-tier reparent: setVisible(true) above
+        // returned early because isAttaching was set, so no debounce timer
+        // was armed. If tier didn't change either, applyRendererPolicy
+        // above is a no-op. Re-acquire the context here so an agent
+        // terminal that released WebGL on hide doesn't stay on the DOM
+        // renderer permanently after a project switch or grid reflow.
+        if (
+          managed.isVisible &&
+          !this.webGLManager.isActive(id) &&
+          this.shouldRestoreWebGL(managed)
+        ) {
+          this.webGLManager.ensureContext(id, managed);
         }
 
         if (!managed.terminal.element) {

@@ -306,4 +306,21 @@ describe("TerminalInstanceService - visibility-driven WebGL lease", () => {
     service.setVisible("t1", false, 5);
     expect(service.webGLManager.isActive("t1")).toBe(false);
   });
+
+  it("agent demotion during debounce window cancels WebGL restore", () => {
+    const managed = makeMockManaged({ isVisible: false });
+    service.instances.set("t1", managed as unknown as Record<string, unknown>);
+
+    service.setVisible("t1", true);
+    expect(service.webGLManager.isActive("t1")).toBe(false);
+
+    // Demotion happens inside the debounce window — runtimeAgentId clears.
+    managed.runtimeAgentId = undefined;
+
+    vi.advanceTimersByTime(100);
+
+    // shouldRestoreWebGL re-checks runtimeAgentId in the timer callback,
+    // so the deferred restore must not fire after demotion.
+    expect(service.webGLManager.isActive("t1")).toBe(false);
+  });
 });
