@@ -9,7 +9,7 @@ import {
   nextGeneration,
   getGeneration,
 } from "@/lib/githubResourceCache";
-import { isTokenRelatedError } from "@/lib/githubErrors";
+import { isTokenRelatedError, isTransientNetworkError } from "@/lib/githubErrors";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
@@ -35,6 +35,27 @@ import {
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 
 type StateFilter = IssueStateFilter | PRStateFilter;
+
+const FETCH_MAX_ATTEMPTS = 3;
+const FETCH_RETRY_DELAYS_MS = [500, 1500];
+
+function abortableDelay(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(signal.reason);
+      return;
+    }
+    const id = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(id);
+      reject(signal?.reason);
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
 
 function sanitizeIpcError(message: string): string {
   const cleaned = message.replace(/^Error invoking remote method '[^']+': (?:Error: )?/, "").trim();
@@ -218,6 +239,12 @@ export function GitHubResourceList({
         setLoadMoreError(null);
       }
 
+      // Retry only the primary fetch path. Load-more has its own Retry button,
+      // and background revalidation already shows stale data.
+      const canRetry = !append && !isRevalidate;
+      const maxAttempts = canRetry ? FETCH_MAX_ATTEMPTS : 1;
+      let lastError: unknown = null;
+
       try {
         const searchOverride =
           numberQuery?.kind === "open-ended" ? `number:>=${numberQuery.from}` : undefined;
@@ -230,47 +257,70 @@ export function GitHubResourceList({
           sortOrder,
         };
 
-        const result =
-          type === "issue"
-            ? await githubClient.listIssues(
-                fetchOptions as Parameters<typeof githubClient.listIssues>[0]
-              )
-            : await githubClient.listPullRequests(
-                fetchOptions as Parameters<typeof githubClient.listPullRequests>[0]
-              );
+        for (let attempt = 0; attempt < maxAttempts; attempt++) {
+          try {
+            const result =
+              type === "issue"
+                ? await githubClient.listIssues(
+                    fetchOptions as Parameters<typeof githubClient.listIssues>[0]
+                  )
+                : await githubClient.listPullRequests(
+                    fetchOptions as Parameters<typeof githubClient.listPullRequests>[0]
+                  );
 
-        // Check if aborted before updating state
-        if (abortSignal?.aborted) return;
+            // Check if aborted before updating state
+            if (abortSignal?.aborted) return;
 
-        // Generation guard: discard stale responses
-        if (options?.generation != null && options.cacheKey != null) {
-          if (getGeneration(options.cacheKey) !== options.generation) return;
+            // Generation guard: discard stale responses
+            if (options?.generation != null && options.cacheKey != null) {
+              if (getGeneration(options.cacheKey) !== options.generation) return;
+            }
+
+            if (append) {
+              setData((prev) => [...prev, ...result.items]);
+            } else {
+              setData(result.items);
+            }
+            setCursor(result.pageInfo.endCursor);
+            setHasMore(result.pageInfo.hasNextPage);
+
+            // Write first-page results to cache (skip search-filtered results)
+            if (!append && options?.cacheKey && !debouncedSearch) {
+              setCache(options.cacheKey, {
+                items: result.items,
+                endCursor: result.pageInfo.endCursor,
+                hasNextPage: result.pageInfo.hasNextPage,
+                timestamp: Date.now(),
+              });
+            }
+            lastError = null;
+            return;
+          } catch (err) {
+            if (abortSignal?.aborted) return;
+            lastError = err;
+            const message = formatErrorMessage(err, "Failed to fetch data");
+            const retryable =
+              canRetry &&
+              attempt < maxAttempts - 1 &&
+              isTransientNetworkError(message) &&
+              !isTokenRelatedError(message);
+            if (!retryable) break;
+            try {
+              await abortableDelay(FETCH_RETRY_DELAYS_MS[attempt]!, abortSignal);
+            } catch {
+              return;
+            }
+            if (abortSignal?.aborted) return;
+          }
         }
 
-        if (append) {
-          setData((prev) => [...prev, ...result.items]);
-        } else {
-          setData(result.items);
-        }
-        setCursor(result.pageInfo.endCursor);
-        setHasMore(result.pageInfo.hasNextPage);
-
-        // Write first-page results to cache (skip search-filtered results)
-        if (!append && options?.cacheKey && !debouncedSearch) {
-          setCache(options.cacheKey, {
-            items: result.items,
-            endCursor: result.pageInfo.endCursor,
-            hasNextPage: result.pageInfo.hasNextPage,
-            timestamp: Date.now(),
-          });
-        }
-      } catch (err) {
-        if (abortSignal?.aborted) return;
-        const message = formatErrorMessage(err, "Failed to fetch data");
-        if (append) {
-          setLoadMoreError(message);
-        } else {
-          setError(message);
+        if (lastError != null) {
+          const message = formatErrorMessage(lastError, "Failed to fetch data");
+          if (append) {
+            setLoadMoreError(message);
+          } else {
+            setError(message);
+          }
         }
       } finally {
         if (!abortSignal?.aborted) {
@@ -347,72 +397,99 @@ export function GitHubResourceList({
     const matchesFilter = (item: GitHubIssue | GitHubPR) =>
       filterState === "all" || item.state.toLowerCase() === filterState;
 
+    const runNumericAttempt = async () => {
+      switch (numberQuery.kind) {
+        case "single": {
+          const result = await getByNumber(numberQuery.number);
+          if (abortController.signal.aborted) return;
+          if (result && matchesFilter(result)) {
+            setData([result]);
+          } else {
+            setData([]);
+            setExactNumberNotFound(numberQuery.number);
+          }
+          break;
+        }
+
+        case "multi": {
+          const results = await Promise.all(numberQuery.numbers.map(getByNumber));
+          if (abortController.signal.aborted) return;
+          const filtered = results.filter(
+            (r): r is NonNullable<typeof r> => r !== null && matchesFilter(r)
+          );
+          setData(filtered);
+          break;
+        }
+
+        case "range": {
+          const numbers: number[] = [];
+          for (let n = numberQuery.from; n <= numberQuery.to; n++) {
+            numbers.push(n);
+          }
+          const results = await Promise.all(numbers.map(getByNumber));
+          if (abortController.signal.aborted) return;
+          const filtered = results.filter(
+            (r): r is NonNullable<typeof r> => r !== null && matchesFilter(r)
+          );
+          setData(filtered);
+          break;
+        }
+
+        case "open-ended": {
+          const options = {
+            cwd: projectPath,
+            search: `number:>=${numberQuery.from}`,
+            state: filterState as "open" | "closed" | "merged" | "all",
+            bypassCache: true,
+            sortOrder: "created" as const,
+          };
+          const result =
+            type === "issue"
+              ? await githubClient.listIssues(
+                  options as Parameters<typeof githubClient.listIssues>[0]
+                )
+              : await githubClient.listPullRequests(
+                  options as Parameters<typeof githubClient.listPullRequests>[0]
+                );
+          if (abortController.signal.aborted) return;
+          setData(result.items);
+          setCursor(result.pageInfo.endCursor);
+          setHasMore(result.pageInfo.hasNextPage);
+          break;
+        }
+      }
+    };
+
     const fetchNumeric = async () => {
+      let lastError: unknown = null;
       try {
-        switch (numberQuery.kind) {
-          case "single": {
-            const result = await getByNumber(numberQuery.number);
+        for (let attempt = 0; attempt < FETCH_MAX_ATTEMPTS; attempt++) {
+          try {
+            await runNumericAttempt();
             if (abortController.signal.aborted) return;
-            if (result && matchesFilter(result)) {
-              setData([result]);
-            } else {
-              setData([]);
-              setExactNumberNotFound(numberQuery.number);
+            lastError = null;
+            return;
+          } catch (err) {
+            if (abortController.signal.aborted) return;
+            lastError = err;
+            const message = formatErrorMessage(err, "Failed to fetch data");
+            const retryable =
+              attempt < FETCH_MAX_ATTEMPTS - 1 &&
+              isTransientNetworkError(message) &&
+              !isTokenRelatedError(message);
+            if (!retryable) break;
+            try {
+              await abortableDelay(FETCH_RETRY_DELAYS_MS[attempt]!, abortController.signal);
+            } catch {
+              return;
             }
-            break;
-          }
-
-          case "multi": {
-            const results = await Promise.all(numberQuery.numbers.map(getByNumber));
             if (abortController.signal.aborted) return;
-            const filtered = results.filter(
-              (r): r is NonNullable<typeof r> => r !== null && matchesFilter(r)
-            );
-            setData(filtered);
-            break;
-          }
-
-          case "range": {
-            const numbers: number[] = [];
-            for (let n = numberQuery.from; n <= numberQuery.to; n++) {
-              numbers.push(n);
-            }
-            const results = await Promise.all(numbers.map(getByNumber));
-            if (abortController.signal.aborted) return;
-            const filtered = results.filter(
-              (r): r is NonNullable<typeof r> => r !== null && matchesFilter(r)
-            );
-            setData(filtered);
-            break;
-          }
-
-          case "open-ended": {
-            const options = {
-              cwd: projectPath,
-              search: `number:>=${numberQuery.from}`,
-              state: filterState as "open" | "closed" | "merged" | "all",
-              bypassCache: true,
-              sortOrder: "created" as const,
-            };
-            const result =
-              type === "issue"
-                ? await githubClient.listIssues(
-                    options as Parameters<typeof githubClient.listIssues>[0]
-                  )
-                : await githubClient.listPullRequests(
-                    options as Parameters<typeof githubClient.listPullRequests>[0]
-                  );
-            if (abortController.signal.aborted) return;
-            setData(result.items);
-            setCursor(result.pageInfo.endCursor);
-            setHasMore(result.pageInfo.hasNextPage);
-            break;
           }
         }
-      } catch (err) {
-        if (abortController.signal.aborted) return;
-        const message = formatErrorMessage(err, "Failed to fetch data");
-        setError(message);
+        if (lastError != null) {
+          const message = formatErrorMessage(lastError, "Failed to fetch data");
+          setError(message);
+        }
       } finally {
         if (!abortController.signal.aborted) {
           setLoading(false);

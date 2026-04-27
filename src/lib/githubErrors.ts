@@ -7,3 +7,8 @@ export function isTokenRelatedError(msg: string | null | undefined): boolean {
     msg.includes("SSO authorization required")
   );
 }
+
+export function isTransientNetworkError(msg: string | null | undefined): boolean {
+  if (!msg) return false;
+  return msg.startsWith("Cannot reach GitHub.");
+}

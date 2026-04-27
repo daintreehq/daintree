@@ -259,3 +259,98 @@ describe("GitHubResourceList SWR behavior", () => {
     expect(screen.getByTestId("skeleton")).toBeTruthy();
   });
 });
+
+describe("GitHubResourceList retry behavior", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("retries transient network errors on cold-start fetch and renders data on success", async () => {
+    mockListIssues
+      .mockRejectedValueOnce(new Error("Cannot reach GitHub. Check your internet connection."))
+      .mockResolvedValue(makeResponse([makeIssue(7)]));
+
+    render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
+
+    await vi.advanceTimersByTimeAsync(500);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("item-7")).toBeTruthy();
+    });
+
+    expect(mockListIssues).toHaveBeenCalledTimes(2);
+    expect(screen.queryByText(/Cannot reach GitHub/)).toBeNull();
+  });
+
+  it("surfaces error after exhausting retries (3 attempts)", async () => {
+    mockListIssues.mockRejectedValue(
+      new Error("Cannot reach GitHub. Check your internet connection.")
+    );
+
+    render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
+
+    await vi.advanceTimersByTimeAsync(500);
+    await vi.advanceTimersByTimeAsync(1500);
+
+    await waitFor(() => {
+      expect(screen.getByText(/Cannot reach GitHub/)).toBeTruthy();
+    });
+
+    expect(mockListIssues).toHaveBeenCalledTimes(3);
+  });
+
+  it("does not retry token-related errors — surfaces immediately", async () => {
+    mockListIssues.mockRejectedValue(
+      new Error("SSO authorization required. Re-authorize at github.com.")
+    );
+
+    render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/SSO authorization required/)).toBeTruthy();
+    });
+
+    expect(mockListIssues).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not retry generic non-transient errors", async () => {
+    mockListIssues.mockRejectedValue(new Error("Repository not found or token lacks access."));
+
+    render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/Repository not found/)).toBeTruthy();
+    });
+
+    expect(mockListIssues).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not retry on background revalidation — preserves stale data and surfaces error", async () => {
+    const cacheKey = buildCacheKey("/test/proj", "issue", "open", "created");
+    setCache(cacheKey, {
+      items: [makeIssue(20)],
+      endCursor: null,
+      hasNextPage: false,
+      timestamp: Date.now(),
+    });
+
+    mockListIssues.mockRejectedValue(
+      new Error("Cannot reach GitHub. Check your internet connection.")
+    );
+
+    render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
+
+    expect(screen.getByTestId("item-20")).toBeTruthy();
+
+    await waitFor(() => {
+      expect(screen.getByText(/Cannot reach GitHub/)).toBeTruthy();
+    });
+
+    expect(mockListIssues).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId("item-20")).toBeTruthy();
+  });
+});
