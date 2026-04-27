@@ -358,6 +358,27 @@ describe("Toast accessibility", () => {
     consoleError.mockRestore();
   });
 
+  it.each([
+    ["success", "lucide-circle-check", "text-status-success"],
+    ["error", "lucide-circle-x", "text-status-error"],
+    ["info", "lucide-info", "text-status-info"],
+    ["warning", "lucide-triangle-alert", "text-status-warning"],
+  ] as const)(
+    "renders a %s severity icon with the matching status colour",
+    async (type, iconClass, colourClass) => {
+      render(<Toaster />);
+      await act(async () => {
+        addToast({ type, message: `${type} message` });
+        vi.advanceTimersByTime(16);
+      });
+
+      const icon = document.querySelector(`.${iconClass}`);
+      expect(icon).not.toBeNull();
+      expect(icon?.parentElement?.className).toContain(colourClass);
+      expect(icon?.getAttribute("aria-hidden")).toBe("true");
+    }
+  );
+
   it("re-announces via screen reader when updatedAt changes", async () => {
     render(<Toaster />);
     let toastId: string;

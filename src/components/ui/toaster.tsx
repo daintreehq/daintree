@@ -1,6 +1,14 @@
 import { useEffect, useLayoutEffect, useState, useCallback, useRef } from "react";
 import { createPortal } from "react-dom";
-import { MoreHorizontal, X } from "lucide-react";
+import {
+  AlertTriangle,
+  CheckCircle2,
+  Info,
+  type LucideIcon,
+  MoreHorizontal,
+  X,
+  XCircle,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useNotificationStore, type Notification } from "@/store/notificationStore";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
@@ -18,6 +26,13 @@ const ACCENT_CLASS: Record<string, string> = {
   error: "border-l-status-error",
   info: "border-l-status-info",
   warning: "border-l-status-warning",
+};
+
+const TYPE_ICON_CONFIG: Record<string, { Icon: LucideIcon; className: string }> = {
+  success: { Icon: CheckCircle2, className: "text-status-success" },
+  error: { Icon: XCircle, className: "text-status-error" },
+  info: { Icon: Info, className: "text-status-info" },
+  warning: { Icon: AlertTriangle, className: "text-status-warning" },
 };
 
 function Toast({ notification }: { notification: Notification }) {
@@ -91,6 +106,8 @@ function Toast({ notification }: { notification: Notification }) {
   }, [notification.duration, notification.updatedAt, handleDismiss, isPaused]);
 
   const accentClass = ACCENT_CLASS[notification.type] ?? "border-l-status-info";
+  const { Icon, className: iconClassName } =
+    TYPE_ICON_CONFIG[notification.type] ?? TYPE_ICON_CONFIG.info;
 
   return (
     <div
@@ -118,6 +135,9 @@ function Toast({ notification }: { notification: Notification }) {
       }}
       role={notification.type === "error" ? "alert" : "status"}
     >
+      <div className={cn("shrink-0 mt-0.5", iconClassName)}>
+        <Icon className="h-4 w-4" />
+      </div>
       <div className="flex-1 space-y-1 min-w-0 py-0.5">
         {notification.title ? (
           <h4 className="font-medium leading-tight tracking-tight text-xs text-daintree-text flex items-center gap-1.5">
