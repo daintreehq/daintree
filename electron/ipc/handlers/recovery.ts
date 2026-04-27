@@ -6,7 +6,9 @@ import type { HandlerDependencies } from "../types.js";
 import { getCrashRecoveryService } from "../../services/CrashRecoveryService.js";
 import { getDevServerUrl } from "../../../shared/config/devServer.js";
 import { isRecoveryPageUrl } from "../../../shared/utils/trustedRenderer.js";
-import { collectDiagnostics } from "../../services/DiagnosticsCollector.js";
+// Lazy-imported below (recovery export is only triggered from recovery.html
+// by user action — keeps DiagnosticsCollector and its archiver/v8 deps out
+// of the eager-import graph).
 import { getLogFilePath } from "../../utils/logger.js";
 import { typedHandle, typedHandleWithContext } from "../utils.js";
 
@@ -54,6 +56,7 @@ export function registerRecoveryHandlers(deps: HandlerDependencies): () => void 
         );
       }
 
+      const { collectDiagnostics } = await import("../../services/DiagnosticsCollector.js");
       const payload = await collectDiagnostics(deps);
       const json = JSON.stringify(payload, null, 2);
 

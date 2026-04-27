@@ -195,6 +195,8 @@ describe("worktree IPC adversarial", () => {
     });
 
     expect(result).toBe("wt-1");
+    // Sound is fire-and-forget via dynamic import — drain microtasks first
+    await new Promise((resolve) => setImmediate(resolve));
     expect(soundMock.play).toHaveBeenCalledWith("worktree-create");
   });
 

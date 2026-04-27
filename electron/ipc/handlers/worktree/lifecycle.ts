@@ -4,7 +4,14 @@ import type { HandlerDependencies, IpcContext } from "../../types.js";
 import type { WorktreeSetActivePayload, WorktreeDeletePayload } from "../../../types/index.js";
 import type { WorktreeState } from "../../../../shared/types/worktree.js";
 import { fileSearchService } from "../../../services/FileSearchService.js";
-import { soundService } from "../../../services/SoundService.js";
+import { getSoundService } from "../../../services/getSoundService.js";
+import type * as SoundServiceModule from "../../../services/SoundService.js";
+
+type SoundId = keyof typeof SoundServiceModule.SOUND_FILES;
+
+function playSoundFireAndForget(id: SoundId): void {
+  void getSoundService().then((svc) => svc.play(id));
+}
 import {
   checkRateLimit,
   waitForRateLimitSlot,
@@ -57,7 +64,7 @@ export function registerWorktreeLifecycleHandlers(deps: HandlerDependencies): ()
       console.warn("[worktree.create] Failed to invalidate file search cache:", error);
     }
     if (store.get("notificationSettings").uiFeedbackSoundEnabled) {
-      soundService.play("worktree-create");
+      playSoundFireAndForget("worktree-create");
     }
     return worktreeId;
   };
@@ -110,7 +117,7 @@ export function registerWorktreeLifecycleHandlers(deps: HandlerDependencies): ()
       }
     }
     if (store.get("notificationSettings").uiFeedbackSoundEnabled) {
-      soundService.play("worktree-delete");
+      playSoundFireAndForget("worktree-delete");
     }
     // Clean up persisted issue association
     const issueMap = store.get("worktreeIssueMap", {});
