@@ -14,6 +14,16 @@ const __dirname = path.dirname(__filename);
  * `process.parentPort` uses inside an Electron utility process — the host
  * code already casts `process.parentPort as unknown as MessagePort` from
  * "node:worker_threads", so the serialization semantics match.
+ *
+ * Known coverage gap: worker_threads does NOT populate `event.ports` on the
+ * receiver side when ports are passed via `transferList`. The production
+ * pty-host/workspace-host code reads `rawMsg?.ports || []` to extract
+ * transferred ports — that path only fires inside Electron's
+ * MessagePortMain, not in worker_threads. So tests using this harness can
+ * verify the SOURCE-side call shape (port lives in the transferList second
+ * arg, not the message body) but cannot verify the receiver actually unwraps
+ * the port. End-to-end port-receipt coverage requires a real Electron
+ * runtime and lives outside this contract test tier.
  */
 export interface FakeUtilityChild extends EventEmitter {
   postMessage: (msg: unknown, transferList?: ReadonlyArray<unknown>) => void;

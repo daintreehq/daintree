@@ -149,8 +149,11 @@ describe.skipIf(shouldSkip)("PtyClient IPC contract (real worker_threads boundar
         code: number | null;
         crashType: string;
         timestamp: number;
-      }>((resolve) => {
+      }>((resolve, reject) => {
         client.on("host-crash-details", (payload) => resolve(payload));
+        // Local timeout — fail fast if `ipc-test:die` is dropped or the
+        // event wire-up regresses, instead of hanging until the 60s global.
+        setTimeout(() => reject(new Error("host-crash-details not emitted within 5s")), 5000);
       });
 
       // Trigger a real process.exit(1) inside the worker — surfaces a real
@@ -160,6 +163,45 @@ describe.skipIf(shouldSkip)("PtyClient IPC contract (real worker_threads boundar
       const crash = await crashPromise;
       expect(crash.crashType).toBeDefined();
       expect(crash.crashType).not.toBe("CLEAN_EXIT");
+    } finally {
+      client.dispose();
+    }
+  });
+
+  it("connectMessagePort sends `connect-port` with the port in the transferList second arg", async () => {
+    // Regression guard for the bug class motivating #5912: a refactor that
+    // moves the port into the message body or drops the transferList would
+    // silently break renderer ↔ pty-host port wiring. Asserting the call
+    // shape catches that even though worker_threads can't fully reproduce
+    // Electron's `event.ports` receipt semantics on the worker side.
+    const client = new PtyClientCtor({ healthCheckIntervalMs: 60_000 });
+    try {
+      await client.waitForReady();
+
+      // Spy after ready so startup chatter (set-log-level-overrides) doesn't
+      // pollute the captured calls. The spy still forwards to the original
+      // by default.
+      const postSpy = vi.spyOn(handle.fakeChild, "postMessage");
+
+      const { MessageChannel } = await import("node:worker_threads");
+      const channel = new MessageChannel();
+      try {
+        client.connectMessagePort(42, channel.port2 as any);
+
+        const connectCall = postSpy.mock.calls.find((c) => (c[0] as any)?.type === "connect-port");
+        expect(connectCall).toBeDefined();
+        expect(connectCall![0]).toEqual({ type: "connect-port", windowId: 42 });
+        expect(connectCall![1]).toBeDefined();
+        expect(Array.isArray(connectCall![1])).toBe(true);
+        expect((connectCall![1] as unknown[]).length).toBe(1);
+        expect((connectCall![1] as unknown[])[0]).toBe(channel.port2);
+      } finally {
+        try {
+          channel.port1.close();
+        } catch {
+          /* ignore */
+        }
+      }
     } finally {
       client.dispose();
     }

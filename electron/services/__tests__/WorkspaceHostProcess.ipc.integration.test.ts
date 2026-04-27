@@ -143,8 +143,9 @@ describe.skipIf(shouldSkip)(
       try {
         await host.waitForReady();
 
-        const recoveringPromise = new Promise<number | null>((resolve) => {
+        const recoveringPromise = new Promise<number | null>((resolve, reject) => {
           host.on("host-recovering", (code: number | null) => resolve(code));
+          setTimeout(() => reject(new Error("host-recovering not emitted within 5s")), 5000);
         });
 
         handle.fakeChild.postMessage({ type: "ipc-test:die" });
@@ -186,6 +187,12 @@ describe.skipIf(shouldSkip)(
           // the MessagePortMain transfer contract; mock-only tests can
           // satisfy the call shape but only a real port survives the trip
           // through the worker_threads structured-clone boundary.
+          //
+          // Note: this assertion only locks the SOURCE-side call shape.
+          // worker_threads does not populate `event.ports` on the receiver,
+          // so the worker stub never sees the transferred port — that
+          // unwrap path is Electron-runtime-specific. See
+          // ipcContractTestUtils.ts header for the full gap rationale.
           expect(attachCall![1]).toBeDefined();
           expect(Array.isArray(attachCall![1])).toBe(true);
           expect((attachCall![1] as unknown[]).length).toBe(1);
