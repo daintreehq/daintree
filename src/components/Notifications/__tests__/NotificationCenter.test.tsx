@@ -3,6 +3,8 @@ import { render, screen, waitFor, act, fireEvent } from "@testing-library/react"
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import type { NotificationHistoryEntry } from "@/store/slices/notificationHistorySlice";
 import { useNotificationHistoryStore } from "@/store/slices/notificationHistorySlice";
+import { useNotificationSettingsStore } from "@/store/notificationSettingsStore";
+import * as notifyLib from "@/lib/notify";
 import { NotificationCenter } from "../NotificationCenter";
 
 const dispatchMock = vi.hoisted(() => vi.fn().mockResolvedValue({ ok: true }));
@@ -15,6 +17,7 @@ vi.mock("@/lib/notify", () => ({
   muteForDuration: vi.fn(),
   muteUntilNextMorning: vi.fn().mockReturnValue(Date.now() + 3600_000),
   notify: vi.fn(),
+  setSessionQuietUntil: vi.fn(),
 }));
 
 function makeEntry(overrides: Partial<NotificationHistoryEntry> = {}): NotificationHistoryEntry {
@@ -37,8 +40,19 @@ function setEntries(entries: NotificationHistoryEntry[]) {
 
 beforeEach(() => {
   useNotificationHistoryStore.getState().clearAll();
+  useNotificationSettingsStore.setState({
+    quietUntil: 0,
+    quietHoursEnabled: false,
+    quietHoursStartMin: 22 * 60,
+    quietHoursEndMin: 8 * 60,
+    quietHoursWeekdays: [],
+  });
   dispatchMock.mockClear();
   getMock.mockReturnValue(null);
+  vi.mocked(notifyLib.muteForDuration).mockClear();
+  vi.mocked(notifyLib.muteUntilNextMorning).mockClear();
+  vi.mocked(notifyLib.notify).mockClear();
+  vi.mocked(notifyLib.setSessionQuietUntil).mockClear();
 });
 
 describe("NotificationThread worst severity", () => {
@@ -273,6 +287,152 @@ describe("NotificationThread message content", () => {
     await waitFor(() => {
       expect(screen.queryByText("Build retried and succeeded")).toBeTruthy();
     });
+  });
+});
+
+describe("NotificationCenter pause menu", () => {
+  it("does not render the legacy Mute / Until morning / Configure buttons", () => {
+    render(<NotificationCenter open onClose={() => {}} />);
+    expect(screen.queryByText("Mute 1h")).toBeNull();
+    expect(screen.queryByText("Until morning")).toBeNull();
+    expect(screen.queryByText("Configure")).toBeNull();
+  });
+
+  it("opens a Pause menu and routes 'For 1 hour' to muteForDuration", async () => {
+    render(<NotificationCenter open onClose={() => {}} />);
+    const trigger = screen.getByLabelText("Pause notifications");
+    await act(async () => {
+      fireEvent.pointerDown(trigger, { button: 0 });
+      fireEvent.pointerUp(trigger, { button: 0 });
+      fireEvent.click(trigger);
+    });
+
+    const oneHour = screen.getByText("For 1 hour");
+    await act(async () => {
+      fireEvent.click(oneHour);
+    });
+
+    expect(vi.mocked(notifyLib.muteForDuration)).toHaveBeenCalledWith(60 * 60 * 1000);
+    expect(vi.mocked(notifyLib.notify)).toHaveBeenCalled();
+  });
+
+  it("routes 'Until 8:00 AM' to muteUntilNextMorning", async () => {
+    render(<NotificationCenter open onClose={() => {}} />);
+    const trigger = screen.getByLabelText("Pause notifications");
+    await act(async () => {
+      fireEvent.pointerDown(trigger, { button: 0 });
+      fireEvent.pointerUp(trigger, { button: 0 });
+      fireEvent.click(trigger);
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByText("Until 8:00 AM"));
+    });
+
+    expect(vi.mocked(notifyLib.muteUntilNextMorning)).toHaveBeenCalledTimes(1);
+  });
+
+  it("dispatches notification settings tab from the footer link", async () => {
+    const onClose = vi.fn();
+    render(<NotificationCenter open onClose={onClose} />);
+    const trigger = screen.getByLabelText("Pause notifications");
+    await act(async () => {
+      fireEvent.pointerDown(trigger, { button: 0 });
+      fireEvent.pointerUp(trigger, { button: 0 });
+      fireEvent.click(trigger);
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByText("Notification settings →"));
+    });
+
+    expect(onClose).toHaveBeenCalled();
+    expect(dispatchMock).toHaveBeenCalledWith(
+      "app.settings.openTab",
+      { tab: "notifications" },
+      { source: "user" }
+    );
+  });
+
+  it("dispatches notification settings tab from 'Custom…' (deferred picker stub)", async () => {
+    const onClose = vi.fn();
+    render(<NotificationCenter open onClose={onClose} />);
+    const trigger = screen.getByLabelText("Pause notifications");
+    await act(async () => {
+      fireEvent.pointerDown(trigger, { button: 0 });
+      fireEvent.pointerUp(trigger, { button: 0 });
+      fireEvent.click(trigger);
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByText("Custom…"));
+    });
+
+    expect(onClose).toHaveBeenCalled();
+    expect(dispatchMock).toHaveBeenCalledWith(
+      "app.settings.openTab",
+      { tab: "notifications" },
+      { source: "user" }
+    );
+  });
+});
+
+describe("NotificationCenter muted pill", () => {
+  it("does not render the pill when neither session nor scheduled mute is active", () => {
+    render(<NotificationCenter open onClose={() => {}} />);
+    expect(screen.queryByTestId("notification-muted-pill")).toBeNull();
+  });
+
+  it("renders a session-mute pill with formatted end time and a Resume ✕ button", () => {
+    const until = Date.now() + 60 * 60 * 1000;
+    useNotificationSettingsStore.setState({ quietUntil: until });
+
+    render(<NotificationCenter open onClose={() => {}} />);
+
+    const pill = screen.getByTestId("notification-muted-pill");
+    expect(pill).toBeTruthy();
+    expect(pill.textContent).toContain("Notifications");
+    expect(pill.textContent).toMatch(/Muted until /);
+    expect(screen.getByLabelText("Resume notifications")).toBeTruthy();
+  });
+
+  it("clears only the session mute (not persistent quiet hours) when ✕ is clicked", () => {
+    const until = Date.now() + 60 * 60 * 1000;
+    useNotificationSettingsStore.setState({
+      quietUntil: until,
+      quietHoursEnabled: true,
+    });
+
+    render(<NotificationCenter open onClose={() => {}} />);
+    fireEvent.click(screen.getByLabelText("Resume notifications"));
+
+    expect(vi.mocked(notifyLib.setSessionQuietUntil)).toHaveBeenCalledWith(0);
+    // Persistent setting must not be touched.
+    expect(useNotificationSettingsStore.getState().quietHoursEnabled).toBe(true);
+  });
+
+  it("renders a scheduled-only pill without a Resume ✕ button", () => {
+    // Window: 22:00 → 08:00 with 'now' fixed inside the window.
+    const fixedNow = new Date();
+    fixedNow.setHours(2, 0, 0, 0);
+    vi.useFakeTimers();
+    vi.setSystemTime(fixedNow);
+    try {
+      useNotificationSettingsStore.setState({
+        quietHoursEnabled: true,
+        quietHoursStartMin: 22 * 60,
+        quietHoursEndMin: 8 * 60,
+        quietHoursWeekdays: [],
+      });
+
+      render(<NotificationCenter open onClose={() => {}} />);
+
+      const pill = screen.getByTestId("notification-muted-pill");
+      expect(pill.textContent).toContain("Quiet hours");
+      expect(screen.queryByLabelText("Resume notifications")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

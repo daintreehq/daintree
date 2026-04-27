@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import { Bell, CheckCheck, Ellipsis, Moon, Settings2, Trash2 } from "lucide-react";
+import { Bell, CheckCheck, Ellipsis, Moon, Trash2, X } from "lucide-react";
+import { useShallow } from "zustand/react/shallow";
 import {
   useNotificationHistoryStore,
   type NotificationHistoryEntry,
@@ -10,10 +11,13 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { actionService } from "@/services/ActionService";
-import { muteForDuration, muteUntilNextMorning, notify } from "@/lib/notify";
+import { muteForDuration, muteUntilNextMorning, notify, setSessionQuietUntil } from "@/lib/notify";
+import { useNotificationSettingsStore } from "@/store/notificationSettingsStore";
+import { isScheduledQuietNow } from "@shared/utils/quietHours";
 import type { NotificationType } from "@/store/notificationStore";
 
 const SEVERITY_WEIGHTS: Record<NotificationType, number> = {
@@ -22,6 +26,11 @@ const SEVERITY_WEIGHTS: Record<NotificationType, number> = {
   info: 1,
   success: 0,
 } as const;
+
+const timeFormatter = new Intl.DateTimeFormat(undefined, {
+  hour: "numeric",
+  minute: "2-digit",
+});
 
 function getWorstSeverity(entries: NotificationHistoryEntry[]): NotificationType {
   if (entries.length === 0) return "success";
@@ -75,14 +84,71 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
   const markAllRead = useNotificationHistoryStore((s) => s.markAllRead);
   const dismissEntry = useNotificationHistoryStore((s) => s.dismissEntry);
 
+  const {
+    quietUntil,
+    quietHoursEnabled,
+    quietHoursStartMin,
+    quietHoursEndMin,
+    quietHoursWeekdays,
+  } = useNotificationSettingsStore(
+    useShallow((s) => ({
+      quietUntil: s.quietUntil,
+      quietHoursEnabled: s.quietHoursEnabled,
+      quietHoursStartMin: s.quietHoursStartMin,
+      quietHoursEndMin: s.quietHoursEndMin,
+      quietHoursWeekdays: s.quietHoursWeekdays,
+    }))
+  );
+
   const [filter, setFilter] = useState<"all" | "unread">("all");
   const [frozenUnreadIds, setFrozenUnreadIds] = useState<Set<string> | null>(null);
+
+  // Re-render at session-mute expiry and at scheduled quiet-hours boundaries —
+  // mirrors the toolbar bell pattern so the pill auto-clears without an
+  // unrelated render trigger.
+  const [, forceTick] = useState(0);
+  const now = Date.now();
+  const isSessionMuted = quietUntil > now;
+  const isScheduledMuted = isScheduledQuietNow({
+    quietHoursEnabled,
+    quietHoursStartMin,
+    quietHoursEndMin,
+    quietHoursWeekdays,
+  });
+  const showMutedPill = isSessionMuted || isScheduledMuted;
 
   useEffect(() => {
     if (!open) {
       setFrozenUnreadIds(null);
     }
   }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    const tick = () => forceTick((n) => n + 1);
+    const timeouts: ReturnType<typeof setTimeout>[] = [];
+    const intervals: ReturnType<typeof setInterval>[] = [];
+
+    if (isSessionMuted) {
+      const delay = Math.max(0, quietUntil - Date.now());
+      timeouts.push(setTimeout(tick, delay + 50));
+    }
+
+    if (quietHoursEnabled) {
+      const msToNextMinute = 60_000 - (Date.now() % 60_000);
+      timeouts.push(
+        setTimeout(() => {
+          tick();
+          intervals.push(setInterval(tick, 60_000));
+        }, msToNextMinute + 50)
+      );
+    }
+
+    return () => {
+      for (const t of timeouts) clearTimeout(t);
+      for (const i of intervals) clearInterval(i);
+    };
+  }, [open, isSessionMuted, quietUntil, quietHoursEnabled]);
 
   const filteredEntries = useMemo(() => {
     if (filter === "all") return entries;
@@ -113,20 +179,60 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
 
   const handleMuteUntilMorning = () => {
     const until = muteUntilNextMorning();
-    const formatter = new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" });
     notify({
       type: "info",
-      message: `Notifications muted until ${formatter.format(new Date(until))}`,
+      message: `Notifications muted until ${timeFormatter.format(new Date(until))}`,
       priority: "low",
       urgent: true,
     });
   };
 
+  const openNotificationSettings = () => {
+    onClose();
+    void actionService.dispatch(
+      "app.settings.openTab",
+      { tab: "notifications" },
+      { source: "user" }
+    );
+  };
+
+  const handleResumeNotifications = () => {
+    setSessionQuietUntil(0);
+  };
+
+  const pillLabel = isSessionMuted
+    ? `Muted until ${timeFormatter.format(new Date(quietUntil))}`
+    : "Quiet hours";
+
   return (
     <div className="w-[360px] max-h-[420px] flex flex-col">
-      <div className="flex items-center justify-between px-3 py-2 border-b border-divider">
-        <div className="flex items-center gap-1.5">
-          <span className="text-xs font-medium text-daintree-text/80">Notifications</span>
+      <div className="flex items-center justify-between px-3 py-2 border-b border-divider gap-2">
+        <div className="flex items-center gap-1.5 min-w-0">
+          {showMutedPill ? (
+            <span
+              data-testid="notification-muted-pill"
+              className="inline-flex items-center gap-1 rounded-full bg-overlay-medium px-2 py-0.5 text-[11px] text-daintree-text/70"
+            >
+              <span className="font-medium text-daintree-text/80">Notifications</span>
+              <span aria-hidden="true" className="text-daintree-text/40">
+                ·
+              </span>
+              <span className="truncate">{pillLabel}</span>
+              {isSessionMuted && (
+                <button
+                  type="button"
+                  onClick={handleResumeNotifications}
+                  aria-label="Resume notifications"
+                  title="Resume notifications"
+                  className="ml-0.5 inline-flex items-center justify-center rounded-full p-0.5 text-daintree-text/50 hover:bg-overlay-emphasis hover:text-daintree-text/80 transition-colors"
+                >
+                  <X className="w-3 h-3" aria-hidden="true" />
+                </button>
+              )}
+            </span>
+          ) : (
+            <span className="text-xs font-medium text-daintree-text/80">Notifications</span>
+          )}
           {entries.length > 0 && (
             <div className="flex items-center rounded-md border border-daintree-text/10 overflow-hidden">
               <button
@@ -157,28 +263,7 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
             </div>
           )}
         </div>
-        <div className="flex items-center gap-1">
-          <Button
-            type="button"
-            variant="ghost"
-            size="xs"
-            onClick={() => handleMuteFor(60 * 60 * 1000, "for 1h")}
-            className="text-daintree-text/50"
-            title="Suppress non-urgent notifications for the next hour"
-          >
-            <Moon />
-            Mute 1h
-          </Button>
-          <Button
-            type="button"
-            variant="ghost"
-            size="xs"
-            onClick={handleMuteUntilMorning}
-            className="text-daintree-text/50"
-            title="Suppress non-urgent notifications until 8:00 AM"
-          >
-            Until morning
-          </Button>
+        <div className="flex items-center gap-1 shrink-0">
           {unreadCount > 0 && (
             <Button
               type="button"
@@ -191,23 +276,29 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
               Mark all read
             </Button>
           )}
-          <Button
-            type="button"
-            variant="ghost"
-            size="xs"
-            onClick={() => {
-              onClose();
-              void actionService.dispatch(
-                "app.settings.openTab",
-                { tab: "notifications" },
-                { source: "user" }
-              );
-            }}
-            className="text-daintree-text/50"
-          >
-            <Settings2 />
-            Configure
-          </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button
+                type="button"
+                aria-label="Pause notifications"
+                title="Pause notifications"
+                className="p-1 hover:bg-daintree-text/10 text-daintree-text/50 hover:text-daintree-text/80 transition-colors rounded-[var(--radius-sm)]"
+              >
+                <Moon className="w-3 h-3" aria-hidden="true" />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="min-w-[180px]">
+              <DropdownMenuItem onSelect={() => handleMuteFor(60 * 60 * 1000, "for 1h")}>
+                For 1 hour
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={handleMuteUntilMorning}>Until 8:00 AM</DropdownMenuItem>
+              <DropdownMenuItem onSelect={openNotificationSettings}>Custom…</DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onSelect={openNotificationSettings}>
+                Notification settings →
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
           {entries.length > 0 && (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
