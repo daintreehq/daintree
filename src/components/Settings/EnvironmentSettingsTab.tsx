@@ -246,7 +246,7 @@ export function EnvironmentSettingsTab() {
                           "w-full bg-daintree-sidebar border border-border-strong rounded px-2 py-1 text-sm text-daintree-text font-mono focus:outline-none focus:border-daintree-accent focus:ring-1 focus:ring-daintree-accent/30",
                           isSensitive && "pr-8"
                         )}
-                        placeholder="value"
+                        placeholder="e.g. /usr/local/bin"
                         aria-label="Environment variable value"
                       />
                       {isSensitive && (

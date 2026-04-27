@@ -210,14 +210,14 @@ export function PortalSettingsTab() {
             value={editName}
             onChange={(e) => setEditName(e.target.value)}
             className="bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-2 py-1 text-sm text-daintree-text w-32 focus:border-daintree-accent focus:outline-none"
-            placeholder="Name"
+            placeholder="e.g. My portal"
           />
           <input
             type="text"
             value={editUrl}
             onChange={(e) => setEditUrl(e.target.value)}
             className="bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-2 py-1 text-sm text-daintree-text flex-1 focus:border-daintree-accent focus:outline-none"
-            placeholder="URL"
+            placeholder="e.g. https://github.com/owner/repo"
           />
           <button
             onClick={handleSaveEdit}
@@ -410,7 +410,7 @@ export function PortalSettingsTab() {
           <div className="flex gap-2">
             <input
               type="text"
-              placeholder="Name"
+              placeholder="e.g. My portal"
               value={newLinkName}
               onChange={(e) => {
                 setNewLinkName(e.target.value);
@@ -420,7 +420,7 @@ export function PortalSettingsTab() {
             />
             <input
               type="text"
-              placeholder="https://..."
+              placeholder="e.g. https://github.com/owner/repo"
               value={newLinkUrl}
               onChange={(e) => {
                 setNewLinkUrl(e.target.value);

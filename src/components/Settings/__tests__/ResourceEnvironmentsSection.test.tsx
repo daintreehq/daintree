@@ -35,37 +35,41 @@ describe("ResourceEnvironmentsSection", () => {
       (input as HTMLInputElement).value.includes("up -d")
     );
     expect(provisionInputs).toHaveLength(1);
-    expect(provisionInputs[0]?.getAttribute("placeholder")).toBe("");
+    expect(provisionInputs[0]?.getAttribute("placeholder")).toBe("e.g. docker compose up -d");
 
     const teardownInputs = inputs.filter((input) =>
       (input as HTMLInputElement).value.includes("down -v")
     );
     expect(teardownInputs).toHaveLength(1);
-    expect(teardownInputs[0]?.getAttribute("placeholder")).toBe("");
+    expect(teardownInputs[0]?.getAttribute("placeholder")).toBe("e.g. docker compose down");
 
     const resumeInputs = inputs.filter((input) =>
       (input as HTMLInputElement).value.includes("start")
     );
     expect(resumeInputs).toHaveLength(1);
-    expect(resumeInputs[0]?.getAttribute("placeholder")).toBe("");
+    expect(resumeInputs[0]?.getAttribute("placeholder")).toBe("e.g. docker unpause container");
 
     const pauseInputs = inputs.filter((input) =>
       (input as HTMLInputElement).value.includes("stop")
     );
     expect(pauseInputs).toHaveLength(1);
-    expect(pauseInputs[0]?.getAttribute("placeholder")).toBe("");
+    expect(pauseInputs[0]?.getAttribute("placeholder")).toBe("e.g. docker pause container");
 
     const statusInputs = inputs.filter((input) =>
       (input as HTMLInputElement).value.includes("ps --format json")
     );
     expect(statusInputs).toHaveLength(1);
-    expect(statusInputs[0]?.getAttribute("placeholder")).toBe("");
+    expect(statusInputs[0]?.getAttribute("placeholder")).toBe(
+      "e.g. docker compose ps --format json"
+    );
 
     const connectInputs = inputs.filter((input) =>
       (input as HTMLInputElement).value.includes("exec app bash")
     );
     expect(connectInputs).toHaveLength(1);
-    expect(connectInputs[0]?.getAttribute("placeholder")).toBe("");
+    expect(connectInputs[0]?.getAttribute("placeholder")).toBe(
+      "e.g. docker exec -it container /bin/bash"
+    );
   });
 
   it("preserves help text for all command fields", () => {

@@ -929,7 +929,6 @@ export function AgentSettings({
                           suggestions={getAgentConfig(activeAgent.id)?.envSuggestions ?? []}
                           datalistId="env-key-suggestions-global"
                           contextKey={`global-${activeAgent.id}`}
-                          valuePlaceholder="value"
                           data-testid="global-env-editor"
                         />
                       </div>
