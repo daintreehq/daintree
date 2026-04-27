@@ -78,6 +78,15 @@ import { detectPrompt } from "./PromptDetector.js";
 import { stripAnsiCodes } from "../../../shared/utils/artifactParser.js";
 import type { SpawnContext } from "./terminalSpawn.js";
 
+const IDENTITY_DEBUG_ENABLED =
+  process.env.NODE_ENV === "development" || Boolean(process.env.DAINTREE_DEBUG);
+
+function logIdentityDebug(message: string): void {
+  if (IDENTITY_DEBUG_ENABLED) {
+    console.log(message);
+  }
+}
+
 type CursorBuffer = {
   cursorY?: number;
   baseY: number;
@@ -688,7 +697,7 @@ export class TerminalProcess {
       if (this.suppressNextShellSubmitSignal) {
         this.suppressNextShellSubmitSignal = false;
       } else if (isAgentUiPromptResponse) {
-        console.log(
+        logIdentityDebug(
           `[IdentityDebug] shell-submit-skip term=${this.id.slice(-8)} reason=agent-ui-prompt`
         );
       } else {
@@ -1203,7 +1212,7 @@ export class TerminalProcess {
     const identity = detectCommandIdentity(normalized);
     if (!identity) return;
     this.seededLaunchCommandText = normalized;
-    console.log(
+    logIdentityDebug(
       `[IdentityDebug] shell-submit term=${this.id.slice(-8)} src=spawn ` +
         `agent=${identity.agentType ?? "<none>"} icon=${identity.processIconId ?? "<none>"} ` +
         `argv0=${redactArgv(normalized)}`
@@ -1366,7 +1375,7 @@ export class TerminalProcess {
 
     if (!this.shellIdentityFallbackIdentity) {
       if (promptVisible && Date.now() - submittedAt >= SHELL_IDENTITY_FALLBACK_COMMIT_MS) {
-        console.log(
+        logIdentityDebug(
           `[IdentityDebug] shell-fallback-stop term=${this.id.slice(-8)} reason=no-identity-prompt`
         );
         this.stopShellIdentityFallbackWatcher();
@@ -1381,7 +1390,7 @@ export class TerminalProcess {
       }
 
       if (promptVisible && !this.shellIdentityFallbackIdentity.agentType) {
-        console.log(
+        logIdentityDebug(
           `[IdentityDebug] shell-fallback-stop term=${this.id.slice(-8)} ` +
             `reason=prompt-before-commit icon=${this.shellIdentityFallbackIdentity.processIconId ?? "<none>"}`
         );
@@ -1434,7 +1443,7 @@ export class TerminalProcess {
       !this.isForegroundShellIdleForAgentDemotion()
     ) {
       if (this.shellIdentityFallbackPromptStreak > 0) {
-        console.log(
+        logIdentityDebug(
           `[IdentityDebug] shell-fallback-hold term=${this.id.slice(-8)} ` +
             `reason=foreground-child-active`
         );
@@ -1449,7 +1458,7 @@ export class TerminalProcess {
       this.hasAgentUiPromptFalsePositive()
     ) {
       if (this.shellIdentityFallbackPromptStreak > 0) {
-        console.log(
+        logIdentityDebug(
           `[IdentityDebug] shell-fallback-hold term=${this.id.slice(-8)} ` +
             `reason=agent-ui-prompt count=${ptyDescendantCount ?? "unknown"} ` +
             `sawDescendant=${this.shellIdentityFallbackSawPtyDescendant}`
@@ -1979,7 +1988,7 @@ export class TerminalProcess {
     } else if (isDetected && !result.agentType && result.processIconId) {
       // Non-agent process detected (npm, python, docker, etc.)
       if (terminal.detectedAgentId) {
-        console.log(
+        logIdentityDebug(
           `[IdentityDebug] terminal-demote-hold term=${this.id.slice(-8)} ` +
             `reason=agent-requires-explicit-exit agent=${terminal.detectedAgentId} ` +
             `processIcon=${result.processIconId}`
@@ -2000,13 +2009,13 @@ export class TerminalProcess {
       const previousAgent = terminal.detectedAgentId;
       if (previousAgent) {
         if (result.evidenceSource !== "shell_command") {
-          console.log(
+          logIdentityDebug(
             `[IdentityDebug] terminal-demote-hold term=${this.id.slice(-8)} ` +
               `reason=agent-requires-explicit-exit agent=${previousAgent}`
           );
           return;
         }
-        console.log(
+        logIdentityDebug(
           `[IdentityDebug] terminal-demote-apply term=${this.id.slice(-8)} ` +
             `reason=prompt-return agent=${previousAgent}`
         );

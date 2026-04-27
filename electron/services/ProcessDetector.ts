@@ -97,6 +97,15 @@ const PROCESS_ICON_MAP: Record<string, string> = {
 
 const PACKAGE_MANAGER_ICON_IDS = new Set(["npm", "yarn", "pnpm", "bun", "composer"]);
 
+const IDENTITY_DEBUG_ENABLED =
+  process.env.NODE_ENV === "development" || Boolean(process.env.DAINTREE_DEBUG);
+
+function logIdentityDebug(message: string): void {
+  if (IDENTITY_DEBUG_ENABLED) {
+    console.log(message);
+  }
+}
+
 /**
  * Extract non-flag command name candidates from a full `command` line in
  * argv order. Used when `comm` basename doesn't match a known CLI — most
@@ -409,7 +418,7 @@ export class ProcessDetector {
     this.shellCommandStickyUntil = observedAt + ProcessDetector.SHELL_COMMAND_STICKY_MS;
     this.shellCommandExpiresAt = observedAt + ProcessDetector.SHELL_COMMAND_EXPIRY_MS;
 
-    console.log(
+    logIdentityDebug(
       `[IdentityDebug] shell-evidence term=${this.terminalId.slice(-8)} ` +
         `agent=${identity.agentType ?? "<none>"} icon=${identity.processIconId ?? "<none>"} ` +
         `name=${JSON.stringify(identity.processName)}`
@@ -443,7 +452,7 @@ export class ProcessDetector {
       this.lastDetected === null && this.lastProcessIconId !== null && shellWasSoleSupport;
 
     if (this.shellCommandIdentity !== null) {
-      console.log(
+      logIdentityDebug(
         `[IdentityDebug] shell-evidence-clear term=${this.terminalId.slice(-8)} ` +
           `reason=${reason} agent=${this.shellCommandIdentity.agentType ?? "<none>"} ` +
           `icon=${this.shellCommandIdentity.processIconId ?? "<none>"} ` +
@@ -485,14 +494,14 @@ export class ProcessDetector {
 
   start(): void {
     if (this.isStarted) {
-      console.log(
+      logIdentityDebug(
         `[IdentityDebug] detector START-SKIPPED term=${this.terminalId.slice(-8)} pid=${this.ptyPid} reason=already-started`
       );
       logWarn(`ProcessDetector for terminal ${this.terminalId} already started`);
       return;
     }
 
-    console.log(
+    logIdentityDebug(
       `[IdentityDebug] detector START term=${this.terminalId.slice(-8)} pid=${this.ptyPid}`
     );
 
@@ -503,7 +512,7 @@ export class ProcessDetector {
     this.unsubscribe = this.cache.onRefresh(() => {
       if (firstRefresh) {
         firstRefresh = false;
-        console.log(
+        logIdentityDebug(
           `[IdentityDebug] detector FIRST-TICK term=${this.terminalId.slice(-8)} pid=${this.ptyPid} children=${this.cache.getChildren(this.ptyPid).length}`
         );
       }
@@ -566,7 +575,7 @@ export class ProcessDetector {
           const signature = `${this.shellCommandIdentity.agentType}|${childCount}`;
           if (signature !== this.lastShellEvidenceRetentionSignature) {
             this.lastShellEvidenceRetentionSignature = signature;
-            console.log(
+            logIdentityDebug(
               `[IdentityDebug] shell-evidence-retain term=${this.terminalId.slice(-8)} ` +
                 `reason=agent-requires-explicit-exit agent=${this.shellCommandIdentity.agentType} ` +
                 `children=${childCount}`
@@ -591,7 +600,7 @@ export class ProcessDetector {
           const passSignature = `${result.detectionState}|${result.agentType ?? ""}|${result.evidenceSource ?? ""}|${procs}`;
           if (passSignature !== this.lastPassSignature) {
             this.lastPassSignature = passSignature;
-            console.log(
+            logIdentityDebug(
               `[IdentityDebug] pass term=${this.terminalId.slice(-8)} pid=${this.ptyPid} ` +
                 `state=${result.detectionState} agent=${result.agentType ?? "<none>"} ` +
                 `src=${result.evidenceSource ?? "<none>"} procs=[${procs}]`
@@ -689,7 +698,7 @@ export class ProcessDetector {
           // elements while still running. Prompt-return clears via
           // clearShellCommandEvidence("prompt-return").
           if (this.offStreak === 0) {
-            console.log(
+            logIdentityDebug(
               `[IdentityDebug] demote-hold term=${this.terminalId.slice(-8)} ` +
                 `reason=agent-requires-explicit-exit agent=${committedAgent} ` +
                 `rawIcon=${rawIcon ?? "<none>"}`
@@ -755,7 +764,7 @@ export class ProcessDetector {
         // only runs when we actually emit (gatedCommitted or a busy/command
         // side-channel change).
         if (gatedCommitted) {
-          console.log(
+          logIdentityDebug(
             `[IdentityDebug] commit term=${this.terminalId.slice(-8)} pid=${this.ptyPid} state=${result.detectionState} agent=${result.agentType ?? "null"} icon=${result.processIconId ?? "null"} src=${result.evidenceSource ?? "process_tree"}`
           );
         }
