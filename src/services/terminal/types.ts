@@ -144,6 +144,11 @@ export interface ManagedTerminal {
   isHibernated?: boolean;
   hibernationTimer?: ReturnType<typeof setTimeout>;
   ipcListenerCount: number;
+
+  // Visibility-driven WebGL restore debounce. Hide path releases the WebGL
+  // context immediately; show path waits ~100ms before re-acquiring so rapid
+  // tab/panel toggles don't thrash addon load/unload.
+  webGLRestoreTimer?: number;
 }
 
 export const TIER_DOWNGRADE_HYSTERESIS_MS = 500;
