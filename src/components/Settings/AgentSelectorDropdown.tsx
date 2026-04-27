@@ -190,8 +190,8 @@ export function AgentSelectorDropdown({
                 onMouseEnter={() => setActiveIndex(index)}
                 className={cn(
                   "flex items-center gap-2 px-2 py-1.5 rounded-[var(--radius-sm)] cursor-pointer text-sm",
-                  isActive && "bg-daintree-accent/10",
-                  isSelected && "text-daintree-accent",
+                  isActive && "bg-overlay-selected",
+                  isSelected && "text-daintree-text font-medium",
                   !isActive && !isSelected && "text-daintree-text"
                 )}
               >

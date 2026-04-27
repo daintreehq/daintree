@@ -60,7 +60,7 @@ describe("PrivacyDataTab", () => {
 
     await waitFor(() => {
       const errorsButton = screen.getByText("Errors Only").closest("button")!;
-      expect(errorsButton.className).toContain("border-daintree-accent/40");
+      expect(errorsButton.className).toContain("border-border-strong");
     });
   });
 
@@ -80,7 +80,7 @@ describe("PrivacyDataTab", () => {
 
     await waitFor(() => {
       expect(screen.getByText("Off").closest("button")!.className).toContain(
-        "border-daintree-accent/40"
+        "border-border-strong"
       );
     });
 
@@ -89,10 +89,10 @@ describe("PrivacyDataTab", () => {
     await waitFor(() => {
       // Should revert back to "Off" being selected
       expect(screen.getByText("Off").closest("button")!.className).toContain(
-        "border-daintree-accent/40"
+        "border-border-strong"
       );
       expect(screen.getByText("Errors Only").closest("button")!.className).not.toContain(
-        "border-daintree-accent/40"
+        "border-border-strong"
       );
     });
 
@@ -123,7 +123,7 @@ describe("PrivacyDataTab", () => {
 
     await waitFor(() => {
       expect(screen.getByText("Off").closest("button")!.className).toContain(
-        "border-daintree-accent/40"
+        "border-border-strong"
       );
     });
 
@@ -131,7 +131,7 @@ describe("PrivacyDataTab", () => {
     fireEvent.click(screen.getByText("Errors Only").closest("button")!);
     await waitFor(() => {
       expect(screen.getByText("Errors Only").closest("button")!.className).toContain(
-        "border-daintree-accent/40"
+        "border-border-strong"
       );
     });
 
@@ -140,10 +140,10 @@ describe("PrivacyDataTab", () => {
     await waitFor(() => {
       // Should revert to "errors" (the last successful value), NOT "off"
       expect(screen.getByText("Errors Only").closest("button")!.className).toContain(
-        "border-daintree-accent/40"
+        "border-border-strong"
       );
       expect(screen.getByText("Full Usage").closest("button")!.className).not.toContain(
-        "border-daintree-accent/40"
+        "border-border-strong"
       );
     });
   });
@@ -185,7 +185,7 @@ describe("PrivacyDataTab", () => {
 
     await waitFor(() => {
       expect(screen.getByText("30 days").closest("button")!.className).toContain(
-        "bg-daintree-accent/10"
+        "bg-overlay-selected"
       );
     });
 
@@ -194,10 +194,10 @@ describe("PrivacyDataTab", () => {
     await waitFor(() => {
       // Should revert back to 30 days
       expect(screen.getByText("30 days").closest("button")!.className).toContain(
-        "bg-daintree-accent/10"
+        "bg-overlay-selected"
       );
       expect(screen.getByText("90 days").closest("button")!.className).not.toContain(
-        "bg-daintree-accent/10"
+        "bg-overlay-selected"
       );
     });
 

@@ -126,7 +126,7 @@ export function ThemeSelector<T extends { id: string }>({
         "flex flex-col gap-1.5 p-2 rounded-[var(--radius-md)] border transition-colors text-left",
         "[&>*]:pointer-events-none",
         item.id === selectedId
-          ? "border-daintree-accent bg-daintree-accent/10"
+          ? "border-border-strong bg-overlay-selected"
           : "border-daintree-border bg-daintree-bg hover:border-daintree-text/30"
       )}
     >

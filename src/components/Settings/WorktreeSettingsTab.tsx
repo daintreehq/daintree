@@ -244,7 +244,7 @@ export function WorktreeSettingsTab() {
                       className={cn(
                         "px-3 py-1.5 text-xs rounded-[var(--radius-md)] border transition-colors",
                         pattern === preset.pattern
-                          ? "bg-daintree-accent/10 border-daintree-accent text-daintree-accent"
+                          ? "bg-overlay-selected border-border-strong text-daintree-text font-medium"
                           : "border-daintree-border text-daintree-text/70 hover:bg-daintree-border/50"
                       )}
                     >

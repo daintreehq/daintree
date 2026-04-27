@@ -213,7 +213,7 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
                   "w-full text-left p-4 rounded-[var(--radius-lg)] border transition-colors",
                   "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2",
                   telemetryLevel === option.level
-                    ? "border-daintree-accent/40 bg-daintree-accent/5"
+                    ? "border-border-strong bg-overlay-selected"
                     : "border-daintree-border hover:bg-tint/5"
                 )}
               >
@@ -222,12 +222,12 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
                     className={cn(
                       "w-4 h-4 rounded-full border-2 flex items-center justify-center shrink-0",
                       telemetryLevel === option.level
-                        ? "border-daintree-accent"
+                        ? "border-border-strong"
                         : "border-daintree-text/30"
                     )}
                   >
                     {telemetryLevel === option.level && (
-                      <div className="w-2 h-2 rounded-full bg-daintree-accent" />
+                      <div className="w-2 h-2 rounded-full bg-daintree-text" />
                     )}
                   </div>
                   <div>
@@ -346,7 +346,7 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
                     "px-3 py-2 rounded-[var(--radius-md)] text-sm font-medium transition-colors",
                     "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2",
                     logRetentionDays === option.value
-                      ? "bg-daintree-accent/10 text-daintree-accent border border-daintree-accent/30"
+                      ? "bg-overlay-selected text-daintree-text font-medium border border-border-strong"
                       : "text-daintree-text/60 border border-daintree-border hover:bg-tint/5 hover:text-daintree-text"
                   )}
                 >

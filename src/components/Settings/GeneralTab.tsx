@@ -554,7 +554,7 @@ export function GeneralTab({
                   className={cn(
                     "px-3 py-1.5 rounded-[var(--radius-md)] text-xs font-medium transition-colors capitalize",
                     updateChannel === ch
-                      ? "bg-daintree-accent/10 border border-daintree-accent text-daintree-accent"
+                      ? "bg-overlay-selected border border-border-strong text-daintree-text font-medium"
                       : "border border-daintree-border hover:bg-tint/5 text-daintree-text/70"
                   )}
                 >
@@ -661,7 +661,7 @@ export function GeneralTab({
                         className={cn(
                           "px-3 py-1.5 rounded-[var(--radius-md)] text-xs font-medium transition-colors",
                           idleNotifyConfig.thresholdMinutes === value
-                            ? "bg-daintree-accent/10 border border-daintree-accent text-daintree-accent"
+                            ? "bg-overlay-selected border border-border-strong text-daintree-text font-medium"
                             : "border border-daintree-border hover:bg-tint/5 text-daintree-text/70"
                         )}
                       >
@@ -718,7 +718,7 @@ export function GeneralTab({
                         className={cn(
                           "px-3 py-1.5 rounded-[var(--radius-md)] text-xs font-medium transition-colors",
                           hibernationConfig.inactiveThresholdHours === value
-                            ? "bg-daintree-accent/10 border border-daintree-accent text-daintree-accent"
+                            ? "bg-overlay-selected border border-border-strong text-daintree-text font-medium"
                             : "border border-daintree-border hover:bg-tint/5 text-daintree-text/70"
                         )}
                       >

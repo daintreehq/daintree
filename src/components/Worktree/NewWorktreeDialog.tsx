@@ -1115,7 +1115,7 @@ export function NewWorktreeDialog({
                                 className={cn(
                                   "flex items-center justify-between gap-2 px-2 py-1.5 text-sm rounded-[var(--radius-sm)] cursor-pointer hover:bg-daintree-border",
                                   row.name === baseBranch && "bg-daintree-border",
-                                  idx === selectedIndex && "bg-daintree-accent/10"
+                                  idx === selectedIndex && "bg-overlay-selected"
                                 )}
                               >
                                 <span className="truncate">
@@ -1135,7 +1135,7 @@ export function NewWorktreeDialog({
                                     </span>
                                   )}
                                   {row.name === baseBranch && (
-                                    <Check className="h-4 w-4 text-daintree-accent" />
+                                    <Check className="h-4 w-4 text-daintree-text" />
                                   )}
                                 </span>
                               </div>
@@ -1226,7 +1226,7 @@ export function NewWorktreeDialog({
                           >
                             <span className="truncate">{branch.name}</span>
                             {branch.name === selectedExistingBranch && (
-                              <Check className="h-4 w-4 shrink-0 text-daintree-accent" />
+                              <Check className="h-4 w-4 shrink-0 text-daintree-text" />
                             )}
                           </div>
                         ))
@@ -1311,10 +1311,10 @@ export function NewWorktreeDialog({
                             onClick={() => handlePrefixSelect(suggestion.type.prefix)}
                             className={cn(
                               "flex items-center gap-2 px-2 py-1.5 text-sm rounded-[var(--radius-sm)] cursor-pointer hover:bg-daintree-border",
-                              index === prefixSelectedIndex && "bg-daintree-accent/10"
+                              index === prefixSelectedIndex && "bg-overlay-selected"
                             )}
                           >
-                            <span className="font-mono text-daintree-accent">
+                            <span className="font-mono text-daintree-text">
                               {suggestion.type.prefix}/
                             </span>
                             <span className="text-daintree-text/60">
@@ -1329,7 +1329,7 @@ export function NewWorktreeDialog({
                 <p className="text-xs text-daintree-text/60 select-text">
                   {parsedBranch.hasPrefix ? (
                     <>
-                      <span className="font-mono text-daintree-accent">{parsedBranch.prefix}/</span>
+                      <span className="font-mono text-daintree-text">{parsedBranch.prefix}/</span>
                       <span className="font-mono">{parsedBranch.slug || "..."}</span>
                     </>
                   ) : (
@@ -1636,7 +1636,7 @@ export function NewWorktreeDialog({
                           <span>Clone current layout</span>
                         </div>
                         {selectedRecipeId === CLONE_LAYOUT_ID && (
-                          <Check className="h-4 w-4 shrink-0 text-daintree-accent" />
+                          <Check className="h-4 w-4 shrink-0 text-daintree-text" />
                         )}
                       </div>
                       <div
@@ -1666,7 +1666,7 @@ export function NewWorktreeDialog({
                       >
                         <span className="text-daintree-text/60">Empty</span>
                         {selectedRecipeId === null && (
-                          <Check className="h-4 w-4 shrink-0 text-daintree-accent" />
+                          <Check className="h-4 w-4 shrink-0 text-daintree-text" />
                         )}
                       </div>
                       {globalRecipes.map((recipe) => (
@@ -1704,13 +1704,13 @@ export function NewWorktreeDialog({
                               {recipe.terminals.length !== 1 ? "s" : ""}
                             </span>
                             {recipe.id === defaultRecipeId && (
-                              <span className="text-xs text-daintree-accent shrink-0">
+                              <span className="text-xs text-daintree-text/50 shrink-0">
                                 (default)
                               </span>
                             )}
                           </div>
                           {recipe.id === selectedRecipeId && (
-                            <Check className="h-4 w-4 shrink-0 text-daintree-accent" />
+                            <Check className="h-4 w-4 shrink-0 text-daintree-text" />
                           )}
                         </div>
                       ))}

@@ -547,7 +547,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
                 className={cn(
                   "flex flex-col items-center justify-center p-3 rounded-[var(--radius-md)] border transition-colors",
                   cachedProjectViews === value
-                    ? "bg-daintree-accent/10 border-daintree-accent text-daintree-accent"
+                    ? "bg-overlay-selected border-border-strong text-daintree-text font-medium"
                     : "border-daintree-border hover:bg-tint/5 text-daintree-text/70"
                 )}
               >
@@ -721,7 +721,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
                   className={cn(
                     "flex flex-col items-center justify-center p-4 rounded-[var(--radius-md)] border transition-colors",
                     layoutConfig.strategy === id
-                      ? "bg-daintree-accent/10 border-daintree-accent text-daintree-accent"
+                      ? "bg-overlay-selected border-border-strong text-daintree-text font-medium"
                       : "border-daintree-border hover:bg-tint/5 text-daintree-text/70"
                   )}
                 >
@@ -782,7 +782,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
                   "flex flex-col items-center justify-center p-3 rounded-[var(--radius-md)] border transition-colors",
                   performanceMode && "opacity-50 cursor-not-allowed",
                   scrollbackLines === value
-                    ? "bg-daintree-accent/10 border-daintree-accent text-daintree-accent"
+                    ? "bg-overlay-selected border-border-strong text-daintree-text font-medium"
                     : "border-daintree-border hover:bg-tint/5 text-daintree-text/70"
                 )}
               >
@@ -873,7 +873,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
                 className={cn(
                   "flex flex-col items-center justify-center p-3 rounded-[var(--radius-md)] border transition-colors",
                   screenReaderMode === value
-                    ? "bg-daintree-accent/10 border-daintree-accent text-daintree-accent"
+                    ? "bg-overlay-selected border-border-strong text-daintree-text font-medium"
                     : "border-daintree-border hover:bg-tint/5 text-daintree-text/70"
                 )}
               >

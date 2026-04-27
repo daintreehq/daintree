@@ -252,8 +252,8 @@ function PresetOption({
       tabIndex={0}
       className={cn(
         "flex items-center gap-2 px-2 py-1.5 rounded-[var(--radius-sm)] cursor-pointer text-sm",
-        "hover:bg-daintree-accent/10 focus:bg-daintree-accent/10 focus:outline-none",
-        isSelected && "text-daintree-accent"
+        "hover:bg-overlay-soft focus:bg-overlay-soft focus:outline-none",
+        isSelected && "text-daintree-text font-medium bg-overlay-selected"
       )}
     >
       <span
