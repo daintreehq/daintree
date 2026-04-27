@@ -28,6 +28,9 @@ vi.mock("../KeybindingService", () => ({
   },
 }));
 
+const notifyMock = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/notify", () => ({ notify: notifyMock }));
+
 import { ActionService } from "../ActionService";
 import type { ActionDefinition, ActionId } from "@shared/types/actions";
 
@@ -36,6 +39,7 @@ describe("ActionService", () => {
 
   beforeEach(() => {
     service = new ActionService();
+    notifyMock.mockClear();
   });
 
   describe("register", () => {
@@ -260,6 +264,73 @@ describe("ActionService", () => {
         expect(result.error.message).toContain("disabled for testing");
       }
       expect(mockRun).not.toHaveBeenCalled();
+    });
+
+    it("should show warning toast when disabled action has disabledReason", async () => {
+      const action: ActionDefinition = {
+        id: "actions.list" as ActionId,
+        title: "Test Action",
+        description: "A test action",
+        category: "test",
+        kind: "command",
+        danger: "safe",
+        scope: "renderer",
+        isEnabled: () => false,
+        disabledReason: () => "No focused terminal",
+        run: vi.fn(),
+      };
+
+      service.register(action);
+      const result = await service.dispatch("actions.list");
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.code).toBe("DISABLED");
+      }
+      expect(notifyMock).toHaveBeenCalledTimes(1);
+      expect(notifyMock).toHaveBeenCalledWith({
+        type: "warning",
+        title: "Action Disabled",
+        message: "No focused terminal",
+      });
+    });
+
+    it("should NOT show toast when disabled action has no disabledReason", async () => {
+      const action: ActionDefinition = {
+        id: "actions.list" as ActionId,
+        title: "Test Action",
+        description: "A test action",
+        category: "test",
+        kind: "command",
+        danger: "safe",
+        scope: "renderer",
+        isEnabled: () => false,
+        run: vi.fn(),
+      };
+
+      service.register(action);
+      const result = await service.dispatch("actions.list");
+
+      expect(result.ok).toBe(false);
+      expect(notifyMock).not.toHaveBeenCalled();
+    });
+
+    it("should NOT show toast for enabled actions", async () => {
+      const action: ActionDefinition = {
+        id: "actions.list" as ActionId,
+        title: "Test Action",
+        description: "A test action",
+        category: "test",
+        kind: "command",
+        danger: "safe",
+        scope: "renderer",
+        run: vi.fn().mockResolvedValue(undefined),
+      };
+
+      service.register(action);
+      await service.dispatch("actions.list");
+
+      expect(notifyMock).not.toHaveBeenCalled();
     });
 
     it("should reject restricted actions", async () => {

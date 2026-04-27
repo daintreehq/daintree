@@ -132,7 +132,6 @@ export function useActionPalette(): UseActionPaletteReturn {
 
   const executeAction = useCallback(
     (item: ActionPaletteItem) => {
-      if (!item.enabled) return;
       useActionMruStore.getState().recordActionMru(item.id);
       close();
       void actionService
@@ -144,7 +143,7 @@ export function useActionPalette(): UseActionPaletteReturn {
           }
         )
         .then((result) => {
-          if (!result.ok) {
+          if (!result.ok && result.error.code !== "DISABLED") {
             notify({
               type: "error",
               title: "Action Failed",

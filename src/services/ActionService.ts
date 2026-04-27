@@ -11,6 +11,7 @@ import type {
 } from "../../shared/types/actions.js";
 import type { AnyActionDefinition } from "./actions/actionTypes";
 import { logWarn } from "@/utils/logger";
+import { notify } from "@/lib/notify";
 import { keybindingService } from "./KeybindingService";
 import { shortcutHintStore } from "../store/shortcutHintStore";
 
@@ -157,7 +158,15 @@ export class ActionService {
 
     const isEnabled = definition.isEnabled?.(context) ?? true;
     if (!isEnabled) {
-      const disabledReason = definition.disabledReason?.(context) ?? "Action is currently disabled";
+      const reasonText = definition.disabledReason?.(context);
+      const disabledReason = reasonText ?? "Action is currently disabled";
+      if (reasonText) {
+        notify({
+          type: "warning",
+          title: "Action Disabled",
+          message: reasonText,
+        });
+      }
       const error: ActionError = {
         code: "DISABLED",
         message: disabledReason,
