@@ -337,9 +337,8 @@ export async function setupWindowServices(
     registerDeferredTask({
       name: "agent-notification-service",
       run: async () => {
-        const { agentNotificationService } = await import(
-          "../services/AgentNotificationService.js"
-        );
+        const { agentNotificationService } =
+          await import("../services/AgentNotificationService.js");
         agentNotificationServiceRef = agentNotificationService;
         agentNotificationService.initialize();
       },
@@ -390,9 +389,8 @@ export async function setupWindowServices(
     registerDeferredTask({
       name: "idle-terminal-notification-service",
       run: async () => {
-        const { initializeIdleTerminalNotificationService } = await import(
-          "../services/IdleTerminalNotificationService.js"
-        );
+        const { initializeIdleTerminalNotificationService } =
+          await import("../services/IdleTerminalNotificationService.js");
         initializeIdleTerminalNotificationService();
       },
     });

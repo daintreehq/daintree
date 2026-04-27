@@ -18,7 +18,9 @@ export async function getSoundService(): Promise<typeof SoundServiceModule.sound
   return (await loadModule()).soundService;
 }
 
-export async function getAllowedSoundFiles(): Promise<typeof SoundServiceModule.ALLOWED_SOUND_FILES> {
+export async function getAllowedSoundFiles(): Promise<
+  typeof SoundServiceModule.ALLOWED_SOUND_FILES
+> {
   return (await loadModule()).ALLOWED_SOUND_FILES;
 }
 
