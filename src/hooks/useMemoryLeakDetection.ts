@@ -170,7 +170,7 @@ export function useMemoryLeakDetection(
                 onClick: () => {},
               },
               {
-                label: "Dismiss",
+                label: "Mute alerts",
                 variant: "secondary" as const,
                 onClick: () => {
                   const st = localStateMap.get(id);
