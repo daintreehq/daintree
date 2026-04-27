@@ -2,11 +2,12 @@ import { memo } from "react";
 import { Button } from "@/components/ui/button";
 import { PanelRightOpen, PanelRightClose } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { ShortcutRevealChip } from "@/components/ui/ShortcutRevealChip";
 import { createTooltipWithShortcut } from "@/lib/platform";
 import { useKeybindingDisplay, useShortcutHintHover } from "@/hooks";
 import { usePortalStore } from "@/store";
 
-const toolbarIconButtonClass = "toolbar-icon-button text-daintree-text transition-colors";
+const toolbarIconButtonClass = "toolbar-icon-button text-daintree-text transition-colors relative";
 
 export const ToolbarPortalButton = memo(function ToolbarPortalButton({
   "data-toolbar-item": dataToolbarItem,
@@ -37,6 +38,7 @@ export const ToolbarPortalButton = memo(function ToolbarPortalButton({
             ) : (
               <PanelRightOpen aria-hidden="true" />
             )}
+            <ShortcutRevealChip actionId="panel.togglePortal" />
           </Button>
         </TooltipTrigger>
         <TooltipContent side="bottom">

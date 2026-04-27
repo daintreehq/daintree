@@ -2,6 +2,7 @@ import { memo } from "react";
 import { Button } from "@/components/ui/button";
 import { SlidersHorizontal } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { ShortcutRevealChip } from "@/components/ui/ShortcutRevealChip";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -13,7 +14,7 @@ import { createTooltipWithShortcut } from "@/lib/platform";
 import { useKeybindingDisplay, useShortcutHintHover } from "@/hooks";
 import { actionService } from "@/services/ActionService";
 
-const toolbarIconButtonClass = "toolbar-icon-button text-daintree-text transition-colors";
+const toolbarIconButtonClass = "toolbar-icon-button text-daintree-text transition-colors relative";
 
 const SETTINGS_CONTEXT_MENU_TABS = [
   { tab: "general", label: "General" },
@@ -59,6 +60,7 @@ export const ToolbarSettingsButton = memo(function ToolbarSettingsButton({
                 aria-label="Open settings"
               >
                 <SlidersHorizontal />
+                <ShortcutRevealChip actionId="app.settings" />
               </Button>
             </TooltipTrigger>
             <TooltipContent side="bottom">

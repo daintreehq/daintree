@@ -38,6 +38,7 @@ import { useProjectMruSwitcher } from "./hooks/useProjectMruSwitcher";
 import { useMcpBridge } from "./hooks/useMcpBridge";
 import { useFileDropGuard } from "./hooks/useFileDropGuard";
 import { useSoundPlaybackListener } from "./hooks/useSoundPlaybackListener";
+import { useHeldShortcutReveal } from "./hooks/useHeldShortcutReveal";
 import { removeStartupSkeleton } from "./utils/removeStartupSkeleton";
 import { useCrashRecoveryGate } from "./hooks/app/useCrashRecoveryGate";
 import { CrashRecoveryDialog } from "./components/Recovery/CrashRecoveryDialog";
@@ -290,6 +291,7 @@ function App() {
   }, []);
   useProjectSwitchRehydration();
   useShortcutHints(isStateLoaded);
+  useHeldShortcutReveal();
   const gettingStarted = useGettingStartedChecklist(isStateLoaded);
   const onboardingOverlayActive = gettingStarted.visible || gettingStarted.showCelebration;
   useUpdateListener(onboardingOverlayActive);

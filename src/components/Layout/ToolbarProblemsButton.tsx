@@ -3,6 +3,7 @@ import { Button } from "@/components/ui/button";
 import { AlertCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { ShortcutRevealChip } from "@/components/ui/ShortcutRevealChip";
 import { createTooltipWithShortcut } from "@/lib/platform";
 import { useKeybindingDisplay, useShortcutHintHover } from "@/hooks";
 
@@ -43,6 +44,7 @@ export const ToolbarProblemsButton = memo(function ToolbarProblemsButton({
             {errorCount > 0 && (
               <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-status-error rounded-full" />
             )}
+            <ShortcutRevealChip actionId="panel.toggleDiagnostics" />
           </Button>
         </TooltipTrigger>
         <TooltipContent side="bottom">

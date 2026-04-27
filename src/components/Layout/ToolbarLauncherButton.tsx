@@ -2,6 +2,7 @@ import { memo, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { SquareTerminal, Globe } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { ShortcutRevealChip } from "@/components/ui/ShortcutRevealChip";
 import { createTooltipWithShortcut } from "@/lib/platform";
 import { useKeybindingDisplay, useShortcutHintHover } from "@/hooks";
 
@@ -30,7 +31,7 @@ const LAUNCHER_CONFIG: Record<
   },
 };
 
-const toolbarIconButtonClass = "toolbar-icon-button text-daintree-text transition-colors";
+const toolbarIconButtonClass = "toolbar-icon-button text-daintree-text transition-colors relative";
 
 interface ToolbarLauncherButtonProps {
   type: LauncherType;
@@ -67,6 +68,7 @@ export const ToolbarLauncherButton = memo(function ToolbarLauncherButton({
             aria-label={config.label}
           >
             <Icon />
+            <ShortcutRevealChip actionId={config.keybindingAction} />
           </Button>
         </TooltipTrigger>
         <TooltipContent side="bottom">

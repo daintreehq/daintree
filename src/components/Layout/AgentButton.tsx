@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { ShortcutRevealChip } from "@/components/ui/ShortcutRevealChip";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -227,7 +228,7 @@ export function AgentButton({
                     disabled={isLoading}
                     data-toolbar-item={dataToolbarItem}
                     className={cn(
-                      "toolbar-agent-button text-daintree-text transition-colors",
+                      "toolbar-agent-button text-daintree-text transition-colors relative",
                       isReady &&
                         "hover:text-[var(--toolbar-control-hover-fg,var(--theme-accent-primary))] focus-visible:text-[var(--toolbar-control-hover-fg,var(--theme-accent-primary))]",
                       needsSetup && "opacity-70"
@@ -235,6 +236,7 @@ export function AgentButton({
                     aria-label={ariaLabel}
                   >
                     {iconElement}
+                    <ShortcutRevealChip actionId={`agent.${type}`} />
                   </Button>
                 </span>
               </TooltipTrigger>
@@ -341,7 +343,7 @@ export function AgentButton({
                   disabled={isLoading}
                   data-toolbar-item={dataToolbarItem}
                   className={cn(
-                    "toolbar-agent-button text-daintree-text transition-colors rounded-r-none border-r border-transparent",
+                    "toolbar-agent-button text-daintree-text transition-colors rounded-r-none border-r border-transparent relative",
                     isReady &&
                       "hover:text-[var(--toolbar-control-hover-fg,var(--theme-accent-primary))] focus-visible:text-[var(--toolbar-control-hover-fg,var(--theme-accent-primary))]",
                     needsSetup && "opacity-70"
@@ -349,6 +351,7 @@ export function AgentButton({
                   aria-label={ariaLabel}
                 >
                   {iconElement}
+                  <ShortcutRevealChip actionId={`agent.${type}`} />
                 </Button>
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
