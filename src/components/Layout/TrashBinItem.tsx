@@ -6,7 +6,7 @@ import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import type { TrashedTerminal } from "@/store/slices";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { deriveTerminalChrome } from "@/utils/terminalChrome";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { isUselessTitle } from "@shared/utils/isUselessTitle";
 import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
 
@@ -96,51 +96,47 @@ export function TrashBinItem({ terminal, trashedInfo, worktreeName }: TrashBinIt
       </div>
 
       <div className="flex gap-1">
-        <TooltipProvider>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <span className="inline-flex">
-                <Button
-                  variant="ghost-success"
-                  size="icon-sm"
-                  onClick={handleRestore}
-                  disabled={!canRestore}
-                  aria-label={
-                    isOrphan
-                      ? canRestore
-                        ? `Adopt ${terminalName} to current worktree`
-                        : "No active worktree to restore to"
-                      : `Restore ${terminalName}`
-                  }
-                >
-                  <RotateCcw aria-hidden="true" />
-                </Button>
-              </span>
-            </TooltipTrigger>
-            <TooltipContent side="bottom">
-              {isOrphan
-                ? canRestore
-                  ? "Adopt to current worktree"
-                  : "No active worktree - select a worktree first"
-                : `Restore ${terminalName}`}
-            </TooltipContent>
-          </Tooltip>
-        </TooltipProvider>
-        <TooltipProvider>
-          <Tooltip>
-            <TooltipTrigger asChild>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span className="inline-flex">
               <Button
-                variant="ghost-danger"
+                variant="ghost-success"
                 size="icon-sm"
-                onClick={handleKill}
-                aria-label={`Remove ${terminalName} permanently`}
+                onClick={handleRestore}
+                disabled={!canRestore}
+                aria-label={
+                  isOrphan
+                    ? canRestore
+                      ? `Adopt ${terminalName} to current worktree`
+                      : "No active worktree to restore to"
+                    : `Restore ${terminalName}`
+                }
               >
-                <X aria-hidden="true" />
+                <RotateCcw aria-hidden="true" />
               </Button>
-            </TooltipTrigger>
-            <TooltipContent side="bottom">{`Remove ${terminalName} permanently`}</TooltipContent>
-          </Tooltip>
-        </TooltipProvider>
+            </span>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">
+            {isOrphan
+              ? canRestore
+                ? "Adopt to current worktree"
+                : "No active worktree - select a worktree first"
+              : `Restore ${terminalName}`}
+          </TooltipContent>
+        </Tooltip>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost-danger"
+              size="icon-sm"
+              onClick={handleKill}
+              aria-label={`Remove ${terminalName} permanently`}
+            >
+              <X aria-hidden="true" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">{`Remove ${terminalName} permanently`}</TooltipContent>
+        </Tooltip>
       </div>
     </div>
   );

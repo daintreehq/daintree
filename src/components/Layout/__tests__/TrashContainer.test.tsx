@@ -1,10 +1,18 @@
 // @vitest-environment jsdom
+import type React from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, act } from "@testing-library/react";
 import { TrashContainer } from "../TrashContainer";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import type { TerminalInstance } from "@/store";
 import type { TrashedTerminal } from "@/store/slices";
+
+vi.mock("@/components/ui/tooltip", () => ({
+  TooltipProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  Tooltip: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  TooltipTrigger: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  TooltipContent: () => null,
+}));
 
 vi.mock("@/hooks/useWorktrees", () => ({
   useWorktrees: () => ({ worktreeMap: new Map() }),

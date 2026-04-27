@@ -1,7 +1,7 @@
 import React from "react";
 import { cn } from "@/lib/utils";
 import type { ActionPaletteItem as ActionPaletteItemType } from "@/hooks/useActionPalette";
-import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ACTION_CATEGORY_COLORS, ACTION_CATEGORY_DEFAULT_COLOR } from "@/config/categoryColors";
 
 interface ActionPaletteItemProps {
@@ -60,14 +60,12 @@ export const ActionPaletteItem = React.memo(function ActionPaletteItem({
 
   if (!item.enabled && item.disabledReason) {
     return (
-      <TooltipProvider>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <span className="inline-flex w-full">{buttonContent}</span>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">{item.disabledReason}</TooltipContent>
-        </Tooltip>
-      </TooltipProvider>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <span className="inline-flex w-full">{buttonContent}</span>
+        </TooltipTrigger>
+        <TooltipContent side="bottom">{item.disabledReason}</TooltipContent>
+      </Tooltip>
     );
   }
 

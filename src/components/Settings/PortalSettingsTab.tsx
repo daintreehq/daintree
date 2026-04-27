@@ -1,7 +1,7 @@
 import { useId, useState } from "react";
 import { Plus, Trash2, Globe, Check, X, Search, PanelRight, Link } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { usePortalStore } from "@/store/portalStore";
 import { getAgentConfig, isRegisteredAgent } from "@/config/agents";
 import { actionService } from "@/services/ActionService";
@@ -245,16 +245,14 @@ export function PortalSettingsTab() {
           <div className="flex flex-col">
             <span className="text-sm text-daintree-text">{link.title}</span>
             {!allowDelete && (
-              <TooltipProvider>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <span className="text-[11px] font-mono text-daintree-text/50 truncate min-w-0">
-                      {link.url}
-                    </span>
-                  </TooltipTrigger>
-                  <TooltipContent side="bottom">{link.url}</TooltipContent>
-                </Tooltip>
-              </TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className="text-[11px] font-mono text-daintree-text/50 truncate min-w-0">
+                    {link.url}
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">{link.url}</TooltipContent>
+              </Tooltip>
             )}
           </div>
         </div>

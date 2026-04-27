@@ -1,7 +1,7 @@
 import { memo } from "react";
 import { Button } from "@/components/ui/button";
 import { SlidersHorizontal } from "lucide-react";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -40,26 +40,24 @@ export const ToolbarSettingsButton = memo(function ToolbarSettingsButton({
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>
-        <TooltipProvider>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon"
-                data-toolbar-item={dataToolbarItem}
-                onClick={onSettings}
-                onPointerEnter={onPreloadSettings}
-                className={toolbarIconButtonClass}
-                aria-label="Open settings"
-              >
-                <SlidersHorizontal />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent side="bottom">
-              {createTooltipWithShortcut("Open Settings", settingsShortcut)}
-            </TooltipContent>
-          </Tooltip>
-        </TooltipProvider>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon"
+              data-toolbar-item={dataToolbarItem}
+              onClick={onSettings}
+              onPointerEnter={onPreloadSettings}
+              className={toolbarIconButtonClass}
+              aria-label="Open settings"
+            >
+              <SlidersHorizontal />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">
+            {createTooltipWithShortcut("Open Settings", settingsShortcut)}
+          </TooltipContent>
+        </Tooltip>
       </ContextMenuTrigger>
       <ContextMenuContent>
         {SETTINGS_CONTEXT_MENU_TABS.map(({ tab, label }) => (

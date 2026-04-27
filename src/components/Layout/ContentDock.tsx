@@ -4,7 +4,7 @@ import { SortableContext, horizontalListSortingStrategy } from "@dnd-kit/sortabl
 import { useDroppable } from "@dnd-kit/core";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   usePanelStore,
   useProjectStore,
@@ -188,25 +188,23 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
             {/* Left Scroll Chevron - Overlay */}
             {canScrollLeft && (
               <div className="absolute left-0 top-1/2 -translate-y-1/2 z-10 pointer-events-none bg-gradient-to-r from-[var(--dock-bg)] via-[var(--dock-bg)]/90 to-transparent pr-4">
-                <TooltipProvider>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <button
-                        type="button"
-                        onClick={scrollLeft}
-                        className={cn(
-                          "pointer-events-auto p-1.5 text-daintree-text/60 hover:text-daintree-text",
-                          "rounded-[var(--radius-md)] transition-colors",
-                          "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
-                        )}
-                        aria-label="Scroll left"
-                      >
-                        <ChevronLeft className="w-4 h-4" />
-                      </button>
-                    </TooltipTrigger>
-                    <TooltipContent side="bottom">Scroll left</TooltipContent>
-                  </Tooltip>
-                </TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      type="button"
+                      onClick={scrollLeft}
+                      className={cn(
+                        "pointer-events-auto p-1.5 text-daintree-text/60 hover:text-daintree-text",
+                        "rounded-[var(--radius-md)] transition-colors",
+                        "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
+                      )}
+                      aria-label="Scroll left"
+                    >
+                      <ChevronLeft className="w-4 h-4" />
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">Scroll left</TooltipContent>
+                </Tooltip>
               </div>
             )}
 
@@ -261,25 +259,23 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
             {/* Right Scroll Chevron - Overlay */}
             {canScrollRight && (
               <div className="absolute right-0 top-1/2 -translate-y-1/2 z-10 pointer-events-none bg-gradient-to-l from-[var(--dock-bg)] via-[var(--dock-bg)]/90 to-transparent pl-4">
-                <TooltipProvider>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <button
-                        type="button"
-                        onClick={scrollRight}
-                        className={cn(
-                          "pointer-events-auto p-1.5 text-daintree-text/60 hover:text-daintree-text",
-                          "rounded-[var(--radius-md)] transition-colors",
-                          "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
-                        )}
-                        aria-label="Scroll right"
-                      >
-                        <ChevronRight className="w-4 h-4" />
-                      </button>
-                    </TooltipTrigger>
-                    <TooltipContent side="bottom">Scroll right</TooltipContent>
-                  </Tooltip>
-                </TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      type="button"
+                      onClick={scrollRight}
+                      className={cn(
+                        "pointer-events-auto p-1.5 text-daintree-text/60 hover:text-daintree-text",
+                        "rounded-[var(--radius-md)] transition-colors",
+                        "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
+                      )}
+                      aria-label="Scroll right"
+                    >
+                      <ChevronRight className="w-4 h-4" />
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">Scroll right</TooltipContent>
+                </Tooltip>
               </div>
             )}
           </div>

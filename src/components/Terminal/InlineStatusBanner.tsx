@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, type CSSProperties } from "react";
 import { cn } from "@/lib/utils";
-import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 type ButtonVariant = "primary" | "accent" | "dismiss" | "danger" | "dangerFilled";
 
@@ -188,12 +188,10 @@ function InlineStatusBannerComponent({
           );
 
           return action.title ? (
-            <TooltipProvider key={action.id}>
-              <Tooltip>
-                <TooltipTrigger asChild>{buttonEl}</TooltipTrigger>
-                <TooltipContent side="bottom">{action.title}</TooltipContent>
-              </Tooltip>
-            </TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>{buttonEl}</TooltipTrigger>
+              <TooltipContent side="bottom">{action.title}</TooltipContent>
+            </Tooltip>
           ) : (
             <React.Fragment key={action.id}>{buttonEl}</React.Fragment>
           );

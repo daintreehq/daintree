@@ -7,7 +7,7 @@ import { LiveTimeAgo } from "@/components/Worktree/LiveTimeAgo";
 import { RecipeEditor } from "@/components/TerminalRecipe/RecipeEditor";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { AppDialog } from "@/components/ui/AppDialog";
-import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { TerminalRecipe, Worktree } from "@/types";
 import { isInRepoRecipeId } from "@shared/utils/recipeFilename";
 
@@ -170,7 +170,7 @@ export function RecipesTab({
   };
 
   return (
-    <TooltipProvider delayDuration={400} skipDelayDuration={300}>
+    <>
       <div className="mb-6">
         <h3 className="text-sm font-semibold text-daintree-text/80 mb-2 flex items-center gap-2">
           <TerminalRecipeIcon className="h-4 w-4" />
@@ -397,6 +397,6 @@ export function RecipesTab({
           </Button>
         </AppDialog.Footer>
       </AppDialog>
-    </TooltipProvider>
+    </>
   );
 }

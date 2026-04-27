@@ -17,7 +17,7 @@ import { TerminalRecipeIcon } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
-import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useRecipeStore } from "@/store/recipeStore";
 import { useProjectStore } from "@/store/projectStore";
 import { LiveTimeAgo } from "@/components/Worktree/LiveTimeAgo";
@@ -280,7 +280,7 @@ export function RecipeManager({
   };
 
   return (
-    <TooltipProvider delayDuration={400} skipDelayDuration={300}>
+    <>
       <AppDialog isOpen={isOpen} onClose={onClose} size="lg">
         <AppDialog.Header>
           <AppDialog.Title>
@@ -478,6 +478,6 @@ export function RecipeManager({
           </Button>
         </AppDialog.Footer>
       </AppDialog>
-    </TooltipProvider>
+    </>
   );
 }

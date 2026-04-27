@@ -1,3 +1,4 @@
+import type React from "react";
 /**
  * @vitest-environment jsdom
  */
@@ -7,6 +8,13 @@ import type { ReactNode } from "react";
 import { GitHubListItem } from "../GitHubListItem";
 import type { GitHubIssue, GitHubPR } from "@shared/types/github";
 import { actionService } from "@/services/ActionService";
+
+vi.mock("@/components/ui/tooltip", () => ({
+  TooltipProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  Tooltip: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  TooltipTrigger: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  TooltipContent: () => null,
+}));
 
 vi.mock("react-dom", async () => {
   const actual = await vi.importActual<typeof import("react-dom")>("react-dom");

@@ -23,7 +23,7 @@ import type {
   GitHubPRCIStatus,
   GitHubPRCISummary,
 } from "@shared/types/github";
-import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -241,42 +241,38 @@ export function GitHubListItem({
               (() => {
                 const ciInfo = getCIStatusInfo(item.ciStatus, item.ciSummary);
                 return (
-                  <TooltipProvider>
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <span className="shrink-0" aria-label={ciInfo.tooltip}>
-                          {ciInfo.icon ? (
-                            <ciInfo.icon className={cn("w-3 h-3", ciInfo.color)} />
-                          ) : (
-                            <span className={cn("block w-2 h-2 rounded-full", ciInfo.color)} />
-                          )}
-                        </span>
-                      </TooltipTrigger>
-                      <TooltipContent side="bottom">{ciInfo.tooltip}</TooltipContent>
-                    </Tooltip>
-                  </TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <span className="shrink-0" aria-label={ciInfo.tooltip}>
+                        {ciInfo.icon ? (
+                          <ciInfo.icon className={cn("w-3 h-3", ciInfo.color)} />
+                        ) : (
+                          <span className={cn("block w-2 h-2 rounded-full", ciInfo.color)} />
+                        )}
+                      </span>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom">{ciInfo.tooltip}</TooltipContent>
+                  </Tooltip>
                 );
               })()}
 
-            <TooltipProvider>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      void handleCopyNumber();
-                    }}
-                    className="shrink-0 text-xs text-muted-foreground hover:text-foreground transition-colors flex items-center gap-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded px-1"
-                    aria-label={`Copy number ${item.number}`}
-                  >
-                    {copied ? <Check className="w-3 h-3 text-status-success" /> : <span>#</span>}
-                    <span>{item.number}</span>
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent side="bottom">{copied ? "Copied!" : "Copy number"}</TooltipContent>
-              </Tooltip>
-            </TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    void handleCopyNumber();
+                  }}
+                  className="shrink-0 text-xs text-muted-foreground hover:text-foreground transition-colors flex items-center gap-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded px-1"
+                  aria-label={`Copy number ${item.number}`}
+                >
+                  {copied ? <Check className="w-3 h-3 text-status-success" /> : <span>#</span>}
+                  <span>{item.number}</span>
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">{copied ? "Copied!" : "Copy number"}</TooltipContent>
+            </Tooltip>
           </div>
 
           {/* Metadata row: author, time, branch/labels, worktree, menu */}
@@ -322,28 +318,26 @@ export function GitHubListItem({
             {!isItemPR && "linkedPR" in item && item.linkedPR && (
               <>
                 <span className="shrink-0">&middot;</span>
-                <TooltipProvider>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          void actionService.dispatch(
-                            "system.openExternal",
-                            { url: item.linkedPR!.url },
-                            { source: "user" }
-                          );
-                        }}
-                        className="shrink-0 text-muted-foreground hover:text-foreground transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded p-0.5"
-                        aria-label={`Linked PR #${item.linkedPR.number}`}
-                      >
-                        <GitPullRequest className="w-3 h-3" />
-                      </button>
-                    </TooltipTrigger>
-                    <TooltipContent side="bottom">PR #{item.linkedPR.number}</TooltipContent>
-                  </Tooltip>
-                </TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        void actionService.dispatch(
+                          "system.openExternal",
+                          { url: item.linkedPR!.url },
+                          { source: "user" }
+                        );
+                      }}
+                      className="shrink-0 text-muted-foreground hover:text-foreground transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded p-0.5"
+                      aria-label={`Linked PR #${item.linkedPR.number}`}
+                    >
+                      <GitPullRequest className="w-3 h-3" />
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">PR #{item.linkedPR.number}</TooltipContent>
+                </Tooltip>
               </>
             )}
 
@@ -359,59 +353,55 @@ export function GitHubListItem({
             )}
 
             {hasWorktree ? (
-              <TooltipProvider>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    {isActiveWorktree ? (
-                      <span className="shrink-0 text-daintree-accent">
-                        <WorktreeIcon className="w-3.5 h-3.5" />
-                      </span>
-                    ) : onSwitchToWorktree && matchedWorktree ? (
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          onSwitchToWorktree(matchedWorktree.id);
-                        }}
-                        className="shrink-0 text-github-open hover:text-github-open/80 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded p-0.5"
-                        aria-label="Switch to worktree"
-                      >
-                        <WorktreeIcon className="w-3.5 h-3.5" />
-                      </button>
-                    ) : (
-                      <span className="shrink-0 text-github-open">
-                        <WorktreeIcon className="w-3.5 h-3.5" />
-                      </span>
-                    )}
-                  </TooltipTrigger>
-                  <TooltipContent side="bottom">
-                    {isActiveWorktree
-                      ? "Active worktree"
-                      : onSwitchToWorktree && matchedWorktree
-                        ? "Switch to worktree"
-                        : "Has worktree"}
-                  </TooltipContent>
-                </Tooltip>
-              </TooltipProvider>
-            ) : item.state === "OPEN" && onCreateWorktree ? (
-              <TooltipProvider>
-                <Tooltip>
-                  <TooltipTrigger asChild>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  {isActiveWorktree ? (
+                    <span className="shrink-0 text-daintree-accent">
+                      <WorktreeIcon className="w-3.5 h-3.5" />
+                    </span>
+                  ) : onSwitchToWorktree && matchedWorktree ? (
                     <button
                       type="button"
                       onClick={(e) => {
                         e.stopPropagation();
-                        onCreateWorktree(item);
+                        onSwitchToWorktree(matchedWorktree.id);
                       }}
-                      className="shrink-0 text-muted-foreground/40 hover:text-muted-foreground transition-colors opacity-0 group-hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded p-0.5"
-                      aria-label="Create worktree"
+                      className="shrink-0 text-github-open hover:text-github-open/80 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded p-0.5"
+                      aria-label="Switch to worktree"
                     >
                       <WorktreeIcon className="w-3.5 h-3.5" />
                     </button>
-                  </TooltipTrigger>
-                  <TooltipContent side="bottom">Create worktree</TooltipContent>
-                </Tooltip>
-              </TooltipProvider>
+                  ) : (
+                    <span className="shrink-0 text-github-open">
+                      <WorktreeIcon className="w-3.5 h-3.5" />
+                    </span>
+                  )}
+                </TooltipTrigger>
+                <TooltipContent side="bottom">
+                  {isActiveWorktree
+                    ? "Active worktree"
+                    : onSwitchToWorktree && matchedWorktree
+                      ? "Switch to worktree"
+                      : "Has worktree"}
+                </TooltipContent>
+              </Tooltip>
+            ) : item.state === "OPEN" && onCreateWorktree ? (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onCreateWorktree(item);
+                    }}
+                    className="shrink-0 text-muted-foreground/40 hover:text-muted-foreground transition-colors opacity-0 group-hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded p-0.5"
+                    aria-label="Create worktree"
+                  >
+                    <WorktreeIcon className="w-3.5 h-3.5" />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">Create worktree</TooltipContent>
+              </Tooltip>
             ) : null}
 
             <DropdownMenu>

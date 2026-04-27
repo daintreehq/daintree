@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback } from "react";
 import { Pause, Lock } from "lucide-react";
 import type { AgentState, PanelKind, AgentStateChangeTrigger } from "@/types";
 import { cn } from "@/lib/utils";
-import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   getEffectiveStateIcon,
   getEffectiveStateColor,
@@ -165,82 +165,78 @@ function TerminalHeaderContentComponent({
     const stateLabel = getEffectiveStateLabel(agentState, waitingReason);
 
     return (
-      <TooltipProvider>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <div className="inline-flex items-center gap-1.5 shrink-0">
-              <div className="relative inline-flex items-center shrink-0">
-                <div
-                  className={cn(
-                    "inline-flex items-center justify-center w-5 h-5 rounded-full border shrink-0",
-                    chipStyle,
-                    effectiveColor
-                  )}
-                  role="status"
-                  aria-label={`Agent state: ${stateLabel}`}
-                >
-                  <StateIcon
-                    className={cn(
-                      "w-3 h-3",
-                      agentState === "working" && "animate-spin-slow",
-                      "motion-reduce:animate-none"
-                    )}
-                    aria-hidden="true"
-                  />
-                </div>
-                {errorCount > 0 && (
-                  <span
-                    className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-status-error"
-                    aria-label={`${errorCount} error${errorCount > 1 ? "s" : ""}`}
-                  />
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <div className="inline-flex items-center gap-1.5 shrink-0">
+            <div className="relative inline-flex items-center shrink-0">
+              <div
+                className={cn(
+                  "inline-flex items-center justify-center w-5 h-5 rounded-full border shrink-0",
+                  chipStyle,
+                  effectiveColor
                 )}
+                role="status"
+                aria-label={`Agent state: ${stateLabel}`}
+              >
+                <StateIcon
+                  className={cn(
+                    "w-3 h-3",
+                    agentState === "working" && "animate-spin-slow",
+                    "motion-reduce:animate-none"
+                  )}
+                  aria-hidden="true"
+                />
               </div>
-              {(agentState === "completed" || agentState === "exited") && sessionCost != null && (
-                <span
-                  className="text-[11px] text-daintree-text/50 font-mono shrink-0"
-                  style={{ fontVariantNumeric: "tabular-nums" }}
-                >
-                  ${sessionCost.toFixed(2)}
-                  {sessionTokens != null && ` · ${formatTokenCount(sessionTokens)}`}
-                </span>
-              )}
-            </div>
-          </TooltipTrigger>
-          <TooltipContent side="bottom" className="max-w-xs">
-            <div className="flex flex-col gap-0.5">
-              <span className="font-medium">
-                {headline}
-                {startedAt != null && <ElapsedTime startedAt={startedAt} />}
-              </span>
-              {isExited && exitCode != null && (
-                <span className="text-status-error tabular-nums">Exit code: {exitCode}</span>
-              )}
-              <span>
-                State: {stateLabel}
-                {showStateDuration && <> · {formatElapsedDuration(tick - lastStateChange!)}</>}
-                {stateChangeTrigger && <> · {TRIGGER_LABELS[stateChangeTrigger]}</>}
-                {showConfidence && <> ({Math.round(stateChangeConfidence * 100)}%)</>}
-              </span>
-              {lastStateChange != null && lastStateChange > 0 && (
-                <span className="text-daintree-text/60">
-                  Since: {formatTimeAgo(lastStateChange)}
-                </span>
-              )}
-              {sessionCost != null && (
-                <span className="text-daintree-text/60 tabular-nums">
-                  Cost: ${sessionCost.toFixed(2)}
-                  {sessionTokens != null && ` · ${formatTokenCount(sessionTokens)} tokens`}
-                </span>
-              )}
               {errorCount > 0 && (
-                <span className="text-status-error">
-                  {errorCount} error{errorCount > 1 ? "s" : ""}
-                </span>
+                <span
+                  className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-status-error"
+                  aria-label={`${errorCount} error${errorCount > 1 ? "s" : ""}`}
+                />
               )}
             </div>
-          </TooltipContent>
-        </Tooltip>
-      </TooltipProvider>
+            {(agentState === "completed" || agentState === "exited") && sessionCost != null && (
+              <span
+                className="text-[11px] text-daintree-text/50 font-mono shrink-0"
+                style={{ fontVariantNumeric: "tabular-nums" }}
+              >
+                ${sessionCost.toFixed(2)}
+                {sessionTokens != null && ` · ${formatTokenCount(sessionTokens)}`}
+              </span>
+            )}
+          </div>
+        </TooltipTrigger>
+        <TooltipContent side="bottom" className="max-w-xs">
+          <div className="flex flex-col gap-0.5">
+            <span className="font-medium">
+              {headline}
+              {startedAt != null && <ElapsedTime startedAt={startedAt} />}
+            </span>
+            {isExited && exitCode != null && (
+              <span className="text-status-error tabular-nums">Exit code: {exitCode}</span>
+            )}
+            <span>
+              State: {stateLabel}
+              {showStateDuration && <> · {formatElapsedDuration(tick - lastStateChange!)}</>}
+              {stateChangeTrigger && <> · {TRIGGER_LABELS[stateChangeTrigger]}</>}
+              {showConfidence && <> ({Math.round(stateChangeConfidence * 100)}%)</>}
+            </span>
+            {lastStateChange != null && lastStateChange > 0 && (
+              <span className="text-daintree-text/60">Since: {formatTimeAgo(lastStateChange)}</span>
+            )}
+            {sessionCost != null && (
+              <span className="text-daintree-text/60 tabular-nums">
+                Cost: ${sessionCost.toFixed(2)}
+                {sessionTokens != null && ` · ${formatTokenCount(sessionTokens)} tokens`}
+              </span>
+            )}
+            {errorCount > 0 && (
+              <span className="text-status-error">
+                {errorCount} error{errorCount > 1 ? "s" : ""}
+              </span>
+            )}
+          </div>
+        </TooltipContent>
+      </Tooltip>
     );
   };
 
@@ -248,16 +244,14 @@ function TerminalHeaderContentComponent({
     <>
       {/* Command Pill - shows currently running command (inline with title) */}
       {showCommandPill && (
-        <TooltipProvider>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <span className="px-3 py-1 rounded-full text-[11px] font-mono bg-overlay-soft text-daintree-text/60 border border-divider truncate max-w-[20rem]">
-                {lastCommand}
-              </span>
-            </TooltipTrigger>
-            <TooltipContent side="bottom">{lastCommand}</TooltipContent>
-          </Tooltip>
-        </TooltipProvider>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span className="px-3 py-1 rounded-full text-[11px] font-mono bg-overlay-soft text-daintree-text/60 border border-divider truncate max-w-[20rem]">
+              {lastCommand}
+            </span>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">{lastCommand}</TooltipContent>
+        </Tooltip>
       )}
 
       {/* Exit code badge */}
@@ -269,142 +263,126 @@ function TerminalHeaderContentComponent({
 
       {/* Queue count badge */}
       {queueCount > 0 && (
-        <TooltipProvider>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <div
-                className="inline-flex items-center gap-1 text-xs font-sans bg-daintree-accent/15 text-daintree-text px-1.5 py-0.5 rounded ml-1"
-                role="status"
-                aria-live="polite"
-              >
-                <span className="font-mono tabular-nums">{queueCount}</span>
-                <span>queued</span>
-              </div>
-            </TooltipTrigger>
-            <TooltipContent side="bottom">
-              {`${queueCount} command${queueCount > 1 ? "s" : ""} queued`}
-            </TooltipContent>
-          </Tooltip>
-        </TooltipProvider>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <div
+              className="inline-flex items-center gap-1 text-xs font-sans bg-daintree-accent/15 text-daintree-text px-1.5 py-0.5 rounded ml-1"
+              role="status"
+              aria-live="polite"
+            >
+              <span className="font-mono tabular-nums">{queueCount}</span>
+              <span>queued</span>
+            </div>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">
+            {`${queueCount} command${queueCount > 1 ? "s" : ""} queued`}
+          </TooltipContent>
+        </Tooltip>
       )}
 
       {/* Paused badge */}
       {flowStatus === "paused-backpressure" && (
-        <TooltipProvider>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <div
-                className="flex items-center gap-1 text-xs font-sans bg-status-warning/15 text-status-warning px-1.5 py-0.5 rounded ml-1"
-                role="status"
-                aria-live="polite"
-              >
-                <Pause className="w-3 h-3" aria-hidden="true" />
-                Paused
-              </div>
-            </TooltipTrigger>
-            <TooltipContent side="bottom">
-              Terminal paused due to buffer overflow (right-click for Force Resume)
-            </TooltipContent>
-          </Tooltip>
-        </TooltipProvider>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <div
+              className="flex items-center gap-1 text-xs font-sans bg-status-warning/15 text-status-warning px-1.5 py-0.5 rounded ml-1"
+              role="status"
+              aria-live="polite"
+            >
+              <Pause className="w-3 h-3" aria-hidden="true" />
+              Paused
+            </div>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">
+            Terminal paused due to buffer overflow (right-click for Force Resume)
+          </TooltipContent>
+        </Tooltip>
       )}
 
       {/* Suspended badge */}
       {flowStatus === "suspended" && (
-        <TooltipProvider>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <div
-                className="flex items-center gap-1 text-xs font-sans bg-status-warning/15 text-status-warning px-1.5 py-0.5 rounded ml-1"
-                role="status"
-                aria-live="polite"
-              >
-                <Pause className="w-3 h-3" aria-hidden="true" />
-                Suspended
-              </div>
-            </TooltipTrigger>
-            <TooltipContent side="bottom">
-              Terminal output streaming suspended due to a stall (auto-recovers on focus)
-            </TooltipContent>
-          </Tooltip>
-        </TooltipProvider>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <div
+              className="flex items-center gap-1 text-xs font-sans bg-status-warning/15 text-status-warning px-1.5 py-0.5 rounded ml-1"
+              role="status"
+              aria-live="polite"
+            >
+              <Pause className="w-3 h-3" aria-hidden="true" />
+              Suspended
+            </div>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">
+            Terminal output streaming suspended due to a stall (auto-recovers on focus)
+          </TooltipContent>
+        </Tooltip>
       )}
 
       {/* Input locked indicator */}
       {isInputLocked && (
-        <TooltipProvider>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <div className="flex items-center text-daintree-text/50 shrink-0" role="status">
-                <Lock className="w-3.5 h-3.5" aria-hidden="true" />
-              </div>
-            </TooltipTrigger>
-            <TooltipContent side="bottom">Input locked (read-only monitor mode)</TooltipContent>
-          </Tooltip>
-        </TooltipProvider>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <div className="flex items-center text-daintree-text/50 shrink-0" role="status">
+              <Lock className="w-3.5 h-3.5" aria-hidden="true" />
+            </div>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">Input locked (read-only monitor mode)</TooltipContent>
+        </Tooltip>
       )}
 
       {/* Resource monitoring badge */}
       {showResource && (
-        <TooltipProvider>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <div
-                className={cn(
-                  "inline-flex items-center gap-1 text-[11px] font-mono shrink-0 ml-1",
-                  {
-                    "text-daintree-text/40":
-                      getResourceSeverity(resourceState.cpuPercent, resourceState.memoryKb) ===
-                      "muted",
-                    "text-status-warning":
-                      getResourceSeverity(resourceState.cpuPercent, resourceState.memoryKb) ===
-                      "amber",
-                    "text-status-error":
-                      getResourceSeverity(resourceState.cpuPercent, resourceState.memoryKb) ===
-                      "red",
-                  }
-                )}
-                style={{ fontVariantNumeric: "tabular-nums" }}
-                role="status"
-              >
-                <TerminalResourceSparkline history={resourceState.cpuHistory} />
-                <span>
-                  {Math.round(resourceState.cpuPercent)}% · {formatMemory(resourceState.memoryKb)}
-                </span>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <div
+              className={cn("inline-flex items-center gap-1 text-[11px] font-mono shrink-0 ml-1", {
+                "text-daintree-text/40":
+                  getResourceSeverity(resourceState.cpuPercent, resourceState.memoryKb) === "muted",
+                "text-status-warning":
+                  getResourceSeverity(resourceState.cpuPercent, resourceState.memoryKb) === "amber",
+                "text-status-error":
+                  getResourceSeverity(resourceState.cpuPercent, resourceState.memoryKb) === "red",
+              })}
+              style={{ fontVariantNumeric: "tabular-nums" }}
+              role="status"
+            >
+              <TerminalResourceSparkline history={resourceState.cpuHistory} />
+              <span>
+                {Math.round(resourceState.cpuPercent)}% · {formatMemory(resourceState.memoryKb)}
+              </span>
+            </div>
+          </TooltipTrigger>
+          <TooltipContent side="bottom" className="max-w-xs">
+            <div className="flex flex-col gap-1">
+              <div className="font-medium" style={{ fontVariantNumeric: "tabular-nums" }}>
+                CPU: {resourceState.cpuPercent.toFixed(1)}% · Memory:{" "}
+                {formatMemory(resourceState.memoryKb)}
               </div>
-            </TooltipTrigger>
-            <TooltipContent side="bottom" className="max-w-xs">
-              <div className="flex flex-col gap-1">
-                <div className="font-medium" style={{ fontVariantNumeric: "tabular-nums" }}>
-                  CPU: {resourceState.cpuPercent.toFixed(1)}% · Memory:{" "}
-                  {formatMemory(resourceState.memoryKb)}
-                </div>
-                {resourceState.breakdown.length > 0 && (
-                  <table className="text-xs" style={{ fontVariantNumeric: "tabular-nums" }}>
-                    <thead>
-                      <tr className="text-daintree-text/60">
-                        <th className="text-left pr-2">PID</th>
-                        <th className="text-left pr-2">Name</th>
-                        <th className="text-right pr-2">CPU</th>
-                        <th className="text-right">Mem</th>
+              {resourceState.breakdown.length > 0 && (
+                <table className="text-xs" style={{ fontVariantNumeric: "tabular-nums" }}>
+                  <thead>
+                    <tr className="text-daintree-text/60">
+                      <th className="text-left pr-2">PID</th>
+                      <th className="text-left pr-2">Name</th>
+                      <th className="text-right pr-2">CPU</th>
+                      <th className="text-right">Mem</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {resourceState.breakdown.map((p) => (
+                      <tr key={p.pid}>
+                        <td className="pr-2 text-daintree-text/60">{p.pid}</td>
+                        <td className="pr-2 truncate max-w-[8rem]">{p.comm}</td>
+                        <td className="text-right pr-2">{p.cpuPercent.toFixed(1)}%</td>
+                        <td className="text-right">{formatMemory(p.memoryKb)}</td>
                       </tr>
-                    </thead>
-                    <tbody>
-                      {resourceState.breakdown.map((p) => (
-                        <tr key={p.pid}>
-                          <td className="pr-2 text-daintree-text/60">{p.pid}</td>
-                          <td className="pr-2 truncate max-w-[8rem]">{p.comm}</td>
-                          <td className="text-right pr-2">{p.cpuPercent.toFixed(1)}%</td>
-                          <td className="text-right">{formatMemory(p.memoryKb)}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                )}
-              </div>
-            </TooltipContent>
-          </Tooltip>
-        </TooltipProvider>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          </TooltipContent>
+        </Tooltip>
       )}
 
       {/* Agent state chip */}

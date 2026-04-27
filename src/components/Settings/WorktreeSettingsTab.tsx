@@ -3,7 +3,7 @@ import { AlertCircle, Check, RotateCcw } from "lucide-react";
 import { Spinner } from "@/components/ui/Spinner";
 import { WorktreeIcon } from "@/components/icons";
 import { cn } from "@/lib/utils";
-import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   validatePathPattern,
   previewPathPattern,
@@ -179,20 +179,18 @@ export function WorktreeSettingsTab() {
                 )}
                 placeholder="{parent-dir}/{base-folder}-worktrees/{branch-slug}"
               />
-              <TooltipProvider>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <button
-                      onClick={handleReset}
-                      className="px-3 py-1.5 border border-daintree-border rounded-[var(--radius-md)] text-daintree-text/60 hover:text-daintree-text hover:bg-daintree-border/50 transition-colors"
-                      aria-label="Reset to default"
-                    >
-                      <RotateCcw className="w-4 h-4" />
-                    </button>
-                  </TooltipTrigger>
-                  <TooltipContent side="bottom">Reset to default</TooltipContent>
-                </Tooltip>
-              </TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    onClick={handleReset}
+                    className="px-3 py-1.5 border border-daintree-border rounded-[var(--radius-md)] text-daintree-text/60 hover:text-daintree-text hover:bg-daintree-border/50 transition-colors"
+                    aria-label="Reset to default"
+                  >
+                    <RotateCcw className="w-4 h-4" />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">Reset to default</TooltipContent>
+              </Tooltip>
             </div>
 
             {!validation.valid && validation.error && (
@@ -238,24 +236,22 @@ export function WorktreeSettingsTab() {
             <span className="block text-xs font-medium text-daintree-text/70">Presets:</span>
             <div className="flex flex-wrap gap-2">
               {PATTERN_PRESETS.map((preset) => (
-                <TooltipProvider key={preset.label}>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <button
-                        onClick={() => handlePresetClick(preset.pattern)}
-                        className={cn(
-                          "px-3 py-1.5 text-xs rounded-[var(--radius-md)] border transition-colors",
-                          pattern === preset.pattern
-                            ? "bg-daintree-accent/10 border-daintree-accent text-daintree-accent"
-                            : "border-daintree-border text-daintree-text/70 hover:bg-daintree-border/50"
-                        )}
-                      >
-                        {preset.label}
-                      </button>
-                    </TooltipTrigger>
-                    <TooltipContent side="bottom">{preset.description}</TooltipContent>
-                  </Tooltip>
-                </TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      onClick={() => handlePresetClick(preset.pattern)}
+                      className={cn(
+                        "px-3 py-1.5 text-xs rounded-[var(--radius-md)] border transition-colors",
+                        pattern === preset.pattern
+                          ? "bg-daintree-accent/10 border-daintree-accent text-daintree-accent"
+                          : "border-daintree-border text-daintree-text/70 hover:bg-daintree-border/50"
+                      )}
+                    >
+                      {preset.label}
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">{preset.description}</TooltipContent>
+                </Tooltip>
               ))}
             </div>
           </div>

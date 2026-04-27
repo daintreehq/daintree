@@ -11,7 +11,7 @@ import {
 import { Plug, Pin, Settings2, ChevronRight } from "lucide-react";
 import { DaintreeAgentIcon } from "@/components/icons";
 import { Button } from "@/components/ui/button";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -539,34 +539,32 @@ export function AgentTrayButton({
         handleOpenChange(o);
       }}
     >
-      <TooltipProvider>
-        <Tooltip open={tooltipOpen} onOpenChange={handleTooltipOpenChange}>
-          <TooltipTrigger asChild>
-            <DropdownMenuTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon"
-                data-toolbar-item={dataToolbarItem}
-                className="toolbar-agent-button text-daintree-text hover:text-[var(--toolbar-control-hover-fg,var(--theme-accent-primary))] focus-visible:text-[var(--toolbar-control-hover-fg,var(--theme-accent-primary))] transition-colors"
-                aria-label={showDiscoveryBadge ? "Agent tray — new agents detected" : "Agent tray"}
-                onPointerEnter={clearFocusRestoreSuppression}
-              >
-                <span className="relative inline-flex items-center justify-center">
-                  <Plug />
-                  {showDiscoveryBadge && (
-                    <span
-                      data-testid="agent-tray-discovery-badge"
-                      className="absolute top-0 right-0 size-1.5 rounded-full bg-status-info ring-1 ring-daintree-sidebar"
-                      aria-hidden="true"
-                    />
-                  )}
-                </span>
-              </Button>
-            </DropdownMenuTrigger>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">Agent Tray</TooltipContent>
-        </Tooltip>
-      </TooltipProvider>
+      <Tooltip open={tooltipOpen} onOpenChange={handleTooltipOpenChange}>
+        <TooltipTrigger asChild>
+          <DropdownMenuTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon"
+              data-toolbar-item={dataToolbarItem}
+              className="toolbar-agent-button text-daintree-text hover:text-[var(--toolbar-control-hover-fg,var(--theme-accent-primary))] focus-visible:text-[var(--toolbar-control-hover-fg,var(--theme-accent-primary))] transition-colors"
+              aria-label={showDiscoveryBadge ? "Agent tray — new agents detected" : "Agent tray"}
+              onPointerEnter={clearFocusRestoreSuppression}
+            >
+              <span className="relative inline-flex items-center justify-center">
+                <Plug />
+                {showDiscoveryBadge && (
+                  <span
+                    data-testid="agent-tray-discovery-badge"
+                    className="absolute top-0 right-0 size-1.5 rounded-full bg-status-info ring-1 ring-daintree-sidebar"
+                    aria-hidden="true"
+                  />
+                )}
+              </span>
+            </Button>
+          </DropdownMenuTrigger>
+        </TooltipTrigger>
+        <TooltipContent side="bottom">Agent Tray</TooltipContent>
+      </Tooltip>
       <DropdownMenuContent
         align="start"
         sideOffset={4}

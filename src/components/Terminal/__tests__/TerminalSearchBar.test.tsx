@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import type React from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, fireEvent, act } from "@testing-library/react";
 
@@ -10,6 +11,13 @@ vi.mock("@/services/TerminalInstanceService", () => ({
 
 import { TerminalSearchBar } from "../TerminalSearchBar";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
+
+vi.mock("@/components/ui/tooltip", () => ({
+  TooltipProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  Tooltip: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  TooltipTrigger: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  TooltipContent: () => null,
+}));
 
 type ResultsListener = (event: { resultIndex: number; resultCount: number }) => void;
 

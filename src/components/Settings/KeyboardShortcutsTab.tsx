@@ -4,7 +4,7 @@ import { cn } from "@/lib/utils";
 import { keybindingService, KeybindingConfig } from "@/services/KeybindingService";
 import { actionService } from "@/services/ActionService";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
-import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { KeybindingProfileActions } from "./KeybindingProfileActions";
 import { SettingsShortcutCapture } from "@/components/KeyboardShortcuts";
 
@@ -69,20 +69,18 @@ function ShortcutRow({ binding, isEditing, onEdit, onSave, onCancel, onReset }: 
           Edit
         </button>
         {binding.isOverridden && (
-          <TooltipProvider>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <button
-                  onClick={onReset}
-                  className="p-0.5 text-daintree-text/60 hover:text-daintree-text opacity-0 group-hover:opacity-100 transition-opacity"
-                  aria-label="Reset to default"
-                >
-                  <RotateCcw className="w-3 h-3" />
-                </button>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">Reset to default</TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                onClick={onReset}
+                className="p-0.5 text-daintree-text/60 hover:text-daintree-text opacity-0 group-hover:opacity-100 transition-opacity"
+                aria-label="Reset to default"
+              >
+                <RotateCcw className="w-3 h-3" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">Reset to default</TooltipContent>
+          </Tooltip>
         )}
       </div>
     </div>

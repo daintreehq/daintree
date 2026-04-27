@@ -1,7 +1,15 @@
 // @vitest-environment jsdom
+import type React from "react";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import { TerminalRestartStatusBanner } from "../TerminalRestartStatusBanner";
+
+vi.mock("@/components/ui/tooltip", () => ({
+  TooltipProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  Tooltip: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  TooltipTrigger: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  TooltipContent: () => null,
+}));
 
 beforeAll(() => {
   Object.defineProperty(window, "matchMedia", {

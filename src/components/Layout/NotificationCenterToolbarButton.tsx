@@ -2,7 +2,7 @@ import { useRef, useEffect, memo } from "react";
 import { Button } from "@/components/ui/button";
 import { FixedDropdown } from "@/components/ui/fixed-dropdown";
 import { Bell } from "lucide-react";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { NotificationCenter } from "@/components/Notifications/NotificationCenter";
 import { useNotificationHistoryStore } from "@/store/slices/notificationHistorySlice";
 import { useNotificationSettingsStore } from "@/store/notificationSettingsStore";
@@ -35,35 +35,33 @@ export const NotificationCenterToolbarButton = memo(function NotificationCenterT
 
   return (
     <div className="relative">
-      <TooltipProvider>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              ref={notificationCenterButtonRef}
-              variant="ghost"
-              size="icon"
-              data-toolbar-item={dataToolbarItem}
-              onClick={toggleNotificationCenter}
-              className={toolbarIconButtonClass}
-              aria-label={
-                notificationUnreadCount > 0
-                  ? `Notifications — ${notificationUnreadCount} unread`
-                  : "Notifications"
-              }
-              aria-expanded={notificationCenterOpen}
-              aria-haspopup="dialog"
-            >
-              <Bell />
-              {notificationUnreadCount > 0 && (
-                <span className="absolute top-1 right-1 min-w-[14px] h-[14px] flex items-center justify-center rounded-full bg-daintree-accent text-[9px] font-bold tabular-nums text-daintree-bg px-0.5 leading-none">
-                  {notificationUnreadCount > 99 ? "99+" : notificationUnreadCount}
-                </span>
-              )}
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">Notifications</TooltipContent>
-        </Tooltip>
-      </TooltipProvider>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            ref={notificationCenterButtonRef}
+            variant="ghost"
+            size="icon"
+            data-toolbar-item={dataToolbarItem}
+            onClick={toggleNotificationCenter}
+            className={toolbarIconButtonClass}
+            aria-label={
+              notificationUnreadCount > 0
+                ? `Notifications — ${notificationUnreadCount} unread`
+                : "Notifications"
+            }
+            aria-expanded={notificationCenterOpen}
+            aria-haspopup="dialog"
+          >
+            <Bell />
+            {notificationUnreadCount > 0 && (
+              <span className="absolute top-1 right-1 min-w-[14px] h-[14px] flex items-center justify-center rounded-full bg-daintree-accent text-[9px] font-bold tabular-nums text-daintree-bg px-0.5 leading-none">
+                {notificationUnreadCount > 99 ? "99+" : notificationUnreadCount}
+              </span>
+            )}
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent side="bottom">Notifications</TooltipContent>
+      </Tooltip>
       <FixedDropdown
         open={notificationCenterOpen}
         onOpenChange={(open) => {

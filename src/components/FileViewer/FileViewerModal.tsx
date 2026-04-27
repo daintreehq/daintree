@@ -10,7 +10,7 @@ import { ExternalLink, Copy, Check, Image as ImageIcon } from "lucide-react";
 import { Spinner } from "@/components/ui/Spinner";
 import { cn } from "@/lib/utils";
 import { formatBytes } from "@/lib/formatBytes";
-import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { FileReadErrorCode } from "@shared/types/ipc/files";
 import { sanitizeSvg } from "@shared/utils/svgSanitizer";
 
@@ -264,22 +264,20 @@ export function FileViewerModal({
     >
       <AppDialog.Header className="py-3">
         <div className="flex items-center gap-3 min-w-0">
-          <TooltipProvider>
-            <Tooltip>
-              <AppDialog.Title className="text-sm font-medium min-w-0">
-                <TooltipTrigger asChild>
-                  <span className="truncate cursor-default">
-                    {branch && <span className="text-muted-foreground/70 mr-1.5">{branch}</span>}
-                    {relativeDir && <span className="text-muted-foreground">{relativeDir}</span>}
-                    <span className="text-daintree-text">{fileName}</span>
-                  </span>
-                </TooltipTrigger>
-              </AppDialog.Title>
-              <TooltipContent side="bottom" className="max-w-lg break-all">
-                {filePath}
-              </TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
+          <Tooltip>
+            <AppDialog.Title className="text-sm font-medium min-w-0">
+              <TooltipTrigger asChild>
+                <span className="truncate cursor-default">
+                  {branch && <span className="text-muted-foreground/70 mr-1.5">{branch}</span>}
+                  {relativeDir && <span className="text-muted-foreground">{relativeDir}</span>}
+                  <span className="text-daintree-text">{fileName}</span>
+                </span>
+              </TooltipTrigger>
+            </AppDialog.Title>
+            <TooltipContent side="bottom" className="max-w-lg break-all">
+              {filePath}
+            </TooltipContent>
+          </Tooltip>
 
           {/* Show view/diff toggle only when both are potentially available */}
           {hasDiff && !imageFile && (canShowView || loadState !== "loading") && (
@@ -346,23 +344,21 @@ export function FileViewerModal({
 
           {/* Copy diff — only visible in diff mode */}
           {mode === "diff" && hasDiff && (
-            <TooltipProvider>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <button
-                    type="button"
-                    onClick={handleCopyDiff}
-                    aria-label={diffCopied ? "Copied!" : "Copy diff to clipboard"}
-                    className="p-1.5 rounded transition-colors text-muted-foreground hover:text-daintree-text hover:bg-daintree-border"
-                  >
-                    {diffCopied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent side="bottom">
-                  {diffCopied ? "Copied!" : "Copy diff to clipboard"}
-                </TooltipContent>
-              </Tooltip>
-            </TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  onClick={handleCopyDiff}
+                  aria-label={diffCopied ? "Copied!" : "Copy diff to clipboard"}
+                  className="p-1.5 rounded transition-colors text-muted-foreground hover:text-daintree-text hover:bg-daintree-border"
+                >
+                  {diffCopied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">
+                {diffCopied ? "Copied!" : "Copy diff to clipboard"}
+              </TooltipContent>
+            </Tooltip>
           )}
 
           {imageFile ? (

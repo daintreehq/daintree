@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { User } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 interface AvatarProps {
   src: string;
@@ -54,12 +54,10 @@ export function Avatar({ src, alt, title, className }: AvatarProps) {
 
   if (title) {
     return (
-      <TooltipProvider>
-        <Tooltip>
-          <TooltipTrigger asChild>{avatarContent}</TooltipTrigger>
-          <TooltipContent side="bottom">{title}</TooltipContent>
-        </Tooltip>
-      </TooltipProvider>
+      <Tooltip>
+        <TooltipTrigger asChild>{avatarContent}</TooltipTrigger>
+        <TooltipContent side="bottom">{title}</TooltipContent>
+      </Tooltip>
     );
   }
 

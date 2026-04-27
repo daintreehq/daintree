@@ -1,3 +1,4 @@
+import type React from "react";
 /**
  * @vitest-environment jsdom
  */
@@ -6,6 +7,13 @@ import { render, screen, fireEvent } from "@testing-library/react";
 import { ConsoleDrawer } from "../ConsoleDrawer";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { TerminalRefreshTier } from "@/types";
+
+vi.mock("@/components/ui/tooltip", () => ({
+  TooltipProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  Tooltip: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  TooltipTrigger: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  TooltipContent: () => null,
+}));
 
 vi.mock("@/services/TerminalInstanceService", () => ({
   terminalInstanceService: {

@@ -1,7 +1,7 @@
 import { memo, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { SquareTerminal, Globe } from "lucide-react";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { createTooltipWithShortcut } from "@/lib/platform";
 import { useKeybindingDisplay } from "@/hooks";
 
@@ -53,24 +53,22 @@ export const ToolbarLauncherButton = memo(function ToolbarLauncherButton({
   const Icon = config.icon;
 
   return (
-    <TooltipProvider>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <Button
-            variant="ghost"
-            size="icon"
-            data-toolbar-item={dataToolbarItem}
-            onClick={handleClick}
-            className={toolbarIconButtonClass}
-            aria-label={config.label}
-          >
-            <Icon />
-          </Button>
-        </TooltipTrigger>
-        <TooltipContent side="bottom">
-          {createTooltipWithShortcut(config.tooltipLabel, shortcut)}
-        </TooltipContent>
-      </Tooltip>
-    </TooltipProvider>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button
+          variant="ghost"
+          size="icon"
+          data-toolbar-item={dataToolbarItem}
+          onClick={handleClick}
+          className={toolbarIconButtonClass}
+          aria-label={config.label}
+        >
+          <Icon />
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent side="bottom">
+        {createTooltipWithShortcut(config.tooltipLabel, shortcut)}
+      </TooltipContent>
+    </Tooltip>
   );
 });

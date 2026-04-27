@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { commandsClient } from "@/clients/commandsClient";
 import type { CommandManifestEntry, CommandOverride } from "@shared/types/commands";
 import { cn } from "@/lib/utils";
-import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { extractTemplateVariables, validatePromptTemplate } from "@shared/utils/promptTemplate";
 
 interface CommandOverridesTabProps {
@@ -372,50 +372,46 @@ export function CommandOverridesTab({ projectId, overrides, onChange }: CommandO
 
                 <div className="flex items-center gap-1 shrink-0">
                   {hasOverride(command.id) && (
-                    <TooltipProvider>
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => resetToDefaults(command.id)}
-                            className="h-7 px-2"
-                            aria-label="Reset to defaults"
-                          >
-                            <RotateCcw />
-                          </Button>
-                        </TooltipTrigger>
-                        <TooltipContent side="bottom">Reset to defaults</TooltipContent>
-                      </Tooltip>
-                    </TooltipProvider>
-                  )}
-                  <TooltipProvider>
                     <Tooltip>
                       <TooltipTrigger asChild>
-                        <button
-                          onClick={() => toggleDisabled(command.id)}
-                          className={cn(
-                            "p-1.5 rounded transition-colors",
-                            isDisabled
-                              ? "text-status-error hover:bg-status-error/10"
-                              : "text-status-success hover:bg-status-success/10"
-                          )}
-                          aria-label={
-                            isDisabled ? "Command disabled for this project" : "Command enabled"
-                          }
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => resetToDefaults(command.id)}
+                          className="h-7 px-2"
+                          aria-label="Reset to defaults"
                         >
-                          {isDisabled ? (
-                            <PowerOff className="h-4 w-4" />
-                          ) : (
-                            <Power className="h-4 w-4" />
-                          )}
-                        </button>
+                          <RotateCcw />
+                        </Button>
                       </TooltipTrigger>
-                      <TooltipContent side="bottom">
-                        {isDisabled ? "Command disabled for this project" : "Command enabled"}
-                      </TooltipContent>
+                      <TooltipContent side="bottom">Reset to defaults</TooltipContent>
                     </Tooltip>
-                  </TooltipProvider>
+                  )}
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <button
+                        onClick={() => toggleDisabled(command.id)}
+                        className={cn(
+                          "p-1.5 rounded transition-colors",
+                          isDisabled
+                            ? "text-status-error hover:bg-status-error/10"
+                            : "text-status-success hover:bg-status-success/10"
+                        )}
+                        aria-label={
+                          isDisabled ? "Command disabled for this project" : "Command enabled"
+                        }
+                      >
+                        {isDisabled ? (
+                          <PowerOff className="h-4 w-4" />
+                        ) : (
+                          <Power className="h-4 w-4" />
+                        )}
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom">
+                      {isDisabled ? "Command disabled for this project" : "Command enabled"}
+                    </TooltipContent>
+                  </Tooltip>
                 </div>
               </div>
 
@@ -560,28 +556,26 @@ function PromptEditor({ commandId, args, value, onChange }: PromptEditorProps) {
             <p className="text-xs font-medium text-daintree-text/70 mb-1.5">Available variables:</p>
             <div className="flex flex-wrap gap-1.5">
               {args.map((arg) => (
-                <TooltipProvider key={arg.name}>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <button
-                        onClick={() => onChange(value + `{${arg.name}}`)}
-                        className={cn(
-                          "text-[11px] px-2 py-0.5 rounded font-mono transition-colors",
-                          usedVariables.includes(arg.name)
-                            ? "bg-daintree-accent/20 text-daintree-accent border border-daintree-accent/30"
-                            : "bg-daintree-sidebar text-daintree-text/70 hover:bg-daintree-border border border-daintree-border"
-                        )}
-                      >
-                        {"{"}
-                        {arg.name}
-                        {"}"}
-                      </button>
-                    </TooltipTrigger>
-                    <TooltipContent side="bottom">
-                      {arg.description || `Insert {${arg.name}}`}
-                    </TooltipContent>
-                  </Tooltip>
-                </TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      onClick={() => onChange(value + `{${arg.name}}`)}
+                      className={cn(
+                        "text-[11px] px-2 py-0.5 rounded font-mono transition-colors",
+                        usedVariables.includes(arg.name)
+                          ? "bg-daintree-accent/20 text-daintree-accent border border-daintree-accent/30"
+                          : "bg-daintree-sidebar text-daintree-text/70 hover:bg-daintree-border border border-daintree-border"
+                      )}
+                    >
+                      {"{"}
+                      {arg.name}
+                      {"}"}
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">
+                    {arg.description || `Insert {${arg.name}}`}
+                  </TooltipContent>
+                </Tooltip>
               ))}
             </div>
           </div>

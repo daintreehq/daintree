@@ -2,7 +2,7 @@ import { Suspense, useState, useCallback, useEffect } from "react";
 import { ChevronUp, RotateCw } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { XtermAdapter } from "../Terminal/XtermAdapter";
 import { terminalInstanceService } from "../../services/TerminalInstanceService";
 import { TerminalRefreshTier } from "@/types";
@@ -116,28 +116,26 @@ export function ConsoleDrawer({
         </div>
 
         {onHardRestart && (
-          <TooltipProvider>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <span className="inline-flex">
-                  <button
-                    type="button"
-                    onClick={onHardRestart}
-                    disabled={hardRestartDisabled}
-                    className={cn(
-                      "p-1.5 rounded hover:bg-overlay-medium disabled:opacity-30 disabled:cursor-not-allowed transition-colors",
-                      isRestarting && "animate-spin"
-                    )}
-                    aria-label={restartTooltip}
-                    aria-busy={isRestarting}
-                  >
-                    <RotateCw className="h-3.5 w-3.5" />
-                  </button>
-                </span>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">{restartTooltip}</TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span className="inline-flex">
+                <button
+                  type="button"
+                  onClick={onHardRestart}
+                  disabled={hardRestartDisabled}
+                  className={cn(
+                    "p-1.5 rounded hover:bg-overlay-medium disabled:opacity-30 disabled:cursor-not-allowed transition-colors",
+                    isRestarting && "animate-spin"
+                  )}
+                  aria-label={restartTooltip}
+                  aria-busy={isRestarting}
+                >
+                  <RotateCw className="h-3.5 w-3.5" />
+                </button>
+              </span>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">{restartTooltip}</TooltipContent>
+          </Tooltip>
         )}
       </div>
 

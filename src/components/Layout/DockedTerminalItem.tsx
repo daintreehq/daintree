@@ -29,7 +29,7 @@ import { useDockPanelPortal } from "./DockPanelOffscreenContainer";
 import { getDockDisplayAgentState, useDockBlockedState } from "./useDockBlockedState";
 import { handleDockInteractOutside, handleDockEscapeKeyDown } from "./dockPopoverGuard";
 import { usePreferencesStore } from "@/store";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 interface DockedTerminalItemProps {
   terminal: TerminalInstance;
@@ -331,43 +331,39 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
             {isActive && commandText && (
               <>
                 <div className="h-3 w-px bg-border-subtle shrink-0" aria-hidden="true" />
-                <TooltipProvider>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <span className="truncate flex-1 min-w-0 text-[11px] text-daintree-text/50 font-mono">
-                        {commandText}
-                      </span>
-                    </TooltipTrigger>
-                    <TooltipContent side="bottom">{commandText}</TooltipContent>
-                  </Tooltip>
-                </TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span className="truncate flex-1 min-w-0 text-[11px] text-daintree-text/50 font-mono">
+                      {commandText}
+                    </span>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">{commandText}</TooltipContent>
+                </Tooltip>
               </>
             )}
 
             {/* State icon (compact spacing from title) */}
             {showStateIcon && StateIcon && (
-              <TooltipProvider>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <div
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <div
+                    className={cn(
+                      "flex items-center shrink-0",
+                      getEffectiveStateColor(agentState, terminal.waitingReason)
+                    )}
+                  >
+                    <StateIcon
                       className={cn(
-                        "flex items-center shrink-0",
-                        getEffectiveStateColor(agentState, terminal.waitingReason)
+                        "w-3.5 h-3.5",
+                        agentState === "working" && "animate-spin-slow",
+                        "motion-reduce:animate-none"
                       )}
-                    >
-                      <StateIcon
-                        className={cn(
-                          "w-3.5 h-3.5",
-                          agentState === "working" && "animate-spin-slow",
-                          "motion-reduce:animate-none"
-                        )}
-                        aria-hidden="true"
-                      />
-                    </div>
-                  </TooltipTrigger>
-                  <TooltipContent side="bottom">{`Agent ${agentState}`}</TooltipContent>
-                </Tooltip>
-              </TooltipProvider>
+                      aria-hidden="true"
+                    />
+                  </div>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">{`Agent ${agentState}`}</TooltipContent>
+              </Tooltip>
             )}
           </button>
         </PopoverTrigger>
