@@ -58,13 +58,9 @@ import {
 import type { IMarker } from "@xterm/headless";
 import {
   TERMINAL_SESSION_PERSISTENCE_ENABLED,
-  SESSION_SNAPSHOT_MAX_BYTES,
-  SESSION_SNAPSHOT_DEBOUNCE_MS,
   restoreSessionFromFile,
-  persistSessionSnapshotSync,
-  persistSessionSnapshotAsync,
-  isSessionPersistSuppressed,
 } from "./terminalSessionPersistence.js";
+import { SessionSnapshotter, type SessionSnapshotterHost } from "./SessionSnapshotter.js";
 import {
   createProcessStateValidator,
   buildActivityMonitorOptions,
@@ -92,7 +88,6 @@ type CursorBuffer = {
   getLine: (index: number) => { translateToString: (trimRight?: boolean) => string } | undefined;
 };
 
-const EVENT_DRIVEN_SNAPSHOT_THROTTLE_MS = 2000;
 const SHELL_IDENTITY_FALLBACK_COMMIT_MS = 1200;
 const SHELL_IDENTITY_FALLBACK_POLL_MS = 200;
 const SHELL_IDENTITY_FALLBACK_PROMPT_POLLS = 2;
@@ -165,10 +160,7 @@ export class TerminalProcess {
 
   private _scrollback: number;
   private headlessResponderDisposable: { dispose: () => void } | null = null;
-  private sessionPersistTimer: NodeJS.Timeout | null = null;
-  private sessionPersistDirty = false;
-  private sessionPersistInFlight = false;
-  private lastEventDrivenFlushAt = -Infinity;
+  private sessionSnapshotter!: SessionSnapshotter;
 
   private readonly terminalInfo: TerminalInfo;
 
@@ -212,74 +204,44 @@ export class TerminalProcess {
     }
   }
 
-  private scheduleSessionPersist(): void {
-    if (!TERMINAL_SESSION_PERSISTENCE_ENABLED) return;
-    if (isSessionPersistSuppressed()) return;
-    if (this.terminalInfo.launchAgentId) return;
-    if (this.terminalInfo.wasKilled) return;
-
-    this.sessionPersistDirty = true;
-    if (this.sessionPersistTimer) return;
-
-    this.sessionPersistTimer = setTimeout(() => {
-      this.sessionPersistTimer = null;
-      void this.persistSessionSnapshot();
-    }, SESSION_SNAPSHOT_DEBOUNCE_MS);
-  }
-
-  private async persistSessionSnapshot(): Promise<void> {
-    if (!TERMINAL_SESSION_PERSISTENCE_ENABLED) return;
-    if (isSessionPersistSuppressed()) return;
-    if (this.terminalInfo.launchAgentId) return;
-    if (this.terminalInfo.wasKilled) return;
-    if (!this.sessionPersistDirty) return;
-    if (this.sessionPersistInFlight) return;
-
-    this.sessionPersistInFlight = true;
-    try {
-      this.sessionPersistDirty = false;
-      const state =
-        this._restoreBannerStart || this._restoreBannerEnd
-          ? this._serializeForPersistence()
-          : await this.getSerializedStateAsync();
-      if (!state) return;
-      if (Buffer.byteLength(state, "utf8") > SESSION_SNAPSHOT_MAX_BYTES) {
-        return;
-      }
-      await persistSessionSnapshotAsync(this.id, state);
-    } catch (error) {
-      console.warn(`[TerminalProcess] Failed to persist session for ${this.id}:`, error);
-    } finally {
-      this.sessionPersistInFlight = false;
-      if (this.sessionPersistDirty) {
-        this.scheduleSessionPersist();
-      }
-    }
-  }
-
-  private clearSessionPersistTimer(): void {
-    if (this.sessionPersistTimer) {
-      clearTimeout(this.sessionPersistTimer);
-      this.sessionPersistTimer = null;
-    }
-  }
-
   flushEventDrivenSnapshot(): void {
-    if (!TERMINAL_SESSION_PERSISTENCE_ENABLED) return;
-    if (isSessionPersistSuppressed()) return;
-    if (this.terminalInfo.wasKilled) return;
+    this.sessionSnapshotter.flushEventDriven();
+  }
 
-    const now = performance.now();
-    if (now - this.lastEventDrivenFlushAt < EVENT_DRIVEN_SNAPSHOT_THROTTLE_MS) return;
-    this.lastEventDrivenFlushAt = now;
+  private createSessionSnapshotter(): SessionSnapshotter {
+    class Host implements SessionSnapshotterHost {
+      constructor(private parent: TerminalProcess) {}
 
-    const state = this.getSerializedState();
-    if (!state) return;
-    if (Buffer.byteLength(state, "utf8") > SESSION_SNAPSHOT_MAX_BYTES) return;
+      get id(): string {
+        return this.parent.id;
+      }
 
-    persistSessionSnapshotAsync(this.id, state).catch((error) => {
-      console.warn(`[TerminalProcess] Event-driven snapshot failed for ${this.id}:`, error);
-    });
+      get wasKilled(): boolean {
+        return this.parent.terminalInfo.wasKilled === true;
+      }
+
+      get launchAgentId(): string | undefined {
+        return this.parent.terminalInfo.launchAgentId;
+      }
+
+      hasBannerMarkers(): boolean {
+        return !!(this.parent._restoreBannerStart || this.parent._restoreBannerEnd);
+      }
+
+      getSerializedState(): string | null {
+        return this.parent.getSerializedState();
+      }
+
+      getSerializedStateAsync(): Promise<string | null> {
+        return this.parent.getSerializedStateAsync();
+      }
+
+      serializeForPersistence(): string | null {
+        return this.parent._serializeForPersistence();
+      }
+    }
+
+    return new SessionSnapshotter(new Host(this));
   }
 
   private logWriteError(error: unknown, context: { operation: string; traceId?: string }): void {
@@ -420,6 +382,7 @@ export class TerminalProcess {
       performSubmit: (text) => this.performSubmit(text),
       onWriteError: (error, context) => this.logWriteError(error, context),
     });
+    this.sessionSnapshotter = this.createSessionSnapshotter();
     this.setupPtyHandlers(ptyProcess);
 
     const ptyPid = ptyProcess.pid;
@@ -974,23 +937,10 @@ export class TerminalProcess {
     // Flush session snapshot synchronously before marking as killed.
     // Once wasKilled is set, all persistence paths are blocked, and
     // disposeHeadless() destroys the buffer — so this is the last chance.
-    if (
-      TERMINAL_SESSION_PERSISTENCE_ENABLED &&
-      !this.terminalInfo.launchAgentId &&
-      !isSessionPersistSuppressed()
-    ) {
-      try {
-        const state = this.getSerializedState();
-        if (state && Buffer.byteLength(state, "utf8") <= SESSION_SNAPSHOT_MAX_BYTES) {
-          persistSessionSnapshotSync(this.id, state);
-        }
-      } catch {
-        // best-effort only
-      }
-    }
+    this.sessionSnapshotter.flushSyncOnKill();
 
     terminal.wasKilled = true;
-    this.clearSessionPersistTimer();
+    this.sessionSnapshotter.dispose();
 
     if (getLiveAgentId(terminal)) {
       this.deps.agentStateService.updateAgentState(terminal, {
@@ -1636,24 +1586,8 @@ export class TerminalProcess {
 
     this.semanticBufferManager.dispose();
 
-    if (
-      TERMINAL_SESSION_PERSISTENCE_ENABLED &&
-      this.sessionPersistDirty &&
-      !this.terminalInfo.wasKilled &&
-      !isSessionPersistSuppressed()
-    ) {
-      try {
-        const state = this._serializeForPersistence() ?? this.getSerializedState();
-        if (state && Buffer.byteLength(state, "utf8") <= SESSION_SNAPSHOT_MAX_BYTES) {
-          persistSessionSnapshotSync(this.id, state);
-          this.sessionPersistDirty = false;
-        }
-      } catch {
-        // best-effort only
-      }
-    }
-
-    this.clearSessionPersistTimer();
+    this.sessionSnapshotter.flushSyncOnDispose();
+    this.sessionSnapshotter.dispose();
 
     this.writeQueue.dispose();
 
@@ -1697,7 +1631,7 @@ export class TerminalProcess {
       }
 
       terminal.headlessTerminal?.write(data);
-      this.scheduleSessionPersist();
+      this.sessionSnapshotter.schedule();
 
       this.emitData(rendererData);
       this.forensicsBuffer.capture(data);
@@ -1737,8 +1671,7 @@ export class TerminalProcess {
 
       this.writeQueue.dispose();
 
-      this.clearSessionPersistTimer();
-      this.sessionPersistDirty = false;
+      this.sessionSnapshotter.dispose();
 
       this.processTreeKiller.abort();
 
