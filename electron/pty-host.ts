@@ -274,8 +274,14 @@ ptyManager.on("data", (id: string, data: string | Uint8Array) => {
     rendererConnections.size > 0 &&
     !isSmokeTestTerminalId(id)
   ) {
-    const dataString = toStringForIpc(data);
-    const byteCount = Buffer.byteLength(dataString, "utf8");
+    // Carry raw bytes on the hot MessagePort path so the renderer receives a
+    // transferred ArrayBuffer instead of a structured-cloned UTF-8 string.
+    // Wrap with `new Uint8Array(...)` to escape node-pty's Buffer pool slab —
+    // each batcher will copy these chunks into a fresh isolated buffer at
+    // flush time before they land in the postMessage transfer list.
+    const chunk =
+      typeof data === "string" ? new Uint8Array(Buffer.from(data, "utf8")) : new Uint8Array(data);
+    const byteCount = chunk.byteLength;
 
     for (const [windowId, conn] of rendererConnections) {
       const windowProject = windowProjectMap.get(windowId) ?? null;
@@ -284,7 +290,7 @@ ptyManager.on("data", (id: string, data: string | Uint8Array) => {
 
       if (filtered) continue;
 
-      if (conn.batcher.write(id, dataString, byteCount)) {
+      if (conn.batcher.write(id, chunk, byteCount)) {
         visualWritten = true;
       }
     }
@@ -744,7 +750,12 @@ port.on("message", async (rawMsg: any) => {
           const perWindowBatcher = new PortBatcher({
             portQueueManager: perWindowQueueManager,
             postMessage: (id, data, bytes) => {
-              receivedPort.postMessage({ type: "data", id, data, bytes });
+              // Transfer the backing ArrayBuffer to the renderer instead of
+              // structured-cloning. The batcher allocates `data` fresh per
+              // flush, so it is safe to detach here.
+              receivedPort.postMessage({ type: "data", id, data, bytes }, [
+                data.buffer as ArrayBuffer,
+              ]);
             },
             onError: () => {
               disconnectWindow(windowId, "postMessage-error");
