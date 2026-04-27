@@ -20,10 +20,7 @@ export function HelpAgentDockButton() {
           type="button"
           variant="pill"
           size="sm"
-          className={cn(
-            "px-2",
-            isOpen && "bg-daintree-border border-daintree-accent/40 ring-1 ring-daintree-accent/30"
-          )}
+          className={cn("px-2", isOpen && "bg-overlay-emphasis border-border-default")}
           onClick={handleClick}
           aria-label="Help Agent"
           aria-expanded={isOpen}

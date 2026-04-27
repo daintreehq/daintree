@@ -149,7 +149,7 @@ export function BackgroundContainer({ compact = false }: BackgroundContainerProp
           size="sm"
           className={cn(
             compact ? "px-1.5 min-w-0" : "px-3",
-            isOpen && "bg-daintree-border border-daintree-accent/40 ring-1 ring-daintree-accent/30"
+            isOpen && "bg-overlay-emphasis border-border-default"
           )}
           aria-haspopup="dialog"
           aria-expanded={isOpen}
