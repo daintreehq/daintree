@@ -91,7 +91,7 @@ function makeMockManaged(overrides: Record<string, unknown> = {}) {
     isUserScrolledBack: false,
     isAltBuffer: false,
     isHibernated: false,
-    runtimeAgentId: "claude",
+    runtimeAgentId: "claude" as string | undefined,
     launchAgentId: "claude",
     lastActiveTime: Date.now(),
     lastWidth: 800,
