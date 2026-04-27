@@ -87,6 +87,7 @@ export type BuiltInKeyAction =
   | "terminal.inject"
   | "terminal.focusNext"
   | "terminal.focusPrevious"
+  | "terminal.focusAlternate"
   | "terminal.focusUp"
   | "terminal.focusDown"
   | "terminal.focusLeft"
@@ -268,6 +269,7 @@ export const KEY_ACTION_VALUES: ReadonlySet<string> = new Set<string>([
   "terminal.inject",
   "terminal.focusNext",
   "terminal.focusPrevious",
+  "terminal.focusAlternate",
   "terminal.focusUp",
   "terminal.focusDown",
   "terminal.focusLeft",

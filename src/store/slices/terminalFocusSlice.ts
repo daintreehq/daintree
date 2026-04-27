@@ -73,6 +73,14 @@ export type MaximizeTarget = { type: "panel"; id: string } | { type: "group"; id
 
 export interface TerminalFocusSlice {
   focusedId: string | null;
+  /**
+   * Most recent panel that held focus before `focusedId`. Used by
+   * `focusAlternate` for tmux-style A↔B toggling. Updated atomically alongside
+   * `focusedId` only when the focused panel actually changes — re-focusing the
+   * already-active panel must not corrupt the toggle. Cleared when the
+   * referenced panel is removed or when focus state is reset.
+   */
+  previousFocusedId: string | null;
   maximizedId: string | null;
   /** Tracks whether maximize is for a single panel or a tab group */
   maximizeTarget: MaximizeTarget;
@@ -98,6 +106,11 @@ export interface TerminalFocusSlice {
   clearPreMaximizeLayout: () => void;
   focusNext: () => void;
   focusPrevious: () => void;
+  /**
+   * Toggles focus between the current panel and the previously focused panel
+   * (tmux `last-pane` semantics). No-op when no valid alternate exists.
+   */
+  focusAlternate: () => void;
   focusDirection: (
     direction: NavigationDirection,
     findNearest: (id: string, dir: NavigationDirection) => string | null
@@ -111,7 +124,7 @@ export interface TerminalFocusSlice {
   // Dock terminal activation
   openDockTerminal: (id: string) => void;
   closeDockTerminal: () => void;
-  activateTerminal: (id: string) => void;
+  activateTerminal: (id: string | null) => void;
 
   // Agent state navigation
   focusNextWaiting: (isInTrash: (id: string) => boolean, validWorktreeIds: Set<string>) => void;
@@ -143,6 +156,7 @@ export const createTerminalFocusSlice =
 
     return {
       focusedId: null,
+      previousFocusedId: null,
       maximizedId: null,
       maximizeTarget: null,
       activeDockTerminalId: null,
@@ -151,11 +165,20 @@ export const createTerminalFocusSlice =
       setFocused: (id, shouldPing = false) => {
         if (id) {
           const previousFocusedId = get().focusedId;
+          const focusActuallyChanged = id !== previousFocusedId;
           const terminal = getTerminals().find((t) => t.id === id);
           if (terminal?.location === "dock") {
-            set({ focusedId: id, activeDockTerminalId: id });
+            set({
+              focusedId: id,
+              activeDockTerminalId: id,
+              ...(focusActuallyChanged && { previousFocusedId }),
+            });
           } else {
-            set({ focusedId: id, activeDockTerminalId: null });
+            set({
+              focusedId: id,
+              activeDockTerminalId: null,
+              ...(focusActuallyChanged && { previousFocusedId }),
+            });
           }
           // Wake-on-focus: sync terminal state from backend when focused.
           // Skip wake for non-PTY panels - they don't have backend PTY processes.
@@ -164,7 +187,7 @@ export const createTerminalFocusSlice =
           }
           // Only ping when selection actually changes — re-focusing the already
           // selected terminal should be a no-op visually (no 1.6s ping loop).
-          if (shouldPing && id !== previousFocusedId) {
+          if (shouldPing && focusActuallyChanged) {
             get().pingTerminal(id);
           }
         } else {
@@ -382,12 +405,22 @@ export const createTerminalFocusSlice =
         if (terminal?.agentState === "working") {
           window.electron?.notification?.acknowledgeWorkingPulse(id);
         }
-        set({ activeDockTerminalId: id, focusedId: id });
+        const previousFocusedId = get().focusedId;
+        const focusActuallyChanged = id !== previousFocusedId;
+        set({
+          activeDockTerminalId: id,
+          focusedId: id,
+          ...(focusActuallyChanged && { previousFocusedId }),
+        });
       },
 
       closeDockTerminal: () => set({ activeDockTerminalId: null }),
 
       activateTerminal: (id) => {
+        if (!id) {
+          set({ focusedId: null });
+          return;
+        }
         const terminals = getTerminals();
         const terminal = terminals.find((t) => t.id === id);
         if (!terminal) return;
@@ -398,6 +431,9 @@ export const createTerminalFocusSlice =
           terminalInstanceService.wake(id);
         }
 
+        const previousFocusedId = get().focusedId;
+        const focusActuallyChanged = id !== previousFocusedId;
+
         if (terminal.location === "dock") {
           if (terminal.agentState === "waiting") {
             window.electron?.notification?.acknowledgeWaiting(id);
@@ -405,10 +441,31 @@ export const createTerminalFocusSlice =
           if (terminal.agentState === "working") {
             window.electron?.notification?.acknowledgeWorkingPulse(id);
           }
-          set({ activeDockTerminalId: id, focusedId: id });
+          set({
+            activeDockTerminalId: id,
+            focusedId: id,
+            ...(focusActuallyChanged && { previousFocusedId }),
+          });
         } else {
-          set({ focusedId: id, activeDockTerminalId: null });
+          set({
+            focusedId: id,
+            activeDockTerminalId: null,
+            ...(focusActuallyChanged && { previousFocusedId }),
+          });
         }
+      },
+
+      focusAlternate: () => {
+        const { previousFocusedId, focusedId, activateTerminal } = get();
+        if (!previousFocusedId || previousFocusedId === focusedId) return;
+        const target = getTerminals().find((t) => t.id === previousFocusedId);
+        if (!target) return;
+        // Skip targets that are no longer reachable: trashed panels are
+        // pending TTL cleanup and background panels are hibernated mirrors,
+        // not user-visible. Activating either would surface a panel the user
+        // didn't expect or fail outright.
+        if (target.location === "trash" || target.location === "background") return;
+        activateTerminal(previousFocusedId);
       },
 
       focusNextWaiting: (isInTrash, validWorktreeIds) => {
@@ -545,6 +602,12 @@ export const createTerminalFocusSlice =
             } else {
               updates.focusedId = null;
             }
+            // Auto-fallback focus is not a user navigation event, so the round-
+            // trip semantic doesn't apply — clear the alternate pointer rather
+            // than letting it point at a panel that wasn't the user's previous.
+            updates.previousFocusedId = null;
+          } else if (state.previousFocusedId === removedId) {
+            updates.previousFocusedId = null;
           }
 
           // Clear maximize state if the removed panel was maximized, or if it was in a maximized group

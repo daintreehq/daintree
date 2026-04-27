@@ -605,6 +605,9 @@ export function setupTerminalStoreListeners() {
                 (t.worktreeId ?? undefined) === activeWt
             );
           updates.focusedId = gridTerminals[0]?.id ?? null;
+          updates.previousFocusedId = null;
+        } else if (state.previousFocusedId === id) {
+          updates.previousFocusedId = null;
         }
         if (state.maximizedId === id) {
           updates.maximizedId = null;
@@ -624,7 +627,12 @@ export function setupTerminalStoreListeners() {
       terminalRegistryController.onRestored((data: { id: string }) => {
         const { id } = data;
         usePanelStore.getState().markAsRestored(id);
-        usePanelStore.setState({ focusedId: id });
+        const previousFocusedId = usePanelStore.getState().focusedId;
+        usePanelStore.setState({
+          focusedId: id,
+          activeDockTerminalId: null,
+          ...(previousFocusedId !== id && { previousFocusedId }),
+        });
       })
     )
   );

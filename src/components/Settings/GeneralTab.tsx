@@ -66,6 +66,7 @@ const CURATED_SHORTCUTS = [
       "terminal.new",
       "terminal.focusNext",
       "terminal.focusPrevious",
+      "terminal.focusAlternate",
     ],
   },
   {

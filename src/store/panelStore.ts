@@ -132,7 +132,7 @@ export const usePanelStore = create<PanelGridState>()(
       (id) => get().moveTerminalToDock(id),
       (id) => get().moveTerminalToGrid(id),
       () => get().focusedId,
-      (id) => set({ focusedId: id }),
+      (id) => get().activateTerminal(id),
       getActiveWorktreeId
     )(set, get, api);
 
@@ -159,7 +159,12 @@ export const usePanelStore = create<PanelGridState>()(
         // focus also isn't meaningful during restore — focus is resolved elsewhere once
         // the active worktree is set.
         if ((!options.location || options.location === "grid") && !isHydrationBatchActive()) {
-          set({ focusedId: id });
+          const previousFocusedId = get().focusedId;
+          if (previousFocusedId !== id) {
+            set({ focusedId: id, previousFocusedId });
+          } else {
+            set({ focusedId: id });
+          }
         }
         return id;
       },
@@ -184,6 +189,13 @@ export const usePanelStore = create<PanelGridState>()(
               gridTerminals.push(t);
           }
           updates.focusedId = gridTerminals[0]?.id ?? null;
+          // Auto-fallback focus from a moved-to-dock panel isn't a user
+          // navigation event — clear the alternate pointer to avoid round-
+          // tripping into a panel the user didn't choose.
+          updates.previousFocusedId = null;
+        }
+        if (state.previousFocusedId === id) {
+          updates.previousFocusedId = null;
         }
 
         if (state.maximizedId) {
@@ -203,7 +215,12 @@ export const usePanelStore = create<PanelGridState>()(
       moveTerminalToGrid: (id: string) => {
         const moveSucceeded = registrySlice.moveTerminalToGrid(id);
         if (moveSucceeded) {
-          set({ focusedId: id, activeDockTerminalId: null });
+          const previousFocusedId = get().focusedId;
+          set({
+            focusedId: id,
+            activeDockTerminalId: null,
+            ...(previousFocusedId !== id && { previousFocusedId }),
+          });
         }
         return moveSucceeded;
       },
@@ -215,6 +232,7 @@ export const usePanelStore = create<PanelGridState>()(
 
         if (location === "grid") {
           const activeDockTerminalId = get().activeDockTerminalId;
+          const previousFocusedId = get().focusedId;
           const nextFocusedId = groupBeforeMove.panelIds.includes(groupBeforeMove.activeTabId)
             ? groupBeforeMove.activeTabId
             : (groupBeforeMove.panelIds[0] ?? null);
@@ -225,11 +243,20 @@ export const usePanelStore = create<PanelGridState>()(
           set({
             focusedId: nextFocusedId,
             ...(shouldClearDock && { activeDockTerminalId: null }),
+            ...(nextFocusedId !== previousFocusedId && { previousFocusedId }),
           });
         } else {
           const focusedId = get().focusedId;
           if (focusedId && groupBeforeMove.panelIds.includes(focusedId)) {
-            set({ focusedId: null, activeDockTerminalId: groupBeforeMove.activeTabId });
+            // The previously focused panel is now in the dock and `focusedId`
+            // is being cleared as a side effect of the move, not a user
+            // navigation. Clear the alternate pointer to keep round-trip
+            // semantics tied to explicit focus changes.
+            set({
+              focusedId: null,
+              activeDockTerminalId: groupBeforeMove.activeTabId,
+              previousFocusedId: null,
+            });
           }
         }
 
@@ -272,6 +299,9 @@ export const usePanelStore = create<PanelGridState>()(
             ? gridTerminals.find((t) => isRuntimeAgentTerminal(t))
             : undefined;
           updates.focusedId = nextAgent?.id ?? gridTerminals[0]?.id ?? null;
+          updates.previousFocusedId = null;
+        } else if (state.previousFocusedId === id) {
+          updates.previousFocusedId = null;
         }
 
         if (state.maximizedId === id) {
@@ -326,6 +356,12 @@ export const usePanelStore = create<PanelGridState>()(
             ? gridTerminals.find((t) => isRuntimeAgentTerminal(t))
             : undefined;
           updates.focusedId = nextAgent?.id ?? gridTerminals[0]?.id ?? null;
+          updates.previousFocusedId = null;
+        } else if (
+          state.previousFocusedId !== null &&
+          panelIdsInGroup.includes(state.previousFocusedId)
+        ) {
+          updates.previousFocusedId = null;
         }
 
         if (state.maximizedId && panelIdsInGroup.includes(state.maximizedId)) {
@@ -343,7 +379,12 @@ export const usePanelStore = create<PanelGridState>()(
 
       restoreTerminal: (id: string, targetWorktreeId?: string) => {
         registrySlice.restoreTerminal(id, targetWorktreeId);
-        set({ focusedId: id, activeDockTerminalId: null });
+        const previousFocusedId = get().focusedId;
+        set({
+          focusedId: id,
+          activeDockTerminalId: null,
+          ...(previousFocusedId !== id && { previousFocusedId }),
+        });
       },
 
       restoreTrashedGroup: (groupRestoreId: string, targetWorktreeId?: string) => {
@@ -369,7 +410,12 @@ export const usePanelStore = create<PanelGridState>()(
           groupPanelIds.includes(anchorPanel.groupMetadata.activeTabId)
             ? anchorPanel.groupMetadata.activeTabId
             : groupPanelIds[0]!;
-        set({ focusedId: focusId, activeDockTerminalId: null });
+        const previousFocusedId = get().focusedId;
+        set({
+          focusedId: focusId,
+          activeDockTerminalId: null,
+          ...(previousFocusedId !== focusId && { previousFocusedId }),
+        });
 
         const group = get().getPanelGroup(focusId);
         if (group) {
@@ -402,7 +448,12 @@ export const usePanelStore = create<PanelGridState>()(
         registrySlice.moveTerminalToPosition(id, toIndex, location, worktreeId);
 
         if (location === "grid") {
-          set({ focusedId: id, activeDockTerminalId: null });
+          const previousFocusedId = state.focusedId;
+          set({
+            focusedId: id,
+            activeDockTerminalId: null,
+            ...(previousFocusedId !== id && { previousFocusedId }),
+          });
         } else if (state.focusedId === id) {
           const activeWt = getActiveWorktreeId() ?? undefined;
           const gridTerminals: TerminalInstance[] = [];
@@ -416,7 +467,9 @@ export const usePanelStore = create<PanelGridState>()(
             )
               gridTerminals.push(t);
           }
-          set({ focusedId: gridTerminals[0]?.id ?? null });
+          // Auto-fallback focus when the focused panel is moved to dock —
+          // not a user navigation, so the alternate pointer becomes stale.
+          set({ focusedId: gridTerminals[0]?.id ?? null, previousFocusedId: null });
         }
       },
 
@@ -473,6 +526,7 @@ export const usePanelStore = create<PanelGridState>()(
           backgroundedTerminals: new Map(),
           tabGroups: new Map(),
           focusedId: null,
+          previousFocusedId: null,
           maximizedId: null,
           activeDockTerminalId: null,
           pingedId: null,
@@ -516,6 +570,7 @@ export const usePanelStore = create<PanelGridState>()(
           backgroundedTerminals: new Map(),
           tabGroups: new Map(),
           focusedId: null,
+          previousFocusedId: null,
           maximizedId: null,
           activeDockTerminalId: null,
           pingedId: null,
@@ -561,6 +616,7 @@ export const usePanelStore = create<PanelGridState>()(
           backgroundedTerminals: new Map(),
           tabGroups: new Map(),
           focusedId: null,
+          previousFocusedId: null,
           maximizedId: null,
           activeDockTerminalId: null,
           pingedId: null,

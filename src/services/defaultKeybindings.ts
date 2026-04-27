@@ -178,6 +178,14 @@ export const DEFAULT_KEYBINDINGS: KeybindingConfig[] = [
     category: "Terminal",
   },
   {
+    actionId: "terminal.focusAlternate",
+    combo: "Cmd+Alt+`",
+    scope: "global",
+    priority: 0,
+    description: "Toggle focus between current and previously focused panel",
+    category: "Terminal",
+  },
+  {
     actionId: "tab.next",
     combo: "Cmd+Shift+]",
     scope: "global",

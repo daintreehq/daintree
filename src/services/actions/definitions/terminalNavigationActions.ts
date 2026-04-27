@@ -35,6 +35,21 @@ export function registerTerminalNavigationActions(
     },
   }));
 
+  actions.set("terminal.focusAlternate", () => ({
+    id: "terminal.focusAlternate",
+    title: "Focus Alternate Panel",
+    description: "Toggle focus between the current panel and the previously focused one",
+    category: "terminal",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    nonRepeatable: true,
+    keywords: ["last", "previous", "swap", "toggle", "tmux", "back"],
+    run: async () => {
+      usePanelStore.getState().focusAlternate();
+    },
+  }));
+
   actions.set("terminal.focusUp", () => ({
     id: "terminal.focusUp",
     title: "Focus Terminal Up",

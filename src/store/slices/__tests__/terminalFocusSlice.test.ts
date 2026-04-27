@@ -1110,3 +1110,247 @@ describe("TerminalFocusSlice - setFocused ping gating", () => {
     expect(pingSpy).not.toHaveBeenCalled();
   });
 });
+
+describe("TerminalFocusSlice - focusAlternate (last-pane toggle)", () => {
+  beforeAll(() => {
+    Object.defineProperty(globalThis, "window", {
+      value: {
+        electron: {
+          notification: { acknowledgeWaiting: vi.fn(), acknowledgeWorkingPulse: vi.fn() },
+        },
+      },
+      writable: true,
+      configurable: true,
+    });
+  });
+
+  afterAll(() => {
+    Object.defineProperty(globalThis, "window", {
+      value: undefined,
+      writable: true,
+      configurable: true,
+    });
+  });
+
+  const makeTerminal = (
+    id: string,
+    location: "grid" | "dock" | "trash" | "background" = "grid",
+    worktreeId = "worktree-1"
+  ): TerminalInstance =>
+    ({
+      id,
+      title: id,
+      cwd: "/test",
+      location,
+      agentState: "idle",
+      isVisible: true,
+      cols: 80,
+      rows: 24,
+      worktreeId,
+    }) as TerminalInstance;
+
+  let terminals: TerminalInstance[];
+  let state: TerminalFocusSlice;
+
+  const setup = () => {
+    const getTerminals = vi.fn(() => terminals);
+    const getState = vi.fn((): TerminalFocusSlice => state);
+    const setState = vi.fn(
+      (
+        updater:
+          | Partial<TerminalFocusSlice>
+          | ((s: TerminalFocusSlice) => Partial<TerminalFocusSlice>)
+      ) => {
+        const currentState = getState();
+        const updates = typeof updater === "function" ? updater(currentState) : updater;
+        state = { ...currentState, ...updates };
+      }
+    );
+    return { getTerminals, setState, getState };
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    terminals = [
+      makeTerminal("a"),
+      makeTerminal("b"),
+      makeTerminal("c"),
+      makeTerminal("dock-1", "dock"),
+    ];
+    const { getTerminals, setState, getState } = setup();
+    state = createTerminalFocusSlice(getTerminals, mockGetActiveWorktreeId)(
+      setState as never,
+      getState as never,
+      {} as never
+    );
+  });
+
+  it("initializes previousFocusedId to null", () => {
+    expect(state.previousFocusedId).toBeNull();
+  });
+
+  it("setFocused records the prior focus as previousFocusedId on a real change", () => {
+    state.setFocused("a");
+    expect(state.focusedId).toBe("a");
+    expect(state.previousFocusedId).toBeNull();
+
+    state.setFocused("b");
+    expect(state.focusedId).toBe("b");
+    expect(state.previousFocusedId).toBe("a");
+  });
+
+  it("setFocused does not corrupt previousFocusedId when re-focusing the active panel", () => {
+    state.setFocused("a");
+    state.setFocused("b");
+    expect(state.previousFocusedId).toBe("a");
+
+    // Re-focusing the already-active panel must not overwrite the alternate
+    // pointer with itself — that would break A↔B round-tripping.
+    state.setFocused("b");
+    expect(state.previousFocusedId).toBe("a");
+  });
+
+  it("activateTerminal records the prior focus as previousFocusedId on a real change", () => {
+    state.activateTerminal("a");
+    expect(state.previousFocusedId).toBeNull();
+
+    state.activateTerminal("b");
+    expect(state.previousFocusedId).toBe("a");
+  });
+
+  it("activateTerminal does not corrupt previousFocusedId when re-activating the active panel", () => {
+    state.activateTerminal("a");
+    state.activateTerminal("b");
+    expect(state.previousFocusedId).toBe("a");
+
+    state.activateTerminal("b");
+    expect(state.previousFocusedId).toBe("a");
+  });
+
+  it("focusAlternate is a no-op when previousFocusedId is null", () => {
+    state.activateTerminal("a");
+    expect(state.previousFocusedId).toBeNull();
+
+    state.focusAlternate();
+    expect(state.focusedId).toBe("a");
+  });
+
+  it("focusAlternate swaps to the previous panel and back (A↔B round-trip)", () => {
+    state.activateTerminal("a");
+    state.activateTerminal("b");
+    expect(state.focusedId).toBe("b");
+    expect(state.previousFocusedId).toBe("a");
+
+    state.focusAlternate();
+    expect(state.focusedId).toBe("a");
+    expect(state.previousFocusedId).toBe("b");
+
+    state.focusAlternate();
+    expect(state.focusedId).toBe("b");
+    expect(state.previousFocusedId).toBe("a");
+  });
+
+  it("focusAlternate ignores trashed targets", () => {
+    state.activateTerminal("a");
+    state.activateTerminal("b");
+    expect(state.previousFocusedId).toBe("a");
+
+    // Simulate the panel being trashed in place (without going through
+    // handleTerminalRemoved, which would null the pointer itself).
+    terminals = terminals.map((t) => (t.id === "a" ? { ...t, location: "trash" } : t));
+
+    state.focusAlternate();
+    expect(state.focusedId).toBe("b");
+  });
+
+  it("focusAlternate ignores background (hibernated) targets", () => {
+    state.activateTerminal("a");
+    state.activateTerminal("b");
+
+    terminals = terminals.map((t) => (t.id === "a" ? { ...t, location: "background" } : t));
+
+    state.focusAlternate();
+    expect(state.focusedId).toBe("b");
+  });
+
+  it("focusAlternate is a no-op when the previous panel was removed entirely", () => {
+    state.activateTerminal("a");
+    state.activateTerminal("b");
+
+    terminals = terminals.filter((t) => t.id !== "a");
+
+    state.focusAlternate();
+    expect(state.focusedId).toBe("b");
+  });
+
+  it("works across grid and dock panels", () => {
+    state.activateTerminal("a");
+    state.activateTerminal("dock-1");
+    expect(state.focusedId).toBe("dock-1");
+    expect(state.activeDockTerminalId).toBe("dock-1");
+    expect(state.previousFocusedId).toBe("a");
+
+    state.focusAlternate();
+    expect(state.focusedId).toBe("a");
+    expect(state.activeDockTerminalId).toBeNull();
+    expect(state.previousFocusedId).toBe("dock-1");
+
+    state.focusAlternate();
+    expect(state.focusedId).toBe("dock-1");
+    expect(state.activeDockTerminalId).toBe("dock-1");
+  });
+
+  it("handleTerminalRemoved clears previousFocusedId when the removed panel was the alternate", () => {
+    state.activateTerminal("a");
+    state.activateTerminal("b");
+    expect(state.previousFocusedId).toBe("a");
+
+    state.handleTerminalRemoved(
+      "a",
+      terminals.filter((t) => t.id !== "a"),
+      0
+    );
+    expect(state.previousFocusedId).toBeNull();
+    expect(state.focusedId).toBe("b");
+  });
+
+  it("handleTerminalRemoved clears previousFocusedId when the focused panel is removed (auto-fallback)", () => {
+    state.activateTerminal("a");
+    state.activateTerminal("b");
+    expect(state.previousFocusedId).toBe("a");
+
+    // b is currently focused; removing b reassigns focusedId to a fallback,
+    // and the old previousFocusedId is no longer the user's preceding choice.
+    state.handleTerminalRemoved(
+      "b",
+      terminals.filter((t) => t.id !== "b"),
+      1
+    );
+    expect(state.previousFocusedId).toBeNull();
+  });
+
+  it("openDockTerminal records the prior focus as previousFocusedId", () => {
+    // Most dock-focus entry points (clicks in DockedTerminalItem, focusDock
+    // action, navigateTab dock branch, focusNextBlockedDock) route through
+    // openDockTerminal — the alternate chain must include them.
+    state.activateTerminal("a");
+
+    state.openDockTerminal("dock-1");
+    expect(state.focusedId).toBe("dock-1");
+    expect(state.activeDockTerminalId).toBe("dock-1");
+    expect(state.previousFocusedId).toBe("a");
+
+    state.focusAlternate();
+    expect(state.focusedId).toBe("a");
+    expect(state.previousFocusedId).toBe("dock-1");
+  });
+
+  it("openDockTerminal does not corrupt previousFocusedId when reopening the same dock panel", () => {
+    state.activateTerminal("a");
+    state.openDockTerminal("dock-1");
+    expect(state.previousFocusedId).toBe("a");
+
+    state.openDockTerminal("dock-1");
+    expect(state.previousFocusedId).toBe("a");
+  });
+});
