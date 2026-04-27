@@ -1,7 +1,6 @@
 import React from "react";
 import { cn } from "@/lib/utils";
 import type { ActionPaletteItem as ActionPaletteItemType } from "@/hooks/useActionPalette";
-import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 import { ACTION_CATEGORY_COLORS, ACTION_CATEGORY_DEFAULT_COLOR } from "@/config/categoryColors";
 
 interface ActionPaletteItemProps {
@@ -17,7 +16,7 @@ export const ActionPaletteItem = React.memo(function ActionPaletteItem({
 }: ActionPaletteItemProps) {
   const categoryColor = ACTION_CATEGORY_COLORS[item.category] ?? ACTION_CATEGORY_DEFAULT_COLOR;
 
-  const buttonContent = (
+  return (
     <button
       id={`action-option-${item.id}`}
       tabIndex={-1}
@@ -25,6 +24,7 @@ export const ActionPaletteItem = React.memo(function ActionPaletteItem({
       role="option"
       aria-selected={isSelected}
       aria-disabled={!item.enabled}
+      disabled={!item.enabled}
       className={cn(
         "relative w-full flex items-center gap-3 px-3 py-2 rounded-[var(--radius-md)] text-left transition-colors border",
         !item.enabled && "opacity-40 cursor-not-allowed",
@@ -32,7 +32,7 @@ export const ActionPaletteItem = React.memo(function ActionPaletteItem({
           ? "bg-overlay-soft border-overlay text-daintree-text before:absolute before:left-0 before:top-2 before:bottom-2 before:w-[2px] before:rounded-r before:bg-daintree-accent before:content-['']"
           : "border-transparent text-daintree-text/70 hover:bg-overlay-subtle hover:text-daintree-text"
       )}
-      onClick={() => onSelect(item)}
+      onClick={() => item.enabled && onSelect(item)}
     >
       <span
         className={cn(
@@ -48,6 +48,11 @@ export const ActionPaletteItem = React.memo(function ActionPaletteItem({
         {item.description && (
           <div className="text-xs text-daintree-text/50 truncate">{item.description}</div>
         )}
+        {!item.enabled && item.disabledReason && (
+          <div className="text-[10px] text-daintree-text/40 italic truncate">
+            {item.disabledReason}
+          </div>
+        )}
       </div>
 
       {item.keybinding && (
@@ -57,19 +62,4 @@ export const ActionPaletteItem = React.memo(function ActionPaletteItem({
       )}
     </button>
   );
-
-  if (!item.enabled && item.disabledReason) {
-    return (
-      <TooltipProvider>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <span className="inline-flex w-full">{buttonContent}</span>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">{item.disabledReason}</TooltipContent>
-        </Tooltip>
-      </TooltipProvider>
-    );
-  }
-
-  return buttonContent;
 });
