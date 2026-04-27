@@ -112,6 +112,27 @@ describe("serializePtyPanel — agentPresetColor (Bug: not serialized)", () => {
   });
 });
 
+// "directing" is a renderer-only ephemeral state owned by
+// TerminalAgentStateController (#5832). Persisting it could resurrect a stuck
+// indicator on the next reload because setAgentState explicitly ignores
+// incoming "directing" values, so the controller cannot sanitize the panel
+// store entry through its normal IPC path.
+describe("serializePtyPanel — directing is never persisted", () => {
+  it("omits agentState entirely when set to directing", () => {
+    const panel = makePanel({ agentState: "directing" });
+    const snapshot = serializePtyPanel(panel) as Record<string, unknown>;
+    expect("agentState" in snapshot).toBe(false);
+  });
+
+  it("still persists non-directing agent states", () => {
+    for (const state of ["working", "waiting", "completed", "exited"] as const) {
+      const panel = makePanel({ agentState: state });
+      const snapshot = serializePtyPanel(panel);
+      expect(snapshot.agentState).toBe(state);
+    }
+  });
+});
+
 // Runtime detection identity (#5768) is recomputed by the backend detector on
 // every PTY attach — it must not be persisted into project JSON.
 describe("serializePtyPanel — detectedAgentId is never persisted", () => {

@@ -738,6 +738,46 @@ describe("TerminalAgentStateController", () => {
       expect(m2.agentState).toBe("waiting");
     });
 
+    it("refreshes wall-clock on each keystroke (active typing not swept)", () => {
+      const managed = makeMockManaged({
+        canonicalAgentState: "waiting",
+        agentState: "waiting",
+      });
+      instances.set("t1", managed);
+
+      // Simulate a long typing session where each keystroke advances the
+      // wall clock but the user keeps interacting (the debounce timer is
+      // continuously reset).
+      controller.onUserInput("t1", "a");
+      vi.setSystemTime(Date.now() + 7000);
+      controller.onUserInput("t1", "b");
+      vi.setSystemTime(Date.now() + 7000);
+      controller.onUserInput("t1", "c");
+      vi.setSystemTime(Date.now() + 7000);
+
+      // Total elapsed: 21s. Last keystroke was 7s ago — under the cap.
+      document.dispatchEvent(new Event("visibilitychange"));
+      expect(managed.agentState).toBe("directing");
+    });
+
+    it("sweeps when last keystroke was 15s+ ago even if a timer is still pending", () => {
+      const managed = makeMockManaged({
+        canonicalAgentState: "waiting",
+        agentState: "waiting",
+      });
+      instances.set("t1", managed);
+
+      // Single keystroke schedules a 1500ms debounce. setSystemTime advances
+      // the wall clock without firing the queued timer — this models
+      // Chromium IntensiveWakeUpThrottling delaying the timer in a
+      // backgrounded view.
+      controller.onUserInput("t1", "a");
+      vi.setSystemTime(Date.now() + 20000);
+
+      document.dispatchEvent(new Event("visibilitychange"));
+      expect(managed.agentState).toBe("waiting");
+    });
+
     it("does not sweep when visibilityState is hidden", () => {
       const managed = makeMockManaged({
         canonicalAgentState: "waiting",

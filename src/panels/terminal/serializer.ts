@@ -22,7 +22,10 @@ export function serializePtyPanel(t: PtySerializeInput): Partial<PanelSnapshot> 
     ...(t.originalPresetId && { originalPresetId: t.originalPresetId }),
     ...(t.isUsingFallback && { isUsingFallback: true }),
     ...(typeof t.fallbackChainIndex === "number" && { fallbackChainIndex: t.fallbackChainIndex }),
-    ...(t.agentState && { agentState: t.agentState }),
+    // "directing" is a renderer-only ephemeral state owned by
+    // TerminalAgentStateController; persisting it could resurrect a stuck
+    // indicator on the next reload (issue #5832).
+    ...(t.agentState && t.agentState !== "directing" && { agentState: t.agentState }),
     ...(t.lastStateChange !== undefined && { lastStateChange: t.lastStateChange }),
   };
 }

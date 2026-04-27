@@ -94,9 +94,14 @@ export class TerminalAgentStateController {
       }
       this.compositionCounts.set(id, newCount);
 
+      // Refreshed per keystroke so the wall-clock guardrail measures "time
+      // since last input", matching the issue spec. Active typers are
+      // continuously refreshed and never swept; abandoned/throttled sessions
+      // age past the cap.
+      this.directingEnteredAt.set(id, Date.now());
+
       if (managed.agentState !== "directing") {
         managed.agentState = "directing";
-        this.directingEnteredAt.set(id, Date.now());
         logDebug("[directing] enter", { terminalId: id, trigger: "user-input" });
         this.notifySubscribers(managed, "directing");
         usePanelStore.getState().updateAgentState(id, "directing");
@@ -218,6 +223,12 @@ export class TerminalAgentStateController {
     if (typeof document === "undefined") return;
     if (document.visibilityState !== "visible") return;
 
+    // Sweep regardless of timer presence: a backgrounded debounce timer
+    // can be delayed up to ~60s by Chromium IntensiveWakeUpThrottling, so
+    // a "still pending" timer is not evidence of an active session. The
+    // enteredAt timestamp (refreshed on each keystroke) is the source of
+    // truth — entries older than the cap mean the user has not typed for
+    // 15s+, so the directing indicator is definitionally stale.
     const now = Date.now();
     const stale: string[] = [];
     for (const [id, enteredAt] of this.directingEnteredAt.entries()) {
