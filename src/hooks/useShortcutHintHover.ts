@@ -1,4 +1,4 @@
-import { useRef, useEffect, useEffectEvent } from "react";
+import { useRef, useEffect } from "react";
 import type React from "react";
 import { shortcutHintStore } from "@/store/shortcutHintStore";
 import { keybindingService } from "./useKeybinding";
@@ -11,12 +11,14 @@ const HOVER_DWELL_MS = 1500;
  * or at a milestone count, with one-shot gating per count level.
  *
  * Returns handlers to spread onto the target element's root node:
- *   const { onPointerEnter, onPointerLeave } = useShortcutHintHover("nav.toggleSidebar");
- *   <button onPointerEnter={onPointerEnter} onPointerLeave={onPointerLeave} />
+ *   const { onPointerEnter, onPointerLeave, onPointerDown } = useShortcutHintHover("nav.toggleSidebar");
+ *   <button onPointerEnter={onPointerEnter} onPointerLeave={onPointerLeave} onPointerDown={onPointerDown} />
  */
 export function useShortcutHintHover(actionId: string) {
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const displayComboRef = useRef<string>("");
+  // Ref-based callback to avoid stale closures in setTimeout without useEffectEvent.
+  const fireDwellRef = useRef<(clientX: number, clientY: number) => void>(() => {});
 
   // Keep display combo updated without re-creating the timer callbacks.
   useEffect(() => {
@@ -27,15 +29,8 @@ export function useShortcutHintHover(actionId: string) {
     return unsub;
   }, [actionId]);
 
-  const clearTimer = () => {
-    if (timerRef.current) {
-      clearTimeout(timerRef.current);
-      timerRef.current = null;
-    }
-  };
-
-  // Fire the hint at dwell time — reads fresh store state to avoid stale closures.
-  const fireDwell = useEffectEvent((clientX: number, clientY: number) => {
+  // Keep the dwell callback fresh with the latest actionId closure.
+  fireDwellRef.current = (clientX: number, clientY: number) => {
     const displayCombo = displayComboRef.current;
     if (!displayCombo) return;
 
@@ -49,7 +44,14 @@ export function useShortcutHintHover(actionId: string) {
     if (shown) {
       store.getState().markHoverShown(actionId);
     }
-  });
+  };
+
+  const clearTimer = () => {
+    if (timerRef.current) {
+      clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+  };
 
   useEffect(() => {
     return () => clearTimer();
@@ -67,7 +69,7 @@ export function useShortcutHintHover(actionId: string) {
 
     timerRef.current = setTimeout(() => {
       timerRef.current = null;
-      fireDwell(clientX, clientY);
+      fireDwellRef.current(clientX, clientY);
     }, HOVER_DWELL_MS);
   };
 
