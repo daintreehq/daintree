@@ -28,7 +28,7 @@ import { GitHubAuth } from "../services/github/GitHubAuth.js";
 import { gitHubTokenHealthService } from "../services/github/GitHubTokenHealthService.js";
 import { secureStorage } from "../services/SecureStorage.js";
 import { notificationService } from "../services/NotificationService.js";
-import { agentNotificationService } from "../services/AgentNotificationService.js";
+import type { agentNotificationService as AgentNotificationServiceType } from "../services/AgentNotificationService.js";
 import { preAgentSnapshotService } from "../services/PreAgentSnapshotService.js";
 import { getActionBreadcrumbService } from "../services/ActionBreadcrumbService.js";
 import {
@@ -45,23 +45,21 @@ import {
   initializeTaskOrchestrator,
   disposeTaskOrchestrator,
 } from "../services/TaskOrchestrator.js";
-import { autoUpdaterService } from "../services/AutoUpdaterService.js";
+import type { autoUpdaterService as AutoUpdaterServiceType } from "../services/AutoUpdaterService.js";
 import { runSmokeFunctionalChecks } from "../services/smokeTest.js";
 import {
   initializeHibernationService,
   getHibernationService,
 } from "../services/HibernationService.js";
-import { initializeIdleTerminalNotificationService } from "../services/IdleTerminalNotificationService.js";
-import {
-  initializeSystemSleepService,
-  getSystemSleepService,
-} from "../services/SystemSleepService.js";
 import {
   evictSessionFiles,
   SESSION_EVICTION_TTL_MS,
   SESSION_EVICTION_MAX_BYTES,
 } from "../services/pty/terminalSessionPersistence.js";
-import { mcpServerService } from "../services/McpServerService.js";
+import {
+  initializeSystemSleepService,
+  getSystemSleepService,
+} from "../services/SystemSleepService.js";
 import { getCrashRecoveryService } from "../services/CrashRecoveryService.js";
 import {
   markPerformance,
@@ -106,6 +104,12 @@ let resourceProfileService: ResourceProfileService | null = null;
 let worktreePortBroker: import("../services/WorktreePortBroker.js").WorktreePortBroker | null =
   null;
 let ccrConfigService: import("../services/CcrConfigService.js").CcrConfigService | null = null;
+
+// Singletons resolved by deferred tasks. Held here so dispose paths can clean
+// them up safely if the task ran. If the window closes before the task runs
+// (early shutdown), these stay null and the dispose path no-ops.
+let autoUpdaterServiceRef: typeof AutoUpdaterServiceType | null = null;
+let agentNotificationServiceRef: typeof AgentNotificationServiceType | null = null;
 
 // Guard: IPC handlers are globally scoped (ipcMain.handle throws on re-registration)
 let ipcHandlersRegistered = false;
@@ -323,14 +327,29 @@ export async function setupWindowServices(
     console.log("[MAIN] GitHubTokenHealthService started");
 
     // Notifications (global singletons)
-    agentNotificationService.initialize();
+    // AgentNotificationService is deferred — agents can't emit state events
+    // before the renderer is interactive, and its boot grace period now starts
+    // from the deferred initialize() so the suppression window still covers
+    // the actual agent startup interval.
     preAgentSnapshotService.initialize();
     getActionBreadcrumbService().initialize();
+
+    registerDeferredTask({
+      name: "agent-notification-service",
+      run: async () => {
+        const { agentNotificationService } =
+          await import("../services/AgentNotificationService.js");
+        agentNotificationServiceRef = agentNotificationService;
+        agentNotificationService.initialize();
+      },
+    });
 
     // Auto-updater
     registerDeferredTask({
       name: "auto-updater",
-      run: () => {
+      run: async () => {
+        const { autoUpdaterService } = await import("../services/AutoUpdaterService.js");
+        autoUpdaterServiceRef = autoUpdaterService;
         autoUpdaterService.initialize();
       },
     });
@@ -369,7 +388,9 @@ export async function setupWindowServices(
 
     registerDeferredTask({
       name: "idle-terminal-notification-service",
-      run: () => {
+      run: async () => {
+        const { initializeIdleTerminalNotificationService } =
+          await import("../services/IdleTerminalNotificationService.js");
         initializeIdleTerminalNotificationService();
       },
     });
@@ -525,10 +546,14 @@ export async function setupWindowServices(
       const registryRef = windowRegistry;
       registerDeferredTask({
         name: "mcp-server",
-        run: () =>
-          mcpServerService.start(registryRef).catch((err) => {
+        run: async () => {
+          try {
+            const { mcpServerService } = await import("../services/McpServerService.js");
+            await mcpServerService.start(registryRef);
+          } catch (err) {
             console.error("[MAIN] MCP server failed to start:", err);
-          }),
+          }
+        },
       });
     }
 
@@ -1218,8 +1243,14 @@ export async function setupWindowServices(
     getSystemSleepService().dispose();
     gitHubTokenHealthService.dispose();
     notificationService.dispose();
-    agentNotificationService.dispose();
+    if (agentNotificationServiceRef) {
+      agentNotificationServiceRef.dispose();
+      agentNotificationServiceRef = null;
+    }
     preAgentSnapshotService.dispose();
-    autoUpdaterService.dispose();
+    if (autoUpdaterServiceRef) {
+      autoUpdaterServiceRef.dispose();
+      autoUpdaterServiceRef = null;
+    }
   });
 }

@@ -6,7 +6,18 @@
 import path from "path";
 import { CHANNELS } from "../../channels.js";
 import { projectStore } from "../../../services/ProjectStore.js";
-import { runCommandDetector } from "../../../services/RunCommandDetector.js";
+import type * as RunCommandDetectorModule from "../../../services/RunCommandDetector.js";
+
+let cachedRunCommandDetector: typeof RunCommandDetectorModule.runCommandDetector | null = null;
+async function getRunCommandDetector(): Promise<
+  typeof RunCommandDetectorModule.runCommandDetector
+> {
+  if (!cachedRunCommandDetector) {
+    const mod = await import("../../../services/RunCommandDetector.js");
+    cachedRunCommandDetector = mod.runCommandDetector;
+  }
+  return cachedRunCommandDetector;
+}
 import { typedHandle } from "../../utils.js";
 import type { ProjectSettings } from "../../../types/index.js";
 
@@ -60,7 +71,8 @@ export function registerProjectSettingsHandlers(): () => void {
       return [];
     }
 
-    return await runCommandDetector.detect(project.path);
+    const detector = await getRunCommandDetector();
+    return await detector.detect(project.path);
   };
   handlers.push(typedHandle(CHANNELS.PROJECT_DETECT_RUNNERS, handleProjectDetectRunners));
 

@@ -5,19 +5,48 @@ import {
   type NotificationState,
   type WatchNotificationContext,
 } from "../../services/NotificationService.js";
-import { agentNotificationService } from "../../services/AgentNotificationService.js";
+import type * as AgentNotificationServiceModule from "../../services/AgentNotificationService.js";
+import type * as SoundServiceModule from "../../services/SoundService.js";
 import {
-  soundService,
-  ALLOWED_SOUND_FILES,
-  SOUND_FILES,
-  getSoundsDir,
-} from "../../services/SoundService.js";
+  getSoundService,
+  getAllowedSoundFiles,
+  getSoundFiles,
+  getSoundsDirectory,
+} from "../../services/getSoundService.js";
 import { store } from "../../store.js";
 import type { HandlerDependencies } from "../types.js";
 import type { NotificationSettings } from "../../../shared/types/ipc/api.js";
 import { typedHandle } from "../utils.js";
 
-type SoundId = keyof typeof SOUND_FILES;
+type SoundId = keyof typeof SoundServiceModule.SOUND_FILES;
+type AgentNotificationSingleton = typeof AgentNotificationServiceModule.agentNotificationService;
+type AllowedSoundFilesSet = typeof SoundServiceModule.ALLOWED_SOUND_FILES;
+type SoundFilesMap = typeof SoundServiceModule.SOUND_FILES;
+
+let cachedAgentNotificationService: AgentNotificationSingleton | null = null;
+async function getAgentNotificationService(): Promise<AgentNotificationSingleton> {
+  if (!cachedAgentNotificationService) {
+    const mod = await import("../../services/AgentNotificationService.js");
+    cachedAgentNotificationService = mod.agentNotificationService;
+  }
+  return cachedAgentNotificationService;
+}
+
+let cachedAllowedSoundFiles: AllowedSoundFilesSet | null = null;
+async function allowedSoundFiles(): Promise<AllowedSoundFilesSet> {
+  if (!cachedAllowedSoundFiles) {
+    cachedAllowedSoundFiles = await getAllowedSoundFiles();
+  }
+  return cachedAllowedSoundFiles;
+}
+
+let cachedSoundFiles: SoundFilesMap | null = null;
+async function soundFiles(): Promise<SoundFilesMap> {
+  if (!cachedSoundFiles) {
+    cachedSoundFiles = await getSoundFiles();
+  }
+  return cachedSoundFiles;
+}
 
 export function registerNotificationHandlers(_deps: HandlerDependencies): () => void {
   const cleanups: Array<() => void> = [];
@@ -38,21 +67,19 @@ export function registerNotificationHandlers(_deps: HandlerDependencies): () => 
 
     const allowed: Partial<NotificationSettings> = {};
     const s = rawSettings as Record<string, unknown>;
+    const ALLOWED = await allowedSoundFiles();
 
     if (typeof s.enabled === "boolean") allowed.enabled = s.enabled;
     if (typeof s.completedEnabled === "boolean") allowed.completedEnabled = s.completedEnabled;
     if (typeof s.waitingEnabled === "boolean") allowed.waitingEnabled = s.waitingEnabled;
     if (typeof s.soundEnabled === "boolean") allowed.soundEnabled = s.soundEnabled;
-    if (typeof s.completedSoundFile === "string" && ALLOWED_SOUND_FILES.has(s.completedSoundFile)) {
+    if (typeof s.completedSoundFile === "string" && ALLOWED.has(s.completedSoundFile)) {
       allowed.completedSoundFile = s.completedSoundFile;
     }
-    if (typeof s.waitingSoundFile === "string" && ALLOWED_SOUND_FILES.has(s.waitingSoundFile)) {
+    if (typeof s.waitingSoundFile === "string" && ALLOWED.has(s.waitingSoundFile)) {
       allowed.waitingSoundFile = s.waitingSoundFile;
     }
-    if (
-      typeof s.escalationSoundFile === "string" &&
-      ALLOWED_SOUND_FILES.has(s.escalationSoundFile)
-    ) {
+    if (typeof s.escalationSoundFile === "string" && ALLOWED.has(s.escalationSoundFile)) {
       allowed.escalationSoundFile = s.escalationSoundFile;
     }
     if (typeof s.waitingEscalationEnabled === "boolean") {
@@ -70,10 +97,7 @@ export function registerNotificationHandlers(_deps: HandlerDependencies): () => 
     if (typeof s.workingPulseEnabled === "boolean") {
       allowed.workingPulseEnabled = s.workingPulseEnabled;
     }
-    if (
-      typeof s.workingPulseSoundFile === "string" &&
-      ALLOWED_SOUND_FILES.has(s.workingPulseSoundFile)
-    ) {
+    if (typeof s.workingPulseSoundFile === "string" && ALLOWED.has(s.workingPulseSoundFile)) {
       allowed.workingPulseSoundFile = s.workingPulseSoundFile;
     }
     if (typeof s.uiFeedbackSoundEnabled === "boolean") {
@@ -102,42 +126,58 @@ export function registerNotificationHandlers(_deps: HandlerDependencies): () => 
   };
 
   const handlePlaySound = async (soundFile: unknown): Promise<void> => {
-    if (typeof soundFile !== "string" || !ALLOWED_SOUND_FILES.has(soundFile)) return;
-    soundService.previewFile(soundFile);
+    if (typeof soundFile !== "string") return;
+    const ALLOWED = await allowedSoundFiles();
+    if (!ALLOWED.has(soundFile)) return;
+    const sound = await getSoundService();
+    sound.previewFile(soundFile);
   };
 
   const handleSyncWatched = (_event: Electron.IpcMainEvent, payload: unknown): void => {
     if (!Array.isArray(payload)) return;
     const ids = payload.filter((v): v is string => typeof v === "string");
-    agentNotificationService.syncWatchedPanels(ids);
+    void getAgentNotificationService()
+      .then((svc) => svc.syncWatchedPanels(ids))
+      .catch((err) => console.error("[notifications] syncWatched failed:", err));
   };
 
   const handlePlayUiEvent = async (soundId: unknown): Promise<void> => {
     if (typeof soundId !== "string") return;
-    if (!(soundId in SOUND_FILES)) return;
+    const SOUNDS = await soundFiles();
+    if (!(soundId in SOUNDS)) return;
     if (!store.get("notificationSettings").uiFeedbackSoundEnabled) return;
-    soundService.play(soundId as SoundId);
+    const sound = await getSoundService();
+    sound.play(soundId as SoundId);
   };
 
   const handleWaitingAcknowledge = (_event: Electron.IpcMainEvent, payload: unknown): void => {
     if (!payload || typeof payload !== "object") return;
     const p = payload as Record<string, unknown>;
     if (typeof p.terminalId !== "string") return;
-    agentNotificationService.acknowledgeWaiting(p.terminalId);
+    const terminalId = p.terminalId;
+    void getAgentNotificationService()
+      .then((svc) => svc.acknowledgeWaiting(terminalId))
+      .catch((err) => console.error("[notifications] acknowledgeWaiting failed:", err));
   };
 
   const handleWorkingPulseAcknowledge = (_event: Electron.IpcMainEvent, payload: unknown): void => {
     if (!payload || typeof payload !== "object") return;
     const p = payload as Record<string, unknown>;
     if (typeof p.terminalId !== "string") return;
-    agentNotificationService.acknowledgeWorkingPulse(p.terminalId);
+    const terminalId = p.terminalId;
+    void getAgentNotificationService()
+      .then((svc) => svc.acknowledgeWorkingPulse(terminalId))
+      .catch((err) => console.error("[notifications] acknowledgeWorkingPulse failed:", err));
   };
 
   const handleSessionMuteSet = (_event: Electron.IpcMainEvent, payload: unknown): void => {
     if (!payload || typeof payload !== "object") return;
     const p = payload as Record<string, unknown>;
     if (typeof p.timestampMs !== "number" || !Number.isFinite(p.timestampMs)) return;
-    agentNotificationService.setSessionMuteUntil(p.timestampMs);
+    const ts = p.timestampMs;
+    void getAgentNotificationService()
+      .then((svc) => svc.setSessionMuteUntil(ts))
+      .catch((err) => console.error("[notifications] setSessionMuteUntil failed:", err));
   };
 
   const handleShowNative = (_event: Electron.IpcMainEvent, payload: unknown): void => {
@@ -168,7 +208,7 @@ export function registerNotificationHandlers(_deps: HandlerDependencies): () => 
   };
 
   const handleGetSoundDir = async (): Promise<string> => {
-    return getSoundsDir();
+    return getSoundsDirectory();
   };
 
   // Fire-and-forget listeners (ipcMain.on) — no typedHandle equivalent.

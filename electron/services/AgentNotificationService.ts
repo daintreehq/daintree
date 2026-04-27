@@ -86,6 +86,10 @@ class AgentNotificationService {
   }
 
   initialize(): void {
+    // Idempotent — repeat calls are a no-op so a deferred-task race during
+    // window close + reopen can't double-subscribe event listeners.
+    if (this.unsubscribers.length > 0) return;
+
     this.initializedAt = Date.now();
 
     const unsubStateChanged = events.on("agent:state-changed", (payload) => {

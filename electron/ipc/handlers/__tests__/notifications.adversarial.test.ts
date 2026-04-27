@@ -175,7 +175,7 @@ describe("notifications IPC adversarial", () => {
     expect(soundServiceMock.play).not.toHaveBeenCalled();
   });
 
-  it("syncWatched filters non-string entries from the id array", () => {
+  it("syncWatched filters non-string entries from the id array", async () => {
     getListener(CHANNELS.NOTIFICATION_SYNC_WATCHED)(fakeEvent() as Electron.IpcMainEvent, [
       "a",
       1,
@@ -184,6 +184,8 @@ describe("notifications IPC adversarial", () => {
       { id: "nope" },
     ]);
 
+    // Listener uses fire-and-forget dynamic import — await microtask drain
+    await new Promise((resolve) => setImmediate(resolve));
     expect(agentNotificationServiceMock.syncWatchedPanels).toHaveBeenCalledWith(["a", "b"]);
   });
 

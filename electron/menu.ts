@@ -6,7 +6,13 @@ import type { CliAvailabilityService } from "./services/CliAvailabilityService.j
 import { isAgentInstalled } from "../shared/utils/agentAvailability.js";
 import * as CliInstallService from "./services/CliInstallService.js";
 import { getWindowRegistry, getProjectViewManager } from "./window/windowRef.js";
-import { autoUpdaterService } from "./services/AutoUpdaterService.js";
+// Auto-updater is dynamically imported on click to keep it out of the eager
+// graph — the menu is built at startup but "Check for Updates" only fires on
+// user action.
+async function checkForUpdatesManually(): Promise<void> {
+  const { autoUpdaterService } = await import("./services/AutoUpdaterService.js");
+  autoUpdaterService.checkForUpdatesManually();
+}
 import { getPluginMenuItems } from "./services/pluginMenuRegistry.js";
 import { getAppWebContents } from "./window/webContentsRegistry.js";
 import { PRODUCT_NAME, PRODUCT_WEBSITE, PRODUCT_COPYRIGHT_ORG } from "./utils/productBranding.js";
@@ -409,7 +415,11 @@ export function createApplicationMenu(
               { type: "separator" as const },
               {
                 label: "Check for Updates...",
-                click: () => autoUpdaterService.checkForUpdatesManually(),
+                click: () => {
+                  checkForUpdatesManually().catch((err) =>
+                    console.error("[menu] checkForUpdatesManually failed:", err)
+                  );
+                },
               },
             ]
           : []),
@@ -429,7 +439,11 @@ export function createApplicationMenu(
           ? [
               {
                 label: "Check for Updates...",
-                click: () => autoUpdaterService.checkForUpdatesManually(),
+                click: () => {
+                  checkForUpdatesManually().catch((err) =>
+                    console.error("[menu] checkForUpdatesManually failed:", err)
+                  );
+                },
               },
             ]
           : []),

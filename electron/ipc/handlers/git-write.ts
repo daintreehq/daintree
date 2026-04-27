@@ -15,7 +15,16 @@ import type {
 } from "../../../shared/types/git.js";
 import { validateCwd, createHardenedGit, createAuthenticatedGit } from "../../utils/hardenedGit.js";
 import { store } from "../../store.js";
-import { soundService } from "../../services/SoundService.js";
+import { getSoundService } from "../../services/getSoundService.js";
+import type * as SoundServiceModule from "../../services/SoundService.js";
+
+type SoundId = keyof typeof SoundServiceModule.SOUND_FILES;
+
+function playSoundFireAndForget(id: SoundId): void {
+  void getSoundService()
+    .then((svc) => svc.play(id))
+    .catch((err) => console.error("[git-write] sound play failed:", err));
+}
 import { preAgentSnapshotService } from "../../services/PreAgentSnapshotService.js";
 import type { SnapshotInfo, SnapshotRevertResult } from "../../../shared/types/ipc/git.js";
 import type { GitOperationReason, RecoveryAction } from "../../../shared/types/ipc/errors.js";
@@ -304,7 +313,7 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
     await scanStagedFilesForConflictMarkers(git);
     const result = await git.commit(payload.message.trim());
     if (store.get("notificationSettings").uiFeedbackSoundEnabled) {
-      soundService.play("git-commit");
+      playSoundFireAndForget("git-commit");
     }
     return {
       hash: result.commit || "",
@@ -348,12 +357,12 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
         }
       }
       if (store.get("notificationSettings").uiFeedbackSoundEnabled) {
-        soundService.play("git-push");
+        playSoundFireAndForget("git-push");
       }
       return { success: true };
     } catch (error) {
       if (store.get("notificationSettings").uiFeedbackSoundEnabled) {
-        soundService.play("git-push-error");
+        playSoundFireAndForget("git-push-error");
       }
       const errorMessage = error instanceof Error ? error.message : String(error);
       const gitReason = classifyGitError(error);

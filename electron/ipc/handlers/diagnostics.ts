@@ -17,7 +17,15 @@ import type {
   DiagnosticsReviewPayload,
   DiagnosticsBundleSavePayload,
 } from "../../../shared/types/ipc/system.js";
-import { collectDiagnosticsWithKeys } from "../../services/DiagnosticsCollector.js";
+import type * as DiagnosticsCollectorModule from "../../services/DiagnosticsCollector.js";
+
+let cachedDiagnosticsCollector: typeof DiagnosticsCollectorModule | null = null;
+async function getDiagnosticsCollector(): Promise<typeof DiagnosticsCollectorModule> {
+  if (!cachedDiagnosticsCollector) {
+    cachedDiagnosticsCollector = await import("../../services/DiagnosticsCollector.js");
+  }
+  return cachedDiagnosticsCollector;
+}
 import { getLogFilePath, getLogDirectory } from "../../utils/logger.js";
 import { safeStringify } from "../../utils/safeStringify.js";
 import {
@@ -165,6 +173,7 @@ export function registerDiagnosticsHandlers(deps: HandlerDependencies): () => vo
   handlers.push(typedHandle(CHANNELS.SYSTEM_GET_HARDWARE_INFO, handleGetHardwareInfo));
 
   const handleDownloadDiagnostics = async (): Promise<boolean> => {
+    const { collectDiagnosticsWithKeys } = await getDiagnosticsCollector();
     const { payload } = await collectDiagnosticsWithKeys(deps);
     const json = JSON.stringify(payload, null, 2);
 
@@ -187,6 +196,7 @@ export function registerDiagnosticsHandlers(deps: HandlerDependencies): () => vo
   handlers.push(typedHandle(CHANNELS.SYSTEM_DOWNLOAD_DIAGNOSTICS, handleDownloadDiagnostics));
 
   const handleCollectDiagnosticsForReview = async (): Promise<DiagnosticsReviewPayload> => {
+    const { collectDiagnosticsWithKeys } = await getDiagnosticsCollector();
     const { payload, sectionKeys } = await collectDiagnosticsWithKeys(deps);
     const previewJson = safeStringify(payload, 2);
     return { payload, sectionKeys, previewJson };
