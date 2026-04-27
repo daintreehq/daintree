@@ -156,6 +156,35 @@ describe("notificationStore adversarial", () => {
     expect(after.updatedAt).toBe(5000);
   });
 
+  it("updateNotification resets firstShownAt when promoting duration:0 to auto-dismiss", () => {
+    vi.spyOn(Date, "now").mockReturnValue(1000);
+    const id = addToast({ message: "Copying…", duration: 0 });
+    expect(
+      useNotificationStore.getState().notifications.find((x) => x.id === id)!.firstShownAt
+    ).toBe(1000);
+
+    // Long-running async operation completes 30s later; toast is promoted.
+    vi.spyOn(Date, "now").mockReturnValue(31000);
+    useNotificationStore.getState().updateNotification(id, { message: "Done", duration: 3000 });
+
+    const after = useNotificationStore.getState().notifications.find((x) => x.id === id)!;
+    expect(after.firstShownAt).toBe(31000);
+  });
+
+  it("updateNotification does NOT reset firstShownAt when patching auto-dismiss → auto-dismiss", () => {
+    vi.spyOn(Date, "now").mockReturnValue(1000);
+    const id = addToast({ message: "m", duration: 3000 });
+    expect(
+      useNotificationStore.getState().notifications.find((x) => x.id === id)!.firstShownAt
+    ).toBe(1000);
+
+    vi.spyOn(Date, "now").mockReturnValue(2000);
+    useNotificationStore.getState().updateNotification(id, { message: "m2", duration: 5000 });
+
+    const after = useNotificationStore.getState().notifications.find((x) => x.id === id)!;
+    expect(after.firstShownAt).toBe(1000);
+  });
+
   it("updateNotification on a missing id is a pure no-op", () => {
     const id = addToast({ title: "keep" });
     const before = JSON.parse(JSON.stringify(useNotificationStore.getState().notifications));

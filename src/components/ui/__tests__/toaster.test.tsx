@@ -312,6 +312,45 @@ describe("Toast accessibility", () => {
     expect(screen.queryByText("Same message")).toBeNull();
   });
 
+  it("persistent (duration:0) toast stays for full new duration when promoted to auto-dismiss", async () => {
+    render(<Toaster />);
+    let toastId: string;
+    await act(async () => {
+      toastId = addToast({ duration: 0, message: "Copying context…" });
+      vi.advanceTimersByTime(16);
+    });
+
+    // Simulate a long async operation while the toast is persistent.
+    await act(async () => {
+      vi.advanceTimersByTime(20000);
+    });
+    expect(screen.getByText("Copying context…")).toBeTruthy();
+
+    // Operation completes; promote to auto-dismiss with a fresh duration.
+    await act(async () => {
+      useNotificationStore.getState().updateNotification(toastId!, {
+        message: "Copied 12 files",
+        duration: 3000,
+      });
+    });
+
+    // The toast must remain visible for the new duration, not dismiss
+    // immediately because firstShownAt was set 20s ago.
+    await act(async () => {
+      vi.advanceTimersByTime(2500);
+    });
+    expect(screen.getByText("Copied 12 files")).toBeTruthy();
+
+    // It does dismiss after the new duration elapses.
+    await act(async () => {
+      vi.advanceTimersByTime(1000);
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(400);
+    });
+    expect(screen.queryByText("Copied 12 files")).toBeNull();
+  });
+
   it("hard cap eventually dismisses toasts updated faster than their duration", async () => {
     render(<Toaster />);
     await act(async () => {

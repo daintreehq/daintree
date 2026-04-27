@@ -187,15 +187,20 @@ export const useNotificationStore = create<NotificationStore>((set) => ({
     set((state) => ({
       notifications: state.notifications.map((n) => {
         if (n.id !== id) return n;
+        const now = Date.now();
         const messageInPatch = "message" in patch;
         const messageChanged = messageInPatch && !messagesEqual(patch.message, n.message);
+        // A transition from "persistent" (duration: 0) to "auto-dismissing"
+        // (duration > 0) is the start of a new visibility window — typically
+        // an async operation completing. Reset firstShownAt so the cap is
+        // measured from this point, not from when the spinner first appeared.
+        const becomingAutoDismiss =
+          n.duration === 0 && typeof patch.duration === "number" && patch.duration > 0;
         return {
           ...n,
           ...patch,
-          updatedAt: Date.now(),
-          // firstShownAt is set once at creation; never overwrite (even if a
-          // caller passes it in the patch).
-          firstShownAt: n.firstShownAt,
+          updatedAt: now,
+          firstShownAt: becomingAutoDismiss ? now : n.firstShownAt,
           contentKey: messageChanged ? (n.contentKey ?? 1) + 1 : (n.contentKey ?? 1),
         };
       }),
