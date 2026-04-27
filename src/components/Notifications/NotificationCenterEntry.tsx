@@ -3,6 +3,7 @@ import { cn } from "@/lib/utils";
 import type { NotificationHistoryEntry } from "@/store/slices/notificationHistorySlice";
 import { actionService } from "@/services/ActionService";
 import type { ActionId } from "@shared/types/actions";
+import type { NotificationType } from "@/store/notificationStore";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -30,6 +31,7 @@ function formatRelativeTime(timestamp: number): string {
 
 interface NotificationCenterEntryProps {
   entry: NotificationHistoryEntry;
+  displayType?: NotificationType;
   threadCount?: number;
   isNew?: boolean;
   onDismiss?: () => void;
@@ -37,11 +39,12 @@ interface NotificationCenterEntryProps {
 
 export function NotificationCenterEntry({
   entry,
+  displayType,
   threadCount,
   isNew = false,
   onDismiss,
 }: NotificationCenterEntryProps) {
-  const config = TYPE_CONFIG[entry.type];
+  const config = TYPE_CONFIG[displayType ?? entry.type];
   const Icon = config.icon;
 
   return (

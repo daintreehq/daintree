@@ -8,6 +8,21 @@ import { NotificationCenterEntry } from "./NotificationCenterEntry";
 import { Button } from "@/components/ui/button";
 import { actionService } from "@/services/ActionService";
 import { muteForDuration, muteUntilNextMorning, notify } from "@/lib/notify";
+import type { NotificationType } from "@/store/notificationStore";
+
+const SEVERITY_WEIGHTS: Record<NotificationType, number> = {
+  error: 3,
+  warning: 2,
+  info: 1,
+  success: 0,
+} as const;
+
+function getWorstSeverity(entries: NotificationHistoryEntry[]): NotificationType {
+  if (entries.length === 0) return "success";
+  return entries.reduce((highest, current) =>
+    SEVERITY_WEIGHTS[current.type] > SEVERITY_WEIGHTS[highest.type] ? current : highest
+  ).type;
+}
 
 interface NotificationCenterProps {
   open: boolean;
@@ -251,10 +266,13 @@ function NotificationThread({
 
   if (!latest) return null;
 
+  const displayType = getWorstSeverity(group.entries);
+
   return (
     <div className="relative">
       <NotificationCenterEntry
         entry={latest}
+        displayType={displayType}
         threadCount={group.entries.length}
         isNew={isNew}
         onDismiss={() => onDismiss(latest.id)}
