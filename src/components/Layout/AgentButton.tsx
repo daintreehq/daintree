@@ -1,10 +1,11 @@
-import { useMemo, useRef, type PointerEvent as ReactPointerEvent } from "react";
+import { useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ShortcutRevealChip } from "@/components/ui/ShortcutRevealChip";
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
@@ -152,6 +153,35 @@ export function AgentButton({
   const panelIds = usePanelStore(useShallow((s) => s.panelIds));
   const activeWorktreeId = useWorktreeSelectionStore((s) => s.activeWorktreeId);
 
+  // Radix Tooltip reopens on focus restoration. When the chevron's
+  // DropdownMenu closes, Radix returns focus to the chevron trigger and the
+  // tooltip would reopen on top of the freshly-launched action's surfaces.
+  // Gate both halves' tooltips on controlled state and hold suppression open
+  // until the next genuine pointer hover. Same pattern as AgentTrayButton.
+  const [primaryTooltipOpen, setPrimaryTooltipOpen] = useState(false);
+  const [chevronTooltipOpen, setChevronTooltipOpen] = useState(false);
+  const isRestoringFocusRef = useRef(false);
+
+  const handlePrimaryTooltipOpenChange = (open: boolean) => {
+    if (open && isRestoringFocusRef.current) return;
+    setPrimaryTooltipOpen(open);
+  };
+
+  const handleChevronTooltipOpenChange = (open: boolean) => {
+    if (open && isRestoringFocusRef.current) return;
+    setChevronTooltipOpen(open);
+  };
+
+  const suppressTooltipsDuringFocusRestore = () => {
+    setPrimaryTooltipOpen(false);
+    setChevronTooltipOpen(false);
+    isRestoringFocusRef.current = true;
+  };
+
+  const clearFocusRestoreSuppression = () => {
+    isRestoringFocusRef.current = false;
+  };
+
   const activeSession = useMemo(() => {
     const states: (AgentState | undefined)[] = [];
     let firstId: string | null = null;
@@ -248,15 +278,13 @@ export function AgentButton({
 
   const handleClick = () => {
     if (isReady) {
-      // MRU semantics: primary-button click launches with the saved preset if
-      // one is stored (user's last pick), otherwise default (no presetId).
-      // Passing `presetId: null` would force explicit default and override a
-      // saved default — we want undefined fallthrough to useAgentLauncher.
-      void actionService.dispatch(
-        "agent.launch",
-        savedPresetId ? { agentId: type, presetId: savedPresetId } : { agentId: type },
-        { source: "user" }
-      );
+      // Defer all preset resolution to useAgentLauncher. Forwarding the
+      // resolved savedPresetId explicitly would block the launcher's
+      // stale-fallback path: when a worktree-scoped pick references a
+      // deleted preset, an explicit presetId bypasses the agent-level
+      // default and launches preset-free instead. Omitting presetId lets
+      // the launcher run resolveEffectivePresetId + fallback in one place.
+      void actionService.dispatch("agent.launch", { agentId: type }, { source: "user" });
     } else {
       void actionService.dispatch(
         "app.settings.openTab",
@@ -301,7 +329,7 @@ export function AgentButton({
     return (
       <ContextMenu>
         <ContextMenuTrigger asChild>
-          <Tooltip>
+          <Tooltip open={primaryTooltipOpen} onOpenChange={handlePrimaryTooltipOpenChange}>
             <TooltipTrigger asChild>
               <span className="inline-flex">
                 <Button
@@ -310,6 +338,7 @@ export function AgentButton({
                   onClick={handleClick}
                   disabled={isLoading}
                   data-toolbar-item={dataToolbarItem}
+                  onPointerEnter={clearFocusRestoreSuppression}
                   className={cn(
                     "toolbar-agent-button text-daintree-text transition-colors relative",
                     isReady &&
@@ -326,7 +355,7 @@ export function AgentButton({
             <TooltipContent side="bottom">{tooltip}</TooltipContent>
           </Tooltip>
         </ContextMenuTrigger>
-        <ContextMenuContent>
+        <ContextMenuContent className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto">
           <ContextMenuItem
             disabled={!isReady}
             onSelect={() =>
@@ -354,7 +383,7 @@ export function AgentButton({
           {worktrees.length > 0 && (
             <ContextMenuSub>
               <ContextMenuSubTrigger disabled={!isReady}>Launch in Worktree</ContextMenuSubTrigger>
-              <ContextMenuSubContent>
+              <ContextMenuSubContent className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto">
                 <WorktreeMenuItems agentType={type} worktrees={worktrees} />
               </ContextMenuSubContent>
             </ContextMenuSub>
@@ -395,7 +424,7 @@ export function AgentButton({
     <ContextMenu>
       <ContextMenuTrigger asChild>
         <span className="inline-flex">
-          <Tooltip>
+          <Tooltip open={primaryTooltipOpen} onOpenChange={handlePrimaryTooltipOpenChange}>
             <TooltipTrigger asChild>
               <Button
                 variant="ghost"
@@ -403,6 +432,7 @@ export function AgentButton({
                 onClick={handleClick}
                 disabled={isLoading}
                 data-toolbar-item={dataToolbarItem}
+                onPointerEnter={clearFocusRestoreSuppression}
                 className={cn(
                   "toolbar-agent-button text-daintree-text transition-colors rounded-r-none border-r border-transparent relative",
                   isReady &&
@@ -417,29 +447,44 @@ export function AgentButton({
             </TooltipTrigger>
             <TooltipContent side="bottom">{tooltip}</TooltipContent>
           </Tooltip>
-          <DropdownMenu>
-            <Tooltip>
+          <DropdownMenu
+            onOpenChange={(open) => {
+              if (open) {
+                setPrimaryTooltipOpen(false);
+                setChevronTooltipOpen(false);
+              }
+            }}
+          >
+            <Tooltip open={chevronTooltipOpen} onOpenChange={handleChevronTooltipOpenChange}>
               <TooltipTrigger asChild>
                 <DropdownMenuTrigger asChild>
                   <Button
                     variant="ghost"
                     disabled={isLoading || !isReady}
                     data-toolbar-item={dataToolbarItem}
+                    onPointerEnter={clearFocusRestoreSuppression}
                     className={cn(
                       "toolbar-agent-button text-daintree-text transition-colors rounded-l-none",
-                      "h-8 w-4 p-0 flex items-center justify-center",
+                      "h-8 w-6 p-0 flex items-center justify-center",
                       "hover:text-[var(--toolbar-control-hover-fg,var(--theme-accent-primary))] focus-visible:text-[var(--toolbar-control-hover-fg,var(--theme-accent-primary))]",
                       !isReady && !isLoading && "opacity-60"
                     )}
                     aria-label={chevronTooltip}
                   >
-                    <ChevronDown className="h-3 w-3 opacity-70" />
+                    <ChevronDown className="h-3 w-3" />
                   </Button>
                 </DropdownMenuTrigger>
               </TooltipTrigger>
               <TooltipContent side="bottom">{chevronTooltip}</TooltipContent>
             </Tooltip>
-            <DropdownMenuContent align="start" sideOffset={4} className="min-w-[12rem]">
+            <DropdownMenuContent
+              align="start"
+              sideOffset={4}
+              className="min-w-[12rem] max-h-[var(--radix-dropdown-menu-content-available-height)] overflow-y-auto"
+              onCloseAutoFocus={() => {
+                suppressTooltipsDuringFocusRestore();
+              }}
+            >
               <DropdownMenuRadioGroup value={savedPresetId ?? ""}>
                 <DropdownMenuRadioItem
                   value=""
@@ -535,11 +580,23 @@ export function AgentButton({
                   </>
                 )}
               </DropdownMenuRadioGroup>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                onSelect={() =>
+                  void actionService.dispatch(
+                    "app.settings.openTab",
+                    { tab: "agents", subtab: type, sectionId: "agents-presets" },
+                    { source: "user" }
+                  )
+                }
+              >
+                Manage Presets...
+              </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
         </span>
       </ContextMenuTrigger>
-      <ContextMenuContent>
+      <ContextMenuContent className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto">
         <ContextMenuItem
           disabled={!isReady}
           onSelect={() =>
@@ -567,7 +624,10 @@ export function AgentButton({
         {hasPresets && (
           <ContextMenuSub>
             <ContextMenuSubTrigger disabled={!isReady}>Launch with Preset</ContextMenuSubTrigger>
-            <ContextMenuSubContent data-testid="context-submenu-content">
+            <ContextMenuSubContent
+              data-testid="context-submenu-content"
+              className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto"
+            >
               <ContextMenuRadioGroup value={savedPresetId ?? ""}>
                 <ContextMenuRadioItem
                   value=""
@@ -605,7 +665,7 @@ export function AgentButton({
         {worktrees.length > 0 && (
           <ContextMenuSub>
             <ContextMenuSubTrigger disabled={!isReady}>Launch in Worktree</ContextMenuSubTrigger>
-            <ContextMenuSubContent>
+            <ContextMenuSubContent className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto">
               <WorktreeMenuItems agentType={type} worktrees={worktrees} />
             </ContextMenuSubContent>
           </ContextMenuSub>

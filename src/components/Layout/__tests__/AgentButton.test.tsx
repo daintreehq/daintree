@@ -350,7 +350,14 @@ describe("AgentButton preset UX", () => {
       );
     });
 
-    it("primary click with savedPresetId dispatches with that presetId (MRU)", () => {
+    it("primary click never forwards an explicit presetId — launcher resolves it", () => {
+      // The toolbar must NOT forward the resolved savedPresetId. Doing so
+      // bypasses useAgentLauncher's stale-fallback path: when a saved id
+      // points to a deleted preset, an explicit presetId launches
+      // preset-free instead of falling back to the agent-level default.
+      // Omitting presetId lets the launcher run resolveEffectivePresetId +
+      // fallback in one place. Saved-preset display still works because the
+      // launcher reads the same setting internally.
       mockSettings = settingsWith({ claude: { presetId: "user-blue" } });
       mockMergedPresetsFn = () => [
         { id: "user-blue", name: "Blue" },
@@ -360,20 +367,17 @@ describe("AgentButton preset UX", () => {
       const { getAllByRole } = render(
         <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
       );
-      // Split-button branch — first button is the primary launch button.
       const [primaryBtn] = getAllByRole("button") as HTMLElement[];
       fireEvent.click(primaryBtn!);
 
       expect(dispatchMock).toHaveBeenCalledWith(
         "agent.launch",
-        { agentId: "claude", presetId: "user-blue" },
+        { agentId: "claude" },
         { source: "user" }
       );
     });
 
-    it("primary click with savedPresetId dispatches presetId when agent has only 1 preset", () => {
-      // With 1 named preset the split UI now renders (Default + the preset),
-      // and the primary button must still honor the saved MRU selection.
+    it("primary click omits presetId even when agent has only 1 preset", () => {
       mockSettings = settingsWith({ claude: { presetId: "user-alpha" } });
       mockMergedPresetsFn = () => [{ id: "user-alpha", name: "Alpha" }];
 
@@ -385,7 +389,35 @@ describe("AgentButton preset UX", () => {
 
       expect(dispatchMock).toHaveBeenCalledWith(
         "agent.launch",
-        { agentId: "claude", presetId: "user-alpha" },
+        { agentId: "claude" },
+        { source: "user" }
+      );
+    });
+
+    it("primary click with stale worktree-scoped preset still dispatches without presetId so launcher fallback runs", () => {
+      // Regression guard: when the worktree slot points to a deleted preset
+      // and the agent-level default is still valid, the toolbar must not
+      // forward the stale id — it would block useAgentLauncher's fallback
+      // and the click would launch preset-free instead of the global
+      // default. The toolbar passes nothing; the launcher does the rest.
+      mockActiveWorktreeId = "wt-A";
+      mockSettings = settingsWith({
+        claude: {
+          presetId: "user-global",
+          worktreePresets: { "wt-A": "deleted-id" },
+        },
+      });
+      mockMergedPresetsFn = () => [{ id: "user-global", name: "Global" }];
+
+      const { getAllByRole } = render(
+        <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
+      );
+      const [primaryBtn] = getAllByRole("button") as HTMLElement[];
+      fireEvent.click(primaryBtn!);
+
+      expect(dispatchMock).toHaveBeenCalledWith(
+        "agent.launch",
+        { agentId: "claude" },
         { source: "user" }
       );
     });
@@ -424,7 +456,7 @@ describe("AgentButton preset UX", () => {
   });
 
   describe("worktree-scoped preset", () => {
-    it("primary click reads the worktree override when present, not the agent-level default", () => {
+    it("primary click dispatches without presetId when a worktree override is present (launcher resolves)", () => {
       mockActiveWorktreeId = "wt-A";
       mockSettings = settingsWith({
         claude: {
@@ -437,20 +469,24 @@ describe("AgentButton preset UX", () => {
         { id: "user-scoped", name: "Scoped" },
       ];
 
-      const { getAllByRole } = render(
+      const { getAllByRole, container } = render(
         <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
       );
       const [primaryBtn] = getAllByRole("button") as HTMLElement[];
       fireEvent.click(primaryBtn!);
 
+      // Dispatch carries no presetId — that's the launcher's job. The
+      // tooltip still surfaces the worktree-scoped preset name so the
+      // user sees what the click will run.
       expect(dispatchMock).toHaveBeenCalledWith(
         "agent.launch",
-        { agentId: "claude", presetId: "user-scoped" },
+        { agentId: "claude" },
         { source: "user" }
       );
+      expect(container.textContent).toContain("Start Claude · Scoped");
     });
 
-    it("primary click falls back to agent-level default when the active worktree has no override", () => {
+    it("primary click dispatches without presetId when active worktree has no override (tooltip shows global)", () => {
       mockActiveWorktreeId = "wt-B";
       mockSettings = settingsWith({
         claude: {
@@ -463,7 +499,7 @@ describe("AgentButton preset UX", () => {
         { id: "user-scoped", name: "Scoped" },
       ];
 
-      const { getAllByRole } = render(
+      const { getAllByRole, container } = render(
         <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
       );
       const [primaryBtn] = getAllByRole("button") as HTMLElement[];
@@ -471,9 +507,10 @@ describe("AgentButton preset UX", () => {
 
       expect(dispatchMock).toHaveBeenCalledWith(
         "agent.launch",
-        { agentId: "claude", presetId: "user-global" },
+        { agentId: "claude" },
         { source: "user" }
       );
+      expect(container.textContent).toContain("Start Claude · Global");
     });
 
     it("dropdown preset selection persists the pick to the worktree slot before dispatch", () => {
@@ -778,6 +815,31 @@ describe("AgentButton preset UX", () => {
 
       const badge = container.querySelector('.relative span[aria-hidden="true"]');
       expect(badge).toBeNull();
+    });
+  });
+
+  describe("manage presets dropdown footer", () => {
+    it("dropdown footer dispatches deep-link to the preset editor with source 'user'", () => {
+      // The chevron dropdown carries a footer "Manage Presets..." item that
+      // mirrors the right-click menu's agent-named entry but uses the
+      // shorter label since the agent identity is implicit (the user just
+      // clicked this agent's chevron). Source is "user" because it's a
+      // direct primary-UI dispatch, not a context-menu surface.
+      mockSettings = settingsWith({ claude: {} });
+      mockMergedPresetsFn = () => [{ id: "user-alpha", name: "Alpha" }];
+
+      const { getAllByTestId } = render(
+        <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
+      );
+      const items = getAllByTestId("preset-item") as HTMLElement[];
+      const manage = items.find((el) => el.textContent === "Manage Presets...")!;
+      fireEvent.click(manage);
+
+      expect(dispatchMock).toHaveBeenCalledWith(
+        "app.settings.openTab",
+        { tab: "agents", subtab: "claude", sectionId: "agents-presets" },
+        { source: "user" }
+      );
     });
   });
 
