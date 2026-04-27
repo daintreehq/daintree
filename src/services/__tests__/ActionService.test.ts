@@ -315,6 +315,34 @@ describe("ActionService", () => {
       expect(notifyMock).not.toHaveBeenCalled();
     });
 
+    it("should show toast for disabled action from any source", async () => {
+      const action: ActionDefinition = {
+        id: "actions.list" as ActionId,
+        title: "Test Action",
+        description: "A test action",
+        category: "test",
+        kind: "command",
+        danger: "safe",
+        scope: "renderer",
+        isEnabled: () => false,
+        disabledReason: () => "Disabled for test",
+        run: vi.fn(),
+      };
+
+      service.register(action);
+
+      for (const source of ["keybinding", "menu", "context-menu", "user", "agent"] as const) {
+        notifyMock.mockClear();
+        const result = await service.dispatch("actions.list", undefined, { source });
+        expect(result.ok).toBe(false);
+        expect(notifyMock).toHaveBeenCalledWith({
+          type: "warning",
+          title: "Action Disabled",
+          message: "Disabled for test",
+        });
+      }
+    });
+
     it("should NOT show toast for enabled actions", async () => {
       const action: ActionDefinition = {
         id: "actions.list" as ActionId,
