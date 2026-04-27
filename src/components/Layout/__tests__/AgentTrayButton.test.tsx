@@ -1031,6 +1031,21 @@ describe("AgentTrayButton", () => {
       }
     );
 
+    // `completed` and `exited` are excluded from ACTIVE_AGENT_STATES, so the
+    // panel never enters the dominant-state aggregation in the first place;
+    // the dot is suppressed one layer earlier than for working/idle. Covered
+    // here so the consumer-level contract ("no badge for passive states") is
+    // tested end-to-end regardless of which guard fires.
+    it.each([["completed"], ["exited"]] as const)(
+      "does not render the badge for terminal state %s",
+      (state) => {
+        const availability = arrangeClaudePanel(state);
+        const { getByTestId } = render(<AgentTrayButton agentAvailability={availability} />);
+        const row = getByTestId("agent-tray-row-claude");
+        expect(badgeIn(row)).toBeNull();
+      }
+    );
+
     it("does not render the badge when there is no active session", () => {
       const availability = { claude: "ready" } as unknown as CliAvailability;
       mockSettings = settingsWith({ claude: { pinned: false } });

@@ -123,18 +123,30 @@ describe("getDominantAgentState", () => {
   it("prefers directing over completed", () => {
     expect(getDominantAgentState(["completed", "directing"])).toBe("directing");
   });
+
+  // Documents the accepted trade-off: when a worktree has both a passive
+  // working session and an actionable waiting session, the dominant state
+  // resolves to working (priority 7 > 3), so agentStateDotColor returns null
+  // and the toolbar dot is suppressed. WorktreeCard's border-flash animation
+  // depends on working outranking waiting; the tray dot rides on the same
+  // priority table. If this priority is ever inverted, this assertion fails
+  // first as a guard.
+  it("returns working when a worktree mixes working and waiting (suppresses tray dot)", () => {
+    expect(getDominantAgentState(["working", "waiting"])).toBe("working");
+  });
 });
 
 describe("agentStateDotColor", () => {
-  it.each([["waiting"], ["directing"]] as const)(
-    "returns a non-null class for actionable state %s",
-    (state) => {
-      const result = agentStateDotColor(state as AgentState);
-      expect(result).not.toBeNull();
-      expect(typeof result).toBe("string");
-      expect(result?.length).toBeGreaterThan(0);
-    }
-  );
+  // Exact class assertions guard the color mapping itself: a swap between
+  // waiting and directing would still return a non-null string, so a
+  // truthiness-only check would let the regression slip past.
+  it("returns bg-state-waiting for waiting", () => {
+    expect(agentStateDotColor("waiting")).toBe("bg-state-waiting");
+  });
+
+  it("returns bg-state-working for directing", () => {
+    expect(agentStateDotColor("directing")).toBe("bg-state-working");
+  });
 
   it.each([["working"], ["completed"], ["exited"], ["idle"]] as const)(
     "returns null for passive state %s (no dot rendered)",
