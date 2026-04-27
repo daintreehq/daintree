@@ -103,9 +103,10 @@ export function AgentButton({
 
   const entry = agentSettings?.agents?.[type] ?? {};
   const presets = getMergedPresets(type, entry.customPresets, ccrPresets, projectPresets);
-  // Only show the split/chevron UI when there are at least 2 presets; a single
-  // preset is implicitly the default and doesn't warrant a picker.
-  const hasPresets = presets.length >= 2;
+  // Show the split/chevron UI when there is at least one named preset; the
+  // dropdown always renders the implicit "Default" entry alongside it, so one
+  // named preset already gives the user two real launch choices.
+  const hasPresets = presets.length >= 1;
   // Worktree-scoped pick wins over the agent-level default so switching
   // worktrees doesn't silently surface another worktree's selection.
   const savedPresetId = resolveEffectivePresetId(entry, activeWorktreeId);
