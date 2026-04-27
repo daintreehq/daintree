@@ -177,7 +177,6 @@
     "knip": "^6.5.0",
     "lint-staged": "^16.4.0",
     "lucide-react": "^0.577.0",
-    "nodemon": "^3.1.11",
     "openai": "^6.33.0",
     "p-queue": "^9.0.1",
     "path-browserify": "^1.0.1",
