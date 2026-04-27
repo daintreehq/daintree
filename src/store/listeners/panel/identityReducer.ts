@@ -1,4 +1,5 @@
 import type { PtyPanelData, TerminalRuntimeIdentity } from "@shared/types/panel";
+import type { BuiltInAgentId } from "@shared/config/agentIds";
 import {
   deriveTerminalRuntimeIdentity,
   terminalRuntimeIdentitiesEqual,
@@ -6,7 +7,7 @@ import {
 import { getDefaultTitle } from "@/store/slices/panelRegistry/helpers";
 
 export interface AgentDetectedReducerInput {
-  nextDetectedAgentId: string | undefined;
+  nextDetectedAgentId: BuiltInAgentId | undefined;
   nextDetectedProcessId: string | undefined;
   nextEverDetectedAgent: true | undefined;
   timestamp: number;
@@ -14,7 +15,7 @@ export interface AgentDetectedReducerInput {
 
 export interface AgentDetectedReducerResult {
   patch: Partial<PtyPanelData>;
-  shouldPromoteAgentId: string | null;
+  shouldPromoteAgentId: BuiltInAgentId | null;
 }
 
 export interface AgentExitedReducerInput {

@@ -1,5 +1,6 @@
 import type { AgentStateChangePayload } from "@shared/types";
 import { isBuiltInAgentId } from "@shared/config/agentIds";
+import { isPtyPanel } from "@shared/types/panel";
 import { terminalRegistryController } from "@/controllers";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { logWarn } from "@/utils/logger";
@@ -98,7 +99,7 @@ export function setupIdentityListeners(): DisposableStore {
 
         usePanelStore.setState((state) => {
           const terminal = state.panelsById[terminalId];
-          if (!terminal) {
+          if (!terminal || !isPtyPanel(terminal)) {
             logIdentityDebugDev(
               `[IdentityDebug] detected IGNORED term=${terminalId.slice(-8)} reason=panel-not-found`
             );
@@ -165,7 +166,7 @@ export function setupIdentityListeners(): DisposableStore {
         // signal that makes deriveTerminalChrome release launch affinity.
         usePanelStore.setState((state) => {
           const terminal = state.panelsById[terminalId];
-          if (!terminal) {
+          if (!terminal || !isPtyPanel(terminal)) {
             logIdentityDebugDev(
               `[IdentityDebug] exited IGNORED term=${terminalId.slice(-8)} reason=panel-not-found`
             );
