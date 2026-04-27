@@ -1,5 +1,5 @@
 import React from "react";
-import { Clock, RotateCcw, X, AlertTriangle } from "lucide-react";
+import { Clock, RotateCcw, AlertTriangle } from "lucide-react";
 import { InlineStatusBanner } from "./InlineStatusBanner";
 import type { TerminalReconnectError } from "@/types";
 
@@ -66,16 +66,8 @@ function ReconnectErrorBannerComponent({
           title: "Restart Terminal",
           ariaLabel: "Restart terminal",
         },
-        {
-          id: "dismiss",
-          label: "Dismiss",
-          icon: X,
-          variant: "dismiss",
-          onClick: () => onDismiss(terminalId),
-          title: "Dismiss",
-          ariaLabel: "Dismiss notification",
-        },
       ]}
+      onClose={() => onDismiss(terminalId)}
       className={className}
     />
   );

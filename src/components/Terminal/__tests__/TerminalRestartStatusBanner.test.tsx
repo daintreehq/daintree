@@ -86,7 +86,7 @@ describe("TerminalRestartStatusBanner", () => {
         onDismiss={onDismiss}
       />
     );
-    const button = screen.getByRole("button", { name: /dismiss restart prompt/i });
+    const button = screen.getByRole("button", { name: "Dismiss" });
     fireEvent.click(button);
     expect(onDismiss).toHaveBeenCalledOnce();
   });

@@ -1,5 +1,5 @@
 import React from "react";
-import { AlertTriangle, RotateCcw, X } from "lucide-react";
+import { AlertTriangle, RotateCcw } from "lucide-react";
 import { Spinner } from "@/components/ui/Spinner";
 import { InlineStatusBanner } from "./InlineStatusBanner";
 import type { RestartBannerVariant } from "./restartStatus";
@@ -44,17 +44,8 @@ function TerminalRestartStatusBannerComponent({
               title: "Restart Session",
               ariaLabel: "Restart session",
             },
-            {
-              id: "dismiss",
-              label: "Dismiss",
-              icon: X,
-              variant: "danger",
-              iconOnly: true,
-              onClick: onDismiss,
-              title: "Dismiss",
-              ariaLabel: "Dismiss restart prompt",
-            },
           ]}
+          onClose={onDismiss}
         />
       );
   }

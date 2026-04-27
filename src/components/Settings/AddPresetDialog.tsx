@@ -145,7 +145,7 @@ export function AddPresetDialog({
 
       <AppDialog.Footer
         secondaryAction={{ label: "Cancel", onClick: onClose }}
-        primaryAction={{ label: "Create", onClick: handleCreate, disabled: !canCreate }}
+        primaryAction={{ label: "Create preset", onClick: handleCreate, disabled: !canCreate }}
       />
     </AppDialog>
   );

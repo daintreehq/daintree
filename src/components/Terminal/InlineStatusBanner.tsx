@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, type CSSProperties } from "react";
+import { X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
@@ -26,6 +27,7 @@ export interface InlineStatusBannerProps {
   actions: BannerAction[];
   role?: "alert" | "status";
   ariaLive?: "polite" | "assertive";
+  onClose?: () => void;
 }
 
 const SEVERITY_VAR: Record<"error" | "warning", string> = {
@@ -76,6 +78,7 @@ function InlineStatusBannerComponent({
   actions,
   role = "alert",
   ariaLive = "polite",
+  onClose,
 }: InlineStatusBannerProps) {
   const prefersReducedMotion =
     typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -156,6 +159,19 @@ function InlineStatusBannerComponent({
       </div>
 
       <div className={cn("flex items-center shrink-0", hasDescription ? "gap-2 ml-6" : "gap-1")}>
+        {onClose && (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onClose();
+            }}
+            aria-label="Dismiss"
+            className="p-1 rounded text-daintree-text/60 hover:text-daintree-text hover:bg-daintree-border/50 focus-visible:outline-2 focus-visible:outline-daintree-accent"
+          >
+            <X className="h-3.5 w-3.5" aria-hidden="true" />
+          </button>
+        )}
         {actions.map((action) => {
           const variant = action.variant ?? "primary";
           const variantClasses = getButtonClasses(variant);
