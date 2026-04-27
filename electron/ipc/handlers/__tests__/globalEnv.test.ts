@@ -38,7 +38,7 @@ describe("registerGlobalEnvHandlers", () => {
   });
 
   it("registers two IPC handlers and cleanup removes them", () => {
-    const cleanup = registerGlobalEnvHandlers({});
+    const cleanup = registerGlobalEnvHandlers();
     expect(ipcMainMock.handle).toHaveBeenCalledTimes(2);
     expect(ipcMainMock.handle).toHaveBeenCalledWith("global-env:get", expect.any(Function));
     expect(ipcMainMock.handle).toHaveBeenCalledWith("global-env:set", expect.any(Function));
@@ -49,20 +49,20 @@ describe("registerGlobalEnvHandlers", () => {
   });
 
   it("get returns empty object when store has no global vars", async () => {
-    registerGlobalEnvHandlers({});
+    registerGlobalEnvHandlers();
     const result = await getHandler("global-env:get")(null);
     expect(result).toEqual({});
   });
 
   it("get returns stored global vars", async () => {
     storeMock._data["globalEnvironmentVariables"] = { NODE_ENV: "production", PORT: "3000" };
-    registerGlobalEnvHandlers({});
+    registerGlobalEnvHandlers();
     const result = await getHandler("global-env:get")(null);
     expect(result).toEqual({ NODE_ENV: "production", PORT: "3000" });
   });
 
   it("set stores variables and get returns them", async () => {
-    registerGlobalEnvHandlers({});
+    registerGlobalEnvHandlers();
     const setHandler = getHandler("global-env:set");
     const getHandlerFn = getHandler("global-env:get");
 
@@ -78,25 +78,25 @@ describe("registerGlobalEnvHandlers", () => {
   });
 
   it("set rejects null payload", async () => {
-    registerGlobalEnvHandlers({});
+    registerGlobalEnvHandlers();
     const setHandler = getHandler("global-env:set");
     await expect(setHandler(null, null)).rejects.toThrow("Invalid payload");
   });
 
   it("set rejects non-object payload", async () => {
-    registerGlobalEnvHandlers({});
+    registerGlobalEnvHandlers();
     const setHandler = getHandler("global-env:set");
     await expect(setHandler(null, "not-an-object")).rejects.toThrow("Invalid payload");
   });
 
   it("set rejects missing variables field", async () => {
-    registerGlobalEnvHandlers({});
+    registerGlobalEnvHandlers();
     const setHandler = getHandler("global-env:set");
     await expect(setHandler(null, { other: "field" })).rejects.toThrow("Invalid variables object");
   });
 
   it("set rejects array as variables", async () => {
-    registerGlobalEnvHandlers({});
+    registerGlobalEnvHandlers();
     const setHandler = getHandler("global-env:set");
     await expect(setHandler(null, { variables: ["a", "b"] })).rejects.toThrow(
       "Invalid variables object"
@@ -104,7 +104,7 @@ describe("registerGlobalEnvHandlers", () => {
   });
 
   it("set rejects non-string values in variables", async () => {
-    registerGlobalEnvHandlers({});
+    registerGlobalEnvHandlers();
     const setHandler = getHandler("global-env:set");
     await expect(setHandler(null, { variables: { PORT: 3000 } })).rejects.toThrow(
       "All environment variable keys and values must be strings"
@@ -112,7 +112,7 @@ describe("registerGlobalEnvHandlers", () => {
   });
 
   it("set accepts empty variables object", async () => {
-    registerGlobalEnvHandlers({});
+    registerGlobalEnvHandlers();
     const setHandler = getHandler("global-env:set");
     await setHandler(null, { variables: {} });
     expect(storeMock.set).toHaveBeenCalledWith("globalEnvironmentVariables", {});
@@ -120,7 +120,7 @@ describe("registerGlobalEnvHandlers", () => {
 
   it("set overwrites previous variables entirely", async () => {
     storeMock._data["globalEnvironmentVariables"] = { OLD_VAR: "old" };
-    registerGlobalEnvHandlers({});
+    registerGlobalEnvHandlers();
     const setHandler = getHandler("global-env:set");
 
     await setHandler(null, { variables: { NEW_VAR: "new" } });

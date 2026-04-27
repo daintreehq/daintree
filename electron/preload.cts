@@ -15,6 +15,10 @@ import { isIpcEnvelope } from "../shared/types/ipc/errors.js";
 import { deserializeError } from "../shared/utils/ipcErrorSerialization.js";
 import { CHANNELS } from "./ipc/channels.js";
 import { buildClipboardPreloadBindings } from "./ipc/handlers/clipboard.preload.js";
+import { buildSlashCommandsPreloadBindings } from "./ipc/handlers/slashCommands.preload.js";
+import { buildGlobalEnvPreloadBindings } from "./ipc/handlers/globalEnv.preload.js";
+import { buildAccessibilityPreloadBindings } from "./ipc/handlers/accessibility.preload.js";
+import { buildHelpPreloadBindings } from "./ipc/handlers/help.preload.js";
 
 import type {
   WorktreeState,
@@ -824,9 +828,7 @@ const api: ElectronAPI = {
   },
 
   // Slash Commands API
-  slashCommands: {
-    list: (payload) => _unwrappingInvoke(CHANNELS.SLASH_COMMANDS_LIST, payload),
-  },
+  slashCommands: buildSlashCommandsPreloadBindings(_unwrappingInvoke),
 
   // Artifact API
   artifact: {
@@ -1333,11 +1335,7 @@ const api: ElectronAPI = {
   },
 
   // Global Environment Variables API
-  globalEnv: {
-    get: (): Promise<Record<string, string>> => _unwrappingInvoke(CHANNELS.GLOBAL_ENV_GET),
-    set: (variables: Record<string, string>): Promise<void> =>
-      _unwrappingInvoke(CHANNELS.GLOBAL_ENV_SET, { variables }),
-  },
+  globalEnv: buildGlobalEnvPreloadBindings(_unwrappingInvoke),
 
   // Agent Settings API
   agentSettings: {
@@ -1615,7 +1613,7 @@ const api: ElectronAPI = {
 
   // Accessibility API
   accessibility: {
-    getEnabled: () => _unwrappingInvoke(CHANNELS.ACCESSIBILITY_GET_ENABLED),
+    ...buildAccessibilityPreloadBindings(_unwrappingInvoke),
 
     onSupportChanged: (callback: (data: { enabled: boolean }) => void) =>
       _typedOn(CHANNELS.ACCESSIBILITY_SUPPORT_CHANGED, callback),
@@ -2341,13 +2339,7 @@ const api: ElectronAPI = {
   },
 
   // Help workspace API
-  help: {
-    getFolderPath: () => _unwrappingInvoke(CHANNELS.HELP_GET_FOLDER_PATH),
-    markTerminal: (terminalId: string) =>
-      _unwrappingInvoke(CHANNELS.HELP_MARK_TERMINAL, terminalId),
-    unmarkTerminal: (terminalId: string) =>
-      _unwrappingInvoke(CHANNELS.HELP_UNMARK_TERMINAL, terminalId),
-  },
+  help: buildHelpPreloadBindings(_unwrappingInvoke),
 
   perf: {
     flushMarks: (payload: {

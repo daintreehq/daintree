@@ -1,16 +1,26 @@
 import { app, BrowserWindow } from "electron";
+import { defineIpcNamespace, op } from "../define.js";
+import { ACCESSIBILITY_METHOD_CHANNELS } from "./accessibility.preload.js";
 import { CHANNELS } from "../channels.js";
 import { getAppWebContents } from "../../window/webContentsRegistry.js";
-import { typedHandle } from "../utils.js";
+
+async function handleGetEnabled(): Promise<boolean> {
+  return app.accessibilitySupportEnabled;
+}
+
+export const accessibilityNamespace = defineIpcNamespace({
+  name: "accessibility",
+  ops: {
+    getEnabled: op(ACCESSIBILITY_METHOD_CHANNELS.getEnabled, handleGetEnabled),
+  },
+});
 
 export function registerAccessibilityHandlers(): () => void {
-  const handlers: Array<() => void> = [];
+  const cleanups: Array<() => void> = [];
 
-  const handleGetEnabled = async () => {
-    return app.accessibilitySupportEnabled;
-  };
-  handlers.push(typedHandle(CHANNELS.ACCESSIBILITY_GET_ENABLED, handleGetEnabled));
+  cleanups.push(accessibilityNamespace.register());
 
+  // Push-only event — not an ipcMain.handle op, so it lives outside the namespace.
   const onChanged = (_event: Electron.Event, enabled: boolean) => {
     for (const win of BrowserWindow.getAllWindows()) {
       if (!win.isDestroyed()) {
@@ -22,7 +32,7 @@ export function registerAccessibilityHandlers(): () => void {
     }
   };
   app.on("accessibility-support-changed", onChanged);
-  handlers.push(() => app.removeListener("accessibility-support-changed", onChanged));
+  cleanups.push(() => app.removeListener("accessibility-support-changed", onChanged));
 
-  return () => handlers.forEach((cleanup) => cleanup());
+  return () => cleanups.forEach((cleanup) => cleanup());
 }

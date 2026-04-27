@@ -1,32 +1,35 @@
-import { CHANNELS } from "../channels.js";
+import { defineIpcNamespace, op } from "../define.js";
+import { GLOBAL_ENV_METHOD_CHANNELS } from "./globalEnv.preload.js";
 import { store } from "../../store.js";
-import type { HandlerDependencies } from "../types.js";
-import { typedHandle } from "../utils.js";
 
-export function registerGlobalEnvHandlers(_deps: HandlerDependencies): () => void {
-  const handlers: Array<() => void> = [];
+async function handleGet(): Promise<Record<string, string>> {
+  return store.get("globalEnvironmentVariables") ?? {};
+}
 
-  const handleGetEnv = async (): Promise<Record<string, string>> => {
-    return store.get("globalEnvironmentVariables") ?? {};
-  };
-  handlers.push(typedHandle(CHANNELS.GLOBAL_ENV_GET, handleGetEnv));
-
-  const handleSetEnv = async (payload: { variables: Record<string, string> }): Promise<void> => {
-    if (!payload || typeof payload !== "object") {
-      throw new Error("Invalid payload");
+async function handleSet(payload: { variables: Record<string, string> }): Promise<void> {
+  if (!payload || typeof payload !== "object") {
+    throw new Error("Invalid payload");
+  }
+  const { variables } = payload;
+  if (!variables || typeof variables !== "object" || Array.isArray(variables)) {
+    throw new Error("Invalid variables object");
+  }
+  for (const [key, value] of Object.entries(variables)) {
+    if (typeof key !== "string" || typeof value !== "string") {
+      throw new Error("All environment variable keys and values must be strings");
     }
-    const { variables } = payload;
-    if (!variables || typeof variables !== "object" || Array.isArray(variables)) {
-      throw new Error("Invalid variables object");
-    }
-    for (const [key, value] of Object.entries(variables)) {
-      if (typeof key !== "string" || typeof value !== "string") {
-        throw new Error("All environment variable keys and values must be strings");
-      }
-    }
-    return store.set("globalEnvironmentVariables", variables);
-  };
-  handlers.push(typedHandle(CHANNELS.GLOBAL_ENV_SET, handleSetEnv));
+  }
+  return store.set("globalEnvironmentVariables", variables);
+}
 
-  return () => handlers.forEach((cleanup) => cleanup());
+export const globalEnvNamespace = defineIpcNamespace({
+  name: "globalEnv",
+  ops: {
+    get: op(GLOBAL_ENV_METHOD_CHANNELS.get, handleGet),
+    set: op(GLOBAL_ENV_METHOD_CHANNELS.set, handleSet),
+  },
+});
+
+export function registerGlobalEnvHandlers(): () => void {
+  return globalEnvNamespace.register();
 }
