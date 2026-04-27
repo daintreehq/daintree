@@ -7,12 +7,16 @@ interface NotificationSettingsState {
   quietHoursStartMin: number;
   quietHoursEndMin: number;
   quietHoursWeekdays: number[];
+  // Reactive mirror of session-mute timestamp (epoch ms). Drives toolbar
+  // DND indicator. In-memory only — meaningless across restarts.
+  quietUntil: number;
   hydrate(): Promise<void>;
   setEnabled(value: boolean): void;
   setQuietHoursEnabled(value: boolean): void;
   setQuietHoursStartMin(value: number): void;
   setQuietHoursEndMin(value: number): void;
   setQuietHoursWeekdays(value: number[]): void;
+  setQuietUntil(ts: number): void;
 }
 
 export const useNotificationSettingsStore = create<NotificationSettingsState>((set, get) => ({
@@ -22,6 +26,7 @@ export const useNotificationSettingsStore = create<NotificationSettingsState>((s
   quietHoursStartMin: 22 * 60,
   quietHoursEndMin: 8 * 60,
   quietHoursWeekdays: [],
+  quietUntil: 0,
 
   async hydrate() {
     if (get().hydrated) return;
@@ -90,5 +95,9 @@ export const useNotificationSettingsStore = create<NotificationSettingsState>((s
     window.electron?.notification?.setSettings({ quietHoursWeekdays: cleaned }).catch(() => {
       set({ quietHoursWeekdays: prev });
     });
+  },
+
+  setQuietUntil(ts: number) {
+    set({ quietUntil: Number.isFinite(ts) ? ts : 0 });
   },
 }));

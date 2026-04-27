@@ -110,6 +110,9 @@ export function _setQuietUntil(ts: number): void {
 /** Session-only mute helper used by the notification-center quick actions. */
 export function setSessionQuietUntil(ts: number): void {
   _quietUntil = ts;
+  // Mirror to the renderer store so the toolbar bell can react. Module-level
+  // _quietUntil stays the hot-path cache for notify().
+  useNotificationSettingsStore.getState().setQuietUntil(ts);
   // Mirror to main so completion watch notifications and working-pulse sounds
   // are also suppressed until the timestamp.
   if (typeof window !== "undefined") {

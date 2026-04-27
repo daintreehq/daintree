@@ -1483,6 +1483,29 @@ describe("notify()", () => {
       vi.useRealTimers();
     });
 
+    it("muteForDuration mirrors the timestamp into the settings store", () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date(2024, 0, 1, 12, 0));
+      const until = muteForDuration(30 * 60 * 1000);
+      expect(useNotificationSettingsStore.getState().quietUntil).toBe(until);
+      vi.useRealTimers();
+    });
+
+    it("muteUntilNextMorning mirrors the timestamp into the settings store", () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date(2024, 0, 1, 23, 0));
+      const until = muteUntilNextMorning();
+      expect(useNotificationSettingsStore.getState().quietUntil).toBe(until);
+      vi.useRealTimers();
+    });
+
+    it("_setQuietUntil (startup path) does NOT mirror to the settings store", () => {
+      // Startup quiet windows must not flip the toolbar to BellOff during boot.
+      useNotificationSettingsStore.setState({ quietUntil: 0 });
+      _setQuietUntil(Date.now() + 5_000);
+      expect(useNotificationSettingsStore.getState().quietUntil).toBe(0);
+    });
+
     it("muteUntilNextMorning mirrors the timestamp to the main process", () => {
       vi.useFakeTimers();
       vi.setSystemTime(new Date(2024, 0, 1, 23, 0));
