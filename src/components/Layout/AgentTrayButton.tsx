@@ -88,7 +88,7 @@ function buildAgentRow(
   const config = getAgentConfig(id);
   if (!config) return null;
   const presets = getMergedPresets(id, customPresets, ccrPresets, projectPresets);
-  const hasPresets = presets.length > 1;
+  const hasPresets = presets.length > 0;
   return {
     id,
     name: config.name,

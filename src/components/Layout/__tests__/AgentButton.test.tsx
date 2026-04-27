@@ -3,7 +3,7 @@
  * AgentButton — toolbar button with optional preset picker.
  *
  * Covers the MRU (most-recently-used) preset launch semantics and the
- * >= 2 threshold for showing the split/chevron UI. These are UX regressions
+ * >= 1 threshold for showing the split/chevron UI. These are UX regressions
  * corrected during the preset PR review:
  *
  *  - Primary-button click launches with the saved `presetId` when present,
@@ -11,8 +11,10 @@
  *    always-default on the primary button contradicts the industry-standard
  *    split-button convention.
  *
- *  - The chevron/dropdown only appears when there are at least 2 presets.
- *    A single preset is implicitly the default and doesn't warrant a picker.
+ *  - The chevron/dropdown appears whenever there is at least one named preset.
+ *    The dropdown always renders the implicit "Default" entry alongside named
+ *    presets, so one named preset already gives the user two real launch
+ *    choices and warrants the picker.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, fireEvent } from "@testing-library/react";
@@ -197,13 +199,14 @@ describe("AgentButton preset UX", () => {
       expect(queryByTestId("chevron-icon")).toBeNull();
     });
 
-    it("renders plain button (no chevron) when agent has exactly 1 preset", () => {
+    it("renders split button (with chevron) when agent has exactly 1 preset", () => {
       mockMergedPresetsFn = () => [{ id: "only", name: "Only" }];
-      const { queryByTestId } = render(
+      const { getByTestId } = render(
         <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
       );
-      // Threshold is >= 2, so a single preset should not trigger the split UI.
-      expect(queryByTestId("chevron-icon")).toBeNull();
+      // The dropdown always includes an implicit Default entry, so a single
+      // named preset already represents two real launch choices.
+      expect(getByTestId("chevron-icon")).toBeTruthy();
     });
 
     it("renders split button (with chevron) when agent has >= 2 presets", () => {
@@ -257,16 +260,17 @@ describe("AgentButton preset UX", () => {
       );
     });
 
-    it("primary click with savedPresetId dispatches presetId even when agent has only 1 preset (no split)", () => {
-      // With < 2 presets we render a plain button, but MRU must still work —
-      // the user picked this preset from Settings and expects it on next click.
+    it("primary click with savedPresetId dispatches presetId when agent has only 1 preset", () => {
+      // With 1 named preset the split UI now renders (Default + the preset),
+      // and the primary button must still honor the saved MRU selection.
       mockSettings = settingsWith({ claude: { presetId: "user-alpha" } });
       mockMergedPresetsFn = () => [{ id: "user-alpha", name: "Alpha" }];
 
-      const { getByRole } = render(
+      const { getAllByRole } = render(
         <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
       );
-      fireEvent.click(getByRole("button"));
+      const [primaryBtn] = getAllByRole("button") as HTMLElement[];
+      fireEvent.click(primaryBtn!);
 
       expect(dispatchMock).toHaveBeenCalledWith(
         "agent.launch",

@@ -923,6 +923,18 @@ describe("AgentTrayButton", () => {
       expect(queryByText("CCR Routes")).toBeNull();
       expect(queryByText("Custom")).toBeNull();
     });
+
+    it("renders the submenu trigger when agent has exactly 1 preset", () => {
+      const availability = { claude: "ready" } as unknown as CliAvailability;
+      mockSettings = settingsWith({ claude: { pinned: false } });
+      mockMergedPresetsFn = () => [{ id: "user-alpha", name: "Alpha" }];
+
+      const { queryAllByTestId } = render(<AgentTrayButton agentAvailability={availability} />);
+      // The submenu always includes the implicit Default entry alongside named
+      // presets, so a single named preset already represents two real launch
+      // choices and warrants the submenu picker.
+      expect(queryAllByTestId("submenu-trigger").length).toBeGreaterThan(0);
+    });
   });
 
   describe("worktree-scoped preset persistence", () => {
