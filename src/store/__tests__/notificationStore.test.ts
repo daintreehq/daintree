@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { useNotificationStore, MAX_VISIBLE_TOASTS, type Notification } from "../notificationStore";
 import { useNotificationHistoryStore } from "../slices/notificationHistorySlice";
 
@@ -143,6 +143,139 @@ describe("notificationStore — toast cap", () => {
     const active = getState().notifications.filter((n) => !n.dismissed);
     expect(active).toHaveLength(3);
     expect(active.map((n) => n.message)).toEqual(["toast-2", "toast-3", "toast-4"]);
+  });
+});
+
+describe("notificationStore — error-protected eviction", () => {
+  beforeEach(() => {
+    useNotificationStore.setState({ notifications: [] });
+    useNotificationHistoryStore.setState({ entries: [], unreadCount: 0 });
+  });
+
+  it("keeps the error visible when three rapid successes follow it (#5861)", () => {
+    const errorId = addToast({ type: "error", message: "boom" });
+    const successId1 = addToast({ type: "success", message: "ok-1" });
+    addToast({ type: "success", message: "ok-2" });
+    addToast({ type: "success", message: "ok-3" });
+
+    const notifications = getState().notifications;
+    expect(notifications).toHaveLength(4);
+
+    expect(notifications.find((n) => n.id === errorId)?.dismissed).toBeFalsy();
+    expect(notifications.find((n) => n.id === successId1)?.dismissed).toBe(true);
+
+    const active = notifications.filter((n) => !n.dismissed);
+    expect(active.map((n) => n.message)).toEqual(["boom", "ok-2", "ok-3"]);
+  });
+
+  it("falls back to oldest-first FIFO when every visible toast is an error", () => {
+    const id1 = addToast({ type: "error", message: "err-1" });
+    addToast({ type: "error", message: "err-2" });
+    addToast({ type: "error", message: "err-3" });
+    addToast({ type: "error", message: "err-4" });
+
+    const notifications = getState().notifications;
+    expect(notifications.find((n) => n.id === id1)?.dismissed).toBe(true);
+
+    const active = notifications.filter((n) => !n.dismissed);
+    expect(active.map((n) => n.message)).toEqual(["err-2", "err-3", "err-4"]);
+  });
+
+  it("treats warning as evictable (warnings are not protected like errors)", () => {
+    const warnId = addToast({ type: "warning", message: "warn" });
+    addToast({ type: "info", message: "info-1" });
+    addToast({ type: "info", message: "info-2" });
+    addToast({ type: "success", message: "ok" });
+
+    const notifications = getState().notifications;
+    expect(notifications.find((n) => n.id === warnId)?.dismissed).toBe(true);
+
+    const active = notifications.filter((n) => !n.dismissed);
+    expect(active.map((n) => n.message)).toEqual(["info-1", "info-2", "ok"]);
+  });
+
+  it("evicts the oldest non-error from a mixed-severity set", () => {
+    addToast({ type: "error", message: "err" });
+    const warnId = addToast({ type: "warning", message: "warn" });
+    addToast({ type: "info", message: "info" });
+    addToast({ type: "success", message: "ok" });
+
+    const notifications = getState().notifications;
+    expect(notifications.find((n) => n.id === warnId)?.dismissed).toBe(true);
+
+    const active = notifications.filter((n) => !n.dismissed);
+    expect(active.map((n) => n.message)).toEqual(["err", "info", "ok"]);
+  });
+
+  it("marks the evicted non-error's history entry as unseen even when an error is present", () => {
+    const entryId = useNotificationHistoryStore.getState().addEntry({
+      type: "info",
+      message: "history-for-info",
+      seenAsToast: true,
+    });
+
+    addToast({ type: "error", message: "err" });
+    addToast({ type: "info", message: "info-1", historyEntryId: entryId });
+    addToast({ type: "info", message: "info-2" });
+    addToast({ type: "success", message: "ok" });
+
+    const entry = useNotificationHistoryStore.getState().entries.find((e) => e.id === entryId);
+    expect(entry?.seenAsToast).toBe(false);
+  });
+
+  it("does not invoke onDismiss when a non-error toast is evicted", () => {
+    const onDismiss = vi.fn();
+    addToast({ type: "error", message: "err" });
+    addToast({ type: "info", message: "info-1", onDismiss });
+    addToast({ type: "info", message: "info-2" });
+    addToast({ type: "success", message: "ok" });
+
+    expect(onDismiss).not.toHaveBeenCalled();
+  });
+
+  it("admits an incoming error by evicting the oldest non-error from a full cap", () => {
+    const successId1 = addToast({ type: "success", message: "ok-1" });
+    addToast({ type: "success", message: "ok-2" });
+    addToast({ type: "success", message: "ok-3" });
+    addToast({ type: "error", message: "boom" });
+
+    const notifications = getState().notifications;
+    expect(notifications.find((n) => n.id === successId1)?.dismissed).toBe(true);
+
+    const active = notifications.filter((n) => !n.dismissed);
+    expect(active.map((n) => n.message)).toEqual(["ok-2", "ok-3", "boom"]);
+  });
+
+  it("flips only the evicted toast's history entry — bystanders stay seen", () => {
+    const evictedEntry = useNotificationHistoryStore.getState().addEntry({
+      type: "info",
+      message: "evicted-history",
+      seenAsToast: true,
+    });
+    const survivorEntry = useNotificationHistoryStore.getState().addEntry({
+      type: "info",
+      message: "survivor-history",
+      seenAsToast: true,
+    });
+
+    addToast({ type: "error", message: "err" });
+    addToast({ type: "info", message: "info-1", historyEntryId: evictedEntry });
+    addToast({ type: "info", message: "info-2", historyEntryId: survivorEntry });
+    addToast({ type: "success", message: "ok" });
+
+    const entries = useNotificationHistoryStore.getState().entries;
+    expect(entries.find((e) => e.id === evictedEntry)?.seenAsToast).toBe(false);
+    expect(entries.find((e) => e.id === survivorEntry)?.seenAsToast).toBe(true);
+  });
+
+  it("does not invoke onDismiss in the all-errors FIFO fallback path", () => {
+    const onDismiss = vi.fn();
+    addToast({ type: "error", message: "err-1", onDismiss });
+    addToast({ type: "error", message: "err-2" });
+    addToast({ type: "error", message: "err-3" });
+    addToast({ type: "error", message: "err-4" });
+
+    expect(onDismiss).not.toHaveBeenCalled();
   });
 });
 
