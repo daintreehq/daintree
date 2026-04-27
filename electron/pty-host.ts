@@ -36,7 +36,11 @@ import { SharedRingBuffer, PacketFramer } from "../shared/utils/SharedRingBuffer
 import { selectShard } from "../shared/utils/shardSelection.js";
 import { setLogLevelOverrides } from "./utils/logger.js";
 import type { AgentEvent } from "./services/AgentStateMachine.js";
-import type { PtyHostEvent, SpawnResult } from "../shared/types/pty-host.js";
+import type {
+  PtyHostEvent,
+  SpawnResult,
+  BroadcastWriteTargetResult,
+} from "../shared/types/pty-host.js";
 import { normalizeScrollbackLines } from "../shared/config/scrollback.js";
 import { isBuiltInAgentId, type BuiltInAgentId } from "../shared/config/agentIds.js";
 import { setSessionPersistSuppressed } from "./services/pty/terminalSessionPersistence.js";
@@ -923,14 +927,42 @@ port.on("message", async (rawMsg: any) => {
         // Fleet broadcast: fan one data payload to every armed PTY in a
         // tight loop inside the pty-host event loop. Avoids N per-keystroke
         // MessagePort/IPC hops from the renderer when a fleet types.
+        //
+        // Per-target writes go straight to `pty.write()`, which throws
+        // synchronously on dead pipes (EPIPE/EIO/EBADF/ECONNRESET).
+        // Catch those throws so one dead target can't take down the whole
+        // fan-out, and report a per-target result so the renderer can
+        // disarm permanently-failed targets and surface the failure chip.
         const ids: string[] = Array.isArray(msg.ids) ? msg.ids : [];
         const data: string = typeof msg.data === "string" ? msg.data : "";
         if (!data) break;
+        const results: BroadcastWriteTargetResult[] = [];
         for (const id of ids) {
           if (typeof id !== "string" || !id) continue;
           const terminal = ptyManager.getTerminal(id);
-          if (!terminal || terminal.wasKilled || terminal.isExited) continue;
-          ptyManager.write(id, data);
+          if (!terminal || terminal.wasKilled || terminal.isExited) {
+            results.push({
+              id,
+              ok: false,
+              error: { code: "EBADF", message: "terminal not available" },
+            });
+            continue;
+          }
+          try {
+            ptyManager.write(id, data);
+            results.push({ id, ok: true });
+          } catch (error) {
+            const err = error as NodeJS.ErrnoException;
+            const code = typeof err?.code === "string" ? err.code : undefined;
+            const message = err?.message ?? String(error);
+            console.error(
+              `[PtyHost] broadcast-write failed for ${id}${code ? ` (${code})` : ""}: ${message}`
+            );
+            results.push({ id, ok: false, error: { code, message } });
+          }
+        }
+        if (results.length > 0) {
+          sendEvent({ type: "broadcast-write-result", results });
         }
         break;
       }

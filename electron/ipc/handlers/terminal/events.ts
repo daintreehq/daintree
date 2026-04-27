@@ -5,7 +5,10 @@
 import { CHANNELS } from "../../channels.js";
 import { broadcastToRenderer } from "../../utils.js";
 import { events, type DaintreeEventMap } from "../../../services/events.js";
-import type { SpawnResult } from "../../../../shared/types/pty-host.js";
+import type {
+  SpawnResult,
+  BroadcastWriteResultPayload,
+} from "../../../../shared/types/pty-host.js";
 import type { HandlerDependencies } from "../../types.js";
 
 export function registerTerminalEventHandlers(deps: HandlerDependencies): () => void {
@@ -61,6 +64,14 @@ export function registerTerminalEventHandlers(deps: HandlerDependencies): () => 
   };
   ptyClient.on("terminal-status", handleTerminalStatus);
   handlers.push(() => ptyClient.off("terminal-status", handleTerminalStatus));
+
+  // Per-target results from a fleet broadcast write. Drives the failure chip
+  // and auto-disarm of dead-pipe targets in the renderer.
+  const handleBroadcastWriteResult = (payload: BroadcastWriteResultPayload) => {
+    broadcastToRenderer(CHANNELS.TERMINAL_BROADCAST_WRITE_RESULT, payload);
+  };
+  ptyClient.on("broadcast-write-result", handleBroadcastWriteResult);
+  handlers.push(() => ptyClient.off("broadcast-write-result", handleBroadcastWriteResult));
 
   // Agent lifecycle events (agent:state-changed, agent:all-clear, agent:detected,
   // agent:exited, agent:fallback-triggered) are relayed by `registerEventsHandlers`

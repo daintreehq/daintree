@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { broadcastFleetRawInput } from "../fleetRawInputBroadcast";
+import { applyFleetBroadcastResult, broadcastFleetRawInput } from "../fleetRawInputBroadcast";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
+import { useFleetFailureStore } from "@/store/fleetFailureStore";
 import { usePanelStore } from "@/store/panelStore";
 import type { TerminalInstance } from "@shared/types";
 
@@ -49,6 +50,7 @@ function resetStores(): void {
     armOrderById: {},
     lastArmedId: null,
   });
+  useFleetFailureStore.getState().clear();
   usePanelStore.setState({ panelsById: {}, panelIds: [] });
 }
 
@@ -104,5 +106,90 @@ describe("broadcastFleetRawInput", () => {
     expect(broadcastFleetRawInput("t1", "")).toBe(false);
 
     expect(broadcastMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("applyFleetBroadcastResult", () => {
+  beforeEach(() => {
+    resetStores();
+  });
+
+  it("disarms the target on a dead-pipe error and leaves peers armed", () => {
+    seedPanels([makeTerminal("t1"), makeTerminal("t2"), makeTerminal("t3")]);
+    useFleetArmingStore.getState().armIds(["t1", "t2", "t3"]);
+    broadcastFleetRawInput("t1", "echo hi\r");
+
+    applyFleetBroadcastResult({
+      results: [
+        { id: "t1", ok: true },
+        { id: "t2", ok: false, error: { code: "EIO", message: "dead pty" } },
+        { id: "t3", ok: true },
+      ],
+    });
+
+    const arming = useFleetArmingStore.getState();
+    expect(arming.armedIds.has("t2")).toBe(false);
+    expect(arming.armedIds.has("t1")).toBe(true);
+    expect(arming.armedIds.has("t3")).toBe(true);
+
+    // The fleetFailureStore subscription auto-clears records for unarmed
+    // targets, so a dead-pipe target should not surface a chip.
+    expect(useFleetFailureStore.getState().failedIds.size).toBe(0);
+  });
+
+  it("records non-permanent failures without disarming the target", () => {
+    seedPanels([makeTerminal("t1"), makeTerminal("t2")]);
+    useFleetArmingStore.getState().armIds(["t1", "t2"]);
+    broadcastFleetRawInput("t1", "ls\r");
+
+    applyFleetBroadcastResult({
+      results: [
+        { id: "t1", ok: true },
+        { id: "t2", ok: false, error: { code: "ENOSPC", message: "no space" } },
+      ],
+    });
+
+    const failure = useFleetFailureStore.getState();
+    expect(Array.from(failure.failedIds)).toEqual(["t2"]);
+    expect(failure.payload).toBe("ls\r");
+
+    const arming = useFleetArmingStore.getState();
+    expect(arming.armedIds.has("t2")).toBe(true);
+  });
+
+  it("handles a mixed batch — disarm permanent, record non-permanent", () => {
+    seedPanels([makeTerminal("t1"), makeTerminal("t2"), makeTerminal("t3"), makeTerminal("t4")]);
+    useFleetArmingStore.getState().armIds(["t1", "t2", "t3", "t4"]);
+    broadcastFleetRawInput("t1", "x");
+
+    applyFleetBroadcastResult({
+      results: [
+        { id: "t1", ok: true },
+        { id: "t2", ok: false, error: { code: "EPIPE", message: "broken pipe" } },
+        { id: "t3", ok: false, error: { code: "ENOSPC", message: "no space" } },
+        { id: "t4", ok: true },
+      ],
+    });
+
+    const arming = useFleetArmingStore.getState();
+    expect(arming.armedIds.has("t2")).toBe(false);
+    expect(arming.armedIds.has("t3")).toBe(true);
+
+    expect(Array.from(useFleetFailureStore.getState().failedIds)).toEqual(["t3"]);
+  });
+
+  it("does nothing when every target succeeded", () => {
+    seedPanels([makeTerminal("t1"), makeTerminal("t2")]);
+    useFleetArmingStore.getState().armIds(["t1", "t2"]);
+
+    applyFleetBroadcastResult({
+      results: [
+        { id: "t1", ok: true },
+        { id: "t2", ok: true },
+      ],
+    });
+
+    expect(useFleetFailureStore.getState().failedIds.size).toBe(0);
+    expect(useFleetArmingStore.getState().armedIds.size).toBe(2);
   });
 });

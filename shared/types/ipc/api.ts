@@ -123,6 +123,7 @@ import type {
   PtyHostActivityTier,
   SpawnResult,
   TerminalResourceBatchPayload,
+  BroadcastWriteResultPayload,
 } from "../pty-host.js";
 import type { ShowContextMenuPayload } from "../menu.js";
 import type {
@@ -283,6 +284,7 @@ export interface ElectronAPI {
     sendKey(id: string, key: string): void;
     batchDoubleEscape(ids: string[]): void;
     broadcastWrite(ids: string[], data: string): void;
+    onBroadcastWriteResult(callback: (data: BroadcastWriteResultPayload) => void): () => void;
     reportTitleState(id: string, state: "working" | "waiting"): void;
     updateObservedTitle(id: string, title: string): void;
     onSpawnResult(callback: (id: string, result: SpawnResult) => void): () => void;

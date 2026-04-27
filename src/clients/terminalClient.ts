@@ -8,6 +8,7 @@ import type {
   BackendTerminalInfo,
   TerminalReconnectResult,
   TerminalStatusPayload,
+  BroadcastWriteResultPayload,
   SpawnResult,
 } from "@shared/types";
 import type { PtyHostToRendererMessage } from "@shared/types/pty-host";
@@ -191,6 +192,16 @@ export const terminalClient = {
   broadcast: (ids: string[], data: string): void => {
     if (ids.length === 0 || data.length === 0) return;
     window.electron.terminal.broadcastWrite(ids, data);
+  },
+
+  /**
+   * Listen for per-target results emitted after every fleet broadcast write.
+   * Used by `fleetRawInputBroadcast` to surface the failure chip and to
+   * auto-disarm targets whose pty is permanently gone (EPIPE/EIO/EBADF/
+   * ECONNRESET).
+   */
+  onBroadcastResult: (callback: (data: BroadcastWriteResultPayload) => void): (() => void) => {
+    return window.electron.terminal.onBroadcastWriteResult(callback);
   },
 
   resize: (id: string, cols: number, rows: number): void => {

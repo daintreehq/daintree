@@ -323,6 +323,8 @@ export type {
   AgentKilledPayload,
   TerminalFlowStatus,
   TerminalStatusPayload,
+  BroadcastWriteTargetResult,
+  BroadcastWriteResultPayload,
   SpawnResult,
   SpawnError,
   SpawnErrorCode,

@@ -277,6 +277,10 @@ export type PtyHostEvent =
       type: "resource-metrics";
       metrics: TerminalResourceBatchPayload;
       timestamp: number;
+    }
+  | {
+      type: "broadcast-write-result";
+      results: BroadcastWriteTargetResult[];
     };
 
 /** Terminal info sent from Host → Main for getTerminal queries */
@@ -412,6 +416,23 @@ export interface TerminalStatusPayload {
   bufferUtilization?: number;
   pauseDuration?: number;
   timestamp: number;
+}
+
+/**
+ * Per-target outcome from a fleet `broadcast-write`. `ok: true` means the
+ * pty-host successfully called `pty.write()` for that target. `ok: false`
+ * means the synchronous write threw — typically a dead pipe (EPIPE/EIO/EBADF/
+ * ECONNRESET) — and the renderer should treat the target as gone.
+ */
+export interface BroadcastWriteTargetResult {
+  id: string;
+  ok: boolean;
+  error?: { code?: string; message: string };
+}
+
+/** Payload delivered to the renderer after every fleet broadcast write. */
+export interface BroadcastWriteResultPayload {
+  results: BroadcastWriteTargetResult[];
 }
 
 /** Payload for host crash events */

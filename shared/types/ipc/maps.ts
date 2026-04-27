@@ -143,6 +143,7 @@ import type {
   SpawnResult,
   TerminalStatusPayload,
   TerminalResourceBatchPayload,
+  BroadcastWriteResultPayload,
 } from "../pty-host.js";
 import type { HibernationConfig, HibernationProjectHibernatedPayload } from "./hibernation.js";
 import type { IdleTerminalNotifyConfig, IdleTerminalNotifyPayload } from "./idleTerminals.js";
@@ -2162,6 +2163,7 @@ export interface IpcEventMap {
   "terminal:restored": { id: string };
   "terminal:status": TerminalStatusPayload;
   "terminal:resource-metrics": { metrics: TerminalResourceBatchPayload; timestamp: number };
+  "terminal:broadcast-write-result": BroadcastWriteResultPayload;
   "terminal:send-key": [id: string, key: string];
   "terminal:spawn-result": [id: string, result: SpawnResult];
   "terminal:backend-crashed": {

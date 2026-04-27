@@ -54,6 +54,7 @@ export const CHANNELS = {
   TERMINAL_SEND_KEY: "terminal:send-key",
   TERMINAL_BATCH_DOUBLE_ESCAPE: "terminal:batch-double-escape",
   TERMINAL_BROADCAST_WRITE: "terminal:broadcast-write",
+  TERMINAL_BROADCAST_WRITE_RESULT: "terminal:broadcast-write-result",
   TERMINAL_AGENT_TITLE_STATE: "terminal:agent-title-state",
   TERMINAL_UPDATE_OBSERVED_TITLE: "terminal:update-observed-title",
   TERMINAL_REDUCE_SCROLLBACK: "terminal:reduce-scrollback",

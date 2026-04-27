@@ -73,6 +73,7 @@ import type {
   TerminalStatusPayload,
   SpawnResult,
   TerminalResourceBatchPayload,
+  BroadcastWriteResultPayload,
 } from "../shared/types/pty-host.js";
 
 type SpawnResultPayload = SpawnResult;
@@ -769,6 +770,9 @@ const api: ElectronAPI = {
 
     broadcastWrite: (ids: string[], data: string) =>
       ipcRenderer.send(CHANNELS.TERMINAL_BROADCAST_WRITE, ids, data),
+
+    onBroadcastWriteResult: (callback: (data: BroadcastWriteResultPayload) => void) =>
+      _typedOn(CHANNELS.TERMINAL_BROADCAST_WRITE_RESULT, callback),
 
     reportTitleState: (id: string, state: "working" | "waiting") =>
       ipcRenderer.send(CHANNELS.TERMINAL_AGENT_TITLE_STATE, { id, state }),

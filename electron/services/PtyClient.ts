@@ -53,6 +53,7 @@ import type {
   HostCrashPayload,
   SpawnResult,
   TerminalResourceBatchPayload,
+  BroadcastWriteResultPayload,
 } from "../../shared/types/pty-host.js";
 import type { TerminalSnapshot } from "./PtyManager.js";
 import type { AgentStateChangeTrigger } from "../types/index.js";
@@ -837,6 +838,14 @@ export class PtyClient extends EventEmitter {
           timestamp: number;
         };
         this.emit("resource-metrics", rmEvent.metrics, rmEvent.timestamp);
+        break;
+      }
+
+      case "broadcast-write-result": {
+        const brEvent = event as {
+          type: "broadcast-write-result";
+        } & BroadcastWriteResultPayload;
+        this.emit("broadcast-write-result", { results: brEvent.results });
         break;
       }
 
