@@ -28,10 +28,14 @@ const ACCENT_CLASS: Record<string, string> = {
   warning: "border-l-status-warning",
 };
 
-const TYPE_ICON_CONFIG: Record<string, { Icon: LucideIcon; className: string }> = {
+type IconConfig = { Icon: LucideIcon; className: string };
+
+const DEFAULT_ICON_CONFIG: IconConfig = { Icon: Info, className: "text-status-info" };
+
+const TYPE_ICON_CONFIG: Record<string, IconConfig> = {
   success: { Icon: CheckCircle2, className: "text-status-success" },
   error: { Icon: XCircle, className: "text-status-error" },
-  info: { Icon: Info, className: "text-status-info" },
+  info: DEFAULT_ICON_CONFIG,
   warning: { Icon: AlertTriangle, className: "text-status-warning" },
 };
 
@@ -107,7 +111,7 @@ function Toast({ notification }: { notification: Notification }) {
 
   const accentClass = ACCENT_CLASS[notification.type] ?? "border-l-status-info";
   const { Icon, className: iconClassName } =
-    TYPE_ICON_CONFIG[notification.type] ?? TYPE_ICON_CONFIG.info;
+    TYPE_ICON_CONFIG[notification.type] ?? DEFAULT_ICON_CONFIG;
 
   return (
     <div
