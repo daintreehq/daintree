@@ -386,7 +386,7 @@ function ProjectListContent({
               ) : mode === "modal" ? (
                 "No active projects"
               ) : (
-                "No projects available"
+                "No projects available — add one below"
               )}
             </div>
           </div>

@@ -6,6 +6,8 @@ import { getAutoAssign } from "@shared/types/project";
 import type { TerminalRecipe } from "@/types";
 import { Settings2 } from "lucide-react";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
+import { actionService } from "@/services/ActionService";
+import { Button } from "@/components/ui/button";
 
 const TYPE_BADGES: Record<string, string> = {
   terminal: "Terminal",
@@ -99,6 +101,10 @@ export function QuickCreatePalette({ palette }: QuickCreatePaletteProps) {
     palette.close();
   }, [closeQuickCreate, palette]);
 
+  const handleOpenRecipeEditor = useCallback(() => {
+    void actionService.dispatch("recipe.editor.open", undefined, { source: "user" });
+  }, []);
+
   const showAssignToggle =
     palette.selectedRecipe && getAutoAssign(palette.selectedRecipe) === "prompt";
 
@@ -130,7 +136,24 @@ export function QuickCreatePalette({ palette }: QuickCreatePaletteProps) {
       searchAriaLabel="Search recipes"
       listId="quick-create-palette-list"
       itemIdPrefix="quick-create-option"
-      emptyMessage="No recipes yet — create one in the recipe editor"
+      emptyMessage="No recipes yet"
+      emptyContent={
+        <div className="flex flex-col items-center gap-3 mt-4">
+          <p className="text-xs text-daintree-text/40">
+            Create a recipe in the recipe editor to get started.
+          </p>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={handleOpenRecipeEditor}
+            className="gap-1.5"
+          >
+            <Settings2 className="w-3.5 h-3.5" />
+            <span>Open recipe editor</span>
+          </Button>
+        </div>
+      }
       noMatchMessage={`No recipes match "${palette.query}"`}
       totalResults={palette.totalResults}
       afterList={
