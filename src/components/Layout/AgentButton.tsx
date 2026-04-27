@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import { Button } from "@/components/ui/button";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ShortcutRevealChip } from "@/components/ui/ShortcutRevealChip";
 import {
   DropdownMenu,
@@ -217,32 +217,30 @@ export function AgentButton({
     return (
       <ContextMenu>
         <ContextMenuTrigger asChild>
-          <TooltipProvider>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <span className="inline-flex">
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    onClick={handleClick}
-                    disabled={isLoading}
-                    data-toolbar-item={dataToolbarItem}
-                    className={cn(
-                      "toolbar-agent-button text-daintree-text transition-colors relative",
-                      isReady &&
-                        "hover:text-[var(--toolbar-control-hover-fg,var(--theme-accent-primary))] focus-visible:text-[var(--toolbar-control-hover-fg,var(--theme-accent-primary))]",
-                      needsSetup && "opacity-70"
-                    )}
-                    aria-label={ariaLabel}
-                  >
-                    {iconElement}
-                    <ShortcutRevealChip actionId={`agent.${type}`} />
-                  </Button>
-                </span>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">{tooltip}</TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span className="inline-flex">
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={handleClick}
+                  disabled={isLoading}
+                  data-toolbar-item={dataToolbarItem}
+                  className={cn(
+                    "toolbar-agent-button text-daintree-text transition-colors relative",
+                    isReady &&
+                      "hover:text-[var(--toolbar-control-hover-fg,var(--theme-accent-primary))] focus-visible:text-[var(--toolbar-control-hover-fg,var(--theme-accent-primary))]",
+                    needsSetup && "opacity-70"
+                  )}
+                  aria-label={ariaLabel}
+                >
+                  {iconElement}
+                  <ShortcutRevealChip actionId={`agent.${type}`} />
+                </Button>
+              </span>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">{tooltip}</TooltipContent>
+          </Tooltip>
         </ContextMenuTrigger>
         <ContextMenuContent>
           <ContextMenuItem
@@ -332,147 +330,143 @@ export function AgentButton({
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>
-        <TooltipProvider>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <span className="inline-flex">
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  onClick={handleClick}
-                  disabled={isLoading}
-                  data-toolbar-item={dataToolbarItem}
-                  className={cn(
-                    "toolbar-agent-button text-daintree-text transition-colors rounded-r-none border-r border-transparent relative",
-                    isReady &&
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span className="inline-flex">
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={handleClick}
+                disabled={isLoading}
+                data-toolbar-item={dataToolbarItem}
+                className={cn(
+                  "toolbar-agent-button text-daintree-text transition-colors rounded-r-none border-r border-transparent relative",
+                  isReady &&
+                    "hover:text-[var(--toolbar-control-hover-fg,var(--theme-accent-primary))] focus-visible:text-[var(--toolbar-control-hover-fg,var(--theme-accent-primary))]",
+                  needsSetup && "opacity-70"
+                )}
+                aria-label={ariaLabel}
+              >
+                {iconElement}
+                <ShortcutRevealChip actionId={`agent.${type}`} />
+              </Button>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    disabled={isLoading || !isReady}
+                    data-toolbar-item={dataToolbarItem}
+                    className={cn(
+                      "toolbar-agent-button text-daintree-text transition-colors rounded-l-none",
+                      "h-8 w-4 p-0 flex items-center justify-center",
                       "hover:text-[var(--toolbar-control-hover-fg,var(--theme-accent-primary))] focus-visible:text-[var(--toolbar-control-hover-fg,var(--theme-accent-primary))]",
-                    needsSetup && "opacity-70"
+                      !isReady && !isLoading && "opacity-60"
+                    )}
+                    aria-label={`Choose ${config.name} preset`}
+                  >
+                    <ChevronDown className="h-3 w-3 opacity-70" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start" sideOffset={4} className="min-w-[12rem]">
+                  <DropdownMenuItem
+                    className={cn(!savedPresetId && "font-medium")}
+                    onSelect={() => {
+                      persistWorktreePick(undefined);
+                      void actionService.dispatch(
+                        "agent.launch",
+                        { agentId: type, presetId: null },
+                        { source: "user" }
+                      );
+                    }}
+                  >
+                    <span className="inline-flex h-4 w-4 items-center justify-center shrink-0 mr-1.5">
+                      <config.icon brandColor={getBrandColorHex(type)} />
+                    </span>
+                    Default
+                  </DropdownMenuItem>
+                  {ccrPresetGroup.length > 0 && (
+                    <>
+                      {hasMultiplePresetGroups && <DropdownMenuSeparator />}
+                      {hasMultiplePresetGroups && <DropdownMenuLabel>CCR Routes</DropdownMenuLabel>}
+                      {ccrPresetGroup.map((preset) => (
+                        <DropdownMenuItem
+                          key={preset.id}
+                          className={cn(savedPresetId === preset.id && "font-medium")}
+                          onSelect={() => {
+                            persistWorktreePick(preset.id);
+                            void actionService.dispatch(
+                              "agent.launch",
+                              { agentId: type, presetId: preset.id },
+                              { source: "user" }
+                            );
+                          }}
+                        >
+                          <span className="inline-flex h-4 w-4 items-center justify-center shrink-0 mr-1.5">
+                            <config.icon brandColor={preset.color ?? getBrandColorHex(type)} />
+                          </span>
+                          {preset.name.replace(/^CCR:\s*/, "")}
+                        </DropdownMenuItem>
+                      ))}
+                    </>
                   )}
-                  aria-label={ariaLabel}
-                >
-                  {iconElement}
-                  <ShortcutRevealChip actionId={`agent.${type}`} />
-                </Button>
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <Button
-                      variant="ghost"
-                      disabled={isLoading || !isReady}
-                      data-toolbar-item={dataToolbarItem}
-                      className={cn(
-                        "toolbar-agent-button text-daintree-text transition-colors rounded-l-none",
-                        "h-8 w-4 p-0 flex items-center justify-center",
-                        "hover:text-[var(--toolbar-control-hover-fg,var(--theme-accent-primary))] focus-visible:text-[var(--toolbar-control-hover-fg,var(--theme-accent-primary))]",
-                        !isReady && !isLoading && "opacity-60"
+                  {projectPresetGroup.length > 0 && (
+                    <>
+                      {hasMultiplePresetGroups && <DropdownMenuSeparator />}
+                      {hasMultiplePresetGroups && (
+                        <DropdownMenuLabel>Project Shared</DropdownMenuLabel>
                       )}
-                      aria-label={`Choose ${config.name} preset`}
-                    >
-                      <ChevronDown className="h-3 w-3 opacity-70" />
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="start" sideOffset={4} className="min-w-[12rem]">
-                    <DropdownMenuItem
-                      className={cn(!savedPresetId && "font-medium")}
-                      onSelect={() => {
-                        persistWorktreePick(undefined);
-                        void actionService.dispatch(
-                          "agent.launch",
-                          { agentId: type, presetId: null },
-                          { source: "user" }
-                        );
-                      }}
-                    >
-                      <span className="inline-flex h-4 w-4 items-center justify-center shrink-0 mr-1.5">
-                        <config.icon brandColor={getBrandColorHex(type)} />
-                      </span>
-                      Default
-                    </DropdownMenuItem>
-                    {ccrPresetGroup.length > 0 && (
-                      <>
-                        {hasMultiplePresetGroups && <DropdownMenuSeparator />}
-                        {hasMultiplePresetGroups && (
-                          <DropdownMenuLabel>CCR Routes</DropdownMenuLabel>
-                        )}
-                        {ccrPresetGroup.map((preset) => (
-                          <DropdownMenuItem
-                            key={preset.id}
-                            className={cn(savedPresetId === preset.id && "font-medium")}
-                            onSelect={() => {
-                              persistWorktreePick(preset.id);
-                              void actionService.dispatch(
-                                "agent.launch",
-                                { agentId: type, presetId: preset.id },
-                                { source: "user" }
-                              );
-                            }}
-                          >
-                            <span className="inline-flex h-4 w-4 items-center justify-center shrink-0 mr-1.5">
-                              <config.icon brandColor={preset.color ?? getBrandColorHex(type)} />
-                            </span>
-                            {preset.name.replace(/^CCR:\s*/, "")}
-                          </DropdownMenuItem>
-                        ))}
-                      </>
-                    )}
-                    {projectPresetGroup.length > 0 && (
-                      <>
-                        {hasMultiplePresetGroups && <DropdownMenuSeparator />}
-                        {hasMultiplePresetGroups && (
-                          <DropdownMenuLabel>Project Shared</DropdownMenuLabel>
-                        )}
-                        {projectPresetGroup.map((preset) => (
-                          <DropdownMenuItem
-                            key={preset.id}
-                            className={cn(savedPresetId === preset.id && "font-medium")}
-                            onSelect={() => {
-                              persistWorktreePick(preset.id);
-                              void actionService.dispatch(
-                                "agent.launch",
-                                { agentId: type, presetId: preset.id },
-                                { source: "user" }
-                              );
-                            }}
-                          >
-                            <span className="inline-flex h-4 w-4 items-center justify-center shrink-0 mr-1.5">
-                              <config.icon brandColor={preset.color ?? getBrandColorHex(type)} />
-                            </span>
-                            {preset.name}
-                          </DropdownMenuItem>
-                        ))}
-                      </>
-                    )}
-                    {customPresetGroup.length > 0 && (
-                      <>
-                        {hasMultiplePresetGroups && <DropdownMenuSeparator />}
-                        {hasMultiplePresetGroups && <DropdownMenuLabel>Custom</DropdownMenuLabel>}
-                        {customPresetGroup.map((preset) => (
-                          <DropdownMenuItem
-                            key={preset.id}
-                            className={cn(savedPresetId === preset.id && "font-medium")}
-                            onSelect={() => {
-                              persistWorktreePick(preset.id);
-                              void actionService.dispatch(
-                                "agent.launch",
-                                { agentId: type, presetId: preset.id },
-                                { source: "user" }
-                              );
-                            }}
-                          >
-                            <span className="inline-flex h-4 w-4 items-center justify-center shrink-0 mr-1.5">
-                              <config.icon brandColor={preset.color ?? getBrandColorHex(type)} />
-                            </span>
-                            {preset.name}
-                          </DropdownMenuItem>
-                        ))}
-                      </>
-                    )}
-                  </DropdownMenuContent>
-                </DropdownMenu>
-              </span>
-            </TooltipTrigger>
-            <TooltipContent side="bottom">{tooltip}</TooltipContent>
-          </Tooltip>
-        </TooltipProvider>
+                      {projectPresetGroup.map((preset) => (
+                        <DropdownMenuItem
+                          key={preset.id}
+                          className={cn(savedPresetId === preset.id && "font-medium")}
+                          onSelect={() => {
+                            persistWorktreePick(preset.id);
+                            void actionService.dispatch(
+                              "agent.launch",
+                              { agentId: type, presetId: preset.id },
+                              { source: "user" }
+                            );
+                          }}
+                        >
+                          <span className="inline-flex h-4 w-4 items-center justify-center shrink-0 mr-1.5">
+                            <config.icon brandColor={preset.color ?? getBrandColorHex(type)} />
+                          </span>
+                          {preset.name}
+                        </DropdownMenuItem>
+                      ))}
+                    </>
+                  )}
+                  {customPresetGroup.length > 0 && (
+                    <>
+                      {hasMultiplePresetGroups && <DropdownMenuSeparator />}
+                      {hasMultiplePresetGroups && <DropdownMenuLabel>Custom</DropdownMenuLabel>}
+                      {customPresetGroup.map((preset) => (
+                        <DropdownMenuItem
+                          key={preset.id}
+                          className={cn(savedPresetId === preset.id && "font-medium")}
+                          onSelect={() => {
+                            persistWorktreePick(preset.id);
+                            void actionService.dispatch(
+                              "agent.launch",
+                              { agentId: type, presetId: preset.id },
+                              { source: "user" }
+                            );
+                          }}
+                        >
+                          <span className="inline-flex h-4 w-4 items-center justify-center shrink-0 mr-1.5">
+                            <config.icon brandColor={preset.color ?? getBrandColorHex(type)} />
+                          </span>
+                          {preset.name}
+                        </DropdownMenuItem>
+                      ))}
+                    </>
+                  )}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </span>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">{tooltip}</TooltipContent>
+        </Tooltip>
       </ContextMenuTrigger>
       <ContextMenuContent>
         <ContextMenuItem

@@ -4,7 +4,7 @@ import type { StagingFileEntry } from "@shared/types";
 import type { GitStatus } from "@shared/types";
 import { cn } from "@/lib/utils";
 import { Plus, Minus } from "lucide-react";
-import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 const STATUS_CONFIG: Record<GitStatus, { label: string; bg: string; text: string }> = {
   modified: {
@@ -87,28 +87,26 @@ export function FileStageRow({ file, isStaged, onToggle, onFileClick }: FileStag
         isStaged ? "bg-status-success/[0.06] hover:bg-status-success/[0.10]" : "hover:bg-tint/5"
       )}
     >
-      <TooltipProvider>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <button
-              type="button"
-              onClick={handleToggle}
-              className={cn(
-                "w-5 h-5 flex items-center justify-center rounded shrink-0 mr-2 transition-colors",
-                "hover:bg-tint/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
-              )}
-              aria-label={isStaged ? `Unstage ${file.path}` : `Stage ${file.path}`}
-            >
-              {isStaged ? (
-                <Minus className="w-3 h-3 text-status-error" />
-              ) : (
-                <Plus className="w-3 h-3 text-status-success" />
-              )}
-            </button>
-          </TooltipTrigger>
-          <TooltipContent side="right">{isStaged ? "Unstage" : "Stage"}</TooltipContent>
-        </Tooltip>
-      </TooltipProvider>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button
+            type="button"
+            onClick={handleToggle}
+            className={cn(
+              "w-5 h-5 flex items-center justify-center rounded shrink-0 mr-2 transition-colors",
+              "hover:bg-tint/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
+            )}
+            aria-label={isStaged ? `Unstage ${file.path}` : `Stage ${file.path}`}
+          >
+            {isStaged ? (
+              <Minus className="w-3 h-3 text-status-error" />
+            ) : (
+              <Plus className="w-3 h-3 text-status-success" />
+            )}
+          </button>
+        </TooltipTrigger>
+        <TooltipContent side="right">{isStaged ? "Unstage" : "Stage"}</TooltipContent>
+      </Tooltip>
 
       <button
         type="button"

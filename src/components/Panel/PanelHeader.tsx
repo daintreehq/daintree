@@ -41,7 +41,7 @@ import { LayoutGroup } from "framer-motion";
 import type { PanelKind } from "@/types";
 import { cn, getBaseTitle } from "@/lib/utils";
 import { formatShortcutForTooltip, createTooltipWithShortcut } from "@/lib/platform";
-import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { AnimatedLabel } from "@/components/ui/AnimatedLabel";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { MoveToDockIcon, MoveToGridIcon, WatchAlertIcon, WorktreeIcon } from "@/components/icons";
@@ -571,30 +571,28 @@ function PanelHeaderComponent({
                         />
                       ))}
                       {onAddTab && (
-                        <TooltipProvider>
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  onAddTab();
-                                }}
-                                onPointerDown={(e) => e.stopPropagation()}
-                                className="shrink-0 p-1.5 hover:bg-daintree-text/10 text-daintree-text/40 hover:text-daintree-text transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-1"
-                                aria-label="Duplicate panel as new tab"
-                                type="button"
-                              >
-                                <Plus className="w-3 h-3" aria-hidden="true" />
-                              </button>
-                            </TooltipTrigger>
-                            <TooltipContent side="bottom">
-                              {createTooltipWithShortcut(
-                                "Duplicate panel as new tab",
-                                duplicateShortcut
-                              )}
-                            </TooltipContent>
-                          </Tooltip>
-                        </TooltipProvider>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onAddTab();
+                              }}
+                              onPointerDown={(e) => e.stopPropagation()}
+                              className="shrink-0 p-1.5 hover:bg-daintree-text/10 text-daintree-text/40 hover:text-daintree-text transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-1"
+                              aria-label="Duplicate panel as new tab"
+                              type="button"
+                            >
+                              <Plus className="w-3 h-3" aria-hidden="true" />
+                            </button>
+                          </TooltipTrigger>
+                          <TooltipContent side="bottom">
+                            {createTooltipWithShortcut(
+                              "Duplicate panel as new tab",
+                              duplicateShortcut
+                            )}
+                          </TooltipContent>
+                        </Tooltip>
                       )}
                     </div>
                   </LayoutGroup>
@@ -670,30 +668,25 @@ function PanelHeaderComponent({
                     />
                   ))}
                   {onAddTab && (
-                    <TooltipProvider>
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              onAddTab();
-                            }}
-                            onPointerDown={(e) => e.stopPropagation()}
-                            className="shrink-0 p-1.5 hover:bg-daintree-text/10 text-daintree-text/40 hover:text-daintree-text transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-1"
-                            aria-label="Duplicate panel as new tab"
-                            type="button"
-                          >
-                            <Plus className="w-3 h-3" aria-hidden="true" />
-                          </button>
-                        </TooltipTrigger>
-                        <TooltipContent side="bottom">
-                          {createTooltipWithShortcut(
-                            "Duplicate panel as new tab",
-                            duplicateShortcut
-                          )}
-                        </TooltipContent>
-                      </Tooltip>
-                    </TooltipProvider>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onAddTab();
+                          }}
+                          onPointerDown={(e) => e.stopPropagation()}
+                          className="shrink-0 p-1.5 hover:bg-daintree-text/10 text-daintree-text/40 hover:text-daintree-text transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-1"
+                          aria-label="Duplicate panel as new tab"
+                          type="button"
+                        >
+                          <Plus className="w-3 h-3" aria-hidden="true" />
+                        </button>
+                      </TooltipTrigger>
+                      <TooltipContent side="bottom">
+                        {createTooltipWithShortcut("Duplicate panel as new tab", duplicateShortcut)}
+                      </TooltipContent>
+                    </Tooltip>
                   )}
                 </div>
               </LayoutGroup>
@@ -742,73 +735,67 @@ function PanelHeaderComponent({
             />
           ) : (
             <div className="flex items-center gap-2 min-w-0">
-              <TooltipProvider>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <span
-                      className={cn(
-                        "text-xs font-medium font-sans select-none transition-colors",
-                        isFocused || isSelected ? "text-daintree-text" : "text-daintree-text/70",
-                        onTitleChange && "cursor-text hover:text-daintree-text",
-                        isPinged &&
-                          !isMaximized &&
-                          (wasJustSelected ? "animate-eco-title-select" : "animate-eco-title")
-                      )}
-                      onDoubleClick={onTitleDoubleClick}
-                      onKeyDown={onTitleKeyDown}
-                      tabIndex={onTitleChange ? 0 : undefined}
-                      role={onTitleChange ? "button" : undefined}
-                      aria-label={onTitleChange ? getTitleAriaLabel() : undefined}
-                    >
-                      {displayTitle}
-                    </span>
-                  </TooltipTrigger>
-                  <TooltipContent side="bottom">
-                    {onTitleChange ? `${title} — Double-click to edit` : title}
-                  </TooltipContent>
-                </Tooltip>
-              </TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span
+                    className={cn(
+                      "text-xs font-medium font-sans select-none transition-colors",
+                      isFocused || isSelected ? "text-daintree-text" : "text-daintree-text/70",
+                      onTitleChange && "cursor-text hover:text-daintree-text",
+                      isPinged &&
+                        !isMaximized &&
+                        (wasJustSelected ? "animate-eco-title-select" : "animate-eco-title")
+                    )}
+                    onDoubleClick={onTitleDoubleClick}
+                    onKeyDown={onTitleKeyDown}
+                    tabIndex={onTitleChange ? 0 : undefined}
+                    role={onTitleChange ? "button" : undefined}
+                    aria-label={onTitleChange ? getTitleAriaLabel() : undefined}
+                  >
+                    {displayTitle}
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">
+                  {onTitleChange ? `${title} — Double-click to edit` : title}
+                </TooltipContent>
+              </Tooltip>
             </div>
           )}
 
           {hasDangerousFlags && (
-            <TooltipProvider>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <span
-                    className="w-2 h-2 rounded-full bg-status-danger shrink-0"
-                    aria-label="Launched with dangerous permissions"
-                  />
-                </TooltipTrigger>
-                <TooltipContent side="bottom">
-                  Launched with dangerous permissions — agent can modify files without prompting
-                </TooltipContent>
-              </Tooltip>
-            </TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span
+                  className="w-2 h-2 rounded-full bg-status-danger shrink-0"
+                  aria-label="Launched with dangerous permissions"
+                />
+              </TooltipTrigger>
+              <TooltipContent side="bottom">
+                Launched with dangerous permissions — agent can modify files without prompting
+              </TooltipContent>
+            </Tooltip>
           )}
 
           {isFleetFailed && (
-            <TooltipProvider>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      dismissFleetFailure(id);
-                    }}
-                    onPointerDown={(e) => e.stopPropagation()}
-                    aria-label="Last fleet broadcast failed on this terminal — click to acknowledge"
-                    data-testid="panel-fleet-failure-dot"
-                    className="w-2 h-2 rounded-full bg-status-error shrink-0 hover:scale-125 transition-transform"
-                  />
-                </TooltipTrigger>
-                <TooltipContent side="bottom">
-                  Last fleet broadcast failed here — click to dismiss. Run "Fleet: Retry failed
-                  broadcast" from the command palette to resend.
-                </TooltipContent>
-              </Tooltip>
-            </TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    dismissFleetFailure(id);
+                  }}
+                  onPointerDown={(e) => e.stopPropagation()}
+                  aria-label="Last fleet broadcast failed on this terminal — click to acknowledge"
+                  data-testid="panel-fleet-failure-dot"
+                  className="w-2 h-2 rounded-full bg-status-error shrink-0 hover:scale-125 transition-transform"
+                />
+              </TooltipTrigger>
+              <TooltipContent side="bottom">
+                Last fleet broadcast failed here — click to dismiss. Run "Fleet: Retry failed
+                broadcast" from the command palette to resend.
+              </TooltipContent>
+            </Tooltip>
           )}
 
           {/* Watch status indicator — non-interactive, shown when actively watching */}
@@ -824,27 +811,25 @@ function PanelHeaderComponent({
 
           {/* Add tab button for single panels */}
           {onAddTab && (
-            <TooltipProvider>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onAddTab();
-                    }}
-                    onPointerDown={(e) => e.stopPropagation()}
-                    className="shrink-0 p-1.5 opacity-0 group-hover:opacity-100 hover:bg-daintree-text/10 text-daintree-text/40 hover:text-daintree-text transition focus-visible:opacity-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-1"
-                    aria-label="Duplicate panel as new tab"
-                    type="button"
-                  >
-                    <Plus className="w-3.5 h-3.5" aria-hidden="true" />
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent side="bottom">
-                  {createTooltipWithShortcut("Duplicate panel as new tab", duplicateShortcut)}
-                </TooltipContent>
-              </Tooltip>
-            </TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onAddTab();
+                  }}
+                  onPointerDown={(e) => e.stopPropagation()}
+                  className="shrink-0 p-1.5 opacity-0 group-hover:opacity-100 hover:bg-daintree-text/10 text-daintree-text/40 hover:text-daintree-text transition focus-visible:opacity-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-1"
+                  aria-label="Duplicate panel as new tab"
+                  type="button"
+                >
+                  <Plus className="w-3.5 h-3.5" aria-hidden="true" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">
+                {createTooltipWithShortcut("Duplicate panel as new tab", duplicateShortcut)}
+              </TooltipContent>
+            </Tooltip>
           )}
 
           {/* Worktree branch badge — shown when multiple worktrees are active */}
@@ -894,213 +879,228 @@ function PanelHeaderComponent({
       <div className="flex items-center gap-1">
         {/* Overflow menu — panel management actions */}
         {hasOverflowItems && (
-          <TooltipProvider>
-            <DropdownMenu
-              onOpenChange={(open) => {
-                if (open) setOverflowTooltipOpen(false);
-              }}
-            >
-              <Tooltip open={overflowTooltipOpen} onOpenChange={setOverflowTooltipOpen}>
-                <TooltipTrigger asChild>
-                  <DropdownMenuTrigger asChild>
-                    <button
-                      type="button"
-                      onPointerDown={(e) => e.stopPropagation()}
-                      className="p-1.5 hover:bg-daintree-text/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2 text-daintree-text/60 hover:text-daintree-text transition-colors"
-                      aria-label="More panel actions"
-                    >
-                      <Ellipsis className="w-3 h-3" aria-hidden="true" />
-                    </button>
-                  </DropdownMenuTrigger>
-                </TooltipTrigger>
-                <TooltipContent side="bottom">More panel actions</TooltipContent>
-              </Tooltip>
-              <DropdownMenuContent align="end" className="min-w-[160px]">
-                {/* Session group */}
-                {canRestart && onRestart && (
-                  <DropdownMenuItem
-                    onSelect={handleRestartSelect}
-                    className={cn(
-                      armedRestartId === id && "bg-status-warning/10 text-status-warning"
-                    )}
-                    data-testid={armedRestartId === id ? "panel-restart-confirm" : "panel-restart"}
-                    aria-label={
-                      armedRestartId === id
-                        ? `Armed — click again to confirm restart. ${countdown !== null ? `${countdown} seconds remaining` : ""}`
-                        : "Restart Session"
-                    }
+          <DropdownMenu
+            onOpenChange={(open) => {
+              if (open) setOverflowTooltipOpen(false);
+            }}
+          >
+            <Tooltip open={overflowTooltipOpen} onOpenChange={setOverflowTooltipOpen}>
+              <TooltipTrigger asChild>
+                <DropdownMenuTrigger asChild>
+                  <button
+                    type="button"
+                    onPointerDown={(e) => e.stopPropagation()}
+                    className="p-1.5 hover:bg-daintree-text/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2 text-daintree-text/60 hover:text-daintree-text transition-colors"
+                    aria-label="More panel actions"
                   >
-                    <RotateCcw className="w-3 h-3 mr-2" aria-hidden="true" />
-                    {armedRestartId === id
-                      ? `Confirm Restart (${countdown ?? 0}s)`
-                      : "Restart Session"}
-                  </DropdownMenuItem>
-                )}
+                    <Ellipsis className="w-3 h-3" aria-hidden="true" />
+                  </button>
+                </DropdownMenuTrigger>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">More panel actions</TooltipContent>
+            </Tooltip>
+            <DropdownMenuContent align="end" className="min-w-[160px]">
+              {/* Session group */}
+              {canRestart && onRestart && (
+                <DropdownMenuItem
+                  onSelect={handleRestartSelect}
+                  className={cn(
+                    armedRestartId === id && "bg-status-warning/10 text-status-warning"
+                  )}
+                  data-testid={armedRestartId === id ? "panel-restart-confirm" : "panel-restart"}
+                  aria-label={
+                    armedRestartId === id
+                      ? `Armed — click again to confirm restart. ${countdown !== null ? `${countdown} seconds remaining` : ""}`
+                      : "Restart Session"
+                  }
+                >
+                  <RotateCcw className="w-3 h-3 mr-2" aria-hidden="true" />
+                  {armedRestartId === id
+                    ? `Confirm Restart (${countdown ?? 0}s)`
+                    : "Restart Session"}
+                </DropdownMenuItem>
+              )}
 
-                {agentId && (
-                  <DropdownMenuItem
-                    onSelect={() =>
-                      void actionService.dispatch(
-                        "terminal.moveToNewWorktree",
-                        { terminalId: id },
-                        { source: "menu" }
-                      )
-                    }
-                  >
-                    <WorktreeIcon className="w-3 h-3 mr-2" aria-hidden="true" />
-                    Move to New Worktree…
-                  </DropdownMenuItem>
-                )}
-
-                {/* Management group */}
-                {((canRestart && onRestart) || agentId) && <DropdownMenuSeparator />}
-                {location === "dock" && onRestore && (
-                  <DropdownMenuItem onSelect={() => onRestore()}>
-                    <MoveToGridIcon className="w-3 h-3 mr-2" aria-hidden="true" />
-                    Restore to Grid
-                  </DropdownMenuItem>
-                )}
+              {agentId && (
                 <DropdownMenuItem
                   onSelect={() =>
                     void actionService.dispatch(
-                      "terminal.rename",
+                      "terminal.moveToNewWorktree",
                       { terminalId: id },
                       { source: "menu" }
                     )
                   }
                 >
-                  <Pencil className="w-3 h-3 mr-2" aria-hidden="true" />
-                  Rename
+                  <WorktreeIcon className="w-3 h-3 mr-2" aria-hidden="true" />
+                  Move to New Worktree…
                 </DropdownMenuItem>
+              )}
+
+              {/* Management group */}
+              {((canRestart && onRestart) || agentId) && <DropdownMenuSeparator />}
+              {location === "dock" && onRestore && (
+                <DropdownMenuItem onSelect={() => onRestore()}>
+                  <MoveToGridIcon className="w-3 h-3 mr-2" aria-hidden="true" />
+                  Restore to Grid
+                </DropdownMenuItem>
+              )}
+              <DropdownMenuItem
+                onSelect={() =>
+                  void actionService.dispatch(
+                    "terminal.rename",
+                    { terminalId: id },
+                    { source: "menu" }
+                  )
+                }
+              >
+                <Pencil className="w-3 h-3 mr-2" aria-hidden="true" />
+                Rename
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onSelect={() =>
+                  void actionService.dispatch(
+                    "terminal.duplicate",
+                    { terminalId: id },
+                    { source: "menu" }
+                  )
+                }
+              >
+                <CopyPlus className="w-3 h-3 mr-2" aria-hidden="true" />
+                Duplicate
+              </DropdownMenuItem>
+              {hasPty && (
                 <DropdownMenuItem
                   onSelect={() =>
                     void actionService.dispatch(
-                      "terminal.duplicate",
+                      "terminal.toggleInputLock",
                       { terminalId: id },
                       { source: "menu" }
                     )
                   }
                 >
-                  <CopyPlus className="w-3 h-3 mr-2" aria-hidden="true" />
-                  Duplicate
+                  {isInputLocked ? (
+                    <Unlock className="w-3 h-3 mr-2" aria-hidden="true" />
+                  ) : (
+                    <Lock className="w-3 h-3 mr-2" aria-hidden="true" />
+                  )}
+                  {isInputLocked ? "Unlock Input" : "Lock Input"}
                 </DropdownMenuItem>
-                {hasPty && (
-                  <DropdownMenuItem
-                    onSelect={() =>
-                      void actionService.dispatch(
-                        "terminal.toggleInputLock",
-                        { terminalId: id },
-                        { source: "menu" }
-                      )
-                    }
-                  >
-                    {isInputLocked ? (
-                      <Unlock className="w-3 h-3 mr-2" aria-hidden="true" />
-                    ) : (
-                      <Lock className="w-3 h-3 mr-2" aria-hidden="true" />
-                    )}
-                    {isInputLocked ? "Unlock Input" : "Lock Input"}
-                  </DropdownMenuItem>
-                )}
-                {showWatchButton && (
-                  <DropdownMenuItem onSelect={handleWatchToggle}>
-                    {isWatched ? (
-                      <BellOff className="w-3 h-3 mr-2" aria-hidden="true" />
-                    ) : (
-                      <Bell className="w-3 h-3 mr-2" aria-hidden="true" />
-                    )}
-                    {isWatched ? "Cancel Watch" : "Watch"}
-                  </DropdownMenuItem>
-                )}
-                {hasPty && (
-                  <DropdownMenuItem
-                    onSelect={() =>
-                      void actionService.dispatch(
-                        "terminal.viewInfo",
-                        { terminalId: id },
-                        { source: "menu" }
-                      )
-                    }
-                  >
-                    <Info className="w-3 h-3 mr-2" aria-hidden="true" />
-                    View Terminal Info
-                  </DropdownMenuItem>
-                )}
-
-                {/* Header actions slot */}
-                {headerActions && <DropdownMenuSeparator />}
-                {headerActions}
-
-                {/* Destructive group */}
-                <DropdownMenuSeparator />
+              )}
+              {showWatchButton && (
+                <DropdownMenuItem onSelect={handleWatchToggle}>
+                  {isWatched ? (
+                    <BellOff className="w-3 h-3 mr-2" aria-hidden="true" />
+                  ) : (
+                    <Bell className="w-3 h-3 mr-2" aria-hidden="true" />
+                  )}
+                  {isWatched ? "Cancel Watch" : "Watch"}
+                </DropdownMenuItem>
+              )}
+              {hasPty && (
                 <DropdownMenuItem
-                  destructive
                   onSelect={() =>
                     void actionService.dispatch(
-                      "terminal.trash",
+                      "terminal.viewInfo",
                       { terminalId: id },
                       { source: "menu" }
                     )
                   }
                 >
-                  <Trash2 className="w-3 h-3 mr-2" aria-hidden="true" />
-                  Trash
+                  <Info className="w-3 h-3 mr-2" aria-hidden="true" />
+                  View Terminal Info
                 </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </TooltipProvider>
+              )}
+
+              {/* Header actions slot */}
+              {headerActions && <DropdownMenuSeparator />}
+              {headerActions}
+
+              {/* Destructive group */}
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                destructive
+                onSelect={() =>
+                  void actionService.dispatch(
+                    "terminal.trash",
+                    { terminalId: id },
+                    { source: "menu" }
+                  )
+                }
+              >
+                <Trash2 className="w-3 h-3 mr-2" aria-hidden="true" />
+                Trash
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         )}
 
         {/* Move to Dock — visible button for grid panels */}
         {showMoveToDock && (
-          <TooltipProvider>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onMinimize!();
-                  }}
-                  onPointerDown={(e) => e.stopPropagation()}
-                  className="p-1.5 hover:bg-daintree-text/10 focus-visible:bg-daintree-text/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2 text-daintree-text/60 hover:text-daintree-text transition-colors"
-                  aria-label="Move to Dock"
-                  data-testid="panel-move-to-dock"
-                >
-                  <MoveToDockIcon className="w-3 h-3" />
-                </button>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">
-                {createTooltipWithShortcut("Move to Dock", moveToDockShortcut)}
-              </TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onMinimize!();
+                }}
+                onPointerDown={(e) => e.stopPropagation()}
+                className="p-1.5 hover:bg-daintree-text/10 focus-visible:bg-daintree-text/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2 text-daintree-text/60 hover:text-daintree-text transition-colors"
+                aria-label="Move to Dock"
+                data-testid="panel-move-to-dock"
+              >
+                <MoveToDockIcon className="w-3 h-3" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">
+              {createTooltipWithShortcut("Move to Dock", moveToDockShortcut)}
+            </TooltipContent>
+          </Tooltip>
         )}
 
         {/* Middle control: Collapse-to-Dock / Maximize / Exit Focus */}
         {location === "dock" && onMinimize ? (
-          <TooltipProvider>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onMinimize();
-                  }}
-                  onPointerDown={(e) => e.stopPropagation()}
-                  className="p-1.5 hover:bg-daintree-text/10 focus-visible:bg-daintree-text/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2 text-daintree-text/60 hover:text-daintree-text transition-colors"
-                  aria-label="Collapse to Dock"
-                  data-testid="panel-collapse-to-dock"
-                >
-                  <MoveToDockIcon className="w-3 h-3" />
-                </button>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">
-                {createTooltipWithShortcut("Collapse to Dock", toggleDockShortcut)}
-              </TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onMinimize();
+                }}
+                onPointerDown={(e) => e.stopPropagation()}
+                className="p-1.5 hover:bg-daintree-text/10 focus-visible:bg-daintree-text/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2 text-daintree-text/60 hover:text-daintree-text transition-colors"
+                aria-label="Collapse to Dock"
+                data-testid="panel-collapse-to-dock"
+              >
+                <MoveToDockIcon className="w-3 h-3" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">
+              {createTooltipWithShortcut("Collapse to Dock", toggleDockShortcut)}
+            </TooltipContent>
+          </Tooltip>
         ) : onToggleMaximize && isMaximized ? (
-          <TooltipProvider>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onFocus();
+                  onToggleMaximize();
+                }}
+                onPointerDown={(e) => e.stopPropagation()}
+                className="flex items-center gap-1.5 px-2 py-1 bg-daintree-accent/10 text-daintree-accent hover:bg-daintree-accent/20 rounded transition-colors mr-1 focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+                aria-label="Exit Focus mode and restore grid view"
+              >
+                <Minimize2 className="w-3.5 h-3.5" aria-hidden="true" />
+                <span className="font-medium">Exit Focus</span>
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">
+              {createTooltipWithShortcut("Restore Grid View", maximizeShortcut)}
+            </TooltipContent>
+          </Tooltip>
+        ) : (
+          onToggleMaximize && (
             <Tooltip>
               <TooltipTrigger asChild>
                 <button
@@ -1110,77 +1110,50 @@ function PanelHeaderComponent({
                     onToggleMaximize();
                   }}
                   onPointerDown={(e) => e.stopPropagation()}
-                  className="flex items-center gap-1.5 px-2 py-1 bg-daintree-accent/10 text-daintree-accent hover:bg-daintree-accent/20 rounded transition-colors mr-1 focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
-                  aria-label="Exit Focus mode and restore grid view"
+                  className="p-1.5 hover:bg-daintree-text/10 focus-visible:bg-daintree-text/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2 text-daintree-text/60 hover:text-daintree-text transition-colors"
+                  aria-label="Maximize"
                 >
-                  <Minimize2 className="w-3.5 h-3.5" aria-hidden="true" />
-                  <span className="font-medium">Exit Focus</span>
+                  <Maximize2 className="w-3 h-3" aria-hidden="true" />
                 </button>
               </TooltipTrigger>
               <TooltipContent side="bottom">
-                {createTooltipWithShortcut("Restore Grid View", maximizeShortcut)}
+                {createTooltipWithShortcut("Maximize", maximizeShortcut)}
               </TooltipContent>
             </Tooltip>
-          </TooltipProvider>
-        ) : (
-          onToggleMaximize && (
-            <TooltipProvider>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onFocus();
-                      onToggleMaximize();
-                    }}
-                    onPointerDown={(e) => e.stopPropagation()}
-                    className="p-1.5 hover:bg-daintree-text/10 focus-visible:bg-daintree-text/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2 text-daintree-text/60 hover:text-daintree-text transition-colors"
-                    aria-label="Maximize"
-                  >
-                    <Maximize2 className="w-3 h-3" aria-hidden="true" />
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent side="bottom">
-                  {createTooltipWithShortcut("Maximize", maximizeShortcut)}
-                </TooltipContent>
-              </Tooltip>
-            </TooltipProvider>
           )
         )}
 
         {/* Close button */}
-        <TooltipProvider>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <button
-                onClick={(e) => {
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                onClose(e.altKey);
+              }}
+              onKeyDown={(e) => {
+                if ((e.key === "Enter" || e.key === " ") && e.altKey) {
+                  e.preventDefault();
                   e.stopPropagation();
-                  onClose(e.altKey);
-                }}
-                onKeyDown={(e) => {
-                  if ((e.key === "Enter" || e.key === " ") && e.altKey) {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    onClose(true);
-                  }
-                }}
-                onPointerDown={(e) => e.stopPropagation()}
-                className="p-1.5 hover:bg-[color-mix(in_oklab,var(--color-status-error)_15%,transparent)] focus-visible:bg-[color-mix(in_oklab,var(--color-status-error)_15%,transparent)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-status-error focus-visible:outline-offset-2 text-daintree-text/60 hover:text-status-error transition-colors"
-                data-testid="panel-close"
-                aria-label={formatShortcutForTooltip(
-                  "Close session. Hold Alt and click to force close without recovery."
-                )}
-              >
-                <X className="w-3 h-3" aria-hidden="true" />
-              </button>
-            </TooltipTrigger>
-            <TooltipContent side="bottom">
-              {createTooltipWithShortcut("Close Session", closeShortcut) +
-                " · " +
-                formatShortcutForTooltip("Alt+Click to force close")}
-            </TooltipContent>
-          </Tooltip>
-        </TooltipProvider>
+                  onClose(true);
+                }
+              }}
+              onPointerDown={(e) => e.stopPropagation()}
+              className="p-1.5 hover:bg-[color-mix(in_oklab,var(--color-status-error)_15%,transparent)] focus-visible:bg-[color-mix(in_oklab,var(--color-status-error)_15%,transparent)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-status-error focus-visible:outline-offset-2 text-daintree-text/60 hover:text-status-error transition-colors"
+              data-testid="panel-close"
+              aria-label={formatShortcutForTooltip(
+                "Close session. Hold Alt and click to force close without recovery."
+              )}
+            >
+              <X className="w-3 h-3" aria-hidden="true" />
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">
+            {createTooltipWithShortcut("Close Session", closeShortcut) +
+              " · " +
+              formatShortcutForTooltip("Alt+Click to force close")}
+          </TooltipContent>
+        </Tooltip>
 
         {/* Kind-specific header content slot */}
         {headerContent}

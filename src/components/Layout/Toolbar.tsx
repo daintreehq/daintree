@@ -26,7 +26,7 @@ import { shortcutHintStore } from "@/store/shortcutHintStore";
 import { isMac, isLinux, createTooltipWithShortcut } from "@/lib/platform";
 import { AgentButton } from "./AgentButton";
 import { AgentTrayButton } from "./AgentTrayButton";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ShortcutRevealChip } from "@/components/ui/ShortcutRevealChip";
 import {
   DropdownMenu,
@@ -73,8 +73,7 @@ const AGENT_TOOLBAR_IDS = new Set<ToolbarButtonId>([
 
 type OverflowMenuMeta = { label: string; icon: React.ComponentType<{ className?: string }> };
 
-const toolbarIconButtonClass =
-  "toolbar-icon-button text-daintree-text transition-colors relative";
+const toolbarIconButtonClass = "toolbar-icon-button text-daintree-text transition-colors relative";
 
 export function PluginToolbarButton({
   pluginId,
@@ -88,30 +87,28 @@ export function PluginToolbarButton({
   const hover = useShortcutHintHover(config.actionId as string);
 
   return (
-    <TooltipProvider>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <Button
-            {...hover}
-            variant="ghost"
-            size="icon"
-            data-toolbar-item={dataToolbarItem}
-            onClick={() => {
-              void actionService.dispatch(
-                config.actionId as Parameters<typeof actionService.dispatch>[0],
-                undefined,
-                { source: "user" }
-              );
-            }}
-            className={toolbarIconButtonClass}
-            aria-label={config?.label ?? pluginId}
-          >
-            <McpServerIcon />
-          </Button>
-        </TooltipTrigger>
-        <TooltipContent side="bottom">{config?.label ?? pluginId}</TooltipContent>
-      </Tooltip>
-    </TooltipProvider>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button
+          {...hover}
+          variant="ghost"
+          size="icon"
+          data-toolbar-item={dataToolbarItem}
+          onClick={() => {
+            void actionService.dispatch(
+              config.actionId as Parameters<typeof actionService.dispatch>[0],
+              undefined,
+              { source: "user" }
+            );
+          }}
+          className={toolbarIconButtonClass}
+          aria-label={config?.label ?? pluginId}
+        >
+          <McpServerIcon />
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent side="bottom">{config?.label ?? pluginId}</TooltipContent>
+    </Tooltip>
   );
 }
 
@@ -376,31 +373,29 @@ export function Toolbar({
     () => ({
       "sidebar-toggle": {
         render: () => (
-          <TooltipProvider key="sidebar-toggle">
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  {...sidebarHintHover}
-                  variant="ghost"
-                  size="icon"
-                  data-toolbar-item=""
-                  onClick={onToggleFocusMode}
-                  className={toolbarIconButtonClass}
-                  aria-label="Toggle Sidebar"
-                  aria-pressed={!isFocusMode}
-                >
-                  {isFocusMode ? <PanelLeftOpen /> : <PanelLeftClose />}
-                  <ShortcutRevealChip actionId="nav.toggleSidebar" />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">
-                {createTooltipWithShortcut(
-                  isFocusMode ? "Show Sidebar" : "Hide Sidebar",
-                  sidebarShortcut
-                )}
-              </TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                {...sidebarHintHover}
+                variant="ghost"
+                size="icon"
+                data-toolbar-item=""
+                onClick={onToggleFocusMode}
+                className={toolbarIconButtonClass}
+                aria-label="Toggle Sidebar"
+                aria-pressed={!isFocusMode}
+              >
+                {isFocusMode ? <PanelLeftOpen /> : <PanelLeftClose />}
+                <ShortcutRevealChip actionId="nav.toggleSidebar" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">
+              {createTooltipWithShortcut(
+                isFocusMode ? "Show Sidebar" : "Hide Sidebar",
+                sidebarShortcut
+              )}
+            </TooltipContent>
+          </Tooltip>
         ),
         isAvailable: true,
       },
@@ -456,26 +451,24 @@ export function Toolbar({
       },
       "dev-server": {
         render: () => (
-          <TooltipProvider key="dev-server">
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  {...devServerHintHover}
-                  variant="ghost"
-                  size="icon"
-                  data-toolbar-item=""
-                  onClick={() =>
-                    actionService.dispatch("devServer.start", undefined, { source: "user" })
-                  }
-                  className={toolbarIconButtonClass}
-                  aria-label="Open Dev Preview"
-                >
-                  <Monitor />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">Open Dev Preview</TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                {...devServerHintHover}
+                variant="ghost"
+                size="icon"
+                data-toolbar-item=""
+                onClick={() =>
+                  actionService.dispatch("devServer.start", undefined, { source: "user" })
+                }
+                className={toolbarIconButtonClass}
+                aria-label="Open Dev Preview"
+              >
+                <Monitor />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">Open Dev Preview</TooltipContent>
+          </Tooltip>
         ),
         isAvailable: !!currentProject,
       },
@@ -502,45 +495,43 @@ export function Toolbar({
       },
       "copy-tree": {
         render: () => (
-          <TooltipProvider key="copy-tree">
-            <Tooltip open={treeCopied || undefined} delayDuration={treeCopied ? 0 : 300}>
-              <TooltipTrigger asChild>
-                <Button
-                  {...copyTreeHintHover}
-                  variant="ghost"
-                  size="icon"
-                  data-toolbar-item=""
-                  onClick={handleCopyTreeClick}
-                  disabled={isCopyingTree || !activeWorktree}
-                  className={cn(
-                    "toolbar-icon-button transition-colors relative",
-                    treeCopied ? "text-status-success bg-status-success/10" : "text-daintree-text",
-                    isCopyingTree && "cursor-wait opacity-70",
-                    !activeWorktree && "opacity-50"
-                  )}
-                  aria-label={
-                    isCopyingTree ? "Copying…" : treeCopied ? "Context Copied" : "Copy Context"
-                  }
-                >
-                  {isCopyingTree ? <Spinner /> : treeCopied ? <Check /> : <CopyTreeIcon />}
-                  {!treeCopied && !isCopyingTree && (
-                    <ShortcutRevealChip actionId="worktree.copyTree" />
-                  )}
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent side="bottom" className="font-medium">
-                {isCopyingTree ? (
-                  "Copying…"
-                ) : treeCopied ? (
-                  <span role="status" aria-live="polite">
-                    {copyFeedback}
-                  </span>
-                ) : (
-                  createTooltipWithShortcut("Copy Context", copyTreeShortcut)
+          <Tooltip open={treeCopied || undefined} delayDuration={treeCopied ? 0 : 300}>
+            <TooltipTrigger asChild>
+              <Button
+                {...copyTreeHintHover}
+                variant="ghost"
+                size="icon"
+                data-toolbar-item=""
+                onClick={handleCopyTreeClick}
+                disabled={isCopyingTree || !activeWorktree}
+                className={cn(
+                  "toolbar-icon-button transition-colors relative",
+                  treeCopied ? "text-status-success bg-status-success/10" : "text-daintree-text",
+                  isCopyingTree && "cursor-wait opacity-70",
+                  !activeWorktree && "opacity-50"
                 )}
-              </TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
+                aria-label={
+                  isCopyingTree ? "Copying…" : treeCopied ? "Context Copied" : "Copy Context"
+                }
+              >
+                {isCopyingTree ? <Spinner /> : treeCopied ? <Check /> : <CopyTreeIcon />}
+                {!treeCopied && !isCopyingTree && (
+                  <ShortcutRevealChip actionId="worktree.copyTree" />
+                )}
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom" className="font-medium">
+              {isCopyingTree ? (
+                "Copying…"
+              ) : treeCopied ? (
+                <span role="status" aria-live="polite">
+                  {copyFeedback}
+                </span>
+              ) : (
+                createTooltipWithShortcut("Copy Context", copyTreeShortcut)
+              )}
+            </TooltipContent>
+          </Tooltip>
         ),
         isAvailable: true,
       },
@@ -787,24 +778,22 @@ export function Toolbar({
     if (overflowIds.length === 0) return null;
     return (
       <DropdownMenu>
-        <TooltipProvider>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <DropdownMenuTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  data-toolbar-item=""
-                  className={toolbarIconButtonClass}
-                  aria-label={`${overflowIds.length} more toolbar items`}
-                >
-                  <Ellipsis />
-                </Button>
-              </DropdownMenuTrigger>
-            </TooltipTrigger>
-            <TooltipContent side="bottom">More items</TooltipContent>
-          </Tooltip>
-        </TooltipProvider>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                data-toolbar-item=""
+                className={toolbarIconButtonClass}
+                aria-label={`${overflowIds.length} more toolbar items`}
+              >
+                <Ellipsis />
+              </Button>
+            </DropdownMenuTrigger>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">More items</TooltipContent>
+        </Tooltip>
         <DropdownMenuContent align={side === "left" ? "start" : "end"} sideOffset={4}>
           {overflowIds.flatMap((id, idx) => {
             if (id === "github-stats") {

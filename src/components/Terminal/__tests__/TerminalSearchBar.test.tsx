@@ -8,6 +8,13 @@ vi.mock("@/services/TerminalInstanceService", () => ({
   },
 }));
 
+vi.mock("@/components/ui/tooltip", () => ({
+  Tooltip: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  TooltipContent: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  TooltipProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  TooltipTrigger: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+}));
+
 import { TerminalSearchBar } from "../TerminalSearchBar";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 

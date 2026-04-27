@@ -2,7 +2,7 @@ import { useMemo } from "react";
 import type { CSSProperties } from "react";
 import type { HeatCell, PulseRangeDays } from "@shared/types";
 import { cn } from "@/lib/utils";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../ui/tooltip";
+import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 
 interface PulseHeatmapProps {
   cells: HeatCell[];
@@ -126,65 +126,63 @@ export function PulseHeatmap({ cells, rangeDays, compact = false }: PulseHeatmap
   const rowWidth = columns > 0 ? cellSize * columns + gap * (columns - 1) : 0;
 
   return (
-    <TooltipProvider delayDuration={0} skipDelayDuration={0}>
-      <div
-        className="flex flex-col"
-        style={{ gap: `${gap}px`, width: `${rowWidth}px` }}
-        role="group"
-        aria-label={`Activity over the last ${rangeDays} days`}
-        data-testid="pulse-heatmap"
-      >
-        {rows.map((row, rowIndex) => (
-          <div
-            key={rowIndex}
-            className={cn(
-              "flex",
-              rowIndex === 0 && rows.length > 1 && row.length < columns && "justify-end"
-            )}
-            style={{ gap: `${gap}px` }}
-          >
-            {row.map((cell) => {
-              const date = new Date(cell.date);
-              const formatted = date.toLocaleDateString("en-US", {
-                month: "short",
-                day: "numeric",
-              });
+    <div
+      className="flex flex-col"
+      style={{ gap: `${gap}px`, width: `${rowWidth}px` }}
+      role="group"
+      aria-label={`Activity over the last ${rangeDays} days`}
+      data-testid="pulse-heatmap"
+    >
+      {rows.map((row, rowIndex) => (
+        <div
+          key={rowIndex}
+          className={cn(
+            "flex",
+            rowIndex === 0 && rows.length > 1 && row.length < columns && "justify-end"
+          )}
+          style={{ gap: `${gap}px` }}
+        >
+          {row.map((cell) => {
+            const date = new Date(cell.date);
+            const formatted = date.toLocaleDateString("en-US", {
+              month: "short",
+              day: "numeric",
+            });
 
-              const ringStyle = (
-                cell.isMostRecentActive
-                  ? { "--tw-ring-offset-color": "var(--pulse-ring-offset, var(--pulse-card-bg))" }
-                  : {}
-              ) as CSSProperties;
+            const ringStyle = (
+              cell.isMostRecentActive
+                ? { "--tw-ring-offset-color": "var(--pulse-ring-offset, var(--pulse-card-bg))" }
+                : {}
+            ) as CSSProperties;
 
-              return (
-                <Tooltip key={cell.date} delayDuration={0}>
-                  <TooltipTrigger asChild>
-                    <button
-                      type="button"
-                      style={{
-                        width: `${cellSize}px`,
-                        height: `${cellSize}px`,
-                        ...getCellStyle(cell),
-                        ...ringStyle,
-                      }}
-                      className={cn(
-                        "rounded-[2px] shrink-0 border-0 p-0 cursor-default transition-[transform,background-color,box-shadow] duration-150",
-                        cell.isMostRecentActive && "ring-1 ring-daintree-accent/45 ring-offset-1"
-                      )}
-                      aria-label={`${formatted}: ${getTooltipText(cell)}`}
-                      tabIndex={0}
-                    />
-                  </TooltipTrigger>
-                  <TooltipContent side="top" className="text-xs">
-                    <span className="font-medium">{formatted}</span>
-                    <span className="ml-1 text-daintree-text/60">{getTooltipText(cell)}</span>
-                  </TooltipContent>
-                </Tooltip>
-              );
-            })}
-          </div>
-        ))}
-      </div>
-    </TooltipProvider>
+            return (
+              <Tooltip key={cell.date} delayDuration={0}>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    style={{
+                      width: `${cellSize}px`,
+                      height: `${cellSize}px`,
+                      ...getCellStyle(cell),
+                      ...ringStyle,
+                    }}
+                    className={cn(
+                      "rounded-[2px] shrink-0 border-0 p-0 cursor-default transition-[transform,background-color,box-shadow] duration-150",
+                      cell.isMostRecentActive && "ring-1 ring-daintree-accent/45 ring-offset-1"
+                    )}
+                    aria-label={`${formatted}: ${getTooltipText(cell)}`}
+                    tabIndex={0}
+                  />
+                </TooltipTrigger>
+                <TooltipContent side="top" className="text-xs">
+                  <span className="font-medium">{formatted}</span>
+                  <span className="ml-1 text-daintree-text/60">{getTooltipText(cell)}</span>
+                </TooltipContent>
+              </Tooltip>
+            );
+          })}
+        </div>
+      ))}
+    </div>
   );
 }

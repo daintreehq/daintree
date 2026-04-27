@@ -2,7 +2,7 @@ import { useRef, useEffect, useState, memo } from "react";
 import { Button } from "@/components/ui/button";
 import { FixedDropdown } from "@/components/ui/fixed-dropdown";
 import { Bell, BellOff } from "lucide-react";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { NotificationCenter } from "@/components/Notifications/NotificationCenter";
 import { useNotificationHistoryStore } from "@/store/slices/notificationHistorySlice";
 import { useNotificationSettingsStore } from "@/store/notificationSettingsStore";
@@ -111,33 +111,31 @@ export const NotificationCenterToolbarButton = memo(function NotificationCenterT
 
   return (
     <div className="relative">
-      <TooltipProvider>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              ref={notificationCenterButtonRef}
-              variant="ghost"
-              size="icon"
-              data-toolbar-item={dataToolbarItem}
-              data-dnd-active={isDndActive ? "true" : undefined}
-              onClick={toggleNotificationCenter}
-              className={toolbarIconButtonClass}
-              aria-label={label}
-              aria-expanded={notificationCenterOpen}
-              aria-haspopup="dialog"
-            >
-              <Icon />
-              {notificationUnreadCount > 0 && (
-                <span
-                  data-testid="notification-unread-dot"
-                  className={`absolute top-1.5 right-1.5 w-1.5 h-1.5 rounded-full ring-1 ring-daintree-bg/60 ${dotColor}`}
-                />
-              )}
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">{label}</TooltipContent>
-        </Tooltip>
-      </TooltipProvider>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            ref={notificationCenterButtonRef}
+            variant="ghost"
+            size="icon"
+            data-toolbar-item={dataToolbarItem}
+            data-dnd-active={isDndActive ? "true" : undefined}
+            onClick={toggleNotificationCenter}
+            className={toolbarIconButtonClass}
+            aria-label={label}
+            aria-expanded={notificationCenterOpen}
+            aria-haspopup="dialog"
+          >
+            <Icon />
+            {notificationUnreadCount > 0 && (
+              <span
+                data-testid="notification-unread-dot"
+                className={`absolute top-1.5 right-1.5 w-1.5 h-1.5 rounded-full ring-1 ring-daintree-bg/60 ${dotColor}`}
+              />
+            )}
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent side="bottom">{label}</TooltipContent>
+      </Tooltip>
       <FixedDropdown
         open={notificationCenterOpen}
         onOpenChange={(open) => {

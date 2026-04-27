@@ -5,7 +5,7 @@ import { useShallow } from "zustand/react/shallow";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { usePanelStore } from "@/store/panelStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
@@ -147,18 +147,16 @@ export function StatusContainer({ config, terminals, compact = false }: StatusCo
                     aria-label={config.statusAriaLabel}
                   />
 
-                  <TooltipProvider>
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <div className="text-muted-foreground/40 group-hover:text-muted-foreground/60 transition-colors">
-                          {getLocationIcon(terminal.location)}
-                        </div>
-                      </TooltipTrigger>
-                      <TooltipContent side="bottom">
-                        {terminal.location === "dock" ? "Docked" : "On Grid"}
-                      </TooltipContent>
-                    </Tooltip>
-                  </TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <div className="text-muted-foreground/40 group-hover:text-muted-foreground/60 transition-colors">
+                        {getLocationIcon(terminal.location)}
+                      </div>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom">
+                      {terminal.location === "dock" ? "Docked" : "On Grid"}
+                    </TooltipContent>
+                  </Tooltip>
                 </div>
               </button>
             ))}

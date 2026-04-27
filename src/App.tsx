@@ -96,6 +96,7 @@ import { QuickSwitcher } from "./components/QuickSwitcher";
 import { SendToAgentPalette } from "./components/Terminal/SendToAgentPalette";
 import { useSendToAgentPalette } from "./hooks/useSendToAgentPalette";
 import { ConfirmDialog } from "./components/ui/ConfirmDialog";
+import { TooltipProvider } from "./components/ui/tooltip";
 import { PanelLimitConfirmDialog } from "./components/Terminal/PanelLimitConfirmDialog";
 import { ThemePalette } from "./components/ThemePalette";
 import { LogLevelPalette } from "./components/LogLevelPalette";
@@ -476,336 +477,338 @@ function App() {
   return (
     <MotionConfig reducedMotion={reduceAnimations ? "always" : "user"}>
       <ErrorBoundary variant="fullscreen" componentName="App">
-        <E2EFaultInjector />
-        {isSafeMode && <SafeModeBanner />}
-        <DndProvider>
-          <VoiceRecordingAnnouncer />
-          <AccessibilityAnnouncer />
-          <Profiler id="app-layout" onRender={onLayoutRender}>
-            <AppLayout
-              sidebarContent={<SidebarContent onOpenOverview={openWorktreeOverview} />}
-              onLaunchAgent={handleLaunchAgent}
-              onSettings={handleSettings}
-              onPreloadSettings={handlePreloadSettings}
-              onRetry={handleErrorRetry}
-              onCancelRetry={handleCancelRetry}
-              agentAvailability={availability}
-              agentSettings={agentSettings}
-              isHydrated={isStateLoaded}
-              projectSwitcherPalette={projectSwitcherPalette}
-            >
-              <Profiler id="content-grid" onRender={onContentGridRender}>
-                <ContentGrid
-                  className="h-full w-full"
-                  agentAvailability={availability}
-                  defaultCwd={defaultTerminalCwd}
-                  emptyContent={
-                    currentProject === null ? (
-                      <WelcomeScreen gettingStarted={gettingStarted} />
-                    ) : undefined
-                  }
-                />
-              </Profiler>
-            </AppLayout>
-          </Profiler>
-        </DndProvider>
+        <TooltipProvider delayDuration={500} skipDelayDuration={150}>
+          <E2EFaultInjector />
+          {isSafeMode && <SafeModeBanner />}
+          <DndProvider>
+            <VoiceRecordingAnnouncer />
+            <AccessibilityAnnouncer />
+            <Profiler id="app-layout" onRender={onLayoutRender}>
+              <AppLayout
+                sidebarContent={<SidebarContent onOpenOverview={openWorktreeOverview} />}
+                onLaunchAgent={handleLaunchAgent}
+                onSettings={handleSettings}
+                onPreloadSettings={handlePreloadSettings}
+                onRetry={handleErrorRetry}
+                onCancelRetry={handleCancelRetry}
+                agentAvailability={availability}
+                agentSettings={agentSettings}
+                isHydrated={isStateLoaded}
+                projectSwitcherPalette={projectSwitcherPalette}
+              >
+                <Profiler id="content-grid" onRender={onContentGridRender}>
+                  <ContentGrid
+                    className="h-full w-full"
+                    agentAvailability={availability}
+                    defaultCwd={defaultTerminalCwd}
+                    emptyContent={
+                      currentProject === null ? (
+                        <WelcomeScreen gettingStarted={gettingStarted} />
+                      ) : undefined
+                    }
+                  />
+                </Profiler>
+              </AppLayout>
+            </Profiler>
+          </DndProvider>
 
-        <QuickSwitcher
-          isOpen={quickSwitcher.isOpen}
-          query={quickSwitcher.query}
-          results={quickSwitcher.results}
-          totalResults={quickSwitcher.totalResults}
-          selectedIndex={quickSwitcher.selectedIndex}
-          close={quickSwitcher.close}
-          setQuery={quickSwitcher.setQuery}
-          selectPrevious={quickSwitcher.selectPrevious}
-          selectNext={quickSwitcher.selectNext}
-          selectItem={quickSwitcher.selectItem}
-          confirmSelection={quickSwitcher.confirmSelection}
-        />
-        <SendToAgentPalette
-          isOpen={sendToAgentPalette.isOpen}
-          query={sendToAgentPalette.query}
-          results={sendToAgentPalette.results}
-          totalResults={sendToAgentPalette.totalResults}
-          selectedIndex={sendToAgentPalette.selectedIndex}
-          close={sendToAgentPalette.close}
-          setQuery={sendToAgentPalette.setQuery}
-          selectPrevious={sendToAgentPalette.selectPrevious}
-          selectNext={sendToAgentPalette.selectNext}
-          selectItem={sendToAgentPalette.selectItem}
-          confirmSelection={sendToAgentPalette.confirmSelection}
-        />
-        <NewTerminalPalette
-          isOpen={newTerminalPalette.isOpen}
-          query={newTerminalPalette.query}
-          results={newTerminalPalette.results}
-          totalResults={newTerminalPalette.totalResults}
-          selectedIndex={newTerminalPalette.selectedIndex}
-          onQueryChange={newTerminalPalette.setQuery}
-          onSelectPrevious={newTerminalPalette.selectPrevious}
-          onSelectNext={newTerminalPalette.selectNext}
-          onSelect={newTerminalPalette.handleSelect}
-          onConfirm={newTerminalPalette.confirmSelection}
-          onClose={newTerminalPalette.close}
-        />
-        <WorktreePalette
-          isOpen={worktreePalette.isOpen}
-          query={worktreePalette.query}
-          results={worktreePalette.results}
-          totalResults={worktreePalette.totalResults}
-          activeWorktreeId={worktreePalette.activeWorktreeId}
-          selectedIndex={worktreePalette.selectedIndex}
-          onQueryChange={worktreePalette.setQuery}
-          onSelectPrevious={worktreePalette.selectPrevious}
-          onSelectNext={worktreePalette.selectNext}
-          onSelect={worktreePalette.selectWorktree}
-          onConfirm={worktreePalette.confirmSelection}
-          onClose={worktreePalette.close}
-        />
-        <QuickCreatePalette palette={quickCreatePalette} />
-        <PanelPalette
-          isOpen={panelPalette.isOpen}
-          query={panelPalette.query}
-          results={panelPalette.results}
-          totalResults={panelPalette.totalResults}
-          selectedIndex={panelPalette.selectedIndex}
-          matchesById={panelPalette.matchesById}
-          onQueryChange={panelPalette.setQuery}
-          onSelectPrevious={panelPalette.selectPrevious}
-          onSelectNext={panelPalette.selectNext}
-          onSelect={(kind) => {
-            const result = panelPalette.handleSelect(kind);
-            if (!result) return;
-            if (result.resumeSession) {
-              const session = result.resumeSession;
-              const agentConfig = getEffectiveAgentConfig(session.agentId);
-              const command = buildResumeCommand(
-                session.agentId,
-                session.sessionId,
-                session.agentLaunchFlags
-              );
-              if (command && agentConfig) {
+          <QuickSwitcher
+            isOpen={quickSwitcher.isOpen}
+            query={quickSwitcher.query}
+            results={quickSwitcher.results}
+            totalResults={quickSwitcher.totalResults}
+            selectedIndex={quickSwitcher.selectedIndex}
+            close={quickSwitcher.close}
+            setQuery={quickSwitcher.setQuery}
+            selectPrevious={quickSwitcher.selectPrevious}
+            selectNext={quickSwitcher.selectNext}
+            selectItem={quickSwitcher.selectItem}
+            confirmSelection={quickSwitcher.confirmSelection}
+          />
+          <SendToAgentPalette
+            isOpen={sendToAgentPalette.isOpen}
+            query={sendToAgentPalette.query}
+            results={sendToAgentPalette.results}
+            totalResults={sendToAgentPalette.totalResults}
+            selectedIndex={sendToAgentPalette.selectedIndex}
+            close={sendToAgentPalette.close}
+            setQuery={sendToAgentPalette.setQuery}
+            selectPrevious={sendToAgentPalette.selectPrevious}
+            selectNext={sendToAgentPalette.selectNext}
+            selectItem={sendToAgentPalette.selectItem}
+            confirmSelection={sendToAgentPalette.confirmSelection}
+          />
+          <NewTerminalPalette
+            isOpen={newTerminalPalette.isOpen}
+            query={newTerminalPalette.query}
+            results={newTerminalPalette.results}
+            totalResults={newTerminalPalette.totalResults}
+            selectedIndex={newTerminalPalette.selectedIndex}
+            onQueryChange={newTerminalPalette.setQuery}
+            onSelectPrevious={newTerminalPalette.selectPrevious}
+            onSelectNext={newTerminalPalette.selectNext}
+            onSelect={newTerminalPalette.handleSelect}
+            onConfirm={newTerminalPalette.confirmSelection}
+            onClose={newTerminalPalette.close}
+          />
+          <WorktreePalette
+            isOpen={worktreePalette.isOpen}
+            query={worktreePalette.query}
+            results={worktreePalette.results}
+            totalResults={worktreePalette.totalResults}
+            activeWorktreeId={worktreePalette.activeWorktreeId}
+            selectedIndex={worktreePalette.selectedIndex}
+            onQueryChange={worktreePalette.setQuery}
+            onSelectPrevious={worktreePalette.selectPrevious}
+            onSelectNext={worktreePalette.selectNext}
+            onSelect={worktreePalette.selectWorktree}
+            onConfirm={worktreePalette.confirmSelection}
+            onClose={worktreePalette.close}
+          />
+          <QuickCreatePalette palette={quickCreatePalette} />
+          <PanelPalette
+            isOpen={panelPalette.isOpen}
+            query={panelPalette.query}
+            results={panelPalette.results}
+            totalResults={panelPalette.totalResults}
+            selectedIndex={panelPalette.selectedIndex}
+            matchesById={panelPalette.matchesById}
+            onQueryChange={panelPalette.setQuery}
+            onSelectPrevious={panelPalette.selectPrevious}
+            onSelectNext={panelPalette.selectNext}
+            onSelect={(kind) => {
+              const result = panelPalette.handleSelect(kind);
+              if (!result) return;
+              if (result.resumeSession) {
+                const session = result.resumeSession;
+                const agentConfig = getEffectiveAgentConfig(session.agentId);
+                const command = buildResumeCommand(
+                  session.agentId,
+                  session.sessionId,
+                  session.agentLaunchFlags
+                );
+                if (command && agentConfig) {
+                  addPanel({
+                    kind: "terminal",
+                    launchAgentId: session.agentId,
+                    title: agentConfig.name,
+                    cwd: defaultTerminalCwd,
+                    worktreeId: activeWorktreeId ?? undefined,
+                    command,
+                    location: "grid",
+                  });
+                }
+              } else if (result.id.startsWith("agent:")) {
+                const agentId = result.id.slice("agent:".length);
+                if (agentId) {
+                  launchAgent(agentId);
+                }
+              } else {
                 addPanel({
-                  kind: "terminal",
-                  launchAgentId: session.agentId,
-                  title: agentConfig.name,
+                  kind: result.id as BuiltInPanelKind,
                   cwd: defaultTerminalCwd,
                   worktreeId: activeWorktreeId ?? undefined,
-                  command,
                   location: "grid",
                 });
               }
-            } else if (result.id.startsWith("agent:")) {
-              const agentId = result.id.slice("agent:".length);
-              if (agentId) {
-                launchAgent(agentId);
-              }
-            } else {
-              addPanel({
-                kind: result.id as BuiltInPanelKind,
-                cwd: defaultTerminalCwd,
-                worktreeId: activeWorktreeId ?? undefined,
-                location: "grid",
-              });
-            }
-          }}
-          onConfirm={() => {
-            const selected = panelPalette.confirmSelection();
-            if (!selected) return;
-            if (selected.id === MORE_AGENTS_PANEL_ID) return;
-            if (selected.resumeSession) {
-              const session = selected.resumeSession;
-              const agentConfig = getEffectiveAgentConfig(session.agentId);
-              const command = buildResumeCommand(
-                session.agentId,
-                session.sessionId,
-                session.agentLaunchFlags
-              );
-              if (command && agentConfig) {
+            }}
+            onConfirm={() => {
+              const selected = panelPalette.confirmSelection();
+              if (!selected) return;
+              if (selected.id === MORE_AGENTS_PANEL_ID) return;
+              if (selected.resumeSession) {
+                const session = selected.resumeSession;
+                const agentConfig = getEffectiveAgentConfig(session.agentId);
+                const command = buildResumeCommand(
+                  session.agentId,
+                  session.sessionId,
+                  session.agentLaunchFlags
+                );
+                if (command && agentConfig) {
+                  addPanel({
+                    kind: "terminal",
+                    launchAgentId: session.agentId,
+                    title: agentConfig.name,
+                    cwd: defaultTerminalCwd,
+                    worktreeId: activeWorktreeId ?? undefined,
+                    command,
+                    location: "grid",
+                  });
+                }
+              } else if (selected.id.startsWith("agent:")) {
+                const agentId = selected.id.slice("agent:".length);
+                if (agentId) {
+                  launchAgent(agentId);
+                }
+              } else {
                 addPanel({
-                  kind: "terminal",
-                  launchAgentId: session.agentId,
-                  title: agentConfig.name,
+                  kind: selected.id as BuiltInPanelKind,
                   cwd: defaultTerminalCwd,
                   worktreeId: activeWorktreeId ?? undefined,
-                  command,
                   location: "grid",
                 });
               }
-            } else if (selected.id.startsWith("agent:")) {
-              const agentId = selected.id.slice("agent:".length);
-              if (agentId) {
-                launchAgent(agentId);
-              }
-            } else {
-              addPanel({
-                kind: selected.id as BuiltInPanelKind,
-                cwd: defaultTerminalCwd,
-                worktreeId: activeWorktreeId ?? undefined,
-                location: "grid",
-              });
-            }
-          }}
-          onClose={panelPalette.close}
-        />
-        <ProjectMruSwitcherOverlay
-          isVisible={mruSwitcher.isVisible}
-          projects={mruSwitcher.projects}
-          selectedIndex={mruSwitcher.selectedIndex}
-        />
-        <ProjectSwitcherPalette
-          isOpen={projectSwitcherPalette.isOpen && projectSwitcherPalette.mode === "modal"}
-          query={projectSwitcherPalette.query}
-          results={projectSwitcherPalette.results}
-          selectedIndex={projectSwitcherPalette.selectedIndex}
-          onQueryChange={projectSwitcherPalette.setQuery}
-          onSelectPrevious={projectSwitcherPalette.selectPrevious}
-          onSelectNext={projectSwitcherPalette.selectNext}
-          onSelect={projectSwitcherPalette.selectProject}
-          onClose={projectSwitcherPalette.close}
-          onStopProject={(projectId) => void projectSwitcherPalette.stopProject(projectId)}
-          onCloseProject={(projectId) => void projectSwitcherPalette.removeProject(projectId)}
-          removeConfirmProject={projectSwitcherPalette.removeConfirmProject}
-          onRemoveConfirmClose={() => projectSwitcherPalette.setRemoveConfirmProject(null)}
-          onConfirmRemove={projectSwitcherPalette.confirmRemoveProject}
-          isRemovingProject={projectSwitcherPalette.isRemovingProject}
-          onSelectNewWindow={(project) => {
-            projectSwitcherPalette.close();
-            void actionService.dispatch(
-              "app.newWindow",
-              { projectPath: project.path },
-              { source: "user" }
-            );
-          }}
-        />
-        <ConfirmDialog
-          isOpen={projectSwitcherPalette.stopConfirmProjectId != null}
-          onClose={() => {
-            if (projectSwitcherPalette.isStoppingProject) return;
-            projectSwitcherPalette.setStopConfirmProjectId(null);
-          }}
-          title={`Stop project?`}
-          description="This will terminate all running sessions in this project. This can't be undone."
-          confirmLabel="Stop project"
-          cancelLabel="Cancel"
-          onConfirm={projectSwitcherPalette.confirmStopProject}
-          isConfirmLoading={projectSwitcherPalette.isStoppingProject}
-          variant="destructive"
-        />
+            }}
+            onClose={panelPalette.close}
+          />
+          <ProjectMruSwitcherOverlay
+            isVisible={mruSwitcher.isVisible}
+            projects={mruSwitcher.projects}
+            selectedIndex={mruSwitcher.selectedIndex}
+          />
+          <ProjectSwitcherPalette
+            isOpen={projectSwitcherPalette.isOpen && projectSwitcherPalette.mode === "modal"}
+            query={projectSwitcherPalette.query}
+            results={projectSwitcherPalette.results}
+            selectedIndex={projectSwitcherPalette.selectedIndex}
+            onQueryChange={projectSwitcherPalette.setQuery}
+            onSelectPrevious={projectSwitcherPalette.selectPrevious}
+            onSelectNext={projectSwitcherPalette.selectNext}
+            onSelect={projectSwitcherPalette.selectProject}
+            onClose={projectSwitcherPalette.close}
+            onStopProject={(projectId) => void projectSwitcherPalette.stopProject(projectId)}
+            onCloseProject={(projectId) => void projectSwitcherPalette.removeProject(projectId)}
+            removeConfirmProject={projectSwitcherPalette.removeConfirmProject}
+            onRemoveConfirmClose={() => projectSwitcherPalette.setRemoveConfirmProject(null)}
+            onConfirmRemove={projectSwitcherPalette.confirmRemoveProject}
+            isRemovingProject={projectSwitcherPalette.isRemovingProject}
+            onSelectNewWindow={(project) => {
+              projectSwitcherPalette.close();
+              void actionService.dispatch(
+                "app.newWindow",
+                { projectPath: project.path },
+                { source: "user" }
+              );
+            }}
+          />
+          <ConfirmDialog
+            isOpen={projectSwitcherPalette.stopConfirmProjectId != null}
+            onClose={() => {
+              if (projectSwitcherPalette.isStoppingProject) return;
+              projectSwitcherPalette.setStopConfirmProjectId(null);
+            }}
+            title={`Stop project?`}
+            description="This will terminate all running sessions in this project. This can't be undone."
+            confirmLabel="Stop project"
+            cancelLabel="Cancel"
+            onConfirm={projectSwitcherPalette.confirmStopProject}
+            isConfirmLoading={projectSwitcherPalette.isStoppingProject}
+            variant="destructive"
+          />
 
-        <ThemePalette isOpen={isThemePaletteOpen} onClose={closeThemePalette} />
+          <ThemePalette isOpen={isThemePaletteOpen} onClose={closeThemePalette} />
 
-        <LogLevelPalette isOpen={isLogLevelPaletteOpen} onClose={closeLogLevelPalette} />
+          <LogLevelPalette isOpen={isLogLevelPaletteOpen} onClose={closeLogLevelPalette} />
 
-        <ActionPalette
-          isOpen={actionPalette.isOpen}
-          query={actionPalette.query}
-          results={actionPalette.results}
-          totalResults={actionPalette.totalResults}
-          selectedIndex={actionPalette.selectedIndex}
-          close={actionPalette.close}
-          setQuery={actionPalette.setQuery}
-          selectPrevious={actionPalette.selectPrevious}
-          selectNext={actionPalette.selectNext}
-          executeAction={actionPalette.executeAction}
-          confirmSelection={actionPalette.confirmSelection}
-        />
+          <ActionPalette
+            isOpen={actionPalette.isOpen}
+            query={actionPalette.query}
+            results={actionPalette.results}
+            totalResults={actionPalette.totalResults}
+            selectedIndex={actionPalette.selectedIndex}
+            close={actionPalette.close}
+            setQuery={actionPalette.setQuery}
+            selectPrevious={actionPalette.selectPrevious}
+            selectNext={actionPalette.selectNext}
+            executeAction={actionPalette.executeAction}
+            confirmSelection={actionPalette.confirmSelection}
+          />
 
-        <WorktreeOverviewModal
-          isOpen={isWorktreeOverviewOpen}
-          onClose={closeWorktreeOverview}
-          worktrees={worktrees}
-          activeWorktreeId={activeWorktreeId}
-          focusedWorktreeId={focusedWorktreeId}
-          onSelectWorktree={selectWorktree}
-          onCopyTree={overviewWorktreeActions.handleCopyTree}
-          onOpenEditor={overviewWorktreeActions.handleOpenEditor}
-          onSaveLayout={undefined}
-          onLaunchAgent={overviewWorktreeActions.handleLaunchAgent}
-          agentAvailability={availability}
-          agentSettings={agentSettings}
-          homeDir={homeDir}
-        />
+          <WorktreeOverviewModal
+            isOpen={isWorktreeOverviewOpen}
+            onClose={closeWorktreeOverview}
+            worktrees={worktrees}
+            activeWorktreeId={activeWorktreeId}
+            focusedWorktreeId={focusedWorktreeId}
+            onSelectWorktree={selectWorktree}
+            onCopyTree={overviewWorktreeActions.handleCopyTree}
+            onOpenEditor={overviewWorktreeActions.handleOpenEditor}
+            onSaveLayout={undefined}
+            onLaunchAgent={overviewWorktreeActions.handleLaunchAgent}
+            agentAvailability={availability}
+            agentSettings={agentSettings}
+            homeDir={homeDir}
+          />
 
-        <CrossWorktreeDiff
-          isOpen={crossDiffDialog.isOpen}
-          onClose={closeCrossWorktreeDiff}
-          initialWorktreeId={crossDiffDialog.initialWorktreeId}
-        />
+          <CrossWorktreeDiff
+            isOpen={crossDiffDialog.isOpen}
+            onClose={closeCrossWorktreeDiff}
+            initialWorktreeId={crossDiffDialog.initialWorktreeId}
+          />
 
-        {(isSettingsOpen || hasOpenedSettings) && (
-          <Suspense fallback={null}>
-            <LazySettingsDialog
-              isOpen={isSettingsOpen}
-              onClose={() => setIsSettingsOpen(false)}
-              defaultTab={settingsTab}
-              defaultSubtab={settingsSubtab}
-              defaultSectionId={settingsSectionId}
-              onSettingsChange={refreshSettings}
-              projectId={currentProject?.id ?? null}
+          {(isSettingsOpen || hasOpenedSettings) && (
+            <Suspense fallback={null}>
+              <LazySettingsDialog
+                isOpen={isSettingsOpen}
+                onClose={() => setIsSettingsOpen(false)}
+                defaultTab={settingsTab}
+                defaultSubtab={settingsSubtab}
+                defaultSectionId={settingsSectionId}
+                onSettingsChange={refreshSettings}
+                projectId={currentProject?.id ?? null}
+              />
+            </Suspense>
+          )}
+
+          <ShortcutReferenceDialog
+            isOpen={isShortcutsOpen}
+            onClose={() => setIsShortcutsOpen(false)}
+          />
+
+          <TerminalInfoDialogHost />
+          <FileViewerModalHost />
+
+          {gitInitDirectoryPath && (
+            <GitInitDialog
+              isOpen={gitInitDialogOpen}
+              directoryPath={gitInitDirectoryPath}
+              onSuccess={handleGitInitSuccess}
+              onCancel={closeGitInitDialog}
             />
-          </Suspense>
-        )}
+          )}
 
-        <ShortcutReferenceDialog
-          isOpen={isShortcutsOpen}
-          onClose={() => setIsShortcutsOpen(false)}
-        />
+          {onboardingProjectId && (
+            <ProjectOnboardingWizard
+              isOpen={onboardingWizardOpen}
+              projectId={onboardingProjectId}
+              onClose={closeOnboardingWizard}
+              onFinish={handleWizardFinish}
+            />
+          )}
 
-        <TerminalInfoDialogHost />
-        <FileViewerModalHost />
-
-        {gitInitDirectoryPath && (
-          <GitInitDialog
-            isOpen={gitInitDialogOpen}
-            directoryPath={gitInitDirectoryPath}
-            onSuccess={handleGitInitSuccess}
-            onCancel={closeGitInitDialog}
+          <CreateProjectFolderDialog
+            isOpen={createFolderDialogOpen}
+            onClose={closeCreateFolderDialog}
           />
-        )}
 
-        {onboardingProjectId && (
-          <ProjectOnboardingWizard
-            isOpen={onboardingWizardOpen}
-            projectId={onboardingProjectId}
-            onClose={closeOnboardingWizard}
-            onFinish={handleWizardFinish}
+          <CloneRepoDialog
+            isOpen={cloneRepoDialogOpen}
+            onSuccess={handleCloneSuccess}
+            onCancel={closeCloneRepoDialog}
           />
-        )}
 
-        <CreateProjectFolderDialog
-          isOpen={createFolderDialogOpen}
-          onClose={closeCreateFolderDialog}
-        />
+          <PanelTransitionOverlay />
+          <PanelLimitConfirmDialog />
 
-        <CloneRepoDialog
-          isOpen={cloneRepoDialogOpen}
-          onSuccess={handleCloneSuccess}
-          onCancel={closeCloneRepoDialog}
-        />
-
-        <PanelTransitionOverlay />
-        <PanelLimitConfirmDialog />
-
-        <Toaster />
-        <ShortcutHint />
-        <ReEntrySummary state={reEntrySummary} />
-        <OnboardingFlow
-          availability={availability}
-          onRefreshSettings={refreshSettings}
-          onComplete={gettingStarted.notifyOnboardingComplete}
-        />
-        {currentProject !== null && gettingStarted.visible && gettingStarted.checklist && (
-          <GettingStartedChecklist
-            checklist={gettingStarted.checklist}
-            collapsed={gettingStarted.collapsed}
-            onDismiss={gettingStarted.dismiss}
-            onToggleCollapse={gettingStarted.toggleCollapse}
-            onMarkItem={gettingStarted.markItem}
+          <Toaster />
+          <ShortcutHint />
+          <ReEntrySummary state={reEntrySummary} />
+          <OnboardingFlow
+            availability={availability}
+            onRefreshSettings={refreshSettings}
+            onComplete={gettingStarted.notifyOnboardingComplete}
           />
-        )}
-        {gettingStarted.showCelebration && <CelebrationConfetti />}
+          {currentProject !== null && gettingStarted.visible && gettingStarted.checklist && (
+            <GettingStartedChecklist
+              checklist={gettingStarted.checklist}
+              collapsed={gettingStarted.collapsed}
+              onDismiss={gettingStarted.dismiss}
+              onToggleCollapse={gettingStarted.toggleCollapse}
+              onMarkItem={gettingStarted.markItem}
+            />
+          )}
+          {gettingStarted.showCelebration && <CelebrationConfetti />}
+        </TooltipProvider>
       </ErrorBoundary>
     </MotionConfig>
   );

@@ -5,7 +5,7 @@ import { getProjectGradient } from "@/lib/colorUtils";
 import { useProjectStore } from "@/store/projectStore";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Button } from "@/components/ui/button";
-import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useKeybindingDisplay } from "@/hooks/useKeybinding";
 import { useProjectSwitcherPalette } from "@/hooks";
 import { actionService } from "@/services/ActionService";
@@ -234,57 +234,51 @@ export function ProjectSwitcher() {
         onConfirmRemove={projectSwitcher.confirmRemoveProject}
         isRemovingProject={projectSwitcher.isRemovingProject}
       >
-        <TooltipProvider>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant="ghost"
-                className={cn(
-                  "relative w-full justify-between h-12 px-2.5",
-                  "rounded-[var(--radius-lg)]",
-                  "border border-border-subtle",
-                  "bg-surface-panel-elevated shadow-[inset_0_1px_0_var(--color-overlay-soft)]",
-                  "hover:bg-surface-panel-elevated transition-colors",
-                  "active:scale-100"
-                )}
-                disabled={isLoading}
-                onClick={() => projectSwitcher.open("dropdown")}
-              >
-                <div className="flex items-center gap-3 text-left min-w-0">
-                  {renderIcon(
-                    currentProject.emoji || "🌲",
-                    currentProject.color,
-                    "h-9 w-9 text-xl"
-                  )}
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost"
+              className={cn(
+                "relative w-full justify-between h-12 px-2.5",
+                "rounded-[var(--radius-lg)]",
+                "border border-border-subtle",
+                "bg-surface-panel-elevated shadow-[inset_0_1px_0_var(--color-overlay-soft)]",
+                "hover:bg-surface-panel-elevated transition-colors",
+                "active:scale-100"
+              )}
+              disabled={isLoading}
+              onClick={() => projectSwitcher.open("dropdown")}
+            >
+              <div className="flex items-center gap-3 text-left min-w-0">
+                {renderIcon(currentProject.emoji || "🌲", currentProject.color, "h-9 w-9 text-xl")}
 
-                  <div className="flex flex-col min-w-0 gap-0.5">
-                    <span className="truncate font-semibold text-daintree-text text-sm leading-none">
-                      {currentProject.name}
-                    </span>
-                    <span className="truncate font-mono text-xs text-text-secondary">
-                      {currentProject.path.split(/[/\\]/).pop()}
-                    </span>
-                  </div>
+                <div className="flex flex-col min-w-0 gap-0.5">
+                  <span className="truncate font-semibold text-daintree-text text-sm leading-none">
+                    {currentProject.name}
+                  </span>
+                  <span className="truncate font-mono text-xs text-text-secondary">
+                    {currentProject.path.split(/[/\\]/).pop()}
+                  </span>
                 </div>
-                <ChevronsUpDown className="shrink-0 text-text-muted transition-colors group-hover:text-text-secondary" />
-                {badgeStatus && (
-                  <span
-                    role="status"
-                    aria-label={`${badgeStatus.count} background agent${badgeStatus.count === 1 ? "" : "s"} ${badgeStatus.pulse ? "working" : "waiting"}`}
-                    className={cn(
-                      "absolute top-1 right-1 h-2 w-2 rounded-full ring-2 ring-[var(--color-surface-panel-elevated)]",
-                      badgeStatus.color,
-                      badgeStatus.pulse && "animate-activity-pulse"
-                    )}
-                  />
-                )}
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent side="right">
-              Switch project{projectSwitcherShortcut ? ` (${projectSwitcherShortcut})` : ""}
-            </TooltipContent>
-          </Tooltip>
-        </TooltipProvider>
+              </div>
+              <ChevronsUpDown className="shrink-0 text-text-muted transition-colors group-hover:text-text-secondary" />
+              {badgeStatus && (
+                <span
+                  role="status"
+                  aria-label={`${badgeStatus.count} background agent${badgeStatus.count === 1 ? "" : "s"} ${badgeStatus.pulse ? "working" : "waiting"}`}
+                  className={cn(
+                    "absolute top-1 right-1 h-2 w-2 rounded-full ring-2 ring-[var(--color-surface-panel-elevated)]",
+                    badgeStatus.color,
+                    badgeStatus.pulse && "animate-activity-pulse"
+                  )}
+                />
+              )}
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="right">
+            Switch project{projectSwitcherShortcut ? ` (${projectSwitcherShortcut})` : ""}
+          </TooltipContent>
+        </Tooltip>
       </ProjectSwitcherPalette>
     </>
   );

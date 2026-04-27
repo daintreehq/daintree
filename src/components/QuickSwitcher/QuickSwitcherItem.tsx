@@ -3,7 +3,7 @@ import { cn } from "@/lib/utils";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { WorktreeIcon } from "@/components/icons";
 import type { QuickSwitcherItem as QuickSwitcherItemData } from "@/hooks/useQuickSwitcher";
-import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 export interface QuickSwitcherItemProps {
   item: QuickSwitcherItemData;
@@ -60,14 +60,12 @@ export const QuickSwitcherItem = React.memo(function QuickSwitcherItem({
           </span>
         </div>
         {item.subtitle && (
-          <TooltipProvider>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <div className="text-xs text-daintree-text/50 truncate">{item.subtitle}</div>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">{item.subtitle}</TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <div className="text-xs text-daintree-text/50 truncate">{item.subtitle}</div>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">{item.subtitle}</TooltipContent>
+          </Tooltip>
         )}
       </div>
     </button>

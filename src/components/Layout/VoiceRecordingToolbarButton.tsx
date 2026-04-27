@@ -1,7 +1,7 @@
 import { Mic } from "lucide-react";
 import { Spinner } from "@/components/ui/Spinner";
 import { Button } from "@/components/ui/button";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ShortcutRevealChip } from "@/components/ui/ShortcutRevealChip";
 import { cn } from "@/lib/utils";
 import { useKeybindingDisplay } from "@/hooks";
@@ -53,51 +53,49 @@ export function VoiceRecordingToolbarButton({
     .join(" \u00B7 ");
 
   return (
-    <TooltipProvider>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <Button
-            variant="ghost"
-            size="icon"
-            data-toolbar-item={dataToolbarItem}
-            onClick={() => {
-              void voiceRecordingService.focusActiveTarget();
-            }}
-            className={cn(
-              "toolbar-icon-button relative transition-colors mr-0.5",
-              isRecording
-                ? "text-daintree-text hover:text-[var(--toolbar-control-hover-fg,var(--theme-accent-primary))]"
-                : status === "connecting"
-                  ? "text-daintree-text/60 hover:text-[var(--toolbar-control-hover-fg,var(--theme-accent-primary))]"
-                  : "text-daintree-accent hover:text-daintree-accent"
-            )}
-            aria-label={tooltipTitle}
-          >
-            {status === "finishing" ? (
-              <Spinner size="md" />
-            ) : (
-              <div className="relative">
-                <Mic className="h-4 w-4" />
-                <span
-                  className="absolute -right-0.5 -top-0.5 h-1.5 w-1.5 rounded-full transition-colors"
-                  style={{
-                    backgroundColor:
-                      status === "connecting"
-                        ? "rgba(var(--theme-accent-rgb), 0.4)"
-                        : `rgba(var(--theme-accent-rgb), ${0.3 + audioLevel * 0.7})`,
-                    transitionDuration: "80ms",
-                  }}
-                />
-              </div>
-            )}
-            <ShortcutRevealChip actionId="voiceInput.toggle" />
-          </Button>
-        </TooltipTrigger>
-        <TooltipContent side="bottom" className="text-center">
-          <div className="font-medium">{tooltipTitle}</div>
-          {tooltipExtra && <div className="text-[11px] text-daintree-text/60">{tooltipExtra}</div>}
-        </TooltipContent>
-      </Tooltip>
-    </TooltipProvider>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button
+          variant="ghost"
+          size="icon"
+          data-toolbar-item={dataToolbarItem}
+          onClick={() => {
+            void voiceRecordingService.focusActiveTarget();
+          }}
+          className={cn(
+            "toolbar-icon-button relative transition-colors mr-0.5",
+            isRecording
+              ? "text-daintree-text hover:text-[var(--toolbar-control-hover-fg,var(--theme-accent-primary))]"
+              : status === "connecting"
+                ? "text-daintree-text/60 hover:text-[var(--toolbar-control-hover-fg,var(--theme-accent-primary))]"
+                : "text-daintree-accent hover:text-daintree-accent"
+          )}
+          aria-label={tooltipTitle}
+        >
+          {status === "finishing" ? (
+            <Spinner size="md" />
+          ) : (
+            <div className="relative">
+              <Mic className="h-4 w-4" />
+              <span
+                className="absolute -right-0.5 -top-0.5 h-1.5 w-1.5 rounded-full transition-colors"
+                style={{
+                  backgroundColor:
+                    status === "connecting"
+                      ? "rgba(var(--theme-accent-rgb), 0.4)"
+                      : `rgba(var(--theme-accent-rgb), ${0.3 + audioLevel * 0.7})`,
+                  transitionDuration: "80ms",
+                }}
+              />
+            </div>
+          )}
+          <ShortcutRevealChip actionId="voiceInput.toggle" />
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent side="bottom" className="text-center">
+        <div className="font-medium">{tooltipTitle}</div>
+        {tooltipExtra && <div className="text-[11px] text-daintree-text/60">{tooltipExtra}</div>}
+      </TooltipContent>
+    </Tooltip>
   );
 }

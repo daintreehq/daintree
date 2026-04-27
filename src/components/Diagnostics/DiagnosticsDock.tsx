@@ -1,7 +1,7 @@
 import { useCallback, useRef, useState, useEffect, memo } from "react";
 import { X } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   useDiagnosticsStore,
   type DiagnosticsTab,
@@ -232,20 +232,18 @@ export function DiagnosticsDock({ onRetry, onCancelRetry, className }: Diagnosti
           {activeTab === "events" && <EventsActions />}
           {activeTab === "telemetry" && <TelemetryActions />}
 
-          <TooltipProvider>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <button
-                  onClick={closeDock}
-                  className="p-1.5 hover:bg-tint/[0.06] rounded-[var(--radius-md)] transition-colors text-daintree-text/60 hover:text-daintree-text focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
-                  aria-label="Close diagnostics dock"
-                >
-                  <X className="w-4 h-4" />
-                </button>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">Close diagnostics dock</TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                onClick={closeDock}
+                className="p-1.5 hover:bg-tint/[0.06] rounded-[var(--radius-md)] transition-colors text-daintree-text/60 hover:text-daintree-text focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
+                aria-label="Close diagnostics dock"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">Close diagnostics dock</TooltipContent>
+          </Tooltip>
         </div>
       </div>
 

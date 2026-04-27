@@ -27,7 +27,7 @@ import type { RecipeTerminal } from "@shared/types";
 import { IssueSelector } from "@/components/GitHub/IssueSelector";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { parseBranchInput } from "./branchPrefixUtils";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { usePreferencesStore } from "@/store/preferencesStore";
 import { useGitHubConfigStore } from "@/store/githubConfigStore";
@@ -866,933 +866,916 @@ export function NewWorktreeDialog({
             <span className="ml-2 text-sm text-daintree-text/60">Loading branches...</span>
           </div>
         ) : (
-          <TooltipProvider>
-            <div className="space-y-4">
-              {initialPR ? (
-                <div className="flex items-center gap-2.5 px-3 py-2.5 rounded-[var(--radius-md)] bg-daintree-accent/5 border border-daintree-accent/20 text-sm min-w-0">
-                  <WorktreeIcon
-                    className="w-4 h-4 text-daintree-accent shrink-0"
-                    aria-hidden="true"
-                  />
-                  <span className="text-daintree-text/80 min-w-0 truncate">
-                    PR <span className="font-medium text-daintree-text">#{initialPR.number}</span> —{" "}
-                    {initialPR.title}
-                  </span>
-                </div>
-              ) : (
-                <div className="space-y-2">
-                  <div className="flex items-center gap-2">
-                    <label className="block text-sm font-medium text-daintree-text">
-                      Link Issue (Optional)
-                    </label>
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <button
-                          type="button"
-                          className="text-daintree-text/40 hover:text-daintree-text/60 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-daintree-accent focus-visible:ring-offset-2"
-                          aria-label="Help for Link Issue field"
-                          disabled={isPending}
-                        >
-                          <Info className="w-3.5 h-3.5" aria-hidden="true" />
-                          <span className="sr-only">Help for Link Issue field</span>
-                        </button>
-                      </TooltipTrigger>
-                      <TooltipContent side="right">
-                        <p>Select an issue to auto-generate a branch name</p>
-                      </TooltipContent>
-                    </Tooltip>
-                  </div>
-                  <IssueSelector
-                    projectPath={rootPath}
-                    selectedIssue={selectedIssue}
-                    onSelect={handleIssueSelect}
-                    disabled={isPending}
-                  />
-                </div>
-              )}
-
-              {!initialPR && canAssignIssue && (
-                <div className="flex items-center gap-3 px-3 py-2.5 rounded-[var(--radius-md)] border bg-daintree-bg/50 border-daintree-border transition-colors">
-                  {currentUserAvatar ? (
-                    <img
-                      src={`${currentUserAvatar}${currentUserAvatar.includes("?") ? "&" : "?"}s=64`}
-                      alt={currentUser}
-                      className="w-8 h-8 rounded-full shrink-0"
-                    />
-                  ) : (
-                    <div className="flex items-center justify-center w-8 h-8 rounded-full shrink-0 bg-daintree-accent/10 text-daintree-accent">
-                      <UserPlus className="w-4 h-4" />
-                    </div>
-                  )}
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm font-medium text-daintree-text">Assign to me</span>
-                      <span className="text-xs text-daintree-text/50 font-mono">
-                        @{currentUser}
-                      </span>
-                    </div>
-                  </div>
-                  <label className="relative inline-flex items-center cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={assignWorktreeToSelf}
-                      onChange={(e) => setAssignWorktreeToSelf(e.target.checked)}
-                      disabled={isPending}
-                      className="sr-only peer"
-                      aria-label="Assign issue to me when creating worktree"
-                    />
-                    <div
-                      className={cn(
-                        "w-9 h-5 rounded-full transition-colors",
-                        "peer-focus-visible:ring-2 peer-focus-visible:ring-daintree-accent",
-                        "after:content-[''] after:absolute after:top-0.5 after:left-0.5",
-                        "after:rounded-full after:h-4 after:w-4",
-                        "after:transition-transform after:duration-200",
-                        assignWorktreeToSelf
-                          ? "bg-daintree-accent after:translate-x-4 after:bg-text-inverse"
-                          : "bg-daintree-border after:translate-x-0 after:bg-daintree-text",
-                        isPending && "opacity-50 cursor-not-allowed"
-                      )}
-                    />
-                  </label>
-                </div>
-              )}
-
-              {!initialPR && (
-                <div
-                  className="inline-flex rounded-[var(--radius-md)] bg-daintree-border/50 p-0.5"
-                  role="radiogroup"
-                  aria-label="Branch mode"
-                >
-                  <button
-                    type="button"
-                    role="radio"
-                    aria-checked={branchMode === "new"}
-                    onClick={() => handleBranchModeChange("new")}
-                    disabled={isPending}
-                    className={cn(
-                      "px-3 py-1 text-sm font-medium rounded-[var(--radius-sm)] transition-colors",
-                      branchMode === "new"
-                        ? "bg-daintree-bg text-daintree-text shadow-sm"
-                        : "text-daintree-text/60 hover:text-daintree-text"
-                    )}
-                  >
-                    New Branch
-                  </button>
-                  <button
-                    type="button"
-                    role="radio"
-                    aria-checked={branchMode === "existing"}
-                    onClick={() => handleBranchModeChange("existing")}
-                    disabled={isPending}
-                    className={cn(
-                      "px-3 py-1 text-sm font-medium rounded-[var(--radius-sm)] transition-colors",
-                      branchMode === "existing"
-                        ? "bg-daintree-bg text-daintree-text shadow-sm"
-                        : "text-daintree-text/60 hover:text-daintree-text"
-                    )}
-                  >
-                    Existing Branch
-                  </button>
-                </div>
-              )}
-
-              {!isExistingMode && (
-                <div className="space-y-2">
-                  <div className="flex items-center gap-2">
-                    <label
-                      htmlFor="base-branch"
-                      className="block text-sm font-medium text-daintree-text"
-                    >
-                      Base Branch
-                    </label>
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <button
-                          type="button"
-                          className="text-daintree-text/40 hover:text-daintree-text/60 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-daintree-accent focus-visible:ring-offset-2"
-                          aria-label="Help for Base Branch field"
-                          disabled={isPending}
-                        >
-                          <Info className="w-3.5 h-3.5" aria-hidden="true" />
-                          <span className="sr-only">Help for Base Branch field</span>
-                        </button>
-                      </TooltipTrigger>
-                      <TooltipContent side="right">
-                        <p>The branch to create the new worktree from</p>
-                      </TooltipContent>
-                    </Tooltip>
-                  </div>
-                  <Popover open={branchPickerOpen} onOpenChange={setBranchPickerOpen}>
-                    <PopoverTrigger asChild>
-                      <Button
-                        id="base-branch"
-                        variant="outline"
-                        role="combobox"
-                        aria-expanded={branchPickerOpen}
-                        aria-haspopup="listbox"
-                        aria-invalid={errorField === "base-branch" ? true : undefined}
-                        aria-describedby={
-                          errorField === "base-branch" ? "validation-error" : undefined
-                        }
-                        className="w-full justify-between bg-daintree-bg border-daintree-border text-daintree-text hover:bg-daintree-bg hover:text-daintree-text"
-                        disabled={isPending}
-                      >
-                        <span className="truncate">
-                          {selectedBranchOption?.labelText || "Select base branch..."}
-                        </span>
-                        <ChevronsUpDown className="opacity-50 shrink-0" />
-                      </Button>
-                    </PopoverTrigger>
-                    <PopoverContent
-                      className="w-[400px] p-0"
-                      align="start"
-                      onEscapeKeyDown={(e) => e.stopPropagation()}
-                    >
-                      <div className="flex items-center border-b border-daintree-border px-3">
-                        <Search className="mr-2 h-4 w-4 opacity-50 shrink-0" />
-                        <input
-                          ref={branchInputRef}
-                          className="flex h-10 w-full rounded-[var(--radius-md)] bg-transparent py-3 text-sm outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50"
-                          placeholder="Search branches..."
-                          value={branchQuery}
-                          onChange={(e) => setBranchQuery(e.target.value)}
-                          onKeyDown={handleBranchKeyDown}
-                          role="combobox"
-                          aria-label="Search base branches"
-                          aria-autocomplete="list"
-                          aria-controls="branch-list"
-                          aria-expanded={branchPickerOpen}
-                          aria-activedescendant={
-                            selectableRows.length > 0 && selectedIndex >= 0
-                              ? `branch-option-${selectedIndex}`
-                              : undefined
-                          }
-                        />
-                      </div>
-                      <ScrollShadow
-                        ref={branchListRef}
-                        id="branch-list"
-                        role="listbox"
-                        className="max-h-[300px]"
-                        scrollClassName="p-1"
-                      >
-                        {selectableRows.length === 0 ? (
-                          <div className="py-6 text-center text-sm text-muted-foreground">
-                            {branchQuery ? "No branches found" : "No branches available"}
-                          </div>
-                        ) : (
-                          (() => {
-                            let optionIndex = 0;
-                            return branchRows.map((row) => {
-                              if (row.kind === "section") {
-                                return (
-                                  <div
-                                    key={`section-${row.label}`}
-                                    role="presentation"
-                                    className="px-2 py-1 text-xs font-medium text-daintree-text/50 uppercase tracking-wider"
-                                  >
-                                    {row.label}
-                                  </div>
-                                );
-                              }
-                              const idx = optionIndex++;
-                              return (
-                                <div
-                                  key={row.name}
-                                  id={`branch-option-${idx}`}
-                                  data-option-index={idx}
-                                  role="option"
-                                  aria-selected={row.name === baseBranch}
-                                  onClick={() => {
-                                    if (row.inUseWorktree) {
-                                      actionService.dispatch("worktree.setActive", {
-                                        worktreeId: row.inUseWorktree.id,
-                                      });
-                                      setBranchPickerOpen(false);
-                                      onClose();
-                                      return;
-                                    }
-                                    handleBranchSelect(row);
-                                  }}
-                                  className={cn(
-                                    "flex items-center justify-between gap-2 px-2 py-1.5 text-sm rounded-[var(--radius-sm)] cursor-pointer hover:bg-daintree-border",
-                                    row.name === baseBranch && "bg-daintree-border",
-                                    idx === selectedIndex && "bg-daintree-accent/10"
-                                  )}
-                                >
-                                  <span className="truncate">
-                                    <HighlightBranchText
-                                      text={row.labelText}
-                                      matchRanges={row.matchRanges}
-                                      nameLength={row.name.length}
-                                    />
-                                  </span>
-                                  <span className="flex items-center gap-1 shrink-0">
-                                    {row.inUseWorktree && (
-                                      <span
-                                        className="text-xs text-status-warning"
-                                        title={`In use by worktree: ${row.inUseWorktree.name}`}
-                                      >
-                                        in use
-                                      </span>
-                                    )}
-                                    {row.name === baseBranch && (
-                                      <Check className="h-4 w-4 text-daintree-accent" />
-                                    )}
-                                  </span>
-                                </div>
-                              );
-                            });
-                          })()
-                        )}
-                      </ScrollShadow>
-                      {!branchQuery && branchOptions.length > 500 && (
-                        <div className="border-t border-daintree-border px-3 py-2 text-xs text-daintree-text/60">
-                          Showing first 500 branches. Type to search.
-                        </div>
-                      )}
-                    </PopoverContent>
-                  </Popover>
-                </div>
-              )}
-
-              {isExistingMode ? (
-                <div className="space-y-2">
-                  <label className="block text-sm font-medium text-daintree-text">
-                    Select Branch
-                  </label>
-                  <Popover
-                    open={existingBranchPickerOpen}
-                    onOpenChange={setExistingBranchPickerOpen}
-                  >
-                    <PopoverTrigger asChild>
-                      <Button
-                        variant="outline"
-                        role="combobox"
-                        aria-expanded={existingBranchPickerOpen}
-                        aria-haspopup="listbox"
-                        className="w-full justify-between bg-daintree-bg border-daintree-border text-daintree-text hover:bg-daintree-bg hover:text-daintree-text"
-                        disabled={isPending}
-                        data-testid="existing-branch-picker"
-                      >
-                        <span className="flex items-center gap-2 truncate">
-                          <GitBranch className="w-4 h-4 shrink-0 text-daintree-accent" />
-                          {selectedExistingBranch ? (
-                            <span className="font-mono text-sm">{selectedExistingBranch}</span>
-                          ) : (
-                            <span className="text-daintree-text/60">Select a local branch...</span>
-                          )}
-                        </span>
-                        <ChevronsUpDown className="opacity-50 shrink-0" />
-                      </Button>
-                    </PopoverTrigger>
-                    <PopoverContent
-                      className="w-[400px] p-0"
-                      align="start"
-                      onEscapeKeyDown={(e) => e.stopPropagation()}
-                    >
-                      <div className="flex items-center border-b border-daintree-border px-3">
-                        <Search className="mr-2 h-4 w-4 opacity-50 shrink-0" />
-                        <input
-                          className="flex h-10 w-full rounded-[var(--radius-md)] bg-transparent py-3 text-sm outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50"
-                          placeholder="Search local branches..."
-                          value={existingBranchQuery}
-                          onChange={(e) => setExistingBranchQuery(e.target.value)}
-                          autoFocus
-                          aria-label="Search existing branches"
-                          data-testid="existing-branch-search"
-                        />
-                      </div>
-                      <ScrollShadow role="listbox" className="max-h-[300px]" scrollClassName="p-1">
-                        {filteredExistingBranches.length === 0 ? (
-                          <div className="py-6 text-center text-sm text-muted-foreground">
-                            {existingBranchQuery
-                              ? "No matching branches"
-                              : "No available local branches"}
-                          </div>
-                        ) : (
-                          filteredExistingBranches.map((branch) => (
-                            <div
-                              key={branch.name}
-                              role="option"
-                              aria-selected={branch.name === selectedExistingBranch}
-                              onClick={() => {
-                                setSelectedExistingBranch(branch.name);
-                                setExistingBranchPickerOpen(false);
-                                setExistingBranchQuery("");
-                                setValidationError(null);
-                                setErrorField(null);
-                                setCreationError(null);
-                              }}
-                              className={cn(
-                                "flex items-center justify-between gap-2 px-2 py-1.5 text-sm rounded-[var(--radius-sm)] cursor-pointer hover:bg-daintree-border font-mono",
-                                branch.name === selectedExistingBranch && "bg-daintree-border"
-                              )}
-                            >
-                              <span className="truncate">{branch.name}</span>
-                              {branch.name === selectedExistingBranch && (
-                                <Check className="h-4 w-4 shrink-0 text-daintree-accent" />
-                              )}
-                            </div>
-                          ))
-                        )}
-                      </ScrollShadow>
-                    </PopoverContent>
-                  </Popover>
-                </div>
-              ) : (
-                <div className="space-y-2">
-                  <label
-                    htmlFor="new-branch"
-                    className="block text-sm font-medium text-daintree-text"
-                  >
-                    New Branch Name
-                  </label>
-                  <Popover open={prefixPickerOpen} onOpenChange={setPrefixPickerOpen}>
-                    <PopoverTrigger asChild>
-                      <div className="relative">
-                        <input
-                          ref={newBranchInputRef}
-                          id="new-branch"
-                          type="text"
-                          data-testid="branch-name-input"
-                          value={branchInput}
-                          onChange={(e) => {
-                            setBranchInput(e.target.value);
-                            markBranchInputTouched();
-                            setValidationError(null);
-                            setErrorField(null);
-                            setCreationError(null);
-                          }}
-                          onKeyDown={handlePrefixKeyDown}
-                          placeholder="feature/add-user-auth"
-                          className="w-full px-3 pr-10 py-2 bg-daintree-bg border border-daintree-border rounded-[var(--radius-md)] text-daintree-text focus:outline-none focus:ring-2 focus:ring-daintree-accent font-mono text-sm"
-                          disabled={isPending}
-                          aria-invalid={errorField === "new-branch" ? true : undefined}
-                          aria-describedby={
-                            [
-                              errorField === "new-branch" ? "validation-error" : null,
-                              branchWasAutoResolved ? "branch-resolved-hint" : null,
-                            ]
-                              .filter(Boolean)
-                              .join(" ") || undefined
-                          }
-                          role="combobox"
-                          aria-autocomplete="list"
-                          aria-controls="prefix-list"
-                          aria-expanded={prefixPickerOpen}
-                        />
-                        {isCheckingBranch && (
-                          <Spinner
-                            size="md"
-                            className="absolute right-3 top-1/2 -translate-y-1/2 text-daintree-text/40 pointer-events-none"
-                          />
-                        )}
-                      </div>
-                    </PopoverTrigger>
-                    <PopoverContent
-                      align="start"
-                      className="w-[var(--radix-popover-trigger-width)] p-0 bg-daintree-bg border border-daintree-border rounded-[var(--radius-md)] shadow-[var(--theme-shadow-floating)]"
-                      onOpenAutoFocus={(e) => e.preventDefault()}
-                      onEscapeKeyDown={(e) => e.stopPropagation()}
-                    >
-                      <ScrollShadow
-                        ref={prefixListRef}
-                        id="prefix-list"
-                        role="listbox"
-                        className="max-h-[240px]"
-                        scrollClassName="p-1"
-                      >
-                        {prefixSuggestions.length === 0 ? (
-                          <div className="py-4 text-center text-sm text-daintree-text/60">
-                            No matching prefixes
-                          </div>
-                        ) : (
-                          prefixSuggestions.map((suggestion, index) => (
-                            <div
-                              key={suggestion.type.prefix}
-                              role="option"
-                              aria-selected={index === prefixSelectedIndex}
-                              onClick={() => handlePrefixSelect(suggestion.type.prefix)}
-                              className={cn(
-                                "flex items-center gap-2 px-2 py-1.5 text-sm rounded-[var(--radius-sm)] cursor-pointer hover:bg-daintree-border",
-                                index === prefixSelectedIndex && "bg-daintree-accent/10"
-                              )}
-                            >
-                              <span className="font-mono text-daintree-accent">
-                                {suggestion.type.prefix}/
-                              </span>
-                              <span className="text-daintree-text/60">
-                                {suggestion.type.displayName}
-                              </span>
-                            </div>
-                          ))
-                        )}
-                      </ScrollShadow>
-                    </PopoverContent>
-                  </Popover>
-                  <p className="text-xs text-daintree-text/60 select-text">
-                    {parsedBranch.hasPrefix ? (
-                      <>
-                        <span className="font-mono text-daintree-accent">
-                          {parsedBranch.prefix}/
-                        </span>
-                        <span className="font-mono">{parsedBranch.slug || "..."}</span>
-                      </>
-                    ) : (
-                      <span className="font-mono">{parsedBranch.fullBranchName || "..."}</span>
-                    )}
-                  </p>
-                  {branchWasAutoResolved && (
-                    <p
-                      id="branch-resolved-hint"
-                      className="text-xs text-status-success flex items-center gap-1.5 mt-1"
-                      role="status"
-                      aria-live="polite"
-                    >
-                      <Info className="w-3.5 h-3.5" aria-hidden="true" />
-                      Name auto-incremented to avoid conflict with existing branch
-                    </p>
-                  )}
-                </div>
-              )}
-
+          <div className="space-y-4">
+            {initialPR ? (
+              <div className="flex items-center gap-2.5 px-3 py-2.5 rounded-[var(--radius-md)] bg-daintree-accent/5 border border-daintree-accent/20 text-sm min-w-0">
+                <WorktreeIcon
+                  className="w-4 h-4 text-daintree-accent shrink-0"
+                  aria-hidden="true"
+                />
+                <span className="text-daintree-text/80 min-w-0 truncate">
+                  PR <span className="font-medium text-daintree-text">#{initialPR.number}</span> —{" "}
+                  {initialPR.title}
+                </span>
+              </div>
+            ) : (
               <div className="space-y-2">
                 <div className="flex items-center gap-2">
-                  <label
-                    htmlFor="worktree-path"
-                    className="block text-sm font-medium text-daintree-text"
-                  >
-                    Worktree Path
+                  <label className="block text-sm font-medium text-daintree-text">
+                    Link Issue (Optional)
                   </label>
                   <Tooltip>
                     <TooltipTrigger asChild>
                       <button
                         type="button"
                         className="text-daintree-text/40 hover:text-daintree-text/60 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-daintree-accent focus-visible:ring-offset-2"
-                        aria-label="Help for Worktree Path field"
+                        aria-label="Help for Link Issue field"
                         disabled={isPending}
                       >
                         <Info className="w-3.5 h-3.5" aria-hidden="true" />
-                        <span className="sr-only">Help for Worktree Path field</span>
+                        <span className="sr-only">Help for Link Issue field</span>
                       </button>
                     </TooltipTrigger>
                     <TooltipContent side="right">
-                      <p>Directory where the worktree will be created</p>
+                      <p>Select an issue to auto-generate a branch name</p>
                     </TooltipContent>
                   </Tooltip>
                 </div>
-                <div className="flex gap-2 items-center">
-                  <div className="relative flex-1">
-                    <input
-                      id="worktree-path"
-                      data-testid="worktree-path-input"
-                      type="text"
-                      value={worktreePath}
-                      onChange={(e) => {
-                        setWorktreePath(e.target.value);
-                        pathTouchedRef.current = true;
-                        setValidationError(null);
-                        setErrorField(null);
-                        setCreationError(null);
-                      }}
-                      placeholder="/path/to/worktree"
-                      className="w-full px-3 pr-10 py-2 bg-daintree-bg border border-daintree-border rounded-[var(--radius-md)] text-daintree-text focus:outline-none focus:ring-2 focus:ring-daintree-accent"
-                      disabled={isPending}
-                      aria-invalid={errorField === "worktree-path" ? true : undefined}
-                      aria-describedby={
-                        errorField === "worktree-path" ? "validation-error" : undefined
-                      }
-                    />
-                    {isGeneratingPath && (
-                      <Spinner
-                        size="md"
-                        className="absolute right-3 top-1/2 -translate-y-1/2 text-daintree-text/40 pointer-events-none"
-                      />
-                    )}
+                <IssueSelector
+                  projectPath={rootPath}
+                  selectedIssue={selectedIssue}
+                  onSelect={handleIssueSelect}
+                  disabled={isPending}
+                />
+              </div>
+            )}
+
+            {!initialPR && canAssignIssue && (
+              <div className="flex items-center gap-3 px-3 py-2.5 rounded-[var(--radius-md)] border bg-daintree-bg/50 border-daintree-border transition-colors">
+                {currentUserAvatar ? (
+                  <img
+                    src={`${currentUserAvatar}${currentUserAvatar.includes("?") ? "&" : "?"}s=64`}
+                    alt={currentUser}
+                    className="w-8 h-8 rounded-full shrink-0"
+                  />
+                ) : (
+                  <div className="flex items-center justify-center w-8 h-8 rounded-full shrink-0 bg-daintree-accent/10 text-daintree-accent">
+                    <UserPlus className="w-4 h-4" />
                   </div>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={async () => {
-                      try {
-                        const result = await actionService.dispatch(
-                          "project.openDialog",
-                          undefined,
-                          {
-                            source: "user",
-                          }
-                        );
-                        if (result.ok && result.result) {
-                          setWorktreePath(result.result as string);
-                          pathTouchedRef.current = true;
+                )}
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-medium text-daintree-text">Assign to me</span>
+                    <span className="text-xs text-daintree-text/50 font-mono">@{currentUser}</span>
+                  </div>
+                </div>
+                <label className="relative inline-flex items-center cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={assignWorktreeToSelf}
+                    onChange={(e) => setAssignWorktreeToSelf(e.target.checked)}
+                    disabled={isPending}
+                    className="sr-only peer"
+                    aria-label="Assign issue to me when creating worktree"
+                  />
+                  <div
+                    className={cn(
+                      "w-9 h-5 rounded-full transition-colors",
+                      "peer-focus-visible:ring-2 peer-focus-visible:ring-daintree-accent",
+                      "after:content-[''] after:absolute after:top-0.5 after:left-0.5",
+                      "after:rounded-full after:h-4 after:w-4",
+                      "after:transition-transform after:duration-200",
+                      assignWorktreeToSelf
+                        ? "bg-daintree-accent after:translate-x-4 after:bg-text-inverse"
+                        : "bg-daintree-border after:translate-x-0 after:bg-daintree-text",
+                      isPending && "opacity-50 cursor-not-allowed"
+                    )}
+                  />
+                </label>
+              </div>
+            )}
+
+            {!initialPR && (
+              <div
+                className="inline-flex rounded-[var(--radius-md)] bg-daintree-border/50 p-0.5"
+                role="radiogroup"
+                aria-label="Branch mode"
+              >
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={branchMode === "new"}
+                  onClick={() => handleBranchModeChange("new")}
+                  disabled={isPending}
+                  className={cn(
+                    "px-3 py-1 text-sm font-medium rounded-[var(--radius-sm)] transition-colors",
+                    branchMode === "new"
+                      ? "bg-daintree-bg text-daintree-text shadow-sm"
+                      : "text-daintree-text/60 hover:text-daintree-text"
+                  )}
+                >
+                  New Branch
+                </button>
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={branchMode === "existing"}
+                  onClick={() => handleBranchModeChange("existing")}
+                  disabled={isPending}
+                  className={cn(
+                    "px-3 py-1 text-sm font-medium rounded-[var(--radius-sm)] transition-colors",
+                    branchMode === "existing"
+                      ? "bg-daintree-bg text-daintree-text shadow-sm"
+                      : "text-daintree-text/60 hover:text-daintree-text"
+                  )}
+                >
+                  Existing Branch
+                </button>
+              </div>
+            )}
+
+            {!isExistingMode && (
+              <div className="space-y-2">
+                <div className="flex items-center gap-2">
+                  <label
+                    htmlFor="base-branch"
+                    className="block text-sm font-medium text-daintree-text"
+                  >
+                    Base Branch
+                  </label>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <button
+                        type="button"
+                        className="text-daintree-text/40 hover:text-daintree-text/60 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-daintree-accent focus-visible:ring-offset-2"
+                        aria-label="Help for Base Branch field"
+                        disabled={isPending}
+                      >
+                        <Info className="w-3.5 h-3.5" aria-hidden="true" />
+                        <span className="sr-only">Help for Base Branch field</span>
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent side="right">
+                      <p>The branch to create the new worktree from</p>
+                    </TooltipContent>
+                  </Tooltip>
+                </div>
+                <Popover open={branchPickerOpen} onOpenChange={setBranchPickerOpen}>
+                  <PopoverTrigger asChild>
+                    <Button
+                      id="base-branch"
+                      variant="outline"
+                      role="combobox"
+                      aria-expanded={branchPickerOpen}
+                      aria-haspopup="listbox"
+                      aria-invalid={errorField === "base-branch" ? true : undefined}
+                      aria-describedby={
+                        errorField === "base-branch" ? "validation-error" : undefined
+                      }
+                      className="w-full justify-between bg-daintree-bg border-daintree-border text-daintree-text hover:bg-daintree-bg hover:text-daintree-text"
+                      disabled={isPending}
+                    >
+                      <span className="truncate">
+                        {selectedBranchOption?.labelText || "Select base branch..."}
+                      </span>
+                      <ChevronsUpDown className="opacity-50 shrink-0" />
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent
+                    className="w-[400px] p-0"
+                    align="start"
+                    onEscapeKeyDown={(e) => e.stopPropagation()}
+                  >
+                    <div className="flex items-center border-b border-daintree-border px-3">
+                      <Search className="mr-2 h-4 w-4 opacity-50 shrink-0" />
+                      <input
+                        ref={branchInputRef}
+                        className="flex h-10 w-full rounded-[var(--radius-md)] bg-transparent py-3 text-sm outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50"
+                        placeholder="Search branches..."
+                        value={branchQuery}
+                        onChange={(e) => setBranchQuery(e.target.value)}
+                        onKeyDown={handleBranchKeyDown}
+                        role="combobox"
+                        aria-label="Search base branches"
+                        aria-autocomplete="list"
+                        aria-controls="branch-list"
+                        aria-expanded={branchPickerOpen}
+                        aria-activedescendant={
+                          selectableRows.length > 0 && selectedIndex >= 0
+                            ? `branch-option-${selectedIndex}`
+                            : undefined
+                        }
+                      />
+                    </div>
+                    <ScrollShadow
+                      ref={branchListRef}
+                      id="branch-list"
+                      role="listbox"
+                      className="max-h-[300px]"
+                      scrollClassName="p-1"
+                    >
+                      {selectableRows.length === 0 ? (
+                        <div className="py-6 text-center text-sm text-muted-foreground">
+                          {branchQuery ? "No branches found" : "No branches available"}
+                        </div>
+                      ) : (
+                        (() => {
+                          let optionIndex = 0;
+                          return branchRows.map((row) => {
+                            if (row.kind === "section") {
+                              return (
+                                <div
+                                  key={`section-${row.label}`}
+                                  role="presentation"
+                                  className="px-2 py-1 text-xs font-medium text-daintree-text/50 uppercase tracking-wider"
+                                >
+                                  {row.label}
+                                </div>
+                              );
+                            }
+                            const idx = optionIndex++;
+                            return (
+                              <div
+                                key={row.name}
+                                id={`branch-option-${idx}`}
+                                data-option-index={idx}
+                                role="option"
+                                aria-selected={row.name === baseBranch}
+                                onClick={() => {
+                                  if (row.inUseWorktree) {
+                                    actionService.dispatch("worktree.setActive", {
+                                      worktreeId: row.inUseWorktree.id,
+                                    });
+                                    setBranchPickerOpen(false);
+                                    onClose();
+                                    return;
+                                  }
+                                  handleBranchSelect(row);
+                                }}
+                                className={cn(
+                                  "flex items-center justify-between gap-2 px-2 py-1.5 text-sm rounded-[var(--radius-sm)] cursor-pointer hover:bg-daintree-border",
+                                  row.name === baseBranch && "bg-daintree-border",
+                                  idx === selectedIndex && "bg-daintree-accent/10"
+                                )}
+                              >
+                                <span className="truncate">
+                                  <HighlightBranchText
+                                    text={row.labelText}
+                                    matchRanges={row.matchRanges}
+                                    nameLength={row.name.length}
+                                  />
+                                </span>
+                                <span className="flex items-center gap-1 shrink-0">
+                                  {row.inUseWorktree && (
+                                    <span
+                                      className="text-xs text-status-warning"
+                                      title={`In use by worktree: ${row.inUseWorktree.name}`}
+                                    >
+                                      in use
+                                    </span>
+                                  )}
+                                  {row.name === baseBranch && (
+                                    <Check className="h-4 w-4 text-daintree-accent" />
+                                  )}
+                                </span>
+                              </div>
+                            );
+                          });
+                        })()
+                      )}
+                    </ScrollShadow>
+                    {!branchQuery && branchOptions.length > 500 && (
+                      <div className="border-t border-daintree-border px-3 py-2 text-xs text-daintree-text/60">
+                        Showing first 500 branches. Type to search.
+                      </div>
+                    )}
+                  </PopoverContent>
+                </Popover>
+              </div>
+            )}
+
+            {isExistingMode ? (
+              <div className="space-y-2">
+                <label className="block text-sm font-medium text-daintree-text">
+                  Select Branch
+                </label>
+                <Popover open={existingBranchPickerOpen} onOpenChange={setExistingBranchPickerOpen}>
+                  <PopoverTrigger asChild>
+                    <Button
+                      variant="outline"
+                      role="combobox"
+                      aria-expanded={existingBranchPickerOpen}
+                      aria-haspopup="listbox"
+                      className="w-full justify-between bg-daintree-bg border-daintree-border text-daintree-text hover:bg-daintree-bg hover:text-daintree-text"
+                      disabled={isPending}
+                      data-testid="existing-branch-picker"
+                    >
+                      <span className="flex items-center gap-2 truncate">
+                        <GitBranch className="w-4 h-4 shrink-0 text-daintree-accent" />
+                        {selectedExistingBranch ? (
+                          <span className="font-mono text-sm">{selectedExistingBranch}</span>
+                        ) : (
+                          <span className="text-daintree-text/60">Select a local branch...</span>
+                        )}
+                      </span>
+                      <ChevronsUpDown className="opacity-50 shrink-0" />
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent
+                    className="w-[400px] p-0"
+                    align="start"
+                    onEscapeKeyDown={(e) => e.stopPropagation()}
+                  >
+                    <div className="flex items-center border-b border-daintree-border px-3">
+                      <Search className="mr-2 h-4 w-4 opacity-50 shrink-0" />
+                      <input
+                        className="flex h-10 w-full rounded-[var(--radius-md)] bg-transparent py-3 text-sm outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50"
+                        placeholder="Search local branches..."
+                        value={existingBranchQuery}
+                        onChange={(e) => setExistingBranchQuery(e.target.value)}
+                        autoFocus
+                        aria-label="Search existing branches"
+                        data-testid="existing-branch-search"
+                      />
+                    </div>
+                    <ScrollShadow role="listbox" className="max-h-[300px]" scrollClassName="p-1">
+                      {filteredExistingBranches.length === 0 ? (
+                        <div className="py-6 text-center text-sm text-muted-foreground">
+                          {existingBranchQuery
+                            ? "No matching branches"
+                            : "No available local branches"}
+                        </div>
+                      ) : (
+                        filteredExistingBranches.map((branch) => (
+                          <div
+                            key={branch.name}
+                            role="option"
+                            aria-selected={branch.name === selectedExistingBranch}
+                            onClick={() => {
+                              setSelectedExistingBranch(branch.name);
+                              setExistingBranchPickerOpen(false);
+                              setExistingBranchQuery("");
+                              setValidationError(null);
+                              setErrorField(null);
+                              setCreationError(null);
+                            }}
+                            className={cn(
+                              "flex items-center justify-between gap-2 px-2 py-1.5 text-sm rounded-[var(--radius-sm)] cursor-pointer hover:bg-daintree-border font-mono",
+                              branch.name === selectedExistingBranch && "bg-daintree-border"
+                            )}
+                          >
+                            <span className="truncate">{branch.name}</span>
+                            {branch.name === selectedExistingBranch && (
+                              <Check className="h-4 w-4 shrink-0 text-daintree-accent" />
+                            )}
+                          </div>
+                        ))
+                      )}
+                    </ScrollShadow>
+                  </PopoverContent>
+                </Popover>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                <label
+                  htmlFor="new-branch"
+                  className="block text-sm font-medium text-daintree-text"
+                >
+                  New Branch Name
+                </label>
+                <Popover open={prefixPickerOpen} onOpenChange={setPrefixPickerOpen}>
+                  <PopoverTrigger asChild>
+                    <div className="relative">
+                      <input
+                        ref={newBranchInputRef}
+                        id="new-branch"
+                        type="text"
+                        data-testid="branch-name-input"
+                        value={branchInput}
+                        onChange={(e) => {
+                          setBranchInput(e.target.value);
+                          markBranchInputTouched();
                           setValidationError(null);
                           setErrorField(null);
                           setCreationError(null);
+                        }}
+                        onKeyDown={handlePrefixKeyDown}
+                        placeholder="feature/add-user-auth"
+                        className="w-full px-3 pr-10 py-2 bg-daintree-bg border border-daintree-border rounded-[var(--radius-md)] text-daintree-text focus:outline-none focus:ring-2 focus:ring-daintree-accent font-mono text-sm"
+                        disabled={isPending}
+                        aria-invalid={errorField === "new-branch" ? true : undefined}
+                        aria-describedby={
+                          [
+                            errorField === "new-branch" ? "validation-error" : null,
+                            branchWasAutoResolved ? "branch-resolved-hint" : null,
+                          ]
+                            .filter(Boolean)
+                            .join(" ") || undefined
                         }
-                      } catch (err: unknown) {
-                        console.error("Failed to open directory picker:", err);
-                        const message = formatErrorMessage(err, "Failed to open directory picker");
-                        setValidationError(`Failed to open directory picker: ${message}`);
-                        setErrorField(null);
-                      }
-                    }}
-                    disabled={isPending}
+                        role="combobox"
+                        aria-autocomplete="list"
+                        aria-controls="prefix-list"
+                        aria-expanded={prefixPickerOpen}
+                      />
+                      {isCheckingBranch && (
+                        <Spinner
+                          size="md"
+                          className="absolute right-3 top-1/2 -translate-y-1/2 text-daintree-text/40 pointer-events-none"
+                        />
+                      )}
+                    </div>
+                  </PopoverTrigger>
+                  <PopoverContent
+                    align="start"
+                    className="w-[var(--radix-popover-trigger-width)] p-0 bg-daintree-bg border border-daintree-border rounded-[var(--radius-md)] shadow-[var(--theme-shadow-floating)]"
+                    onOpenAutoFocus={(e) => e.preventDefault()}
+                    onEscapeKeyDown={(e) => e.stopPropagation()}
                   >
-                    <FolderOpen />
-                  </Button>
-                </div>
-                {pathWasAutoResolved && (
+                    <ScrollShadow
+                      ref={prefixListRef}
+                      id="prefix-list"
+                      role="listbox"
+                      className="max-h-[240px]"
+                      scrollClassName="p-1"
+                    >
+                      {prefixSuggestions.length === 0 ? (
+                        <div className="py-4 text-center text-sm text-daintree-text/60">
+                          No matching prefixes
+                        </div>
+                      ) : (
+                        prefixSuggestions.map((suggestion, index) => (
+                          <div
+                            key={suggestion.type.prefix}
+                            role="option"
+                            aria-selected={index === prefixSelectedIndex}
+                            onClick={() => handlePrefixSelect(suggestion.type.prefix)}
+                            className={cn(
+                              "flex items-center gap-2 px-2 py-1.5 text-sm rounded-[var(--radius-sm)] cursor-pointer hover:bg-daintree-border",
+                              index === prefixSelectedIndex && "bg-daintree-accent/10"
+                            )}
+                          >
+                            <span className="font-mono text-daintree-accent">
+                              {suggestion.type.prefix}/
+                            </span>
+                            <span className="text-daintree-text/60">
+                              {suggestion.type.displayName}
+                            </span>
+                          </div>
+                        ))
+                      )}
+                    </ScrollShadow>
+                  </PopoverContent>
+                </Popover>
+                <p className="text-xs text-daintree-text/60 select-text">
+                  {parsedBranch.hasPrefix ? (
+                    <>
+                      <span className="font-mono text-daintree-accent">{parsedBranch.prefix}/</span>
+                      <span className="font-mono">{parsedBranch.slug || "..."}</span>
+                    </>
+                  ) : (
+                    <span className="font-mono">{parsedBranch.fullBranchName || "..."}</span>
+                  )}
+                </p>
+                {branchWasAutoResolved && (
                   <p
+                    id="branch-resolved-hint"
                     className="text-xs text-status-success flex items-center gap-1.5 mt-1"
                     role="status"
                     aria-live="polite"
                   >
                     <Info className="w-3.5 h-3.5" aria-hidden="true" />
-                    Path auto-incremented to avoid conflict with existing directory
+                    Name auto-incremented to avoid conflict with existing branch
                   </p>
                 )}
               </div>
+            )}
 
-              {!isExistingMode && (
-                <div className="flex items-center gap-2">
-                  <input
-                    id="from-remote"
-                    type="checkbox"
-                    checked={fromRemote}
-                    onChange={(e) => setFromRemote(e.target.checked)}
-                    className="rounded border-daintree-border text-daintree-accent focus:ring-daintree-accent"
-                    disabled={isPending}
-                  />
-                  <label htmlFor="from-remote" className="text-sm text-daintree-text select-none">
-                    Create from remote branch
-                  </label>
-                </div>
-              )}
-
-              {hasAnyEnvironments && (
-                <div className="space-y-2">
-                  <div className="flex items-center gap-2">
-                    <label className="block text-sm font-medium text-daintree-text">
-                      Environment
-                    </label>
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <button
-                          type="button"
-                          className="text-daintree-text/40 hover:text-daintree-text/60 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-daintree-accent focus-visible:ring-offset-2"
-                          aria-label="Help for Environment field"
-                          disabled={isPending}
-                        >
-                          <Info className="w-3.5 h-3.5" aria-hidden="true" />
-                        </button>
-                      </TooltipTrigger>
-                      <TooltipContent side="right">
-                        <p>
-                          Choose where this worktree runs. Non-local environments provision remote
-                          compute from project environment settings.
-                        </p>
-                      </TooltipContent>
-                    </Tooltip>
-                  </div>
-                  <div
-                    className="inline-flex rounded-[var(--radius-md)] bg-daintree-border/50 p-0.5"
-                    role="radiogroup"
-                    aria-label="Worktree environment mode"
-                  >
+            <div className="space-y-2">
+              <div className="flex items-center gap-2">
+                <label
+                  htmlFor="worktree-path"
+                  className="block text-sm font-medium text-daintree-text"
+                >
+                  Worktree Path
+                </label>
+                <Tooltip>
+                  <TooltipTrigger asChild>
                     <button
                       type="button"
+                      className="text-daintree-text/40 hover:text-daintree-text/60 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-daintree-accent focus-visible:ring-offset-2"
+                      aria-label="Help for Worktree Path field"
+                      disabled={isPending}
+                    >
+                      <Info className="w-3.5 h-3.5" aria-hidden="true" />
+                      <span className="sr-only">Help for Worktree Path field</span>
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent side="right">
+                    <p>Directory where the worktree will be created</p>
+                  </TooltipContent>
+                </Tooltip>
+              </div>
+              <div className="flex gap-2 items-center">
+                <div className="relative flex-1">
+                  <input
+                    id="worktree-path"
+                    data-testid="worktree-path-input"
+                    type="text"
+                    value={worktreePath}
+                    onChange={(e) => {
+                      setWorktreePath(e.target.value);
+                      pathTouchedRef.current = true;
+                      setValidationError(null);
+                      setErrorField(null);
+                      setCreationError(null);
+                    }}
+                    placeholder="/path/to/worktree"
+                    className="w-full px-3 pr-10 py-2 bg-daintree-bg border border-daintree-border rounded-[var(--radius-md)] text-daintree-text focus:outline-none focus:ring-2 focus:ring-daintree-accent"
+                    disabled={isPending}
+                    aria-invalid={errorField === "worktree-path" ? true : undefined}
+                    aria-describedby={
+                      errorField === "worktree-path" ? "validation-error" : undefined
+                    }
+                  />
+                  {isGeneratingPath && (
+                    <Spinner
+                      size="md"
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-daintree-text/40 pointer-events-none"
+                    />
+                  )}
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={async () => {
+                    try {
+                      const result = await actionService.dispatch("project.openDialog", undefined, {
+                        source: "user",
+                      });
+                      if (result.ok && result.result) {
+                        setWorktreePath(result.result as string);
+                        pathTouchedRef.current = true;
+                        setValidationError(null);
+                        setErrorField(null);
+                        setCreationError(null);
+                      }
+                    } catch (err: unknown) {
+                      console.error("Failed to open directory picker:", err);
+                      const message = formatErrorMessage(err, "Failed to open directory picker");
+                      setValidationError(`Failed to open directory picker: ${message}`);
+                      setErrorField(null);
+                    }
+                  }}
+                  disabled={isPending}
+                >
+                  <FolderOpen />
+                </Button>
+              </div>
+              {pathWasAutoResolved && (
+                <p
+                  className="text-xs text-status-success flex items-center gap-1.5 mt-1"
+                  role="status"
+                  aria-live="polite"
+                >
+                  <Info className="w-3.5 h-3.5" aria-hidden="true" />
+                  Path auto-incremented to avoid conflict with existing directory
+                </p>
+              )}
+            </div>
+
+            {!isExistingMode && (
+              <div className="flex items-center gap-2">
+                <input
+                  id="from-remote"
+                  type="checkbox"
+                  checked={fromRemote}
+                  onChange={(e) => setFromRemote(e.target.checked)}
+                  className="rounded border-daintree-border text-daintree-accent focus:ring-daintree-accent"
+                  disabled={isPending}
+                />
+                <label htmlFor="from-remote" className="text-sm text-daintree-text select-none">
+                  Create from remote branch
+                </label>
+              </div>
+            )}
+
+            {hasAnyEnvironments && (
+              <div className="space-y-2">
+                <div className="flex items-center gap-2">
+                  <label className="block text-sm font-medium text-daintree-text">
+                    Environment
+                  </label>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <button
+                        type="button"
+                        className="text-daintree-text/40 hover:text-daintree-text/60 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-daintree-accent focus-visible:ring-offset-2"
+                        aria-label="Help for Environment field"
+                        disabled={isPending}
+                      >
+                        <Info className="w-3.5 h-3.5" aria-hidden="true" />
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent side="right">
+                      <p>
+                        Choose where this worktree runs. Non-local environments provision remote
+                        compute from project environment settings.
+                      </p>
+                    </TooltipContent>
+                  </Tooltip>
+                </div>
+                <div
+                  className="inline-flex rounded-[var(--radius-md)] bg-daintree-border/50 p-0.5"
+                  role="radiogroup"
+                  aria-label="Worktree environment mode"
+                >
+                  <button
+                    type="button"
+                    role="radio"
+                    aria-checked={worktreeMode === "local"}
+                    onClick={() => setWorktreeMode("local")}
+                    disabled={isPending}
+                    className={cn(
+                      "px-3 py-1 text-sm font-medium rounded-[var(--radius-sm)] transition-colors",
+                      worktreeMode === "local"
+                        ? "bg-daintree-bg text-daintree-text shadow-sm"
+                        : "text-daintree-text/60 hover:text-daintree-text"
+                    )}
+                  >
+                    Local
+                  </button>
+                  {Object.entries(resourceEnvironments ?? {}).map(([key]) => (
+                    <button
+                      key={key}
+                      type="button"
                       role="radio"
-                      aria-checked={worktreeMode === "local"}
-                      onClick={() => setWorktreeMode("local")}
+                      aria-checked={worktreeMode === key}
+                      onClick={() => setWorktreeMode(key)}
                       disabled={isPending}
                       className={cn(
                         "px-3 py-1 text-sm font-medium rounded-[var(--radius-sm)] transition-colors",
-                        worktreeMode === "local"
+                        worktreeMode === key
                           ? "bg-daintree-bg text-daintree-text shadow-sm"
                           : "text-daintree-text/60 hover:text-daintree-text"
                       )}
                     >
-                      Local
+                      {key}
                     </button>
-                    {Object.entries(resourceEnvironments ?? {}).map(([key]) => (
-                      <button
-                        key={key}
-                        type="button"
-                        role="radio"
-                        aria-checked={worktreeMode === key}
-                        onClick={() => setWorktreeMode(key)}
-                        disabled={isPending}
-                        className={cn(
-                          "px-3 py-1 text-sm font-medium rounded-[var(--radius-sm)] transition-colors",
-                          worktreeMode === key
-                            ? "bg-daintree-bg text-daintree-text shadow-sm"
-                            : "text-daintree-text/60 hover:text-daintree-text"
-                        )}
-                      >
-                        {key}
-                      </button>
-                    ))}
-                  </div>
-                  {worktreeMode !== "local" && (
-                    <p className="text-xs text-daintree-text/50">
-                      Provisions {worktreeMode} environment after worktree setup
-                    </p>
-                  )}
+                  ))}
                 </div>
-              )}
+                {worktreeMode !== "local" && (
+                  <p className="text-xs text-daintree-text/50">
+                    Provisions {worktreeMode} environment after worktree setup
+                  </p>
+                )}
+              </div>
+            )}
 
-              {globalRecipes.length > 0 && (
-                <div className="space-y-2">
-                  <div className="flex items-center gap-2">
-                    <label
-                      htmlFor="recipe-selector"
-                      className="block text-sm font-medium text-daintree-text"
-                    >
-                      Run Recipe (Optional)
-                    </label>
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <button
-                          type="button"
-                          className="text-daintree-text/40 hover:text-daintree-text/60 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-daintree-accent focus-visible:ring-offset-2"
-                          aria-label="Help for Run Recipe field"
-                          disabled={isPending}
-                        >
-                          <Info className="w-3.5 h-3.5" aria-hidden="true" />
-                          <span className="sr-only">Help for Run Recipe field</span>
-                        </button>
-                      </TooltipTrigger>
-                      <TooltipContent side="right">
-                        <p>Select a recipe to run after creating the worktree</p>
-                      </TooltipContent>
-                    </Tooltip>
-                  </div>
-                  <Popover open={recipePickerOpen} onOpenChange={setRecipePickerOpen}>
-                    <PopoverTrigger asChild>
-                      <Button
-                        id="recipe-selector"
-                        variant="outline"
-                        role="combobox"
-                        aria-expanded={recipePickerOpen}
-                        aria-haspopup="listbox"
-                        aria-controls="recipe-list"
-                        className="w-full justify-between bg-daintree-bg border-daintree-border text-daintree-text hover:bg-daintree-bg hover:text-daintree-text"
+            {globalRecipes.length > 0 && (
+              <div className="space-y-2">
+                <div className="flex items-center gap-2">
+                  <label
+                    htmlFor="recipe-selector"
+                    className="block text-sm font-medium text-daintree-text"
+                  >
+                    Run Recipe (Optional)
+                  </label>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <button
+                        type="button"
+                        className="text-daintree-text/40 hover:text-daintree-text/60 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-daintree-accent focus-visible:ring-offset-2"
+                        aria-label="Help for Run Recipe field"
                         disabled={isPending}
                       >
-                        <span className="flex items-center gap-2 truncate">
-                          {selectedRecipeId === CLONE_LAYOUT_ID ? (
-                            <>
-                              <Copy className="shrink-0 text-daintree-accent" />
-                              <span>Clone current layout</span>
-                            </>
-                          ) : selectedRecipe ? (
-                            <>
-                              <Play className="shrink-0 text-daintree-accent" />
-                              <span>{selectedRecipe.name}</span>
-                              <span className="text-xs text-daintree-text/50">
-                                ({selectedRecipe.terminals.length} terminal
-                                {selectedRecipe.terminals.length !== 1 ? "s" : ""})
-                              </span>
-                            </>
-                          ) : (
-                            <>
-                              <Play className="shrink-0 text-daintree-accent" />
-                              <span className="text-daintree-text/60">Empty</span>
-                            </>
-                          )}
-                        </span>
-                        <ChevronsUpDown className="opacity-50 shrink-0" />
-                      </Button>
-                    </PopoverTrigger>
-                    <PopoverContent
-                      className="w-[400px] p-0"
-                      align="start"
-                      onEscapeKeyDown={(e) => e.stopPropagation()}
+                        <Info className="w-3.5 h-3.5" aria-hidden="true" />
+                        <span className="sr-only">Help for Run Recipe field</span>
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent side="right">
+                      <p>Select a recipe to run after creating the worktree</p>
+                    </TooltipContent>
+                  </Tooltip>
+                </div>
+                <Popover open={recipePickerOpen} onOpenChange={setRecipePickerOpen}>
+                  <PopoverTrigger asChild>
+                    <Button
+                      id="recipe-selector"
+                      variant="outline"
+                      role="combobox"
+                      aria-expanded={recipePickerOpen}
+                      aria-haspopup="listbox"
+                      aria-controls="recipe-list"
+                      className="w-full justify-between bg-daintree-bg border-daintree-border text-daintree-text hover:bg-daintree-bg hover:text-daintree-text"
+                      disabled={isPending}
                     >
-                      <ScrollShadow
-                        id="recipe-list"
-                        role="listbox"
-                        className="max-h-[300px]"
-                        scrollClassName="p-1"
-                      >
-                        <div
-                          role="option"
-                          aria-selected={selectedRecipeId === CLONE_LAYOUT_ID}
-                          tabIndex={0}
-                          onKeyDown={(event) => {
-                            if (event.key === "Enter" || event.key === " ") {
-                              event.preventDefault();
-                              recipeSelectionTouchedRef.current = true;
-                              setSelectedRecipeId(CLONE_LAYOUT_ID);
-                              if (projectId)
-                                setLastSelectedWorktreeRecipeIdByProject(
-                                  projectId,
-                                  CLONE_LAYOUT_ID
-                                );
-                              setRecipePickerOpen(false);
-                            }
-                          }}
-                          onClick={() => {
+                      <span className="flex items-center gap-2 truncate">
+                        {selectedRecipeId === CLONE_LAYOUT_ID ? (
+                          <>
+                            <Copy className="shrink-0 text-daintree-accent" />
+                            <span>Clone current layout</span>
+                          </>
+                        ) : selectedRecipe ? (
+                          <>
+                            <Play className="shrink-0 text-daintree-accent" />
+                            <span>{selectedRecipe.name}</span>
+                            <span className="text-xs text-daintree-text/50">
+                              ({selectedRecipe.terminals.length} terminal
+                              {selectedRecipe.terminals.length !== 1 ? "s" : ""})
+                            </span>
+                          </>
+                        ) : (
+                          <>
+                            <Play className="shrink-0 text-daintree-accent" />
+                            <span className="text-daintree-text/60">Empty</span>
+                          </>
+                        )}
+                      </span>
+                      <ChevronsUpDown className="opacity-50 shrink-0" />
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent
+                    className="w-[400px] p-0"
+                    align="start"
+                    onEscapeKeyDown={(e) => e.stopPropagation()}
+                  >
+                    <ScrollShadow
+                      id="recipe-list"
+                      role="listbox"
+                      className="max-h-[300px]"
+                      scrollClassName="p-1"
+                    >
+                      <div
+                        role="option"
+                        aria-selected={selectedRecipeId === CLONE_LAYOUT_ID}
+                        tabIndex={0}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter" || event.key === " ") {
+                            event.preventDefault();
                             recipeSelectionTouchedRef.current = true;
                             setSelectedRecipeId(CLONE_LAYOUT_ID);
                             if (projectId)
                               setLastSelectedWorktreeRecipeIdByProject(projectId, CLONE_LAYOUT_ID);
                             setRecipePickerOpen(false);
-                          }}
-                          className={cn(
-                            "flex items-center justify-between gap-2 px-2 py-1.5 text-sm rounded-[var(--radius-sm)] cursor-pointer hover:bg-daintree-border",
-                            selectedRecipeId === CLONE_LAYOUT_ID && "bg-daintree-border"
-                          )}
-                        >
-                          <div className="flex items-center gap-2">
-                            <Copy className="h-3.5 w-3.5 text-daintree-text/50" />
-                            <span>Clone current layout</span>
-                          </div>
-                          {selectedRecipeId === CLONE_LAYOUT_ID && (
-                            <Check className="h-4 w-4 shrink-0 text-daintree-accent" />
-                          )}
+                          }
+                        }}
+                        onClick={() => {
+                          recipeSelectionTouchedRef.current = true;
+                          setSelectedRecipeId(CLONE_LAYOUT_ID);
+                          if (projectId)
+                            setLastSelectedWorktreeRecipeIdByProject(projectId, CLONE_LAYOUT_ID);
+                          setRecipePickerOpen(false);
+                        }}
+                        className={cn(
+                          "flex items-center justify-between gap-2 px-2 py-1.5 text-sm rounded-[var(--radius-sm)] cursor-pointer hover:bg-daintree-border",
+                          selectedRecipeId === CLONE_LAYOUT_ID && "bg-daintree-border"
+                        )}
+                      >
+                        <div className="flex items-center gap-2">
+                          <Copy className="h-3.5 w-3.5 text-daintree-text/50" />
+                          <span>Clone current layout</span>
                         </div>
-                        <div
-                          role="option"
-                          aria-selected={selectedRecipeId === null}
-                          tabIndex={0}
-                          onKeyDown={(event) => {
-                            if (event.key === "Enter" || event.key === " ") {
-                              event.preventDefault();
-                              recipeSelectionTouchedRef.current = true;
-                              setSelectedRecipeId(null);
-                              if (projectId)
-                                setLastSelectedWorktreeRecipeIdByProject(projectId, null);
-                              setRecipePickerOpen(false);
-                            }
-                          }}
-                          onClick={() => {
+                        {selectedRecipeId === CLONE_LAYOUT_ID && (
+                          <Check className="h-4 w-4 shrink-0 text-daintree-accent" />
+                        )}
+                      </div>
+                      <div
+                        role="option"
+                        aria-selected={selectedRecipeId === null}
+                        tabIndex={0}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter" || event.key === " ") {
+                            event.preventDefault();
                             recipeSelectionTouchedRef.current = true;
                             setSelectedRecipeId(null);
                             if (projectId)
                               setLastSelectedWorktreeRecipeIdByProject(projectId, null);
                             setRecipePickerOpen(false);
-                          }}
-                          className={cn(
-                            "flex items-center justify-between gap-2 px-2 py-1.5 text-sm rounded-[var(--radius-sm)] cursor-pointer hover:bg-daintree-border",
-                            selectedRecipeId === null && "bg-daintree-border"
-                          )}
-                        >
-                          <span className="text-daintree-text/60">Empty</span>
-                          {selectedRecipeId === null && (
-                            <Check className="h-4 w-4 shrink-0 text-daintree-accent" />
-                          )}
-                        </div>
-                        {globalRecipes.map((recipe) => (
-                          <div
-                            key={recipe.id}
-                            role="option"
-                            aria-selected={recipe.id === selectedRecipeId}
-                            tabIndex={0}
-                            onKeyDown={(event) => {
-                              if (event.key === "Enter" || event.key === " ") {
-                                event.preventDefault();
-                                recipeSelectionTouchedRef.current = true;
-                                setSelectedRecipeId(recipe.id);
-                                if (projectId)
-                                  setLastSelectedWorktreeRecipeIdByProject(projectId, recipe.id);
-                                setRecipePickerOpen(false);
-                              }
-                            }}
-                            onClick={() => {
+                          }
+                        }}
+                        onClick={() => {
+                          recipeSelectionTouchedRef.current = true;
+                          setSelectedRecipeId(null);
+                          if (projectId) setLastSelectedWorktreeRecipeIdByProject(projectId, null);
+                          setRecipePickerOpen(false);
+                        }}
+                        className={cn(
+                          "flex items-center justify-between gap-2 px-2 py-1.5 text-sm rounded-[var(--radius-sm)] cursor-pointer hover:bg-daintree-border",
+                          selectedRecipeId === null && "bg-daintree-border"
+                        )}
+                      >
+                        <span className="text-daintree-text/60">Empty</span>
+                        {selectedRecipeId === null && (
+                          <Check className="h-4 w-4 shrink-0 text-daintree-accent" />
+                        )}
+                      </div>
+                      {globalRecipes.map((recipe) => (
+                        <div
+                          key={recipe.id}
+                          role="option"
+                          aria-selected={recipe.id === selectedRecipeId}
+                          tabIndex={0}
+                          onKeyDown={(event) => {
+                            if (event.key === "Enter" || event.key === " ") {
+                              event.preventDefault();
                               recipeSelectionTouchedRef.current = true;
                               setSelectedRecipeId(recipe.id);
                               if (projectId)
                                 setLastSelectedWorktreeRecipeIdByProject(projectId, recipe.id);
                               setRecipePickerOpen(false);
-                            }}
-                            className={cn(
-                              "flex items-center justify-between gap-2 px-2 py-1.5 text-sm rounded-[var(--radius-sm)] cursor-pointer hover:bg-daintree-border",
-                              recipe.id === selectedRecipeId && "bg-daintree-border"
-                            )}
-                          >
-                            <div className="flex items-center gap-2 min-w-0">
-                              <span className="truncate">{recipe.name}</span>
-                              <span className="text-xs text-daintree-text/50 shrink-0">
-                                {recipe.terminals.length} terminal
-                                {recipe.terminals.length !== 1 ? "s" : ""}
+                            }
+                          }}
+                          onClick={() => {
+                            recipeSelectionTouchedRef.current = true;
+                            setSelectedRecipeId(recipe.id);
+                            if (projectId)
+                              setLastSelectedWorktreeRecipeIdByProject(projectId, recipe.id);
+                            setRecipePickerOpen(false);
+                          }}
+                          className={cn(
+                            "flex items-center justify-between gap-2 px-2 py-1.5 text-sm rounded-[var(--radius-sm)] cursor-pointer hover:bg-daintree-border",
+                            recipe.id === selectedRecipeId && "bg-daintree-border"
+                          )}
+                        >
+                          <div className="flex items-center gap-2 min-w-0">
+                            <span className="truncate">{recipe.name}</span>
+                            <span className="text-xs text-daintree-text/50 shrink-0">
+                              {recipe.terminals.length} terminal
+                              {recipe.terminals.length !== 1 ? "s" : ""}
+                            </span>
+                            {recipe.id === defaultRecipeId && (
+                              <span className="text-xs text-daintree-accent shrink-0">
+                                (default)
                               </span>
-                              {recipe.id === defaultRecipeId && (
-                                <span className="text-xs text-daintree-accent shrink-0">
-                                  (default)
-                                </span>
-                              )}
-                            </div>
-                            {recipe.id === selectedRecipeId && (
-                              <Check className="h-4 w-4 shrink-0 text-daintree-accent" />
                             )}
                           </div>
-                        ))}
-                      </ScrollShadow>
-                    </PopoverContent>
-                  </Popover>
-                </div>
-              )}
+                          {recipe.id === selectedRecipeId && (
+                            <Check className="h-4 w-4 shrink-0 text-daintree-accent" />
+                          )}
+                        </div>
+                      ))}
+                    </ScrollShadow>
+                  </PopoverContent>
+                </Popover>
+              </div>
+            )}
 
-              {initialPR && prBranchResolved === false && (
-                <div className="flex items-start gap-2 p-3 bg-status-warning/10 border border-status-warning/20 rounded-[var(--radius-md)]">
-                  <AlertCircle className="w-4 h-4 text-status-warning mt-0.5 flex-shrink-0" />
-                  <p className="text-sm text-status-warning">
-                    Could not fetch branch{" "}
-                    <span className="font-mono">{initialPR.headRefName ?? "unknown"}</span> from the
-                    remote. The worktree will be created from the fallback branch instead. You can
-                    try running <span className="font-mono">git fetch origin</span> manually and
-                    reopening this dialog.
-                  </p>
-                </div>
-              )}
+            {initialPR && prBranchResolved === false && (
+              <div className="flex items-start gap-2 p-3 bg-status-warning/10 border border-status-warning/20 rounded-[var(--radius-md)]">
+                <AlertCircle className="w-4 h-4 text-status-warning mt-0.5 flex-shrink-0" />
+                <p className="text-sm text-status-warning">
+                  Could not fetch branch{" "}
+                  <span className="font-mono">{initialPR.headRefName ?? "unknown"}</span> from the
+                  remote. The worktree will be created from the fallback branch instead. You can try
+                  running <span className="font-mono">git fetch origin</span> manually and reopening
+                  this dialog.
+                </p>
+              </div>
+            )}
 
-              {validationError && (
-                <div
-                  id="validation-error"
-                  role="alert"
-                  className="flex items-start gap-2 p-3 bg-status-error/10 border border-status-error/20 rounded-[var(--radius-md)]"
-                >
+            {validationError && (
+              <div
+                id="validation-error"
+                role="alert"
+                className="flex items-start gap-2 p-3 bg-status-error/10 border border-status-error/20 rounded-[var(--radius-md)]"
+              >
+                <AlertCircle className="w-4 h-4 text-status-error mt-0.5 flex-shrink-0" />
+                <p className="text-sm text-status-error">{validationError}</p>
+              </div>
+            )}
+
+            {creationError && (
+              <div
+                role="alert"
+                className="p-3 bg-status-error/10 border border-status-error/20 rounded-[var(--radius-md)] space-y-2"
+              >
+                <div className="flex items-start gap-2">
                   <AlertCircle className="w-4 h-4 text-status-error mt-0.5 flex-shrink-0" />
-                  <p className="text-sm text-status-error">{validationError}</p>
+                  <p className="text-sm text-status-error">{creationError.friendly}</p>
                 </div>
-              )}
-
-              {creationError && (
-                <div
-                  role="alert"
-                  className="p-3 bg-status-error/10 border border-status-error/20 rounded-[var(--radius-md)] space-y-2"
-                >
-                  <div className="flex items-start gap-2">
-                    <AlertCircle className="w-4 h-4 text-status-error mt-0.5 flex-shrink-0" />
-                    <p className="text-sm text-status-error">{creationError.friendly}</p>
-                  </div>
-                  {creationError.recovery && (
-                    <button
-                      type="button"
-                      onClick={creationError.recovery.onAction}
-                      className="ml-6 text-xs font-medium text-status-error underline underline-offset-2 hover:text-status-error/80"
-                    >
-                      {creationError.recovery.label}
-                    </button>
-                  )}
-                  {creationError.raw !== creationError.friendly && (
-                    <details className="ml-6">
-                      <summary className="flex items-center gap-1 text-xs text-daintree-text/50 cursor-pointer select-none">
-                        <ChevronDown className="w-3 h-3" />
-                        Show details
-                      </summary>
-                      <pre className="mt-1.5 overflow-x-auto rounded bg-status-error/5 p-2 font-mono text-[11px] text-daintree-text/50 whitespace-pre-wrap break-all select-text">
-                        {creationError.raw}
-                      </pre>
-                    </details>
-                  )}
-                </div>
-              )}
-            </div>
-          </TooltipProvider>
+                {creationError.recovery && (
+                  <button
+                    type="button"
+                    onClick={creationError.recovery.onAction}
+                    className="ml-6 text-xs font-medium text-status-error underline underline-offset-2 hover:text-status-error/80"
+                  >
+                    {creationError.recovery.label}
+                  </button>
+                )}
+                {creationError.raw !== creationError.friendly && (
+                  <details className="ml-6">
+                    <summary className="flex items-center gap-1 text-xs text-daintree-text/50 cursor-pointer select-none">
+                      <ChevronDown className="w-3 h-3" />
+                      Show details
+                    </summary>
+                    <pre className="mt-1.5 overflow-x-auto rounded bg-status-error/5 p-2 font-mono text-[11px] text-daintree-text/50 whitespace-pre-wrap break-all select-text">
+                      {creationError.raw}
+                    </pre>
+                  </details>
+                )}
+              </div>
+            )}
+          </div>
         )}
       </AppDialog.Body>
 

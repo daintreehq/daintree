@@ -6,7 +6,7 @@ import { githubClient } from "@/clients/githubClient";
 import type { GitHubIssue } from "@shared/types/github";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { GitHubResourceRowsSkeleton } from "./GitHubDropdownSkeletons";
 
 interface IssueSelectorProps {
@@ -92,27 +92,25 @@ export function IssueSelector({
           )}
           <div className="flex items-center gap-1 shrink-0">
             {selectedIssue && !disabled && (
-              <TooltipProvider>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <span
-                      role="button"
-                      tabIndex={0}
-                      onClick={handleClear}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter" || e.key === " ") {
-                          e.preventDefault();
-                          handleClear(e as unknown as React.MouseEvent);
-                        }
-                      }}
-                      className="p-0.5 hover:bg-daintree-border rounded cursor-pointer"
-                    >
-                      <X className="h-3.5 w-3.5 text-muted-foreground hover:text-daintree-text" />
-                    </span>
-                  </TooltipTrigger>
-                  <TooltipContent side="bottom">Clear selection</TooltipContent>
-                </Tooltip>
-              </TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span
+                    role="button"
+                    tabIndex={0}
+                    onClick={handleClear}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        handleClear(e as unknown as React.MouseEvent);
+                      }
+                    }}
+                    className="p-0.5 hover:bg-daintree-border rounded cursor-pointer"
+                  >
+                    <X className="h-3.5 w-3.5 text-muted-foreground hover:text-daintree-text" />
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">Clear selection</TooltipContent>
+              </Tooltip>
             )}
             <ChevronsUpDown className="h-4 w-4 opacity-50" />
           </div>

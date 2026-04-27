@@ -21,7 +21,7 @@ import {
   useKeybindingDisplay,
 } from "@/hooks";
 import { createTooltipWithShortcut } from "@/lib/platform";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   WorktreeCard,
   type WorktreeCardProps,
@@ -892,269 +892,267 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   );
 
   return (
-    <TooltipProvider delayDuration={400} skipDelayDuration={300}>
-      <div className="flex flex-col h-full">
-        {/* Header Section */}
-        <div className="group/header flex items-center justify-between px-4 py-2 border-b border-divider bg-transparent shrink-0">
-          <div className="flex items-baseline gap-1.5">
-            <h2 className="text-daintree-text font-semibold text-sm tracking-wide">Worktrees</h2>
-            <span className="text-daintree-text/50 text-xs">
-              {hasFilters && visibleCount !== deferredWorktrees.length
-                ? `(${visibleCount} of ${deferredWorktrees.length})`
-                : `(${deferredWorktrees.length})`}
+    <div className="flex flex-col h-full">
+      {/* Header Section */}
+      <div className="group/header flex items-center justify-between px-4 py-2 border-b border-divider bg-transparent shrink-0">
+        <div className="flex items-baseline gap-1.5">
+          <h2 className="text-daintree-text font-semibold text-sm tracking-wide">Worktrees</h2>
+          <span className="text-daintree-text/50 text-xs">
+            {hasFilters && visibleCount !== deferredWorktrees.length
+              ? `(${visibleCount} of ${deferredWorktrees.length})`
+              : `(${deferredWorktrees.length})`}
+          </span>
+          {isReconnecting && (
+            <span
+              role="status"
+              aria-live="polite"
+              className="flex items-center gap-1 text-daintree-text/60 text-xs"
+            >
+              <RefreshCw className="w-3 h-3 animate-spin" aria-hidden="true" />
+              Reconnecting…
             </span>
-            {isReconnecting && (
-              <span
-                role="status"
-                aria-live="polite"
-                className="flex items-center gap-1 text-daintree-text/60 text-xs"
-              >
-                <RefreshCw className="w-3 h-3 animate-spin" aria-hidden="true" />
-                Reconnecting…
-              </span>
-            )}
-          </div>
-          <div className="flex items-center gap-1">
-            <div className="invisible group-hover/header:visible group-focus-within/header:visible flex items-center gap-1">
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <button
-                    onClick={onOpenOverview}
-                    className="p-1 text-daintree-text/40 hover:text-daintree-text hover:bg-tint/[0.06] rounded transition-colors"
-                    aria-label="Open worktrees overview"
-                  >
-                    <LayoutGrid className="w-3.5 h-3.5" />
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent side="bottom">
-                  {createTooltipWithShortcut("Open worktrees overview", overviewShortcut)}
-                </TooltipContent>
-              </Tooltip>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <button
-                    onClick={() =>
-                      actionService.dispatch("terminal.bulkCommand", undefined, {
-                        source: "user",
-                      })
-                    }
-                    className="p-1 text-daintree-text/40 hover:text-daintree-text hover:bg-tint/[0.06] rounded transition-colors"
-                    aria-label="Broadcast to armed agents"
-                  >
-                    <BroadcastTerminalIcon className="w-3.5 h-3.5" />
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent side="bottom">Broadcast to agents</TooltipContent>
-              </Tooltip>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <button
-                    onClick={handleRefreshAll}
-                    disabled={isRefreshing}
-                    className="p-1 text-daintree-text/40 hover:text-daintree-text hover:bg-tint/[0.06] rounded transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-                    aria-label="Refresh sidebar"
-                  >
-                    <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? "animate-spin" : ""}`} />
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent side="bottom">Refresh sidebar</TooltipContent>
-              </Tooltip>
-            </div>
+          )}
+        </div>
+        <div className="flex items-center gap-1">
+          <div className="invisible group-hover/header:visible group-focus-within/header:visible flex items-center gap-1">
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  onClick={onOpenOverview}
+                  className="p-1 text-daintree-text/40 hover:text-daintree-text hover:bg-tint/[0.06] rounded transition-colors"
+                  aria-label="Open worktrees overview"
+                >
+                  <LayoutGrid className="w-3.5 h-3.5" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">
+                {createTooltipWithShortcut("Open worktrees overview", overviewShortcut)}
+              </TooltipContent>
+            </Tooltip>
             <Tooltip>
               <TooltipTrigger asChild>
                 <button
                   onClick={() =>
-                    actionService.dispatch("worktree.createDialog.open", undefined, {
+                    actionService.dispatch("terminal.bulkCommand", undefined, {
                       source: "user",
                     })
                   }
                   className="p-1 text-daintree-text/40 hover:text-daintree-text hover:bg-tint/[0.06] rounded transition-colors"
-                  aria-label="Create new worktree"
+                  aria-label="Broadcast to armed agents"
                 >
-                  <Plus className="w-3.5 h-3.5" />
+                  <BroadcastTerminalIcon className="w-3.5 h-3.5" />
                 </button>
               </TooltipTrigger>
-              <TooltipContent side="bottom">Create new worktree</TooltipContent>
+              <TooltipContent side="bottom">Broadcast to agents</TooltipContent>
             </Tooltip>
-          </div>
-        </div>
-
-        {/* Inline search bar — only when there are non-main worktrees */}
-        {hasNonMainWorktrees && <WorktreeSidebarSearchBar inputRef={searchInputRef} />}
-
-        {/* Arm all terminals matching the active filter — only when a filter narrows the list */}
-        {hasNonMainWorktrees && hasFilters && filteredWorktrees.length > 0 && (
-          <div className="shrink-0 px-4 py-1.5 border-b border-divider">
             <Tooltip>
               <TooltipTrigger asChild>
                 <button
-                  type="button"
-                  onClick={() =>
-                    actionService.dispatch(
-                      "fleet.armMatchingFilter",
-                      { worktreeIds: filteredWorktrees.map((w) => w.id) },
-                      { source: "user" }
-                    )
-                  }
-                  className="w-full flex items-center justify-center gap-1.5 text-xs px-2 py-1 text-daintree-accent hover:bg-daintree-accent/10 rounded transition-colors"
-                  aria-label={`Arm ${filteredWorktrees.length} matching worktrees`}
+                  onClick={handleRefreshAll}
+                  disabled={isRefreshing}
+                  className="p-1 text-daintree-text/40 hover:text-daintree-text hover:bg-tint/[0.06] rounded transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                  aria-label="Refresh sidebar"
                 >
-                  <BroadcastTerminalIcon className="w-3 h-3" />
-                  Arm {filteredWorktrees.length} matching
+                  <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? "animate-spin" : ""}`} />
                 </button>
               </TooltipTrigger>
-              <TooltipContent side="bottom">
-                Arm all eligible terminals in the {filteredWorktrees.length} worktrees visible below
-              </TooltipContent>
+              <TooltipContent side="bottom">Refresh sidebar</TooltipContent>
             </Tooltip>
           </div>
-        )}
-
-        {/* Main worktree — visible unless excluded by text search */}
-        {mainMatchesQuery && (
-          <div
-            className="shrink-0"
-            style={{ contentVisibility: "auto", containIntrinsicSize: "auto 180px" }}
-          >
-            <StaticWorktreeRow
-              key={mainWorktree.id}
-              worktreeId={mainWorktree.id}
-              activeWorktreeId={activeWorktreeId}
-              focusedWorktreeId={focusedWorktreeId}
-              totalWorktreeCount={deferredWorktrees.length}
-              selectWorktree={selectWorktree}
-              worktreeActions={worktreeActions}
-              availability={availability}
-              agentSettings={agentSettings}
-              homeDir={homeDir}
-              aggregateCounts={mainWorktreeAggregateCounts}
-            />
-          </div>
-        )}
-
-        {/* Integration branch (develop/trunk/next) — pinned below main, subject to text search */}
-        {integrationMatchesQuery && (
-          <div
-            className="shrink-0"
-            style={{ contentVisibility: "auto", containIntrinsicSize: "auto 180px" }}
-          >
-            {renderWorktreeCard(integrationWorktree)}
-          </div>
-        )}
-
-        {/* Strong divider between pinned worktrees and scrollable list */}
-        {hasNonMainWorktrees && <div className="shrink-0 border-b border-border-default" />}
-
-        {/* Non-main worktree list */}
-        <div className="relative flex-1 min-h-0">
-          <div ref={scrollContainerRef} className="h-full overflow-y-auto scrollbar-none">
-            <div ref={scrollContentRef}>
-              {hasNonMainWorktrees && (
-                <QuickStateFilterBar
-                  value={quickStateFilter}
-                  onChange={setQuickStateFilter}
-                  counts={quickStateCounts}
-                />
-              )}
-              {filteredWorktrees.length === 0 && hasFilters && hasNonMainWorktrees ? (
-                <div className="flex flex-col items-center justify-center py-12 px-4 text-center">
-                  <FilterX className="w-10 h-10 text-daintree-text/40 mb-3" />
-                  <p className="text-sm text-daintree-text/60 mb-3">
-                    No worktrees match your filters
-                  </p>
-                  <button
-                    onClick={clearAllFilters}
-                    className="text-xs px-3 py-1.5 text-daintree-accent hover:bg-daintree-accent/10 rounded transition-colors"
-                  >
-                    Clear filters
-                  </button>
-                </div>
-              ) : groupedSections ? (
-                <div className="flex flex-col">
-                  {groupedSections.map((section) => (
-                    <div key={section.type}>
-                      <div className="sticky top-0 z-10 px-4 py-2 text-[10px] font-medium text-daintree-text/50 uppercase tracking-wide bg-daintree-sidebar border-b border-divider">
-                        {section.displayName} ({section.worktrees.length})
-                      </div>
-                      {section.worktrees.map(renderWorktreeCard)}
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <SortableContext items={sortableIds} strategy={verticalListSortingStrategy}>
-                  <div className="flex flex-col">
-                    {filteredWorktrees.map((worktree) => {
-                      const isPinned = pinnedWorktrees.includes(worktree.id);
-                      return (
-                        <SidebarWorktreeRow
-                          key={worktree.id}
-                          worktreeId={worktree.id}
-                          activeWorktreeId={activeWorktreeId}
-                          focusedWorktreeId={focusedWorktreeId}
-                          totalWorktreeCount={deferredWorktrees.length}
-                          selectWorktree={selectWorktree}
-                          worktreeActions={worktreeActions}
-                          availability={availability}
-                          agentSettings={agentSettings}
-                          homeDir={homeDir}
-                          dragStartOrder={dragStartOrder}
-                          isSortDisabled={isSortDisabled}
-                          isPinned={isPinned}
-                        />
-                      );
-                    })}
-                  </div>
-                </SortableContext>
-              )}
-            </div>
-          </div>
-          <ScrollIndicator direction="above" count={hiddenAbove} onClick={scrollToTop} />
-          <ScrollIndicator direction="below" count={hiddenBelow} onClick={scrollToBottom} />
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                onClick={() =>
+                  actionService.dispatch("worktree.createDialog.open", undefined, {
+                    source: "user",
+                  })
+                }
+                className="p-1 text-daintree-text/40 hover:text-daintree-text hover:bg-tint/[0.06] rounded transition-colors"
+                aria-label="Create new worktree"
+              >
+                <Plus className="w-3.5 h-3.5" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">Create new worktree</TooltipContent>
+          </Tooltip>
         </div>
-
-        <RecipeEditor
-          recipe={recipeManagerEdit}
-          worktreeId={recipeEditorWorktreeId}
-          initialTerminals={recipeEditorInitialTerminals}
-          defaultScope={recipeEditorDefaultScope}
-          isOpen={isRecipeEditorOpen}
-          onClose={handleCloseRecipeEditor}
-        />
-
-        <RecipeManager
-          isOpen={isRecipeManagerOpen}
-          onClose={handleCloseRecipeManager}
-          onEditRecipe={handleRecipeManagerEdit}
-          onCreateRecipe={handleRecipeManagerCreate}
-        />
-
-        {rootPath && (createDialog.isOpen || hasOpenedNewWorktree) && (
-          <Suspense fallback={null}>
-            <LazyNewWorktreeDialog
-              isOpen={createDialog.isOpen}
-              onClose={closeCreateDialog}
-              rootPath={rootPath}
-              onWorktreeCreated={(worktreeId) => {
-                refresh();
-                createDialog.onCreated?.(worktreeId);
-              }}
-              initialIssue={createDialog.initialIssue}
-              initialPR={createDialog.initialPR}
-              initialRecipeId={createDialog.initialRecipeId}
-            />
-          </Suspense>
-        )}
-
-        <BulkCreateWorktreeDialog
-          isOpen={bulkCreateDialog.isOpen}
-          onClose={closeBulkCreateDialog}
-          mode={bulkCreateDialog.mode}
-          selectedIssues={bulkCreateDialog.selectedIssues}
-          selectedPRs={bulkCreateDialog.selectedPRs}
-          onComplete={closeBulkCreateDialog}
-        />
       </div>
-    </TooltipProvider>
+
+      {/* Inline search bar — only when there are non-main worktrees */}
+      {hasNonMainWorktrees && <WorktreeSidebarSearchBar inputRef={searchInputRef} />}
+
+      {/* Arm all terminals matching the active filter — only when a filter narrows the list */}
+      {hasNonMainWorktrees && hasFilters && filteredWorktrees.length > 0 && (
+        <div className="shrink-0 px-4 py-1.5 border-b border-divider">
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                onClick={() =>
+                  actionService.dispatch(
+                    "fleet.armMatchingFilter",
+                    { worktreeIds: filteredWorktrees.map((w) => w.id) },
+                    { source: "user" }
+                  )
+                }
+                className="w-full flex items-center justify-center gap-1.5 text-xs px-2 py-1 text-daintree-accent hover:bg-daintree-accent/10 rounded transition-colors"
+                aria-label={`Arm ${filteredWorktrees.length} matching worktrees`}
+              >
+                <BroadcastTerminalIcon className="w-3 h-3" />
+                Arm {filteredWorktrees.length} matching
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">
+              Arm all eligible terminals in the {filteredWorktrees.length} worktrees visible below
+            </TooltipContent>
+          </Tooltip>
+        </div>
+      )}
+
+      {/* Main worktree — visible unless excluded by text search */}
+      {mainMatchesQuery && (
+        <div
+          className="shrink-0"
+          style={{ contentVisibility: "auto", containIntrinsicSize: "auto 180px" }}
+        >
+          <StaticWorktreeRow
+            key={mainWorktree.id}
+            worktreeId={mainWorktree.id}
+            activeWorktreeId={activeWorktreeId}
+            focusedWorktreeId={focusedWorktreeId}
+            totalWorktreeCount={deferredWorktrees.length}
+            selectWorktree={selectWorktree}
+            worktreeActions={worktreeActions}
+            availability={availability}
+            agentSettings={agentSettings}
+            homeDir={homeDir}
+            aggregateCounts={mainWorktreeAggregateCounts}
+          />
+        </div>
+      )}
+
+      {/* Integration branch (develop/trunk/next) — pinned below main, subject to text search */}
+      {integrationMatchesQuery && (
+        <div
+          className="shrink-0"
+          style={{ contentVisibility: "auto", containIntrinsicSize: "auto 180px" }}
+        >
+          {renderWorktreeCard(integrationWorktree)}
+        </div>
+      )}
+
+      {/* Strong divider between pinned worktrees and scrollable list */}
+      {hasNonMainWorktrees && <div className="shrink-0 border-b border-border-default" />}
+
+      {/* Non-main worktree list */}
+      <div className="relative flex-1 min-h-0">
+        <div ref={scrollContainerRef} className="h-full overflow-y-auto scrollbar-none">
+          <div ref={scrollContentRef}>
+            {hasNonMainWorktrees && (
+              <QuickStateFilterBar
+                value={quickStateFilter}
+                onChange={setQuickStateFilter}
+                counts={quickStateCounts}
+              />
+            )}
+            {filteredWorktrees.length === 0 && hasFilters && hasNonMainWorktrees ? (
+              <div className="flex flex-col items-center justify-center py-12 px-4 text-center">
+                <FilterX className="w-10 h-10 text-daintree-text/40 mb-3" />
+                <p className="text-sm text-daintree-text/60 mb-3">
+                  No worktrees match your filters
+                </p>
+                <button
+                  onClick={clearAllFilters}
+                  className="text-xs px-3 py-1.5 text-daintree-accent hover:bg-daintree-accent/10 rounded transition-colors"
+                >
+                  Clear filters
+                </button>
+              </div>
+            ) : groupedSections ? (
+              <div className="flex flex-col">
+                {groupedSections.map((section) => (
+                  <div key={section.type}>
+                    <div className="sticky top-0 z-10 px-4 py-2 text-[10px] font-medium text-daintree-text/50 uppercase tracking-wide bg-daintree-sidebar border-b border-divider">
+                      {section.displayName} ({section.worktrees.length})
+                    </div>
+                    {section.worktrees.map(renderWorktreeCard)}
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <SortableContext items={sortableIds} strategy={verticalListSortingStrategy}>
+                <div className="flex flex-col">
+                  {filteredWorktrees.map((worktree) => {
+                    const isPinned = pinnedWorktrees.includes(worktree.id);
+                    return (
+                      <SidebarWorktreeRow
+                        key={worktree.id}
+                        worktreeId={worktree.id}
+                        activeWorktreeId={activeWorktreeId}
+                        focusedWorktreeId={focusedWorktreeId}
+                        totalWorktreeCount={deferredWorktrees.length}
+                        selectWorktree={selectWorktree}
+                        worktreeActions={worktreeActions}
+                        availability={availability}
+                        agentSettings={agentSettings}
+                        homeDir={homeDir}
+                        dragStartOrder={dragStartOrder}
+                        isSortDisabled={isSortDisabled}
+                        isPinned={isPinned}
+                      />
+                    );
+                  })}
+                </div>
+              </SortableContext>
+            )}
+          </div>
+        </div>
+        <ScrollIndicator direction="above" count={hiddenAbove} onClick={scrollToTop} />
+        <ScrollIndicator direction="below" count={hiddenBelow} onClick={scrollToBottom} />
+      </div>
+
+      <RecipeEditor
+        recipe={recipeManagerEdit}
+        worktreeId={recipeEditorWorktreeId}
+        initialTerminals={recipeEditorInitialTerminals}
+        defaultScope={recipeEditorDefaultScope}
+        isOpen={isRecipeEditorOpen}
+        onClose={handleCloseRecipeEditor}
+      />
+
+      <RecipeManager
+        isOpen={isRecipeManagerOpen}
+        onClose={handleCloseRecipeManager}
+        onEditRecipe={handleRecipeManagerEdit}
+        onCreateRecipe={handleRecipeManagerCreate}
+      />
+
+      {rootPath && (createDialog.isOpen || hasOpenedNewWorktree) && (
+        <Suspense fallback={null}>
+          <LazyNewWorktreeDialog
+            isOpen={createDialog.isOpen}
+            onClose={closeCreateDialog}
+            rootPath={rootPath}
+            onWorktreeCreated={(worktreeId) => {
+              refresh();
+              createDialog.onCreated?.(worktreeId);
+            }}
+            initialIssue={createDialog.initialIssue}
+            initialPR={createDialog.initialPR}
+            initialRecipeId={createDialog.initialRecipeId}
+          />
+        </Suspense>
+      )}
+
+      <BulkCreateWorktreeDialog
+        isOpen={bulkCreateDialog.isOpen}
+        onClose={closeBulkCreateDialog}
+        mode={bulkCreateDialog.mode}
+        selectedIssues={bulkCreateDialog.selectedIssues}
+        selectedPRs={bulkCreateDialog.selectedPRs}
+        onComplete={closeBulkCreateDialog}
+      />
+    </div>
   );
 }
 

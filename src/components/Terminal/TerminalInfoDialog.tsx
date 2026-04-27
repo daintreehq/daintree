@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { Button } from "@/components/ui/button";
 import { Info } from "lucide-react";
-import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { TerminalInfoPayload } from "@/types/electron";
 import { actionService } from "@/services/ActionService";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
@@ -80,12 +80,10 @@ function InfoRow({ label, value, mono = false }: InfoRowProps) {
     <div className="flex justify-between items-start gap-4 text-sm">
       <span className="text-daintree-text/70 shrink-0 select-none">{label}:</span>
       {typeof displayValue === "string" ? (
-        <TooltipProvider>
-          <Tooltip>
-            <TooltipTrigger asChild>{valueElement}</TooltipTrigger>
-            <TooltipContent side="bottom">{displayValue}</TooltipContent>
-          </Tooltip>
-        </TooltipProvider>
+        <Tooltip>
+          <TooltipTrigger asChild>{valueElement}</TooltipTrigger>
+          <TooltipContent side="bottom">{displayValue}</TooltipContent>
+        </Tooltip>
       ) : (
         valueElement
       )}

@@ -17,7 +17,6 @@ import { cn } from "@/lib/utils";
 import { getProjectGradient } from "@/lib/colorUtils";
 import { AppPaletteDialog } from "@/components/ui/AppPaletteDialog";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { TooltipProvider } from "@/components/ui/tooltip";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -598,7 +597,7 @@ function ProjectPaletteInner({
   const activeResult = results[selectedIndex];
 
   return (
-    <TooltipProvider>
+    <>
       <AppPaletteDialog.Header
         label="Switch Project"
         keyHint={projectSwitcherShortcut}
@@ -703,7 +702,7 @@ function ProjectPaletteInner({
       <AppPaletteDialog.Footer>
         <ProjectSwitcherFooter mode={mode} />
       </AppPaletteDialog.Footer>
-    </TooltipProvider>
+    </>
   );
 }
 

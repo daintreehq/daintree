@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { cn } from "@/lib/utils";
 import { useEventStore, type EventRecord, type EventFilterOptions } from "@/store/eventStore";
 import { Copy, Check, ChevronDown, ChevronRight, Filter, X } from "lucide-react";
-import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 interface EventDetailProps {
   event: EventRecord | null;
@@ -24,35 +24,33 @@ function ContextPill({ label, value, filterKey, currentFilters, onToggle }: Cont
   return (
     <div className="grid grid-cols-[100px_1fr] gap-2 items-center">
       <span className="text-muted-foreground">{label}:</span>
-      <TooltipProvider>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                onToggle(filterKey, value);
-              }}
-              className={cn(
-                "group flex items-center gap-2 px-2 py-1 rounded text-xs font-mono text-left w-fit transition max-w-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-                isActive
-                  ? "bg-primary/15 text-primary border border-primary/30 hover:bg-primary/25"
-                  : "hover:bg-muted border border-transparent hover:border-border text-foreground"
-              )}
-              aria-pressed={isActive}
-            >
-              <span className="truncate">{strValue}</span>
-              {isActive ? (
-                <X className="w-3 h-3 flex-shrink-0 opacity-70" />
-              ) : (
-                <Filter className="w-3 h-3 flex-shrink-0 opacity-0 group-hover:opacity-30" />
-              )}
-            </button>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">
-            {isActive ? "Click to clear filter" : `Filter by ${label}`}
-          </TooltipContent>
-        </Tooltip>
-      </TooltipProvider>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onToggle(filterKey, value);
+            }}
+            className={cn(
+              "group flex items-center gap-2 px-2 py-1 rounded text-xs font-mono text-left w-fit transition max-w-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+              isActive
+                ? "bg-primary/15 text-primary border border-primary/30 hover:bg-primary/25"
+                : "hover:bg-muted border border-transparent hover:border-border text-foreground"
+            )}
+            aria-pressed={isActive}
+          >
+            <span className="truncate">{strValue}</span>
+            {isActive ? (
+              <X className="w-3 h-3 flex-shrink-0 opacity-70" />
+            ) : (
+              <Filter className="w-3 h-3 flex-shrink-0 opacity-0 group-hover:opacity-30" />
+            )}
+          </button>
+        </TooltipTrigger>
+        <TooltipContent side="bottom">
+          {isActive ? "Click to clear filter" : `Filter by ${label}`}
+        </TooltipContent>
+      </Tooltip>
     </div>
   );
 }
@@ -149,23 +147,21 @@ export function EventDetail({ event, className }: EventDetailProps) {
               <span className="capitalize">{event.source}</span>
             </div>
           </div>
-          <TooltipProvider>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <button
-                  onClick={copyPayload}
-                  className="flex-shrink-0 p-2 hover:bg-muted rounded transition-colors"
-                >
-                  {copied ? (
-                    <Check className="w-4 h-4 text-status-success" />
-                  ) : (
-                    <Copy className="w-4 h-4" />
-                  )}
-                </button>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">Copy payload</TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                onClick={copyPayload}
+                className="flex-shrink-0 p-2 hover:bg-muted rounded transition-colors"
+              >
+                {copied ? (
+                  <Check className="w-4 h-4 text-status-success" />
+                ) : (
+                  <Copy className="w-4 h-4" />
+                )}
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">Copy payload</TooltipContent>
+          </Tooltip>
         </div>
       </div>
 
@@ -185,14 +181,12 @@ export function EventDetail({ event, className }: EventDetailProps) {
           <div className="px-4 pb-3 space-y-2 text-sm">
             <div className="grid grid-cols-[100px_1fr] gap-2">
               <span className="text-muted-foreground">Event ID:</span>
-              <TooltipProvider>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <span className="font-mono text-xs truncate">{event.id}</span>
-                  </TooltipTrigger>
-                  <TooltipContent side="bottom">{event.id}</TooltipContent>
-                </Tooltip>
-              </TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className="font-mono text-xs truncate">{event.id}</span>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">{event.id}</TooltipContent>
+              </Tooltip>
             </div>
             <div className="grid grid-cols-[100px_1fr] gap-2">
               <span className="text-muted-foreground">Type:</span>
@@ -209,14 +203,12 @@ export function EventDetail({ event, className }: EventDetailProps) {
             {event.payload?.traceId && (
               <div className="grid grid-cols-[100px_1fr] gap-2">
                 <span className="text-muted-foreground">Trace ID:</span>
-                <TooltipProvider>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <span className="font-mono text-xs truncate">{event.payload.traceId}</span>
-                    </TooltipTrigger>
-                    <TooltipContent side="bottom">{event.payload.traceId}</TooltipContent>
-                  </Tooltip>
-                </TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span className="font-mono text-xs truncate">{event.payload.traceId}</span>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">{event.payload.traceId}</TooltipContent>
+                </Tooltip>
               </div>
             )}
           </div>

@@ -3,7 +3,6 @@ import { useShallow } from "zustand/react/shallow";
 import { Virtuoso, VirtuosoHandle } from "react-virtuoso";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
-import { TooltipProvider } from "@/components/ui/tooltip";
 import { useLogsStore, filterLogs, collapseConsecutiveDuplicates } from "@/store";
 import { LogEntry, type LogEntryCopyMeta } from "../Logs/LogEntry";
 import { LogFilters } from "../Logs/LogFilters";
@@ -204,70 +203,68 @@ export function LogsContent({ className, onSourcesChange }: LogsContentProps) {
   }, [setAutoScroll]);
 
   return (
-    <TooltipProvider>
-      <div className={cn("flex flex-col h-full", className)}>
-        <LogFilters
-          filters={filters}
-          onFiltersChange={setFilters}
-          onClear={clearFilters}
-          availableSources={sources}
-          levelCounts={levelCounts}
-        />
+    <div className={cn("flex flex-col h-full", className)}>
+      <LogFilters
+        filters={filters}
+        onFiltersChange={setFilters}
+        onClear={clearFilters}
+        availableSources={sources}
+        levelCounts={levelCounts}
+      />
 
-        {previousSessionEntry && !filters?.search && (
-          <div className="shrink-0 max-h-48 overflow-y-auto overflow-x-hidden border-b border-daintree-border bg-surface-panel/50 p-3">
-            <div className="flex items-center gap-2 text-text-secondary text-xs font-medium mb-2">
-              <div className="w-2 h-2 rounded-full bg-text-secondary/40" />
-              <span>Previous session</span>
-            </div>
-            <pre className="text-xs text-text-muted whitespace-pre-wrap break-all font-mono">
-              {String(previousSessionEntry.context?.tail || "")}
-            </pre>
+      {previousSessionEntry && !filters?.search && (
+        <div className="shrink-0 max-h-48 overflow-y-auto overflow-x-hidden border-b border-daintree-border bg-surface-panel/50 p-3">
+          <div className="flex items-center gap-2 text-text-secondary text-xs font-medium mb-2">
+            <div className="w-2 h-2 rounded-full bg-text-secondary/40" />
+            <span>Previous session</span>
           </div>
+          <pre className="text-xs text-text-muted whitespace-pre-wrap break-all font-mono">
+            {String(previousSessionEntry.context?.tail || "")}
+          </pre>
+        </div>
+      )}
+
+      <div className="flex-1 relative min-h-0">
+        {displayEntries.length === 0 ? (
+          <div className="flex items-center justify-center h-full text-daintree-text/60 text-sm">
+            {logs.length === 0 && !previousSessionEntry
+              ? "No logs yet"
+              : logs.length === 0
+                ? "No new logs this session"
+                : "No logs match filters"}
+          </div>
+        ) : (
+          <Virtuoso
+            ref={virtuosoRef}
+            data={displayEntries}
+            followOutput={autoScroll ? "smooth" : false}
+            atBottomStateChange={handleAtBottomChange}
+            computeItemKey={(_index, display) => display.entry.id}
+            itemContent={(_index, display) => (
+              <LogEntry
+                entry={display.entry}
+                count={display.count}
+                copyMeta={copyMeta}
+                isExpanded={expandedIds.has(display.entry.id)}
+                onToggle={() => toggleExpanded(display.entry.id)}
+              />
+            )}
+            className="absolute inset-0 overflow-y-auto overflow-x-hidden font-mono"
+          />
         )}
 
-        <div className="flex-1 relative min-h-0">
-          {displayEntries.length === 0 ? (
-            <div className="flex items-center justify-center h-full text-daintree-text/60 text-sm">
-              {logs.length === 0 && !previousSessionEntry
-                ? "No logs yet"
-                : logs.length === 0
-                  ? "No new logs this session"
-                  : "No logs match filters"}
-            </div>
-          ) : (
-            <Virtuoso
-              ref={virtuosoRef}
-              data={displayEntries}
-              followOutput={autoScroll ? "smooth" : false}
-              atBottomStateChange={handleAtBottomChange}
-              computeItemKey={(_index, display) => display.entry.id}
-              itemContent={(_index, display) => (
-                <LogEntry
-                  entry={display.entry}
-                  count={display.count}
-                  copyMeta={copyMeta}
-                  isExpanded={expandedIds.has(display.entry.id)}
-                  onToggle={() => toggleExpanded(display.entry.id)}
-                />
-              )}
-              className="absolute inset-0 overflow-y-auto overflow-x-hidden font-mono"
-            />
-          )}
-
-          {!atBottom && displayEntries.length > 0 && (
-            <Button
-              variant="info"
-              size="sm"
-              className="absolute bottom-4 right-4 rounded-full shadow-[var(--theme-shadow-floating)] tabular-nums"
-              onClick={scrollToBottom}
-              aria-label={newCount > 0 ? `Resume tail, ${newCount} new` : "Scroll to bottom"}
-            >
-              {newCount > 0 ? `↓ ${newCount} new` : "Scroll to bottom"}
-            </Button>
-          )}
-        </div>
+        {!atBottom && displayEntries.length > 0 && (
+          <Button
+            variant="info"
+            size="sm"
+            className="absolute bottom-4 right-4 rounded-full shadow-[var(--theme-shadow-floating)] tabular-nums"
+            onClick={scrollToBottom}
+            aria-label={newCount > 0 ? `Resume tail, ${newCount} new` : "Scroll to bottom"}
+          >
+            {newCount > 0 ? `↓ ${newCount} new` : "Scroll to bottom"}
+          </Button>
+        )}
       </div>
-    </TooltipProvider>
+    </div>
   );
 }

@@ -7,7 +7,7 @@ import {
   type ConsoleMessage,
   EMPTY_MESSAGES,
 } from "@/store/consoleCaptureStore";
-import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ObjectInspector } from "./ObjectInspector";
 import { StackTrace } from "./StackTrace";
 
@@ -297,38 +297,34 @@ export function ConsolePanel({ paneId, height = 200, webContentsId }: ConsolePan
 
         {/* Scroll to bottom */}
         {!isAtBottom && (
-          <TooltipProvider>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <button
-                  type="button"
-                  onClick={handleScrollToBottom}
-                  className="p-1 rounded hover:bg-overlay-medium text-daintree-text/50 hover:text-daintree-text transition-colors"
-                >
-                  <ChevronDown className="w-3.5 h-3.5" />
-                </button>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">Scroll to bottom</TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
-        )}
-
-        {/* Clear */}
-        <TooltipProvider>
           <Tooltip>
             <TooltipTrigger asChild>
               <button
                 type="button"
-                onClick={() => clearMessages(paneId)}
+                onClick={handleScrollToBottom}
                 className="p-1 rounded hover:bg-overlay-medium text-daintree-text/50 hover:text-daintree-text transition-colors"
-                aria-label="Clear console"
               >
-                <Trash2 className="w-3.5 h-3.5" />
+                <ChevronDown className="w-3.5 h-3.5" />
               </button>
             </TooltipTrigger>
-            <TooltipContent side="bottom">Clear console</TooltipContent>
+            <TooltipContent side="bottom">Scroll to bottom</TooltipContent>
           </Tooltip>
-        </TooltipProvider>
+        )}
+
+        {/* Clear */}
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              type="button"
+              onClick={() => clearMessages(paneId)}
+              className="p-1 rounded hover:bg-overlay-medium text-daintree-text/50 hover:text-daintree-text transition-colors"
+              aria-label="Clear console"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">Clear console</TooltipContent>
+        </Tooltip>
       </div>
 
       {/* Message list */}

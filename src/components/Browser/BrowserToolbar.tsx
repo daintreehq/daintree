@@ -19,7 +19,7 @@ import { cn } from "@/lib/utils";
 import { normalizeBrowserUrl, getDisplayUrl } from "./browserUtils";
 import { actionService } from "@/services/ActionService";
 import { useUrlHistoryStore, getFrecencySuggestions } from "@/store/urlHistoryStore";
-import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { ViewportPresetId } from "@shared/types/panel";
 import { VIEWPORT_PRESET_LIST, getViewportPreset } from "@/panels/dev-preview/viewportPresets";
 
@@ -275,165 +275,151 @@ export function BrowserToolbar({
   return (
     <div className="flex items-center gap-1.5 px-2 py-1.5 bg-surface border-b border-overlay">
       {/* Navigation buttons */}
-      <TooltipProvider>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <span className="inline-flex">
-              <button
-                type="button"
-                onClick={onBack}
-                disabled={!canGoBack}
-                className={buttonClass}
-                aria-label="Go back"
-                data-testid="browser-back"
-              >
-                <ArrowLeft className="w-4 h-4" />
-              </button>
-            </span>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">Go back</TooltipContent>
-        </Tooltip>
-      </TooltipProvider>
-      <TooltipProvider>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <span className="inline-flex">
-              <button
-                type="button"
-                onClick={onForward}
-                disabled={!canGoForward}
-                className={buttonClass}
-                aria-label="Go forward"
-                data-testid="browser-forward"
-              >
-                <ArrowRight className="w-4 h-4" />
-              </button>
-            </span>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">Go forward</TooltipContent>
-        </Tooltip>
-      </TooltipProvider>
-      <TooltipProvider>
-        <Tooltip>
-          <TooltipTrigger asChild>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <span className="inline-flex">
             <button
               type="button"
-              onClick={(e) => {
-                if (e.shiftKey && onHardReload) {
-                  onHardReload();
-                } else {
-                  onReload();
-                }
-              }}
-              className={cn(buttonClass, isLoading && "animate-spin")}
-              aria-label="Reload"
-              data-testid="browser-reload"
+              onClick={onBack}
+              disabled={!canGoBack}
+              className={buttonClass}
+              aria-label="Go back"
+              data-testid="browser-back"
             >
-              <RotateCw className="w-4 h-4" />
+              <ArrowLeft className="w-4 h-4" />
             </button>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">
-            {onHardReload ? "Reload (Shift+click for hard reload)" : "Reload"}
-          </TooltipContent>
-        </Tooltip>
-      </TooltipProvider>
+          </span>
+        </TooltipTrigger>
+        <TooltipContent side="bottom">Go back</TooltipContent>
+      </Tooltip>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <span className="inline-flex">
+            <button
+              type="button"
+              onClick={onForward}
+              disabled={!canGoForward}
+              className={buttonClass}
+              aria-label="Go forward"
+              data-testid="browser-forward"
+            >
+              <ArrowRight className="w-4 h-4" />
+            </button>
+          </span>
+        </TooltipTrigger>
+        <TooltipContent side="bottom">Go forward</TooltipContent>
+      </Tooltip>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button
+            type="button"
+            onClick={(e) => {
+              if (e.shiftKey && onHardReload) {
+                onHardReload();
+              } else {
+                onReload();
+              }
+            }}
+            className={cn(buttonClass, isLoading && "animate-spin")}
+            aria-label="Reload"
+            data-testid="browser-reload"
+          >
+            <RotateCw className="w-4 h-4" />
+          </button>
+        </TooltipTrigger>
+        <TooltipContent side="bottom">
+          {onHardReload ? "Reload (Shift+click for hard reload)" : "Reload"}
+        </TooltipContent>
+      </Tooltip>
 
       {/* Zoom controls */}
       {onZoomChange && (
         <div className="flex items-center gap-0.5">
-          <TooltipProvider>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <span className="inline-flex">
-                  <button
-                    type="button"
-                    onClick={() => handleZoomStep("out")}
-                    disabled={!canZoomOut}
-                    className={buttonClass}
-                    aria-label="Zoom out"
-                  >
-                    <ZoomOut className="w-3.5 h-3.5" />
-                  </button>
-                </span>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">Zoom out</TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
-          <TooltipProvider>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <span className="inline-flex">
-                  <button
-                    type="button"
-                    onClick={handleZoomReset}
-                    disabled={!isNonDefaultZoom}
-                    className={cn(
-                      "px-1.5 py-1 rounded text-xs font-medium transition-colors",
-                      "hover:bg-overlay-medium disabled:opacity-40 disabled:cursor-not-allowed",
-                      isNonDefaultZoom ? "text-status-info" : "text-daintree-text/60"
-                    )}
-                    aria-label="Reset zoom"
-                  >
-                    {currentZoomLabel}
-                  </button>
-                </span>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">Reset zoom to 100%</TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
-          <TooltipProvider>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <span className="inline-flex">
-                  <button
-                    type="button"
-                    onClick={() => handleZoomStep("in")}
-                    disabled={!canZoomIn}
-                    className={buttonClass}
-                    aria-label="Zoom in"
-                  >
-                    <ZoomIn className="w-3.5 h-3.5" />
-                  </button>
-                </span>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">Zoom in</TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span className="inline-flex">
+                <button
+                  type="button"
+                  onClick={() => handleZoomStep("out")}
+                  disabled={!canZoomOut}
+                  className={buttonClass}
+                  aria-label="Zoom out"
+                >
+                  <ZoomOut className="w-3.5 h-3.5" />
+                </button>
+              </span>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">Zoom out</TooltipContent>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span className="inline-flex">
+                <button
+                  type="button"
+                  onClick={handleZoomReset}
+                  disabled={!isNonDefaultZoom}
+                  className={cn(
+                    "px-1.5 py-1 rounded text-xs font-medium transition-colors",
+                    "hover:bg-overlay-medium disabled:opacity-40 disabled:cursor-not-allowed",
+                    isNonDefaultZoom ? "text-status-info" : "text-daintree-text/60"
+                  )}
+                  aria-label="Reset zoom"
+                >
+                  {currentZoomLabel}
+                </button>
+              </span>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">Reset zoom to 100%</TooltipContent>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span className="inline-flex">
+                <button
+                  type="button"
+                  onClick={() => handleZoomStep("in")}
+                  disabled={!canZoomIn}
+                  className={buttonClass}
+                  aria-label="Zoom in"
+                >
+                  <ZoomIn className="w-3.5 h-3.5" />
+                </button>
+              </span>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">Zoom in</TooltipContent>
+          </Tooltip>
         </div>
       )}
 
       {/* Viewport preset selector (dev-preview only) */}
       {onViewportPresetChange && (
         <div className="flex items-center">
-          <TooltipProvider>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (viewportPreset) {
-                      onViewportPresetChange(undefined);
-                    } else {
-                      onViewportPresetChange("iphone");
-                    }
-                  }}
-                  className={cn(
-                    buttonClass,
-                    viewportPreset && "bg-overlay-emphasis text-daintree-text"
-                  )}
-                  aria-label="Viewport preset"
-                  aria-pressed={!!viewportPreset}
-                >
-                  <Smartphone className="w-4 h-4" />
-                </button>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">
-                {viewportPreset
-                  ? `Viewport: ${getViewportPreset(viewportPreset).label}`
-                  : "Responsive viewport"}
-              </TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                onClick={() => {
+                  if (viewportPreset) {
+                    onViewportPresetChange(undefined);
+                  } else {
+                    onViewportPresetChange("iphone");
+                  }
+                }}
+                className={cn(
+                  buttonClass,
+                  viewportPreset && "bg-overlay-emphasis text-daintree-text"
+                )}
+                aria-label="Viewport preset"
+                aria-pressed={!!viewportPreset}
+              >
+                <Smartphone className="w-4 h-4" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">
+              {viewportPreset
+                ? `Viewport: ${getViewportPreset(viewportPreset).label}`
+                : "Responsive viewport"}
+            </TooltipContent>
+          </Tooltip>
           {viewportPreset && (
             <div className="flex items-center ml-0.5">
               {VIEWPORT_PRESET_LIST.map((preset) => (
@@ -467,16 +453,14 @@ export function BrowserToolbar({
           <div className="relative flex items-center">
             <Globe className="absolute left-2 w-3.5 h-3.5 text-daintree-text/40 pointer-events-none" />
             {urlMightBeStale && !isEditing && (
-              <TooltipProvider>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <span className="absolute left-6 w-1.5 h-1.5 rounded-full bg-status-warning/60" />
-                  </TooltipTrigger>
-                  <TooltipContent side="bottom">
-                    URL may differ from page shown (in-page navigation)
-                  </TooltipContent>
-                </Tooltip>
-              </TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className="absolute left-6 w-1.5 h-1.5 rounded-full bg-status-warning/60" />
+                </TooltipTrigger>
+                <TooltipContent side="bottom">
+                  URL may differ from page shown (in-page navigation)
+                </TooltipContent>
+              </Tooltip>
             )}
             <input
               ref={inputRef}
@@ -589,93 +573,80 @@ export function BrowserToolbar({
       </div>
 
       {/* Action buttons */}
-      <TooltipProvider>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <button type="button" onClick={handleCopy} className={buttonClass}>
-              {copied ? (
-                <Check className="w-4 h-4 text-status-success" />
-              ) : (
-                <Copy className="w-4 h-4" />
-              )}
-            </button>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">Copy URL</TooltipContent>
-        </Tooltip>
-      </TooltipProvider>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button type="button" onClick={handleCopy} className={buttonClass}>
+            {copied ? (
+              <Check className="w-4 h-4 text-status-success" />
+            ) : (
+              <Copy className="w-4 h-4" />
+            )}
+          </button>
+        </TooltipTrigger>
+        <TooltipContent side="bottom">Copy URL</TooltipContent>
+      </Tooltip>
 
       {onCaptureScreenshot && (
-        <TooltipProvider>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <button
-                type="button"
-                onClick={onCaptureScreenshot}
-                disabled={!isWebviewReady}
-                className={buttonClass}
-                aria-label="Capture screenshot"
-              >
-                <Camera className="w-4 h-4" />
-              </button>
-            </TooltipTrigger>
-            <TooltipContent side="bottom">Copy screenshot to clipboard</TooltipContent>
-          </Tooltip>
-        </TooltipProvider>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              type="button"
+              onClick={onCaptureScreenshot}
+              disabled={!isWebviewReady}
+              className={buttonClass}
+              aria-label="Capture screenshot"
+            >
+              <Camera className="w-4 h-4" />
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">Copy screenshot to clipboard</TooltipContent>
+        </Tooltip>
       )}
 
       {onToggleConsole && (
-        <TooltipProvider>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <button
-                type="button"
-                onClick={onToggleConsole}
-                className={cn(
-                  buttonClass,
-                  isConsoleOpen && "bg-overlay-emphasis text-daintree-text"
-                )}
-                aria-label="Toggle console"
-                aria-pressed={isConsoleOpen}
-              >
-                <SquareTerminal className="w-4 h-4" />
-              </button>
-            </TooltipTrigger>
-            <TooltipContent side="bottom">
-              {isConsoleOpen ? "Hide console" : "Show console"}
-            </TooltipContent>
-          </Tooltip>
-        </TooltipProvider>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              type="button"
+              onClick={onToggleConsole}
+              className={cn(buttonClass, isConsoleOpen && "bg-overlay-emphasis text-daintree-text")}
+              aria-label="Toggle console"
+              aria-pressed={isConsoleOpen}
+            >
+              <SquareTerminal className="w-4 h-4" />
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">
+            {isConsoleOpen ? "Hide console" : "Show console"}
+          </TooltipContent>
+        </Tooltip>
       )}
 
       {onToggleDevTools && (
-        <TooltipProvider>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <button
-                type="button"
-                onClick={onToggleDevTools}
-                disabled={!isWebviewReady}
-                className={buttonClass}
-                aria-label="Toggle DevTools"
-              >
-                <Code className="w-4 h-4" />
-              </button>
-            </TooltipTrigger>
-            <TooltipContent side="bottom">Open DevTools</TooltipContent>
-          </Tooltip>
-        </TooltipProvider>
-      )}
-
-      <TooltipProvider>
         <Tooltip>
           <TooltipTrigger asChild>
-            <button type="button" onClick={onOpenExternal} className={buttonClass}>
-              <ExternalLink className="w-4 h-4" />
+            <button
+              type="button"
+              onClick={onToggleDevTools}
+              disabled={!isWebviewReady}
+              className={buttonClass}
+              aria-label="Toggle DevTools"
+            >
+              <Code className="w-4 h-4" />
             </button>
           </TooltipTrigger>
-          <TooltipContent side="bottom">Open in browser</TooltipContent>
+          <TooltipContent side="bottom">Open DevTools</TooltipContent>
         </Tooltip>
-      </TooltipProvider>
+      )}
+
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button type="button" onClick={onOpenExternal} className={buttonClass}>
+            <ExternalLink className="w-4 h-4" />
+          </button>
+        </TooltipTrigger>
+        <TooltipContent side="bottom">Open in browser</TooltipContent>
+      </Tooltip>
     </div>
   );
 }
