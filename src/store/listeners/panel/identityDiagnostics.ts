@@ -3,8 +3,9 @@ import { usePanelStore } from "@/store/panelStore";
 // Circular log of identity events for live diagnostics. Open devtools and
 // call `__daintreeIdentityEvents()` to inspect the last N detected/exited
 // events per terminal. The log is append-only, capped, and has no effect
-// on store behavior. The whole module is dead-code-eliminated by Rolldown
-// in production because every emission is gated by `import.meta.env.DEV`.
+// on store behavior. Every function body is gated by `import.meta.env.DEV`
+// so Rolldown DCE strips the writes and `window` global installation in
+// production builds; the empty ring buffer allocation itself is harmless.
 const IDENTITY_LOG_CAP = 200;
 
 interface IdentityEventEntry {

@@ -254,6 +254,23 @@ describe("reduceAgentExited", () => {
     expect(result!.agentState).toBeUndefined();
   });
 
+  it("clears process runtimeIdentity on plain process exit", () => {
+    const terminal = makeTerminal({
+      detectedProcessId: "npm",
+      runtimeIdentity: { kind: "process", id: "npm", iconId: "npm", processId: "npm" },
+    });
+    const result = reduceAgentExited(terminal, {
+      hasAgentType: false,
+      exitKind: undefined,
+      timestamp: 9000,
+    });
+    expect(result).not.toBeNull();
+    expect(result!.detectedProcessId).toBeUndefined();
+    expect(result!.runtimeIdentity).toBeUndefined();
+    expect(result!.agentState).toBeUndefined();
+    expect(result!.lastStateChange).toBeUndefined();
+  });
+
   it("updates title on demotion when titleMode=default", () => {
     const terminal = makeTerminal({
       detectedAgentId: "claude",
