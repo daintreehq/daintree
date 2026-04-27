@@ -135,7 +135,9 @@ vi.mock("@/components/ui/button", () => ({
 
 vi.mock("@/components/ui/tooltip", () => ({
   Tooltip: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-  TooltipContent: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  TooltipContent: ({ children }: { children: React.ReactNode }) => (
+    <span data-testid="tooltip-content">{children}</span>
+  ),
   TooltipProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
   TooltipTrigger: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }));
@@ -158,6 +160,32 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
     <div
       role="menuitem"
       data-testid="preset-item"
+      className={className}
+      onClick={(e) => onSelect?.(e as unknown as Event)}
+    >
+      {children}
+    </div>
+  ),
+  DropdownMenuRadioGroup: ({ children, value }: { children: React.ReactNode; value?: string }) => (
+    <div data-testid="preset-radio-group" data-value={value ?? ""}>
+      {children}
+    </div>
+  ),
+  DropdownMenuRadioItem: ({
+    children,
+    onSelect,
+    value,
+    className,
+  }: {
+    children: React.ReactNode;
+    onSelect?: (e: Event) => void;
+    value: string;
+    className?: string;
+  }) => (
+    <div
+      role="menuitemradio"
+      data-testid="preset-item"
+      data-value={value}
       className={className}
       onClick={(e) => onSelect?.(e as unknown as Event)}
     >
@@ -198,6 +226,29 @@ vi.mock("@/components/ui/context-menu", () => ({
         if (disabled) return;
         onSelect?.(e as unknown as Event);
       }}
+    >
+      {children}
+    </div>
+  ),
+  ContextMenuRadioGroup: ({ children, value }: { children: React.ReactNode; value?: string }) => (
+    <div data-testid="context-radio-group" data-value={value ?? ""}>
+      {children}
+    </div>
+  ),
+  ContextMenuRadioItem: ({
+    children,
+    onSelect,
+    value,
+  }: {
+    children: React.ReactNode;
+    onSelect?: (e: Event) => void;
+    value: string;
+  }) => (
+    <div
+      role="menuitemradio"
+      data-testid="context-radio-item"
+      data-value={value}
+      onClick={(e) => onSelect?.(e as unknown as Event)}
     >
       {children}
     </div>
@@ -497,6 +548,155 @@ describe("AgentButton preset UX", () => {
         "agent.launch",
         { agentId: "claude", presetId: "user-alpha" },
         { source: "user" }
+      );
+    });
+  });
+
+  describe("tooltip surfaces active preset", () => {
+    function tooltipTexts(getAllByTestId: (id: string) => HTMLElement[]): string[] {
+      return getAllByTestId("tooltip-content").map((el) => el.textContent ?? "");
+    }
+
+    it("appends the saved preset name to the launch tooltip", () => {
+      mockSettings = settingsWith({ claude: { presetId: "user-blue" } });
+      mockMergedPresetsFn = () => [
+        { id: "user-blue", name: "Blue" },
+        { id: "user-red", name: "Red" },
+      ];
+
+      const { getAllByTestId } = render(
+        <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
+      );
+      expect(tooltipTexts(getAllByTestId)).toContain("Start Claude · Blue");
+    });
+
+    it("strips the CCR routing prefix from the saved preset name", () => {
+      mockSettings = settingsWith({ claude: { presetId: "ccr-sonnet" } });
+      mockMergedPresetsFn = () => [{ id: "ccr-sonnet", name: "CCR: Sonnet 4.5" }];
+
+      const { getAllByTestId } = render(
+        <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
+      );
+      expect(tooltipTexts(getAllByTestId)).toContain("Start Claude · Sonnet 4.5");
+    });
+
+    it("omits the preset segment when no preset is saved", () => {
+      mockSettings = settingsWith({ claude: {} });
+      mockMergedPresetsFn = () => [{ id: "user-blue", name: "Blue" }];
+
+      const { getAllByTestId } = render(
+        <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
+      );
+      const texts = tooltipTexts(getAllByTestId);
+      expect(texts).toContain("Start Claude");
+      // No `·` segment leaks in via the launch tooltip when nothing is armed.
+      const launchTooltip = texts.find((t) => t.startsWith("Start "));
+      expect(launchTooltip).toBeDefined();
+      expect(launchTooltip).not.toContain("·");
+    });
+
+    it("omits the preset segment when the saved id no longer matches a preset", () => {
+      // Stale id (preset deleted) — fall back to plain tooltip rather than
+      // surfacing a phantom name.
+      mockSettings = settingsWith({ claude: { presetId: "ghost" } });
+      mockMergedPresetsFn = () => [{ id: "user-blue", name: "Blue" }];
+
+      const { getAllByTestId } = render(
+        <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
+      );
+      const texts = tooltipTexts(getAllByTestId);
+      expect(texts).toContain("Start Claude");
+      const launchTooltip = texts.find((t) => t.startsWith("Start "));
+      expect(launchTooltip).not.toContain("·");
+    });
+
+    it("renders a chevron-specific tooltip distinct from the launch tooltip", () => {
+      mockSettings = settingsWith({ claude: {} });
+      mockMergedPresetsFn = () => [{ id: "user-blue", name: "Blue" }];
+
+      const { getAllByTestId } = render(
+        <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
+      );
+      expect(tooltipTexts(getAllByTestId)).toContain("Choose Claude preset");
+    });
+
+    it("preserves the preset segment when the sign-in probe is unconfirmed", () => {
+      // Edge case: agent is `ready` but the auth probe came back empty.
+      // The user still has an armed preset that will fire on click — the
+      // tooltip should surface it rather than silently dropping the segment.
+      mockSettings = settingsWith({ claude: { presetId: "user-blue" } });
+      mockMergedPresetsFn = () => [{ id: "user-blue", name: "Blue" }];
+      mockCliDetails = { claude: { authConfirmed: false } };
+
+      const { getAllByTestId } = render(
+        <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
+      );
+      const texts = tooltipTexts(getAllByTestId);
+      const launchTooltip = texts.find((t) => t.startsWith("Start "));
+      expect(launchTooltip).toContain("· Blue");
+      expect(launchTooltip).toContain("sign-in not detected");
+    });
+  });
+
+  describe("radio indicator", () => {
+    it("dropdown radio group reflects the saved preset id", () => {
+      mockSettings = settingsWith({ claude: { presetId: "user-blue" } });
+      mockMergedPresetsFn = () => [
+        { id: "user-blue", name: "Blue" },
+        { id: "user-red", name: "Red" },
+      ];
+
+      const { getByTestId } = render(
+        <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
+      );
+      expect(getByTestId("preset-radio-group").getAttribute("data-value")).toBe("user-blue");
+    });
+
+    it("dropdown radio group falls back to empty string when no preset is saved", () => {
+      mockSettings = settingsWith({ claude: {} });
+      mockMergedPresetsFn = () => [{ id: "user-blue", name: "Blue" }];
+
+      const { getByTestId } = render(
+        <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
+      );
+      // The Default radio item is rendered with value="" so the group
+      // resolves to that item when nothing is saved.
+      expect(getByTestId("preset-radio-group").getAttribute("data-value")).toBe("");
+    });
+
+    it("context-menu radio group reflects the saved preset id", () => {
+      mockSettings = settingsWith({ claude: { presetId: "user-blue" } });
+      mockMergedPresetsFn = () => [
+        { id: "user-blue", name: "Blue" },
+        { id: "user-red", name: "Red" },
+      ];
+
+      const { getByTestId } = render(
+        <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
+      );
+      expect(getByTestId("context-radio-group").getAttribute("data-value")).toBe("user-blue");
+    });
+
+    it("context-menu preset selection dispatches with source 'context-menu'", () => {
+      mockActiveWorktreeId = "wt-A";
+      mockSettings = settingsWith({ claude: {} });
+      mockMergedPresetsFn = () => [
+        { id: "user-blue", name: "Blue" },
+        { id: "user-red", name: "Red" },
+      ];
+
+      const { getAllByTestId } = render(
+        <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
+      );
+      const items = getAllByTestId("context-radio-item") as HTMLElement[];
+      const blueItem = items.find((el) => el.textContent?.includes("Blue"))!;
+      fireEvent.click(blueItem);
+
+      expect(updateWorktreePresetMock).toHaveBeenCalledWith("claude", "wt-A", "user-blue");
+      expect(dispatchMock).toHaveBeenCalledWith(
+        "agent.launch",
+        { agentId: "claude", presetId: "user-blue" },
+        { source: "context-menu" }
       );
     });
   });

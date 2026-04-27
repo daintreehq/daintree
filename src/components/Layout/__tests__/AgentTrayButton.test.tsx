@@ -186,6 +186,32 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
   DropdownMenuLabel: ({ children }: { children: React.ReactNode }) => (
     <div data-testid="menu-label">{children}</div>
   ),
+  DropdownMenuRadioGroup: ({ children, value }: { children: React.ReactNode; value?: string }) => (
+    <div data-testid="preset-radio-group" data-value={value ?? ""}>
+      {children}
+    </div>
+  ),
+  DropdownMenuRadioItem: ({
+    children,
+    onSelect,
+    value,
+    className,
+  }: {
+    children: React.ReactNode;
+    onSelect?: (e: Event) => void;
+    value: string;
+    className?: string;
+  }) => (
+    <div
+      role="menuitemradio"
+      data-testid="preset-radio-item"
+      data-value={value}
+      className={className}
+      onClick={(e) => onSelect?.(e as unknown as Event)}
+    >
+      {children}
+    </div>
+  ),
   DropdownMenuSeparator: () => <hr data-testid="menu-separator" />,
   DropdownMenuShortcut: ({ children }: { children: React.ReactNode }) => (
     <span data-testid="menu-shortcut">{children}</span>
@@ -1053,6 +1079,59 @@ describe("AgentTrayButton", () => {
       const { getByTestId } = render(<AgentTrayButton agentAvailability={availability} />);
       const row = getByTestId("agent-tray-row-claude");
       expect(badgeIn(row)).toBeNull();
+    });
+  });
+
+  describe("SplitLaunchItem saved-preset indicator", () => {
+    function arrangeAgentWithPresets() {
+      const availability = { claude: "ready" } as unknown as CliAvailability;
+      mockMergedPresetsFn = (agentId: string) =>
+        agentId === "claude"
+          ? [
+              { id: "user-alpha", name: "Alpha" },
+              { id: "user-beta", name: "Beta" },
+            ]
+          : [];
+      return availability;
+    }
+
+    it("threads the worktree-scoped saved preset id into the submenu radio group", () => {
+      mockActiveWorktreeId = "wt-A";
+      mockSettings = settingsWith({
+        claude: {
+          presetId: "user-alpha",
+          worktreePresets: { "wt-A": "user-beta" },
+        } as unknown as { pinned?: boolean },
+      });
+      const availability = arrangeAgentWithPresets();
+
+      const { getAllByTestId } = render(<AgentTrayButton agentAvailability={availability} />);
+      const groups = getAllByTestId("preset-radio-group");
+      // The worktree-scoped pick wins over the agent-level default — the
+      // submenu radio group resolves to "user-beta".
+      expect(groups[0]!.getAttribute("data-value")).toBe("user-beta");
+    });
+
+    it("falls back to the agent-level preset when no worktree override exists", () => {
+      mockActiveWorktreeId = "wt-A";
+      mockSettings = settingsWith({
+        claude: { presetId: "user-alpha" } as unknown as { pinned?: boolean },
+      });
+      const availability = arrangeAgentWithPresets();
+
+      const { getAllByTestId } = render(<AgentTrayButton agentAvailability={availability} />);
+      const groups = getAllByTestId("preset-radio-group");
+      expect(groups[0]!.getAttribute("data-value")).toBe("user-alpha");
+    });
+
+    it("resolves to empty string when nothing is saved (Default armed)", () => {
+      mockActiveWorktreeId = null;
+      mockSettings = settingsWith({ claude: { pinned: false } });
+      const availability = arrangeAgentWithPresets();
+
+      const { getAllByTestId } = render(<AgentTrayButton agentAvailability={availability} />);
+      const groups = getAllByTestId("preset-radio-group");
+      expect(groups[0]!.getAttribute("data-value")).toBe("");
     });
   });
 });

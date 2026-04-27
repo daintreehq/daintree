@@ -17,6 +17,8 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
   DropdownMenuSeparator,
   DropdownMenuShortcut,
   DropdownMenuSub,
@@ -44,6 +46,7 @@ import { useKeybindingDisplay } from "@/hooks";
 import { useAgentDiscoveryOnboarding } from "@/hooks/app/useAgentDiscoveryOnboarding";
 import { BUILT_IN_AGENT_IDS, type BuiltInAgentId } from "@shared/config/agentIds";
 import type { CliAvailability, AgentState } from "@shared/types";
+import { resolveEffectivePresetId } from "@shared/types";
 import { isAgentReady, isAgentInstalled } from "../../../shared/utils/agentAvailability";
 import { isAgentPinned } from "../../../shared/utils/agentPinned";
 import {
@@ -67,6 +70,7 @@ type AgentRow = {
   isNew: boolean;
   presets?: AgentPreset[];
   projectPresetIds: Set<string>;
+  savedPresetId?: string;
 };
 
 const ACTIVE_AGENT_STATES: ReadonlySet<AgentState | undefined> = new Set<AgentState | undefined>([
@@ -83,7 +87,8 @@ function buildAgentRow(
   isNew: boolean,
   customPresets?: AgentPreset[],
   ccrPresets?: AgentPreset[],
-  projectPresets?: AgentPreset[]
+  projectPresets?: AgentPreset[],
+  savedPresetId?: string
 ): AgentRow | null {
   const config = getAgentConfig(id);
   if (!config) return null;
@@ -98,6 +103,7 @@ function buildAgentRow(
     isNew,
     presets: hasPresets ? presets : undefined,
     projectPresetIds: new Set((projectPresets ?? []).map((f) => f.id)),
+    savedPresetId,
   };
 }
 
@@ -187,54 +193,68 @@ function SplitLaunchItem({ row, onLaunch }: SplitLaunchItemProps) {
         </span>
       </DropdownMenuSubTrigger>
       <DropdownMenuSubContent data-testid="submenu-content">
-        <DropdownMenuItem onSelect={() => onLaunch(row.id, null)}>
-          <span className="inline-flex h-4 w-4 items-center justify-center shrink-0 mr-1.5">
-            <row.Icon brandColor={getBrandColorHex(row.id)} />
-          </span>
-          Default
-        </DropdownMenuItem>
-        {ccrPresets.length > 0 && (
-          <>
-            {hasMultipleGroups && <DropdownMenuSeparator />}
-            {hasMultipleGroups && <DropdownMenuLabel>CCR Routes</DropdownMenuLabel>}
-            {ccrPresets.map((preset) => (
-              <DropdownMenuItem key={preset.id} onSelect={() => onLaunch(row.id, preset.id)}>
-                <span className="inline-flex h-4 w-4 items-center justify-center shrink-0 mr-1.5">
-                  <row.Icon brandColor={preset.color ?? getBrandColorHex(row.id)} />
-                </span>
-                {preset.name.replace(/^CCR:\s*/, "")}
-              </DropdownMenuItem>
-            ))}
-          </>
-        )}
-        {projectPresets.length > 0 && (
-          <>
-            {hasMultipleGroups && <DropdownMenuSeparator />}
-            {hasMultipleGroups && <DropdownMenuLabel>Project Shared</DropdownMenuLabel>}
-            {projectPresets.map((preset) => (
-              <DropdownMenuItem key={preset.id} onSelect={() => onLaunch(row.id, preset.id)}>
-                <span className="inline-flex h-4 w-4 items-center justify-center shrink-0 mr-1.5">
-                  <row.Icon brandColor={preset.color ?? getBrandColorHex(row.id)} />
-                </span>
-                {preset.name}
-              </DropdownMenuItem>
-            ))}
-          </>
-        )}
-        {customPresets.length > 0 && (
-          <>
-            {hasMultipleGroups && <DropdownMenuSeparator />}
-            {hasMultipleGroups && <DropdownMenuLabel>Custom</DropdownMenuLabel>}
-            {customPresets.map((preset) => (
-              <DropdownMenuItem key={preset.id} onSelect={() => onLaunch(row.id, preset.id)}>
-                <span className="inline-flex h-4 w-4 items-center justify-center shrink-0 mr-1.5">
-                  <row.Icon brandColor={preset.color ?? getBrandColorHex(row.id)} />
-                </span>
-                {preset.name}
-              </DropdownMenuItem>
-            ))}
-          </>
-        )}
+        <DropdownMenuRadioGroup value={row.savedPresetId ?? ""}>
+          <DropdownMenuRadioItem value="" onSelect={() => onLaunch(row.id, null)}>
+            <span className="inline-flex h-4 w-4 items-center justify-center shrink-0 mr-1.5">
+              <row.Icon brandColor={getBrandColorHex(row.id)} />
+            </span>
+            Default
+          </DropdownMenuRadioItem>
+          {ccrPresets.length > 0 && (
+            <>
+              {hasMultipleGroups && <DropdownMenuSeparator />}
+              {hasMultipleGroups && <DropdownMenuLabel>CCR Routes</DropdownMenuLabel>}
+              {ccrPresets.map((preset) => (
+                <DropdownMenuRadioItem
+                  key={preset.id}
+                  value={preset.id}
+                  onSelect={() => onLaunch(row.id, preset.id)}
+                >
+                  <span className="inline-flex h-4 w-4 items-center justify-center shrink-0 mr-1.5">
+                    <row.Icon brandColor={preset.color ?? getBrandColorHex(row.id)} />
+                  </span>
+                  {preset.name.replace(/^CCR:\s*/, "")}
+                </DropdownMenuRadioItem>
+              ))}
+            </>
+          )}
+          {projectPresets.length > 0 && (
+            <>
+              {hasMultipleGroups && <DropdownMenuSeparator />}
+              {hasMultipleGroups && <DropdownMenuLabel>Project Shared</DropdownMenuLabel>}
+              {projectPresets.map((preset) => (
+                <DropdownMenuRadioItem
+                  key={preset.id}
+                  value={preset.id}
+                  onSelect={() => onLaunch(row.id, preset.id)}
+                >
+                  <span className="inline-flex h-4 w-4 items-center justify-center shrink-0 mr-1.5">
+                    <row.Icon brandColor={preset.color ?? getBrandColorHex(row.id)} />
+                  </span>
+                  {preset.name}
+                </DropdownMenuRadioItem>
+              ))}
+            </>
+          )}
+          {customPresets.length > 0 && (
+            <>
+              {hasMultipleGroups && <DropdownMenuSeparator />}
+              {hasMultipleGroups && <DropdownMenuLabel>Custom</DropdownMenuLabel>}
+              {customPresets.map((preset) => (
+                <DropdownMenuRadioItem
+                  key={preset.id}
+                  value={preset.id}
+                  onSelect={() => onLaunch(row.id, preset.id)}
+                >
+                  <span className="inline-flex h-4 w-4 items-center justify-center shrink-0 mr-1.5">
+                    <row.Icon brandColor={preset.color ?? getBrandColorHex(row.id)} />
+                  </span>
+                  {preset.name}
+                </DropdownMenuRadioItem>
+              ))}
+            </>
+          )}
+        </DropdownMenuRadioGroup>
       </DropdownMenuSubContent>
     </DropdownMenuSub>
   );
@@ -379,9 +399,11 @@ export function AgentTrayButton({
     for (const id of BUILT_IN_AGENT_IDS) {
       const pinned = isAgentPinned(agentSettings?.agents?.[id]);
       const dominant = agentDominantStates.get(id) ?? null;
-      const customPresets = agentSettings?.agents?.[id]?.customPresets;
+      const entry = agentSettings?.agents?.[id];
+      const customPresets = entry?.customPresets;
       const ccrPresets = ccrPresetsByAgent[id];
       const projectPresets = projectPresetsByAgent[id];
+      const savedPresetId = resolveEffectivePresetId(entry, activeWorktreeId);
       const row = buildAgentRow(
         id,
         pinned,
@@ -389,7 +411,8 @@ export function AgentTrayButton({
         newAgentIds.has(id),
         customPresets,
         ccrPresets,
-        projectPresets
+        projectPresets,
+        savedPresetId
       );
       if (!row) continue;
 
@@ -438,6 +461,7 @@ export function AgentTrayButton({
     newAgentIds,
     ccrPresetsByAgent,
     projectPresetsByAgent,
+    activeWorktreeId,
   ]);
 
   const handleLaunch = useCallback(

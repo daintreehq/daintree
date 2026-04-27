@@ -5,8 +5,9 @@ import { ShortcutRevealChip } from "@/components/ui/ShortcutRevealChip";
 import {
   DropdownMenu,
   DropdownMenuContent,
-  DropdownMenuItem,
   DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
@@ -20,6 +21,8 @@ import {
   ContextMenu,
   ContextMenuContent,
   ContextMenuItem,
+  ContextMenuRadioGroup,
+  ContextMenuRadioItem,
   ContextMenuSeparator,
   ContextMenuSub,
   ContextMenuSubContent,
@@ -185,6 +188,10 @@ export function AgentButton({
   // Worktree-scoped pick wins over the agent-level default so switching
   // worktrees doesn't silently surface another worktree's selection.
   const savedPresetId = resolveEffectivePresetId(entry, activeWorktreeId);
+  const activePreset = savedPresetId ? presets.find((p) => p.id === savedPresetId) : undefined;
+  // CCR presets carry the routing prefix in their stored name; strip it for
+  // display so the tooltip and menu surfaces show the same human label.
+  const activePresetName = activePreset ? activePreset.name.replace(/^CCR:\s*/, "") : null;
   // Group by source. Project presets are identified by membership so that a
   // project preset whose id happens to start with "ccr-" still lands in
   // "Project Shared" rather than being stolen by the CCR group. Everything
@@ -219,15 +226,17 @@ export function AgentButton({
   // because the CLI itself will prompt for sign-in on first run.
   const signInUnconfirmed = isReady && cliDetail?.authConfirmed === false;
 
+  const presetSegment = activePresetName ? ` · ${activePresetName}` : "";
   const tooltip = isLoading
     ? `Checking ${config.name} CLI availability...`
     : isReady
       ? signInUnconfirmed
-        ? `Start ${config.name} — sign-in not detected${shortcut}`
-        : `Start ${config.name}${tooltipDetails}${shortcut}`
+        ? `Start ${config.name}${presetSegment} — sign-in not detected${shortcut}`
+        : `Start ${config.name}${presetSegment}${tooltipDetails}${shortcut}`
       : needsSetup
         ? `${config.name} needs setup. Click to configure.`
         : `${config.name} CLI not found. Click to install.`;
+  const chevronTooltip = `Choose ${config.name} preset`;
 
   const ariaLabel = isLoading
     ? `Checking ${config.name} availability`
@@ -385,9 +394,9 @@ export function AgentButton({
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <span className="inline-flex">
+        <span className="inline-flex">
+          <Tooltip>
+            <TooltipTrigger asChild>
               <Button
                 variant="ghost"
                 size="icon"
@@ -405,7 +414,12 @@ export function AgentButton({
                 {iconElement}
                 <ShortcutRevealChip actionId={`agent.${type}`} />
               </Button>
-              <DropdownMenu>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">{tooltip}</TooltipContent>
+          </Tooltip>
+          <DropdownMenu>
+            <Tooltip>
+              <TooltipTrigger asChild>
                 <DropdownMenuTrigger asChild>
                   <Button
                     variant="ghost"
@@ -417,111 +431,113 @@ export function AgentButton({
                       "hover:text-[var(--toolbar-control-hover-fg,var(--theme-accent-primary))] focus-visible:text-[var(--toolbar-control-hover-fg,var(--theme-accent-primary))]",
                       !isReady && !isLoading && "opacity-60"
                     )}
-                    aria-label={`Choose ${config.name} preset`}
+                    aria-label={chevronTooltip}
                   >
                     <ChevronDown className="h-3 w-3 opacity-70" />
                   </Button>
                 </DropdownMenuTrigger>
-                <DropdownMenuContent align="start" sideOffset={4} className="min-w-[12rem]">
-                  <DropdownMenuItem
-                    className={cn(!savedPresetId && "font-medium")}
-                    onSelect={() => {
-                      persistWorktreePick(undefined);
-                      void actionService.dispatch(
-                        "agent.launch",
-                        { agentId: type, presetId: null },
-                        { source: "user" }
-                      );
-                    }}
-                  >
-                    <span className="inline-flex h-4 w-4 items-center justify-center shrink-0 mr-1.5">
-                      <config.icon brandColor={getBrandColorHex(type)} />
-                    </span>
-                    Default
-                  </DropdownMenuItem>
-                  {ccrPresetGroup.length > 0 && (
-                    <>
-                      {hasMultiplePresetGroups && <DropdownMenuSeparator />}
-                      {hasMultiplePresetGroups && <DropdownMenuLabel>CCR Routes</DropdownMenuLabel>}
-                      {ccrPresetGroup.map((preset) => (
-                        <DropdownMenuItem
-                          key={preset.id}
-                          className={cn(savedPresetId === preset.id && "font-medium")}
-                          onSelect={() => {
-                            persistWorktreePick(preset.id);
-                            void actionService.dispatch(
-                              "agent.launch",
-                              { agentId: type, presetId: preset.id },
-                              { source: "user" }
-                            );
-                          }}
-                        >
-                          <span className="inline-flex h-4 w-4 items-center justify-center shrink-0 mr-1.5">
-                            <config.icon brandColor={preset.color ?? getBrandColorHex(type)} />
-                          </span>
-                          {preset.name.replace(/^CCR:\s*/, "")}
-                        </DropdownMenuItem>
-                      ))}
-                    </>
-                  )}
-                  {projectPresetGroup.length > 0 && (
-                    <>
-                      {hasMultiplePresetGroups && <DropdownMenuSeparator />}
-                      {hasMultiplePresetGroups && (
-                        <DropdownMenuLabel>Project Shared</DropdownMenuLabel>
-                      )}
-                      {projectPresetGroup.map((preset) => (
-                        <DropdownMenuItem
-                          key={preset.id}
-                          className={cn(savedPresetId === preset.id && "font-medium")}
-                          onSelect={() => {
-                            persistWorktreePick(preset.id);
-                            void actionService.dispatch(
-                              "agent.launch",
-                              { agentId: type, presetId: preset.id },
-                              { source: "user" }
-                            );
-                          }}
-                        >
-                          <span className="inline-flex h-4 w-4 items-center justify-center shrink-0 mr-1.5">
-                            <config.icon brandColor={preset.color ?? getBrandColorHex(type)} />
-                          </span>
-                          {preset.name}
-                        </DropdownMenuItem>
-                      ))}
-                    </>
-                  )}
-                  {customPresetGroup.length > 0 && (
-                    <>
-                      {hasMultiplePresetGroups && <DropdownMenuSeparator />}
-                      {hasMultiplePresetGroups && <DropdownMenuLabel>Custom</DropdownMenuLabel>}
-                      {customPresetGroup.map((preset) => (
-                        <DropdownMenuItem
-                          key={preset.id}
-                          className={cn(savedPresetId === preset.id && "font-medium")}
-                          onSelect={() => {
-                            persistWorktreePick(preset.id);
-                            void actionService.dispatch(
-                              "agent.launch",
-                              { agentId: type, presetId: preset.id },
-                              { source: "user" }
-                            );
-                          }}
-                        >
-                          <span className="inline-flex h-4 w-4 items-center justify-center shrink-0 mr-1.5">
-                            <config.icon brandColor={preset.color ?? getBrandColorHex(type)} />
-                          </span>
-                          {preset.name}
-                        </DropdownMenuItem>
-                      ))}
-                    </>
-                  )}
-                </DropdownMenuContent>
-              </DropdownMenu>
-            </span>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">{tooltip}</TooltipContent>
-        </Tooltip>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">{chevronTooltip}</TooltipContent>
+            </Tooltip>
+            <DropdownMenuContent align="start" sideOffset={4} className="min-w-[12rem]">
+              <DropdownMenuRadioGroup value={savedPresetId ?? ""}>
+                <DropdownMenuRadioItem
+                  value=""
+                  onSelect={() => {
+                    persistWorktreePick(undefined);
+                    void actionService.dispatch(
+                      "agent.launch",
+                      { agentId: type, presetId: null },
+                      { source: "user" }
+                    );
+                  }}
+                >
+                  <span className="inline-flex h-4 w-4 items-center justify-center shrink-0 mr-1.5">
+                    <config.icon brandColor={getBrandColorHex(type)} />
+                  </span>
+                  Default
+                </DropdownMenuRadioItem>
+                {ccrPresetGroup.length > 0 && (
+                  <>
+                    {hasMultiplePresetGroups && <DropdownMenuSeparator />}
+                    {hasMultiplePresetGroups && <DropdownMenuLabel>CCR Routes</DropdownMenuLabel>}
+                    {ccrPresetGroup.map((preset) => (
+                      <DropdownMenuRadioItem
+                        key={preset.id}
+                        value={preset.id}
+                        onSelect={() => {
+                          persistWorktreePick(preset.id);
+                          void actionService.dispatch(
+                            "agent.launch",
+                            { agentId: type, presetId: preset.id },
+                            { source: "user" }
+                          );
+                        }}
+                      >
+                        <span className="inline-flex h-4 w-4 items-center justify-center shrink-0 mr-1.5">
+                          <config.icon brandColor={preset.color ?? getBrandColorHex(type)} />
+                        </span>
+                        {preset.name.replace(/^CCR:\s*/, "")}
+                      </DropdownMenuRadioItem>
+                    ))}
+                  </>
+                )}
+                {projectPresetGroup.length > 0 && (
+                  <>
+                    {hasMultiplePresetGroups && <DropdownMenuSeparator />}
+                    {hasMultiplePresetGroups && (
+                      <DropdownMenuLabel>Project Shared</DropdownMenuLabel>
+                    )}
+                    {projectPresetGroup.map((preset) => (
+                      <DropdownMenuRadioItem
+                        key={preset.id}
+                        value={preset.id}
+                        onSelect={() => {
+                          persistWorktreePick(preset.id);
+                          void actionService.dispatch(
+                            "agent.launch",
+                            { agentId: type, presetId: preset.id },
+                            { source: "user" }
+                          );
+                        }}
+                      >
+                        <span className="inline-flex h-4 w-4 items-center justify-center shrink-0 mr-1.5">
+                          <config.icon brandColor={preset.color ?? getBrandColorHex(type)} />
+                        </span>
+                        {preset.name}
+                      </DropdownMenuRadioItem>
+                    ))}
+                  </>
+                )}
+                {customPresetGroup.length > 0 && (
+                  <>
+                    {hasMultiplePresetGroups && <DropdownMenuSeparator />}
+                    {hasMultiplePresetGroups && <DropdownMenuLabel>Custom</DropdownMenuLabel>}
+                    {customPresetGroup.map((preset) => (
+                      <DropdownMenuRadioItem
+                        key={preset.id}
+                        value={preset.id}
+                        onSelect={() => {
+                          persistWorktreePick(preset.id);
+                          void actionService.dispatch(
+                            "agent.launch",
+                            { agentId: type, presetId: preset.id },
+                            { source: "user" }
+                          );
+                        }}
+                      >
+                        <span className="inline-flex h-4 w-4 items-center justify-center shrink-0 mr-1.5">
+                          <config.icon brandColor={preset.color ?? getBrandColorHex(type)} />
+                        </span>
+                        {preset.name}
+                      </DropdownMenuRadioItem>
+                    ))}
+                  </>
+                )}
+              </DropdownMenuRadioGroup>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </span>
       </ContextMenuTrigger>
       <ContextMenuContent>
         <ContextMenuItem
@@ -552,22 +568,37 @@ export function AgentButton({
           <ContextMenuSub>
             <ContextMenuSubTrigger disabled={!isReady}>Launch with Preset</ContextMenuSubTrigger>
             <ContextMenuSubContent data-testid="context-submenu-content">
-              {presets.map((preset) => (
-                <ContextMenuItem
-                  key={preset.id}
+              <ContextMenuRadioGroup value={savedPresetId ?? ""}>
+                <ContextMenuRadioItem
+                  value=""
                   onSelect={() => {
-                    persistWorktreePick(preset.id);
+                    persistWorktreePick(undefined);
                     void actionService.dispatch(
                       "agent.launch",
-                      { agentId: type, presetId: preset.id },
+                      { agentId: type, presetId: null },
                       { source: "context-menu" }
                     );
                   }}
                 >
-                  {preset.name}
-                  {savedPresetId === preset.id ? " ✓" : ""}
-                </ContextMenuItem>
-              ))}
+                  Default
+                </ContextMenuRadioItem>
+                {presets.map((preset) => (
+                  <ContextMenuRadioItem
+                    key={preset.id}
+                    value={preset.id}
+                    onSelect={() => {
+                      persistWorktreePick(preset.id);
+                      void actionService.dispatch(
+                        "agent.launch",
+                        { agentId: type, presetId: preset.id },
+                        { source: "context-menu" }
+                      );
+                    }}
+                  >
+                    {preset.name.replace(/^CCR:\s*/, "")}
+                  </ContextMenuRadioItem>
+                ))}
+              </ContextMenuRadioGroup>
             </ContextMenuSubContent>
           </ContextMenuSub>
         )}
