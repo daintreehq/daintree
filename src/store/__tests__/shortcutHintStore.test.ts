@@ -8,6 +8,7 @@ describe("shortcutHintStore", () => {
       hydrated: false,
       pointer: null,
       activeHint: null,
+      hintedHover: new Set(),
     });
     vi.stubGlobal("window", {
       electron: {
@@ -189,6 +190,12 @@ describe("shortcutHintStore", () => {
 
     expect(resultA).toBe(true);
     expect(resultB).toBe(false);
+  });
+
+  it("isHoverEligible returns false before hydration", () => {
+    const s = shortcutHintStore.getState();
+    // Store starts with hydrated: false (set in beforeEach)
+    expect(s.isHoverEligible("nav.quickSwitcher")).toBe(false);
   });
 
   // --- Hover path tests ---

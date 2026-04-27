@@ -54,6 +54,7 @@ export const ToolbarSettingsButton = memo(function ToolbarSettingsButton({
                   settingsHover.onPointerEnter(e);
                 }}
                 onPointerLeave={settingsHover.onPointerLeave}
+                onPointerDown={settingsHover.onPointerDown}
                 className={toolbarIconButtonClass}
                 aria-label="Open settings"
               >

@@ -117,6 +117,34 @@ describe("useShortcutHintHover", () => {
     expect(shortcutHintStore.getState().activeHint).toBeNull();
   });
 
+  it("cancels dwell timer on pointer down", () => {
+    shortcutHintStore.getState().hydrateCounts({ "nav.toggleSidebar": 0 });
+
+    const { result } = renderHook(() => useShortcutHintHover("nav.toggleSidebar"));
+
+    act(() => {
+      vi.advanceTimersByTime(10);
+    });
+
+    act(() => {
+      result.current.onPointerEnter(createPointerEvent(100, 200));
+    });
+
+    act(() => {
+      vi.advanceTimersByTime(1000);
+    });
+
+    // Pointer down should cancel the timer
+    act(() => {
+      result.current.onPointerDown();
+    });
+
+    act(() => {
+      vi.advanceTimersByTime(600);
+    });
+    expect(shortcutHintStore.getState().activeHint).toBeNull();
+  });
+
   it("suppresses hint for non-milestone non-zero count", () => {
     getDisplayComboMock.mockReturnValue("⌘B");
     // Count 4 is not a milestone
@@ -149,7 +177,7 @@ describe("useShortcutHintHover", () => {
       vi.advanceTimersByTime(10);
     });
 
-    // First hover — should trigger
+    // First hover — should trigger (and auto-mark as shown via markHoverShown)
     act(() => {
       result.current.onPointerEnter(createPointerEvent(100, 200));
     });
@@ -158,9 +186,8 @@ describe("useShortcutHintHover", () => {
     });
     expect(shortcutHintStore.getState().activeHint).not.toBeNull();
 
-    // Reset hint
+    // Clear hint display for second hover cycle
     shortcutHintStore.getState().hide();
-    shortcutHintStore.getState().markHoverShown("nav.toggleSidebar");
 
     // Second hover at same count — should NOT trigger (one-shot)
     act(() => {

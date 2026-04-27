@@ -89,7 +89,8 @@ export const shortcutHintStore = createStore<ShortcutHintStore>((set, get) => ({
   },
 
   isHoverEligible(actionId: string): boolean {
-    const { counts, hintedHover } = get();
+    const { hydrated, counts, hintedHover } = get();
+    if (!hydrated) return false;
     const count = counts[actionId] ?? 0;
 
     // Count 0 is eligible for pre-use discovery, but still one-shot gated

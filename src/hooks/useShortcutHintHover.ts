@@ -27,6 +27,13 @@ export function useShortcutHintHover(actionId: string) {
     return unsub;
   }, [actionId]);
 
+  const clearTimer = () => {
+    if (timerRef.current) {
+      clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+  };
+
   // Fire the hint at dwell time — reads fresh store state to avoid stale closures.
   const fireDwell = useEffectEvent((clientX: number, clientY: number) => {
     const displayCombo = displayComboRef.current;
@@ -45,12 +52,7 @@ export function useShortcutHintHover(actionId: string) {
   });
 
   useEffect(() => {
-    return () => {
-      if (timerRef.current) {
-        clearTimeout(timerRef.current);
-        timerRef.current = null;
-      }
-    };
+    return () => clearTimer();
   }, []);
 
   const onPointerEnter = (e: React.PointerEvent) => {
@@ -70,11 +72,12 @@ export function useShortcutHintHover(actionId: string) {
   };
 
   const onPointerLeave = () => {
-    if (timerRef.current) {
-      clearTimeout(timerRef.current);
-      timerRef.current = null;
-    }
+    clearTimer();
   };
 
-  return { onPointerEnter, onPointerLeave };
+  const onPointerDown = () => {
+    clearTimer();
+  };
+
+  return { onPointerEnter, onPointerLeave, onPointerDown };
 }
