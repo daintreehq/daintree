@@ -36,6 +36,7 @@ import { events } from "../events.js";
 import { AgentSpawnedSchema } from "../../schemas/agent.js";
 import type { PtyPool } from "../PtyPool.js";
 import { installHeadlessResponder } from "./headlessResponder.js";
+import { handleOscColorQueries } from "./OscResponder.js";
 import { classifyExitOutput, shouldTriggerFallback } from "./FallbackErrorClassifier.js";
 
 // Extracted modules
@@ -93,20 +94,6 @@ const SHELL_PROMPT_PATTERNS = [
   /^\s*[A-Za-z0-9_.-]+@[\w.-]+(?:\s+[^\r\n]*)?\s*[#$%>]\s*$/,
   /^\s*[➜➤➟➔❯›]\s+.*$/,
 ] as const;
-// OSC 10/11 "?" queries terminated by BEL (\x07) or ST (\x1b\\).
-// Trigger and strip must use the same terminator-requiring pattern: if we
-// responded on an unterminated fragment but stripped only terminated ones,
-// a split chunk would leak the fragment to the renderer and double-respond
-// once xterm.js re-assembles the sequence.
-// eslint-disable-next-line no-control-regex
-const OSC_10_QUERY_RE = /\x1b\]10;\?(?:\x07|\x1b\\)/;
-// eslint-disable-next-line no-control-regex
-const OSC_11_QUERY_RE = /\x1b\]11;\?(?:\x07|\x1b\\)/;
-// eslint-disable-next-line no-control-regex
-const OSC_10_QUERY_STRIP_RE = /\x1b\]10;\?(?:\x07|\x1b\\)/g;
-// eslint-disable-next-line no-control-regex
-const OSC_11_QUERY_STRIP_RE = /\x1b\]11;\?(?:\x07|\x1b\\)/g;
-
 // Backend-side identity for internal decisions (activity monitor pattern
 // lookup, event routing). Detection wins; during the boot window the launch
 // hint is used so cold-launched terminals start monitoring before the
@@ -1834,39 +1821,16 @@ export class TerminalProcess {
         this.ensureHeadlessResponder();
       }
 
-      // Respond to OSC 10/11 (foreground/background color queries) whenever the
-      // terminal is agent-owned — spawn-time agent panel OR runtime-promoted
-      // plain terminal. Without this, termenv (Bubble Tea / OpenCode / Gemini CLI)
-      // blocks for 5 seconds PER query waiting for responses that never come.
-      // The renderer's xterm.js (@xterm/xterm BrowserTerminal) also replies to
-      // OSC 10/11 by default; to keep exactly one responder active, we strip
-      // queries whose backend response succeeded from data forwarded to the
-      // renderer. If a write fails, we leave that query intact so the renderer
-      // can still satisfy it and the TUI agent does not hang.
+      // OSC 10/11 color queries are answered whenever the terminal is agent-owned
+      // (spawn-time agent panel OR runtime-promoted plain terminal). The
+      // call-site gate and quick-test heuristic stay here; the responder logic
+      // lives in OscResponder. See OscResponder.ts for the strip-on-success
+      // contract that keeps the renderer's xterm.js from double-responding.
       let rendererData = data;
       if (this.shouldHandleOscColorQueries && data.includes("\x1b]1")) {
-        const has10 = OSC_10_QUERY_RE.test(data);
-        const has11 = OSC_11_QUERY_RE.test(data);
-        let handled10 = false;
-        let handled11 = false;
-        if (has10) {
-          try {
-            terminal.ptyProcess.write("\x1b]10;rgb:cccc/cccc/cccc\x1b\\");
-            handled10 = true;
-          } catch (error) {
-            this.logWriteError(error, { operation: "write(osc-color-response)" });
-          }
-        }
-        if (has11) {
-          try {
-            terminal.ptyProcess.write("\x1b]11;rgb:0000/0000/0000\x1b\\");
-            handled11 = true;
-          } catch (error) {
-            this.logWriteError(error, { operation: "write(osc-color-response)" });
-          }
-        }
-        if (handled10) rendererData = rendererData.replace(OSC_10_QUERY_STRIP_RE, "");
-        if (handled11) rendererData = rendererData.replace(OSC_11_QUERY_STRIP_RE, "");
+        rendererData = handleOscColorQueries(data, (response) => {
+          terminal.ptyProcess.write(response);
+        });
       }
 
       terminal.headlessTerminal?.write(data);
