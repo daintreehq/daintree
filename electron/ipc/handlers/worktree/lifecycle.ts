@@ -10,7 +10,9 @@ import type * as SoundServiceModule from "../../../services/SoundService.js";
 type SoundId = keyof typeof SoundServiceModule.SOUND_FILES;
 
 function playSoundFireAndForget(id: SoundId): void {
-  void getSoundService().then((svc) => svc.play(id));
+  void getSoundService()
+    .then((svc) => svc.play(id))
+    .catch((err) => console.error("[worktree.lifecycle] sound play failed:", err));
 }
 import {
   checkRateLimit,

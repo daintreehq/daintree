@@ -21,7 +21,9 @@ import type * as SoundServiceModule from "../../services/SoundService.js";
 type SoundId = keyof typeof SoundServiceModule.SOUND_FILES;
 
 function playSoundFireAndForget(id: SoundId): void {
-  void getSoundService().then((svc) => svc.play(id));
+  void getSoundService()
+    .then((svc) => svc.play(id))
+    .catch((err) => console.error("[git-write] sound play failed:", err));
 }
 import { preAgentSnapshotService } from "../../services/PreAgentSnapshotService.js";
 import type { SnapshotInfo, SnapshotRevertResult } from "../../../shared/types/ipc/git.js";

@@ -410,7 +410,9 @@ export function createApplicationMenu(
               {
                 label: "Check for Updates...",
                 click: () => {
-                  void checkForUpdatesManually();
+                  checkForUpdatesManually().catch((err) =>
+                    console.error("[menu] checkForUpdatesManually failed:", err)
+                  );
                 },
               },
             ]
@@ -432,7 +434,9 @@ export function createApplicationMenu(
               {
                 label: "Check for Updates...",
                 click: () => {
-                  void checkForUpdatesManually();
+                  checkForUpdatesManually().catch((err) =>
+                    console.error("[menu] checkForUpdatesManually failed:", err)
+                  );
                 },
               },
             ]

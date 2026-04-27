@@ -136,7 +136,9 @@ export function registerNotificationHandlers(_deps: HandlerDependencies): () => 
   const handleSyncWatched = (_event: Electron.IpcMainEvent, payload: unknown): void => {
     if (!Array.isArray(payload)) return;
     const ids = payload.filter((v): v is string => typeof v === "string");
-    void getAgentNotificationService().then((svc) => svc.syncWatchedPanels(ids));
+    void getAgentNotificationService()
+      .then((svc) => svc.syncWatchedPanels(ids))
+      .catch((err) => console.error("[notifications] syncWatched failed:", err));
   };
 
   const handlePlayUiEvent = async (soundId: unknown): Promise<void> => {
@@ -153,7 +155,9 @@ export function registerNotificationHandlers(_deps: HandlerDependencies): () => 
     const p = payload as Record<string, unknown>;
     if (typeof p.terminalId !== "string") return;
     const terminalId = p.terminalId;
-    void getAgentNotificationService().then((svc) => svc.acknowledgeWaiting(terminalId));
+    void getAgentNotificationService()
+      .then((svc) => svc.acknowledgeWaiting(terminalId))
+      .catch((err) => console.error("[notifications] acknowledgeWaiting failed:", err));
   };
 
   const handleWorkingPulseAcknowledge = (_event: Electron.IpcMainEvent, payload: unknown): void => {
@@ -161,7 +165,9 @@ export function registerNotificationHandlers(_deps: HandlerDependencies): () => 
     const p = payload as Record<string, unknown>;
     if (typeof p.terminalId !== "string") return;
     const terminalId = p.terminalId;
-    void getAgentNotificationService().then((svc) => svc.acknowledgeWorkingPulse(terminalId));
+    void getAgentNotificationService()
+      .then((svc) => svc.acknowledgeWorkingPulse(terminalId))
+      .catch((err) => console.error("[notifications] acknowledgeWorkingPulse failed:", err));
   };
 
   const handleSessionMuteSet = (_event: Electron.IpcMainEvent, payload: unknown): void => {
@@ -169,7 +175,9 @@ export function registerNotificationHandlers(_deps: HandlerDependencies): () => 
     const p = payload as Record<string, unknown>;
     if (typeof p.timestampMs !== "number" || !Number.isFinite(p.timestampMs)) return;
     const ts = p.timestampMs;
-    void getAgentNotificationService().then((svc) => svc.setSessionMuteUntil(ts));
+    void getAgentNotificationService()
+      .then((svc) => svc.setSessionMuteUntil(ts))
+      .catch((err) => console.error("[notifications] setSessionMuteUntil failed:", err));
   };
 
   const handleShowNative = (_event: Electron.IpcMainEvent, payload: unknown): void => {

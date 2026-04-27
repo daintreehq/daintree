@@ -20,13 +20,20 @@ export function registerDevPreviewHandlers(deps: HandlerDependencies): () => voi
   async function getSessionService(): Promise<DevPreviewSessionServiceType> {
     if (sessionService) return sessionService;
     if (!sessionServicePromise) {
-      sessionServicePromise = import("../../services/DevPreviewSessionService.js").then((mod) => {
-        sessionService = new mod.DevPreviewSessionService(deps.ptyClient!, (state) => {
-          const payload: DevPreviewStateChangedPayload = { state };
-          broadcastToRenderer(CHANNELS.DEV_PREVIEW_STATE_CHANGED, payload);
+      sessionServicePromise = import("../../services/DevPreviewSessionService.js")
+        .then((mod) => {
+          sessionService = new mod.DevPreviewSessionService(deps.ptyClient!, (state) => {
+            const payload: DevPreviewStateChangedPayload = { state };
+            broadcastToRenderer(CHANNELS.DEV_PREVIEW_STATE_CHANGED, payload);
+          });
+          return sessionService;
+        })
+        .catch((err) => {
+          // Reset cached promise on failure so the next call can retry instead
+          // of returning a permanently-rejected promise.
+          sessionServicePromise = null;
+          throw err;
         });
-        return sessionService;
-      });
     }
     return sessionServicePromise;
   }
