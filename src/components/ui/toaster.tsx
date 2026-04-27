@@ -64,6 +64,15 @@ function Toast({ notification }: { notification: Notification }) {
   }, []);
 
   useEffect(() => {
+    if (
+      import.meta.env.DEV &&
+      typeof notification.message !== "string" &&
+      !notification.inboxMessage
+    ) {
+      console.error(
+        "[Toaster] non-string message without inboxMessage — aria-live announcement will be empty."
+      );
+    }
     const text =
       typeof notification.message === "string"
         ? notification.message

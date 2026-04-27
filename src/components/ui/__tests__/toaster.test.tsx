@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import React from "react";
 import { render, screen, act, fireEvent } from "@testing-library/react";
 import { describe, expect, it, beforeEach, vi, afterEach } from "vitest";
 import { useNotificationStore } from "@/store/notificationStore";
@@ -722,5 +723,56 @@ describe("Toast severity-based dismissal (issue #5859)", () => {
       vi.advanceTimersByTime(60_000);
     });
     expect(screen.getByText("Stuck")).toBeTruthy();
+  });
+
+  describe("dev guard — inboxMessage invariant", () => {
+    it("logs dev guard when non-string message has no inboxMessage", async () => {
+      const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      render(<Toaster />);
+      const jsxElement = React.createElement("span", null, "rich");
+      await act(async () => {
+        addToast({ message: jsxElement as unknown as React.ReactNode });
+        vi.advanceTimersByTime(16);
+      });
+
+      expect(consoleSpy).toHaveBeenCalledWith(
+        expect.stringContaining("[Toaster] non-string message without inboxMessage")
+      );
+      consoleSpy.mockRestore();
+    });
+
+    it("does NOT log toaster guard when non-string message has inboxMessage", async () => {
+      const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      render(<Toaster />);
+      const jsxElement = React.createElement("span", null, "rich");
+      await act(async () => {
+        addToast({
+          message: jsxElement as unknown as React.ReactNode,
+          inboxMessage: "Fallback text",
+        });
+        vi.advanceTimersByTime(16);
+      });
+
+      const toasterGuardCall = consoleSpy.mock.calls.find(
+        (call) => typeof call[0] === "string" && call[0].includes("[Toaster]")
+      );
+      expect(toasterGuardCall).toBeUndefined();
+      consoleSpy.mockRestore();
+    });
+
+    it("does NOT log toaster guard for string message without inboxMessage", async () => {
+      const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      render(<Toaster />);
+      await act(async () => {
+        addToast({ message: "Plain string" });
+        vi.advanceTimersByTime(16);
+      });
+
+      const toasterGuardCall = consoleSpy.mock.calls.find(
+        (call) => typeof call[0] === "string" && call[0].includes("[Toaster]")
+      );
+      expect(toasterGuardCall).toBeUndefined();
+      consoleSpy.mockRestore();
+    });
   });
 });

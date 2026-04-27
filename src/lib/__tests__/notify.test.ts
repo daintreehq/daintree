@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import React from "react";
 import { describe, it, expect, beforeEach, vi, afterEach } from "vitest";
 import {
   notify,
@@ -98,14 +99,61 @@ describe("notify()", () => {
       expect(useNotificationHistoryStore.getState().entries[0]!.message).toBe("inbox message");
     });
 
-    it("skips history entry if no string message and no inboxMessage", () => {
+    it("skips history entry if ReactNode message and no inboxMessage", () => {
       vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      const jsxElement = React.createElement("span", null, "test");
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       notify({
         type: "info",
-        message: null as unknown as string,
+        message: jsxElement,
+        priority: "low",
+      } as any);
+      expect(useNotificationHistoryStore.getState().entries).toHaveLength(0);
+      expect(consoleSpy).toHaveBeenCalledWith(
+        expect.stringContaining("[notify] ReactNode message without inboxMessage")
+      );
+      consoleSpy.mockRestore();
+    });
+
+    it("creates history entry when ReactNode message provides inboxMessage", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      const jsxElement = React.createElement("span", null, "rich");
+      notify({
+        type: "info",
+        message: jsxElement,
+        inboxMessage: "Plain text fallback",
         priority: "low",
       });
-      expect(useNotificationHistoryStore.getState().entries).toHaveLength(0);
+      expect(useNotificationHistoryStore.getState().entries).toHaveLength(1);
+      expect(useNotificationHistoryStore.getState().entries[0]!.message).toBe(
+        "Plain text fallback"
+      );
+    });
+
+    it("does NOT log dev guard for string message without inboxMessage", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      notify({ type: "info", message: "Just a string", priority: "low" });
+      expect(consoleSpy).not.toHaveBeenCalled();
+      expect(useNotificationHistoryStore.getState().entries).toHaveLength(1);
+      consoleSpy.mockRestore();
+    });
+
+    it("logs dev guard when ReactNode message has empty-string inboxMessage", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      const jsxElement = React.createElement("span", null, "test");
+      notify({
+        type: "info",
+        message: jsxElement,
+        inboxMessage: "",
+        priority: "low",
+      });
+      expect(consoleSpy).toHaveBeenCalledWith(
+        expect.stringContaining("[notify] ReactNode message without inboxMessage")
+      );
+      consoleSpy.mockRestore();
     });
 
     it("stores correlationId in history entry", () => {

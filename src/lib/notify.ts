@@ -181,10 +181,32 @@ export function isScheduledQuietHours(now: Date = new Date()): boolean {
  * | any     | watch    | yes   | yes       | yes     |
  *
  * The `grid-bar` placement bypasses priority routing and always renders inline.
+ *
+ * When `message` is a non-string ReactNode, `inboxMessage` is required —
+ * otherwise the persistent inbox history entry is silently dropped (WCAG 2.2.1).
+ * String messages auto-derive the history text from the message itself.
  */
+export function notify(
+  payload: Omit<NotifyPayload, "message" | "inboxMessage"> & {
+    message: string;
+    inboxMessage?: string;
+  }
+): string;
+export function notify(
+  payload: Omit<NotifyPayload, "message" | "inboxMessage"> & {
+    message: Exclude<ReactNode, string>;
+    inboxMessage: string;
+  }
+): string;
 export function notify(payload: NotifyPayload): string {
   const priority = payload.priority ?? "high";
   const { placement, correlationId, type, title, message, inboxMessage, context } = payload;
+
+  if (import.meta.env.DEV && typeof message !== "string" && !inboxMessage) {
+    console.error(
+      "[notify] ReactNode message without inboxMessage — persistent inbox history will be dropped. Provide inboxMessage for WCAG 2.2.1 compliance."
+    );
+  }
 
   const historyMessage = inboxMessage ?? (typeof message === "string" ? message : undefined);
 
