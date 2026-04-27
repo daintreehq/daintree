@@ -103,12 +103,11 @@ describe("notify()", () => {
       vi.spyOn(document, "hasFocus").mockReturnValue(true);
       const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
       const jsxElement = React.createElement("span", null, "test");
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       notify({
         type: "info",
         message: jsxElement,
         priority: "low",
-      } as any);
+      } as any); // eslint-disable-line @typescript-eslint/no-explicit-any
       expect(useNotificationHistoryStore.getState().entries).toHaveLength(0);
       expect(consoleSpy).toHaveBeenCalledWith(
         expect.stringContaining("[notify] ReactNode message without inboxMessage")
