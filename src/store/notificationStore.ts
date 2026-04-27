@@ -136,12 +136,18 @@ export const useNotificationStore = create<NotificationStore>((set) => ({
       if (notification.placement !== "grid-bar") {
         const active = notifications.filter((n) => !n.dismissed && n.placement !== "grid-bar");
         if (active.length >= MAX_VISIBLE_TOASTS) {
-          const oldest = active[0]!;
+          // Prefer evicting the oldest non-error toast so an error stays
+          // visible when fast successes/infos arrive after it (#5861). Falls
+          // back to oldest-of-any-type when the visible set is all errors.
+          // Relies on `notifications` being append-only — `active` is therefore
+          // insertion-ordered oldest-first, so `find` returns the oldest
+          // non-error without sorting.
+          const evictCandidate = active.find((n) => n.type !== "error") ?? active[0]!;
           notifications = notifications.map((n) =>
-            n.id === oldest.id ? { ...n, dismissed: true } : n
+            n.id === evictCandidate.id ? { ...n, dismissed: true } : n
           );
-          if (oldest.historyEntryId) {
-            useNotificationHistoryStore.getState().markUnseenAsToast(oldest.historyEntryId);
+          if (evictCandidate.historyEntryId) {
+            useNotificationHistoryStore.getState().markUnseenAsToast(evictCandidate.historyEntryId);
           }
         }
       }
