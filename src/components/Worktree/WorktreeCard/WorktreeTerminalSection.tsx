@@ -76,9 +76,11 @@ function TerminalRow({ term, listeners, onClick }: TerminalRowProps) {
   const armBadge = useFleetArmingStore((s) => s.armOrderById[term.id]);
   const chrome = deriveTerminalChrome(term);
   const agentState = chrome.isAgent ? term.agentState : undefined;
-  // Primary ("last armed") gets a solid accent ring — it's the terminal that
-  // will receive keyboard focus when fleet scope exits. Non-primary armed
-  // peers get a dashed ring so the distinction is visible at a glance.
+  // Only the primary ("last armed") row gets the accent ring — it's the
+  // singular focus anchor that will receive keyboard focus when fleet scope
+  // exits. Secondary armed peers keep the dashed shape but use a neutral
+  // border color so multiple accents never render at once. The arm-position
+  // badge stays accent-colored as the secondary signal.
   const isPrimary = useFleetArmingStore((s) => s.lastArmedId === term.id);
 
   return (
@@ -89,9 +91,9 @@ function TerminalRow({ term, listeners, onClick }: TerminalRowProps) {
       data-terminal-agent-state={agentState || undefined}
       className={cn(
         "rounded-[var(--radius-md)]",
-        isArmed && "bg-daintree-accent/5 outline outline-2 outline-offset-[-2px]",
+        isArmed && "outline outline-2 outline-offset-[-2px]",
         isArmed && isPrimary && "outline-solid outline-daintree-accent",
-        isArmed && !isPrimary && "outline-dashed outline-daintree-accent/70"
+        isArmed && !isPrimary && "outline-dashed outline-border-strong"
       )}
     >
       <div className="worktree-section-button group/termrow flex items-center justify-between gap-2.5 px-3 py-2 transition-colors">
