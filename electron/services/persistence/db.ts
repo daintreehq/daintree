@@ -79,6 +79,10 @@ export function openDb(dbPath: string): { sqlite: Database.Database; db: AppDb }
   const sqlite = new Database(dbPath);
   sqlite.pragma("journal_mode = WAL");
   sqlite.pragma("busy_timeout = 3000");
+  sqlite.pragma("synchronous = NORMAL");
+  sqlite.pragma("temp_store = MEMORY");
+  sqlite.pragma("mmap_size = 10737418240");
+  sqlite.pragma("cache_size = -65536");
   sqlite.exec(CREATE_TABLES_SQL);
 
   // Migrate: add pinned column to projects table if it doesn't exist
