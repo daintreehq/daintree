@@ -837,6 +837,200 @@ describe("TerminalFocusSlice - focusNextAgent / focusPreviousAgent runtime ident
   });
 });
 
+describe("TerminalFocusSlice - cycle from non-matching focus (issue #5834)", () => {
+  beforeAll(() => {
+    Object.defineProperty(globalThis, "window", {
+      value: {
+        electron: {
+          notification: { acknowledgeWaiting: vi.fn(), acknowledgeWorkingPulse: vi.fn() },
+        },
+      },
+      writable: true,
+      configurable: true,
+    });
+  });
+
+  afterAll(() => {
+    Object.defineProperty(globalThis, "window", {
+      value: undefined,
+      writable: true,
+      configurable: true,
+    });
+  });
+
+  const makeTerminal = (
+    id: string,
+    opts: {
+      kind?: "agent" | "terminal";
+      launchAgentId?: string;
+      detectedAgentId?: string;
+      everDetectedAgent?: boolean;
+      agentState?: string;
+    } = {}
+  ): TerminalInstance =>
+    ({
+      id,
+      title: id,
+      kind: opts.kind ?? "terminal",
+      launchAgentId: opts.launchAgentId,
+      detectedAgentId: opts.detectedAgentId,
+      everDetectedAgent: opts.everDetectedAgent,
+      cwd: "/test",
+      location: "grid",
+      agentState: opts.agentState ?? "idle",
+      isVisible: true,
+      cols: 80,
+      rows: 24,
+      worktreeId: "worktree-1",
+    }) as TerminalInstance;
+
+  let terminals: TerminalInstance[];
+  let state: TerminalFocusSlice;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    const getTerminals = vi.fn(() => terminals);
+    const getState = vi.fn((): TerminalFocusSlice => state);
+    const setState = vi.fn(
+      (
+        updater:
+          | Partial<TerminalFocusSlice>
+          | ((s: TerminalFocusSlice) => Partial<TerminalFocusSlice>)
+      ) => {
+        const currentState = getState();
+        const updates = typeof updater === "function" ? updater(currentState) : updater;
+        state = { ...currentState, ...updates };
+      }
+    );
+    state = createTerminalFocusSlice(getTerminals, mockGetActiveWorktreeId)(
+      setState as never,
+      getState as never,
+      {} as never
+    );
+  });
+
+  const neverInTrash = () => false;
+  const validWorktrees = new Set(["worktree-1"]);
+
+  it("focusNextWaiting from a non-waiting terminal between two waiting terminals lands on the next waiting after focus, not the first", () => {
+    terminals = [
+      makeTerminal("waiting-a", { agentState: "waiting" }),
+      makeTerminal("idle-x", { agentState: "idle" }),
+      makeTerminal("waiting-b", { agentState: "waiting" }),
+      makeTerminal("idle-y", { agentState: "idle" }),
+      makeTerminal("waiting-c", { agentState: "waiting" }),
+    ];
+    state.focusedId = "idle-y";
+
+    state.focusNextWaiting(neverInTrash, validWorktrees);
+
+    // idle-y sits between waiting-b and waiting-c; the next waiting after that
+    // spatial position is waiting-c. The pre-fix code returned waiting-a (index 0).
+    expect(state.focusedId).toBe("waiting-c");
+  });
+
+  it("focusNextWorking from a non-working terminal between two working terminals advances spatially", () => {
+    terminals = [
+      makeTerminal("working-a", { agentState: "working" }),
+      makeTerminal("idle-x", { agentState: "idle" }),
+      makeTerminal("working-b", { agentState: "working" }),
+    ];
+    state.focusedId = "idle-x";
+
+    state.focusNextWorking(neverInTrash, validWorktrees);
+
+    expect(state.focusedId).toBe("working-b");
+  });
+
+  it("focusNextAgent from a non-agent shell between two agents advances spatially", () => {
+    terminals = [
+      makeTerminal("agent-a", { detectedAgentId: "claude" }),
+      makeTerminal("shell", {}),
+      makeTerminal("agent-b", { detectedAgentId: "gemini" }),
+    ];
+    state.focusedId = "shell";
+
+    state.focusNextAgent(neverInTrash, validWorktrees);
+
+    expect(state.focusedId).toBe("agent-b");
+  });
+
+  it("focusPreviousAgent from a non-agent shell lands on the agent immediately before, not the last agent", () => {
+    terminals = [
+      makeTerminal("agent-a", { detectedAgentId: "claude" }),
+      makeTerminal("shell", {}),
+      makeTerminal("agent-b", { detectedAgentId: "gemini" }),
+    ];
+    state.focusedId = "shell";
+
+    state.focusPreviousAgent(neverInTrash, validWorktrees);
+
+    // Before the fix this returned agent-b (last in the filtered subset).
+    expect(state.focusedId).toBe("agent-a");
+  });
+
+  it("focusNextWaiting wraps from the last waiting back to the first", () => {
+    terminals = [
+      makeTerminal("waiting-a", { agentState: "waiting" }),
+      makeTerminal("idle-x", { agentState: "idle" }),
+      makeTerminal("waiting-b", { agentState: "waiting" }),
+    ];
+    state.focusedId = "waiting-b";
+
+    state.focusNextWaiting(neverInTrash, validWorktrees);
+
+    expect(state.focusedId).toBe("waiting-a");
+  });
+
+  it("focusNextWaiting advances when the previously-focused waiting terminal transitions out of waiting between presses", () => {
+    terminals = [
+      makeTerminal("waiting-a", { agentState: "waiting" }),
+      makeTerminal("waiting-b", { agentState: "waiting" }),
+      makeTerminal("waiting-c", { agentState: "waiting" }),
+    ];
+    state.focusedId = "outside";
+
+    // First press from a non-waiting/non-existent focus → lands on the first waiting.
+    state.focusNextWaiting(neverInTrash, validWorktrees);
+    expect(state.focusedId).toBe("waiting-a");
+
+    // Simulate state churn: the just-focused terminal transitions to working.
+    terminals = [
+      makeTerminal("waiting-a", { agentState: "working" }),
+      makeTerminal("waiting-b", { agentState: "waiting" }),
+      makeTerminal("waiting-c", { agentState: "waiting" }),
+    ];
+
+    // Second press should advance to waiting-b, not loop back to itself.
+    state.focusNextWaiting(neverInTrash, validWorktrees);
+    expect(state.focusedId).toBe("waiting-b");
+  });
+
+  it("focusNextAgent with focus on a non-existent terminal lands on the first agent", () => {
+    terminals = [
+      makeTerminal("agent-a", { detectedAgentId: "claude" }),
+      makeTerminal("agent-b", { detectedAgentId: "gemini" }),
+    ];
+    state.focusedId = "ghost";
+
+    state.focusNextAgent(neverInTrash, validWorktrees);
+
+    expect(state.focusedId).toBe("agent-a");
+  });
+
+  it("focusPreviousAgent with focus on a non-existent terminal lands on the last agent", () => {
+    terminals = [
+      makeTerminal("agent-a", { detectedAgentId: "claude" }),
+      makeTerminal("agent-b", { detectedAgentId: "gemini" }),
+    ];
+    state.focusedId = "ghost";
+
+    state.focusPreviousAgent(neverInTrash, validWorktrees);
+
+    expect(state.focusedId).toBe("agent-b");
+  });
+});
+
 describe("TerminalFocusSlice - setFocused ping gating", () => {
   const mockTerminals: TerminalInstance[] = [
     {
