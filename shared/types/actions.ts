@@ -108,6 +108,7 @@ export type BuiltInActionId =
   | "project.update"
   | "project.remove"
   | "project.close"
+  | "project.closeActive"
   | "project.openDialog"
   | "project.getSettings"
   | "project.saveSettings"

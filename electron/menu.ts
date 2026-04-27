@@ -140,6 +140,12 @@ export function createApplicationMenu(
           : []),
         { type: "separator" },
         {
+          label: "Close Project",
+          enabled: !!projectStore.getCurrentProjectId(),
+          click: (_item, browserWindow) =>
+            sendAction("close-project", getTargetBrowserWindow(browserWindow)),
+        },
+        {
           label: "Close Window",
           role: "close",
           registerAccelerator: false,

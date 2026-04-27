@@ -265,6 +265,7 @@ function createCallbacks(overrides: Partial<ActionCallbacks> = {}): ActionCallba
     onCloseWorktreeOverview: vi.fn(),
     onOpenPanelPalette: vi.fn(),
     onOpenProjectSwitcherPalette: vi.fn(),
+    onConfirmCloseActiveProject: vi.fn(),
     onOpenActionPalette: vi.fn(),
     onOpenQuickSwitcher: vi.fn(),
     onOpenShortcuts: vi.fn(),

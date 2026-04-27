@@ -63,6 +63,7 @@ function createStubCallbacks(): ActionCallbacks {
     onCloseWorktreeOverview: () => {},
     onOpenPanelPalette: () => {},
     onOpenProjectSwitcherPalette: () => {},
+    onConfirmCloseActiveProject: () => {},
     onOpenActionPalette: () => {},
     onOpenQuickSwitcher: () => {},
     onOpenShortcuts: () => {},

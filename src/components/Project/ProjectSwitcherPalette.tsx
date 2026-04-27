@@ -243,6 +243,12 @@ const ProjectListItem = memo(function ProjectListItem({
             Stop all agents
           </ContextMenuItem>
         )}
+        {onCloseProject && project.isActive && (
+          <ContextMenuItem destructive onClick={() => onCloseProject(project.id)}>
+            <X className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
+            Close project
+          </ContextMenuItem>
+        )}
         {onCloseProject && !project.isActive && (
           <ContextMenuItem destructive onClick={() => onCloseProject(project.id)}>
             <X className="w-3.5 h-3.5 mr-2" aria-hidden="true" />

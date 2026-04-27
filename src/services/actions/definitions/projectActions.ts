@@ -165,7 +165,27 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
     argsSchema: z.object({ projectId: z.string() }),
     run: async (args: unknown) => {
       const { projectId } = args as { projectId: string };
-      await useProjectStore.getState().closeProject(projectId);
+      const state = useProjectStore.getState();
+      if (projectId === state.currentProject?.id) {
+        await state.closeActiveProject(projectId);
+      } else {
+        await state.closeProject(projectId);
+      }
+    },
+  }));
+
+  actions.set("project.closeActive", () => ({
+    id: "project.closeActive",
+    title: "Close Project",
+    description: "Close the currently active project and return to the welcome screen",
+    category: "project",
+    kind: "command",
+    danger: "confirm",
+    scope: "renderer",
+    run: async () => {
+      const projectId = useProjectStore.getState().currentProject?.id;
+      if (!projectId) return;
+      callbacks.onConfirmCloseActiveProject(projectId);
     },
   }));
 

@@ -392,6 +392,9 @@ function App() {
     onCloseWorktreeOverview: closeWorktreeOverview,
     onOpenPanelPalette: panelPalette.open,
     onOpenProjectSwitcherPalette: projectSwitcherPalette.open,
+    onConfirmCloseActiveProject: (projectId: string) => {
+      void projectSwitcherPalette.removeProject(projectId);
+    },
     onOpenShortcuts: () => setIsShortcutsOpen(true),
     onLaunchAgent: async (agentId, options) => {
       return launchAgent(agentId, options);
@@ -659,6 +662,12 @@ function App() {
           onSelectNext={projectSwitcherPalette.selectNext}
           onSelect={projectSwitcherPalette.selectProject}
           onClose={projectSwitcherPalette.close}
+          onStopProject={(projectId) => void projectSwitcherPalette.stopProject(projectId)}
+          onCloseProject={(projectId) => void projectSwitcherPalette.removeProject(projectId)}
+          removeConfirmProject={projectSwitcherPalette.removeConfirmProject}
+          onRemoveConfirmClose={() => projectSwitcherPalette.setRemoveConfirmProject(null)}
+          onConfirmRemove={projectSwitcherPalette.confirmRemoveProject}
+          isRemovingProject={projectSwitcherPalette.isRemovingProject}
           onSelectNewWindow={(project) => {
             projectSwitcherPalette.close();
             void actionService.dispatch(
