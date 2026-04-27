@@ -20,7 +20,9 @@ import { ActivityMonitor } from "../ActivityMonitor.js";
 import { AgentStateService } from "./AgentStateService.js";
 import { ActivityHeadlineGenerator } from "../ActivityHeadlineGenerator.js";
 import {
+  type ExitReason,
   type PtySpawnOptions,
+  type PtyState,
   type TerminalInfo,
   type TerminalPublicState,
   type TerminalSnapshot,
@@ -147,6 +149,8 @@ export class TerminalProcess {
 
   private writeQueue!: WriteQueue;
   private readonly processTreeKiller: ProcessTreeKiller;
+  private _ptyState: PtyState = { kind: "alive" };
+  private _exitEventEmitted = false;
   private shellIdentityFallbackTimer: NodeJS.Timeout | null = null;
   private shellIdentityFallbackSubmittedAt: number | null = null;
   private shellIdentityFallbackCommandText: string | undefined;
@@ -377,12 +381,13 @@ export class TerminalProcess {
       writeToPty: (data) => {
         this.terminalInfo.ptyProcess.write(data);
       },
-      isExited: () => this.terminalInfo.isExited === true,
+      isExited: () => this._ptyState.kind !== "alive",
       lastOutputTime: () => this.terminalInfo.lastOutputTime,
       performSubmit: (text) => this.performSubmit(text),
       onWriteError: (error, context) => this.logWriteError(error, context),
     });
     this.sessionSnapshotter = this.createSessionSnapshotter();
+    this._subscribeExitObservers();
     this.setupPtyHandlers(ptyProcess);
 
     const ptyPid = ptyProcess.pid;
@@ -484,6 +489,192 @@ export class TerminalProcess {
     }
     terminal.headlessTerminal = undefined;
     terminal.serializeAddon = undefined;
+  }
+
+  /**
+   * Replace the lifecycle state. Returns `false` (no-op) when the requested
+   * transition is illegal — most importantly when something tries to enter
+   * `shutting-down` while we are already past `alive`. This is what makes
+   * `teardown()`, `kill()`, and `dispose()` idempotent: the second caller
+   * sees `false` and returns immediately.
+   */
+  private transition(next: PtyState): boolean {
+    const current = this._ptyState;
+    if (current.kind === next.kind) {
+      return false;
+    }
+
+    let valid = false;
+    switch (current.kind) {
+      case "alive":
+        valid = next.kind === "shutting-down";
+        break;
+      case "shutting-down":
+        valid = next.kind === "exited" || next.kind === "disposed";
+        break;
+      case "exited":
+        valid = next.kind === "disposed";
+        break;
+      case "disposed":
+        valid = false;
+        break;
+    }
+
+    if (!valid) {
+      return false;
+    }
+
+    this._ptyState = next;
+    return true;
+  }
+
+  /**
+   * Mechanical resource cleanup shared by `kill()`, `dispose()`, and the
+   * natural PTY `onExit` handler. Idempotent — the first caller transitions
+   * `alive → shutting-down` and clears collaborators/timers; later callers
+   * see the state mismatch and return `false`.
+   *
+   * Critical orderings (lessons #3177 and #3728):
+   *
+   * 1. The session snapshot flush in `kill()` runs *before* this method, so
+   *    that path is preserved by the existing `kill()` ordering — `teardown`
+   *    only blocks debounced persistence by clearing the timer here.
+   * 2. Activity / process-tree monitors are stopped here so they don't poll
+   *    a dying PTY (the recursive timer in ActivityMonitor already guards
+   *    its own `disposed` flag, but stopping it here makes the contract
+   *    explicit).
+   * 3. The headless buffer is *not* torn down here. Callers that need to
+   *    preserve it on exit (agent terminal, exit code 0) skip the
+   *    `disposeHeadless()` call after teardown returns.
+   */
+  private teardown(reason: ExitReason): boolean {
+    if (!this.transition({ kind: "shutting-down", reason })) {
+      return false;
+    }
+
+    this.stopProcessDetector();
+    this.stopActivityMonitor();
+    this.stopShellIdentityFallbackWatcher();
+    this.semanticBufferManager.flush();
+
+    this.writeQueue.dispose();
+    this.processTreeKiller.abort();
+
+    return true;
+  }
+
+  /**
+   * Emit `terminal:exited` exactly once per terminal lifetime. Forensics,
+   * `agent:completed`, and fallback classification subscribe to this event
+   * (see `_subscribeExitObservers`) instead of running inline inside the
+   * PTY `onExit` callback. `recentOutput` must be captured before the
+   * headless buffer is torn down — `disposeHeadless()` clears the
+   * forensics buffer, and a fallback subscriber that scans exit-time
+   * output cannot recover it once cleared.
+   */
+  private emitTerminalExited(args: {
+    code: number | null;
+    signal?: number;
+    reason: ExitReason;
+    recentOutput: string;
+  }): void {
+    if (this._exitEventEmitted) return;
+    this._exitEventEmitted = true;
+
+    const terminal = this.terminalInfo;
+    const liveAgentAtExit = getLiveAgentId(terminal);
+    const hadAgent = !!terminal.launchAgentId || !!terminal.everDetectedAgent;
+
+    events.emit("terminal:exited", {
+      terminalId: this.id,
+      code: args.code,
+      signal: args.signal,
+      reason: args.reason,
+      recentOutput: args.recentOutput,
+      hadAgent,
+      liveAgentAtExit,
+      launchAgentId: terminal.launchAgentId,
+      agentPresetId: terminal.agentPresetId,
+      originalAgentPresetId: terminal.originalAgentPresetId,
+      timestamp: Date.now(),
+    });
+  }
+
+  /**
+   * Subscribe forensics logging, agent-completion emission, and fallback
+   * classification to the `terminal:exited` event. Registered once during
+   * construction and torn down when the event fires (or in `dispose()` if
+   * the terminal is destroyed without ever emitting).
+   *
+   * Filters by `terminalId` so the singleton event bus can fan out to many
+   * terminals without each subscriber re-checking.
+   */
+  private _exitObserverDisposable: { dispose: () => void } | null = null;
+  private _subscribeExitObservers(): void {
+    const off = events.on("terminal:exited", (payload) => {
+      if (payload.terminalId !== this.id) return;
+
+      // Forensics: log abnormal exits with the tail captured at exit time.
+      // `wasKilled` is encoded in the reason — kill / graceful-shutdown
+      // paths suppress the abnormal-exit log even if the exit code was
+      // non-zero, matching the prior inline behaviour.
+      this.forensicsBuffer.logForensics(
+        this.id,
+        payload.code ?? 0,
+        this.terminalInfo,
+        payload.hadAgent,
+        payload.signal
+      );
+
+      // Agent state machine: only natural exits update agent state and
+      // emit agent:completed. kill / graceful-shutdown route through the
+      // kill path which has already emitted agent:killed before teardown.
+      if (payload.reason === "natural" && payload.hadAgent) {
+        this.deps.agentStateService.updateAgentState(this.terminalInfo, {
+          type: "exit",
+          code: payload.code ?? 0,
+          signal: payload.signal,
+        });
+      }
+
+      if (payload.reason === "natural" && payload.hadAgent && payload.liveAgentAtExit) {
+        this.deps.agentStateService.emitAgentCompleted(this.terminalInfo, payload.code ?? 0);
+      }
+
+      // Fallback classification: only fires for natural exits of agent
+      // terminals with a launched preset. Killed agents never trigger
+      // fallback (the user explicitly stopped them).
+      if (
+        payload.reason === "natural" &&
+        payload.launchAgentId &&
+        payload.agentPresetId &&
+        payload.code !== null
+      ) {
+        const cls = classifyExitOutput({
+          recentOutput: payload.recentOutput,
+          // Pass through as-is so a null/undefined code (crash, signal) does
+          // NOT short-circuit the scan. Only an explicit exit 0 skips the tail.
+          exitCode: payload.code,
+          wasKilled: false,
+        });
+        if (shouldTriggerFallback(cls)) {
+          events.emit("agent:fallback-triggered", {
+            terminalId: this.id,
+            agentId: payload.launchAgentId,
+            fromPresetId: payload.agentPresetId,
+            originalPresetId: payload.originalAgentPresetId ?? payload.agentPresetId,
+            reason: cls as "connection" | "auth",
+            exitCode: payload.code,
+            timestamp: Date.now(),
+          });
+        }
+      }
+
+      this._exitObserverDisposable?.dispose();
+      this._exitObserverDisposable = null;
+    });
+
+    this._exitObserverDisposable = { dispose: off };
   }
 
   /** @deprecated Use getPublicState() for IPC-safe data */
@@ -918,26 +1109,17 @@ export class TerminalProcess {
 
   kill(reason?: string): void {
     const terminal = this.terminalInfo;
+    const exitReason: ExitReason = reason === "graceful-shutdown" ? "graceful-shutdown" : "kill";
 
-    if (this.processDetector) {
-      this.processDetector.stop();
-      this.processDetector = null;
-      terminal.processDetector = undefined;
-    }
-
-    if (this.activityMonitor) {
-      this.activityMonitor.dispose();
-      this.activityMonitor = null;
-    }
-
-    this.semanticBufferManager.flush();
-
-    this.writeQueue.dispose();
-
-    // Flush session snapshot synchronously before marking as killed.
-    // Once wasKilled is set, all persistence paths are blocked, and
-    // disposeHeadless() destroys the buffer — so this is the last chance.
+    // Flush session snapshot synchronously BEFORE teardown.
+    // Once teardown disposes the writeQueue and processTreeKiller.abort() fires,
+    // debounced writes are lost — so this is the last chance.
+    // See lesson #3177.
     this.sessionSnapshotter.flushSyncOnKill();
+
+    if (!this.teardown(exitReason)) {
+      return;
+    }
 
     terminal.wasKilled = true;
     this.sessionSnapshotter.dispose();
@@ -949,6 +1131,12 @@ export class TerminalProcess {
       this.deps.agentStateService.emitAgentKilled(terminal, reason);
     }
 
+    // Capture forensic tail before disposeHeadless() clears the buffer so
+    // any subscriber that runs synchronously after the natural-exit
+    // emit-path can still read it. The kill path emits no `terminal:exited`
+    // here — natural onExit will fire (or `dispose()` will emit if it
+    // doesn't), carrying `reason: "kill"` through the exit-reason carried
+    // by the state machine.
     this.disposeHeadless();
 
     this.processTreeKiller.execute(false);
@@ -1580,20 +1768,51 @@ export class TerminalProcess {
   }
 
   dispose(): void {
-    this.stopProcessDetector();
-    this.stopActivityMonitor();
-    this.stopShellIdentityFallbackWatcher();
+    const recentOutput = this.forensicsBuffer.getRecentOutput();
 
-    this.semanticBufferManager.dispose();
-
+    // Best-effort flush before teardown disposes the writeQueue and tears down
+    // the buffer. Only attempted on the alive→dispose path — if we already
+    // passed through kill / natural exit, persistence has already been handled.
     this.sessionSnapshotter.flushSyncOnDispose();
     this.sessionSnapshotter.dispose();
 
-    this.writeQueue.dispose();
-
+    this.teardown("dispose");
+    this.semanticBufferManager.dispose();
     this.disposeHeadless();
-
     this.processTreeKiller.execute(true);
+
+    // If the PTY never fired onExit (LRU eviction, app shutdown, or kill()
+    // followed by dispose() before the kernel reaped the child), this is
+    // the last chance to notify subscribers. `_exitEventEmitted` makes a
+    // late natural-exit emit a no-op if onExit fires after dispose.
+    if (!this._exitEventEmitted) {
+      this.emitTerminalExited({
+        code: null,
+        reason: this.getExitReason() ?? "dispose",
+        recentOutput,
+      });
+    }
+
+    if (this._ptyState.kind !== "disposed") {
+      this._ptyState = { kind: "disposed", reason: this.getExitReason() ?? "dispose" };
+    }
+
+    this._exitObserverDisposable?.dispose();
+    this._exitObserverDisposable = null;
+  }
+
+  /**
+   * Read the exit reason captured by `teardown()` if available. Returns
+   * `null` for terminals that are still `alive` — primarily useful when
+   * `dispose()` runs after a prior `kill()` or natural exit and needs to
+   * preserve the original reason in the final `disposed` state.
+   */
+  private getExitReason(): ExitReason | null {
+    const s = this._ptyState;
+    if (s.kind === "shutting-down" || s.kind === "exited" || s.kind === "disposed") {
+      return s.reason;
+    }
+    return null;
   }
 
   private setupPtyHandlers(ptyProcess: pty.IPty): void {
@@ -1664,32 +1883,20 @@ export class TerminalProcess {
         return;
       }
 
-      this.stopProcessDetector();
-      this.stopActivityMonitor();
-      this.stopShellIdentityFallbackWatcher();
-      this.semanticBufferManager.flush();
+      // Capture forensic tail before disposeHeadless() clears the buffer.
+      // The terminal:exited subscriber reads this via the payload — once
+      // `disposeHeadless` runs, `forensicsBuffer.getRecentOutput()` is gone.
+      const recentOutput = this.forensicsBuffer.getRecentOutput();
 
-      this.writeQueue.dispose();
-
+      // teardown() returns false when kill() / dispose() got here first,
+      // in which case the prior reason is preserved in `_ptyState`. The
+      // event payload still carries the actual exit code from the PTY,
+      // so subscribers see e.g. `reason: "kill"` with `code: 0`.
+      const teardownReason = this.getExitReason() ?? "natural";
+      this.teardown("natural");
       this.sessionSnapshotter.dispose();
 
-      this.processTreeKiller.abort();
-
-      const hadAgent = !!terminal.launchAgentId || !!terminal.everDetectedAgent;
-      const liveAgentAtExit = getLiveAgentId(terminal);
-      this.forensicsBuffer.logForensics(this.id, exitCode ?? 0, terminal, hadAgent, signal);
-
-      if (hadAgent && !terminal.wasKilled) {
-        this.deps.agentStateService.updateAgentState(terminal, {
-          type: "exit",
-          code: exitCode ?? 0,
-          signal: signal ?? undefined,
-        });
-      }
-
-      if (hadAgent && liveAgentAtExit && !terminal.wasKilled) {
-        this.deps.agentStateService.emitAgentCompleted(terminal, exitCode ?? 0);
-      }
+      const reasonForEvent = this.getExitReason() ?? teardownReason;
 
       const previousAgent = terminal.detectedAgentId;
       const hadDetectedIdentity =
@@ -1718,38 +1925,28 @@ export class TerminalProcess {
 
       this.callbacks.onExit(this.id, exitCode ?? 0);
 
-      // Fallback detection: inspect the forensic buffer BEFORE teardown clears
-      // anything and emit a fallback-triggered event so the renderer can walk
-      // the preset's fallbacks[] chain. Passive observation only — we do not
-      // modify the terminal, spawn anything, or touch user config here.
-      if (terminal.launchAgentId && terminal.agentPresetId && !terminal.wasKilled) {
-        const cls = classifyExitOutput({
-          recentOutput: this.forensicsBuffer.getRecentOutput(),
-          // Pass through as-is so a null/undefined code (crash, signal) does
-          // NOT short-circuit the scan. Only an explicit exit 0 skips the tail.
-          exitCode: exitCode,
-          wasKilled: terminal.wasKilled,
-        });
-        if (shouldTriggerFallback(cls)) {
-          events.emit("agent:fallback-triggered", {
-            terminalId: this.id,
-            agentId: terminal.launchAgentId,
-            fromPresetId: terminal.agentPresetId,
-            originalPresetId: terminal.originalAgentPresetId ?? terminal.agentPresetId,
-            reason: cls as "connection" | "auth",
-            exitCode: exitCode ?? 0,
-            timestamp: Date.now(),
-          });
-        }
-      }
+      this.emitTerminalExited({
+        code: exitCode ?? 0,
+        signal,
+        reason: reasonForEvent,
+        recentOutput,
+      });
 
-      if (this.shouldPreserveOnExit(exitCode ?? 0)) {
+      const preserve = this.shouldPreserveOnExit(exitCode ?? 0);
+      if (preserve) {
         terminal.exitCode = exitCode ?? 0;
         terminal.isExited = true;
+        this._ptyState = {
+          kind: "exited",
+          code: exitCode ?? 0,
+          signal,
+          reason: reasonForEvent,
+        };
         return;
       }
 
       this.disposeHeadless();
+      this._ptyState = { kind: "disposed", reason: reasonForEvent };
     });
   }
 
