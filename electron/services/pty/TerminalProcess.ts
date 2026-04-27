@@ -1194,38 +1194,39 @@ export class TerminalProcess {
   }
 
   private createIdentityWatcherDelegate(): IdentityWatcherDelegate {
-    const self = this;
+    // eslint-disable-next-line @typescript-eslint/no-this-alias
+    const tp = this;
     return {
       get terminalId() {
-        return self.id;
+        return tp.id;
       },
       get isExited() {
-        return self.terminalInfo.isExited;
+        return tp.terminalInfo.isExited ?? false;
       },
       get wasKilled() {
-        return self.terminalInfo.wasKilled;
+        return tp.terminalInfo.wasKilled ?? false;
       },
       get detectedAgentId() {
-        return self.terminalInfo.detectedAgentId;
+        return tp.terminalInfo.detectedAgentId;
       },
       get lastOutputTime() {
-        return self.terminalInfo.lastOutputTime;
+        return tp.terminalInfo.lastOutputTime;
       },
       get spawnedAt() {
-        return self.terminalInfo.spawnedAt;
+        return tp.terminalInfo.spawnedAt;
       },
       get lastDetectedProcessIconId() {
-        return self.lastDetectedProcessIconId;
+        return tp.lastDetectedProcessIconId;
       },
       get processDetector() {
-        return self.processDetector;
+        return tp.processDetector;
       },
-      getLastNLines: (n) => self.getLastNLines(n),
-      getCursorLine: () => self.getCursorLine(),
-      getLastCommand: () => self.semanticBufferManager.getLastCommand(),
-      getPtyDescendantCount: () => self.getPtyDescendantCount(),
-      readForegroundProcessGroupSnapshot: () => self.readForegroundProcessGroupSnapshot(),
-      handleAgentDetection: (result, cbSpawnedAt) => self.handleAgentDetection(result, cbSpawnedAt),
+      getLastNLines: (n) => tp.getLastNLines(n),
+      getCursorLine: () => tp.getCursorLine(),
+      getLastCommand: () => tp.semanticBufferManager.getLastCommand(),
+      getPtyDescendantCount: () => tp.getPtyDescendantCount(),
+      readForegroundProcessGroupSnapshot: () => tp.readForegroundProcessGroupSnapshot(),
+      handleAgentDetection: (result, cbSpawnedAt) => tp.handleAgentDetection(result, cbSpawnedAt),
     };
   }
 
