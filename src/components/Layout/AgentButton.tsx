@@ -278,15 +278,13 @@ export function AgentButton({
 
   const handleClick = () => {
     if (isReady) {
-      // MRU semantics: primary-button click launches with the saved preset if
-      // one is stored (user's last pick), otherwise default (no presetId).
-      // Passing `presetId: null` would force explicit default and override a
-      // saved default — we want undefined fallthrough to useAgentLauncher.
-      void actionService.dispatch(
-        "agent.launch",
-        savedPresetId ? { agentId: type, presetId: savedPresetId } : { agentId: type },
-        { source: "user" }
-      );
+      // Defer all preset resolution to useAgentLauncher. Forwarding the
+      // resolved savedPresetId explicitly would block the launcher's
+      // stale-fallback path: when a worktree-scoped pick references a
+      // deleted preset, an explicit presetId bypasses the agent-level
+      // default and launches preset-free instead. Omitting presetId lets
+      // the launcher run resolveEffectivePresetId + fallback in one place.
+      void actionService.dispatch("agent.launch", { agentId: type }, { source: "user" });
     } else {
       void actionService.dispatch(
         "app.settings.openTab",
