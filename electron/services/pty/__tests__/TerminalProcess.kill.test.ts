@@ -231,7 +231,7 @@ describe.skipIf(process.platform === "win32")("TerminalProcess.kill — process 
 
     // Now SIGKILL should have been sent to descendant + shell
     const sigkillAfter = processKillSpy.mock.calls.filter((c: unknown[]) => c[1] === "SIGKILL");
-    expect(sigkillAfter).toHaveLength(2); // pid 456 + pid 123 (shell)
+    expect(sigkillAfter.map((c: unknown[]) => c[0])).toEqual([456, 123]);
   });
 
   it("sends SIGKILL immediately on dispose()", () => {
