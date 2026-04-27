@@ -385,6 +385,7 @@ export function RecipeManager({
             : "Are you sure you want to delete this recipe? This action cannot be undone."
         }
         confirmLabel={deleteError ? "Retry" : "Delete"}
+        variant="destructive"
         onConfirm={() => {
           if (recipeToDelete) void handleDeleteRecipe(recipeToDelete);
         }}
@@ -403,6 +404,7 @@ export function RecipeManager({
             : "This recipe will be written to .daintree/recipes/ in the repository where it can be committed and shared with the team."
         }
         confirmLabel={saveError ? "Retry" : "Save to Repo"}
+        variant="default"
         isConfirmLoading={isSaving}
         onConfirm={() => void handleSaveToRepo()}
         onClose={() => {

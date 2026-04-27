@@ -130,8 +130,9 @@ vi.mock("@/components/ui/ConfirmDialog", () => ({
     description?: ReactNode;
     onConfirm: () => void;
     onClose?: () => void;
-    confirmLabel?: string;
+    confirmLabel: string;
     cancelLabel?: string;
+    variant: "default" | "destructive" | "info";
   }) => {
     if (!isOpen) return null;
     return (
@@ -139,7 +140,7 @@ vi.mock("@/components/ui/ConfirmDialog", () => ({
         <div>{title}</div>
         {description && <div>{description}</div>}
         <button type="button" onClick={onConfirm}>
-          {confirmLabel ?? "Confirm"}
+          {confirmLabel}
         </button>
         {onClose && (
           <button type="button" onClick={onClose}>

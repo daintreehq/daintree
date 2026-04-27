@@ -338,6 +338,7 @@ export function RecipesTab({
             : "Are you sure you want to delete this recipe? This action cannot be undone."
         }
         confirmLabel={deleteError ? "Retry" : "Delete"}
+        variant="destructive"
         onConfirm={() => {
           if (recipeToDelete) {
             void handleDeleteRecipe(recipeToDelete);
