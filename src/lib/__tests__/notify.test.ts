@@ -2,6 +2,7 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from "vitest";
 import {
   notify,
+  TOAST_DURATION,
   _resetCoalesceMap,
   _resetComboMap,
   _setQuietUntil,
@@ -366,18 +367,18 @@ describe("notify()", () => {
       expect(notification!.duration).toBe(0);
     });
 
-    it("leaves duration undefined when no action is present (render layer falls back to 3000ms)", () => {
+    it("applies the severity-based default when no action is present", () => {
       vi.spyOn(document, "hasFocus").mockReturnValue(true);
       notify({ type: "success", message: "Done" });
       const notification = useNotificationStore.getState().notifications[0];
-      expect(notification!.duration).toBeUndefined();
+      expect(notification!.duration).toBe(TOAST_DURATION.success);
     });
 
-    it("leaves duration undefined when `actions` is an empty array", () => {
+    it("applies the severity-based default when `actions` is an empty array", () => {
       vi.spyOn(document, "hasFocus").mockReturnValue(true);
       notify({ type: "info", message: "No actions", actions: [] });
       const notification = useNotificationStore.getState().notifications[0];
-      expect(notification!.duration).toBeUndefined();
+      expect(notification!.duration).toBe(TOAST_DURATION.info);
     });
 
     it("applies the persist default on the grid-bar placement path", () => {
@@ -410,7 +411,7 @@ describe("notify()", () => {
 
     it("applies the persist default on coalesce-update when buildAction introduces an action", () => {
       vi.spyOn(document, "hasFocus").mockReturnValue(true);
-      // First event: no action → duration stays undefined.
+      // First event: no action → duration falls back to severity default (info).
       notify({
         type: "info",
         message: "First",
@@ -420,7 +421,7 @@ describe("notify()", () => {
           buildAction: (n) => (n > 1 ? { label: "Review", onClick: () => {} } : undefined),
         },
       });
-      expect(useNotificationStore.getState().notifications[0]!.duration).toBeUndefined();
+      expect(useNotificationStore.getState().notifications[0]!.duration).toBe(TOAST_DURATION.info);
 
       // Second event: buildAction now returns an action → duration should become 0.
       notify({
@@ -461,6 +462,58 @@ describe("notify()", () => {
       });
       const notification = useNotificationStore.getState().notifications[0];
       expect(notification!.duration).toBe(5000);
+    });
+  });
+
+  describe("default duration — severity-based defaults", () => {
+    it("applies a 12s default for error notifications", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      notify({ type: "error", message: "Something failed" });
+      const notification = useNotificationStore.getState().notifications[0];
+      expect(notification!.duration).toBe(12000);
+      expect(notification!.duration).toBe(TOAST_DURATION.error);
+    });
+
+    it("applies a 12s default for warning notifications", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      notify({ type: "warning", message: "Heads up" });
+      const notification = useNotificationStore.getState().notifications[0];
+      expect(notification!.duration).toBe(12000);
+      expect(notification!.duration).toBe(TOAST_DURATION.warning);
+    });
+
+    it("applies a 4s default for success notifications", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      notify({ type: "success", message: "Saved" });
+      const notification = useNotificationStore.getState().notifications[0];
+      expect(notification!.duration).toBe(4000);
+      expect(notification!.duration).toBe(TOAST_DURATION.success);
+    });
+
+    it("applies a 4s default for info notifications", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      notify({ type: "info", message: "FYI" });
+      const notification = useNotificationStore.getState().notifications[0];
+      expect(notification!.duration).toBe(4000);
+      expect(notification!.duration).toBe(TOAST_DURATION.info);
+    });
+
+    it("preserves an explicit caller duration over the severity default", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      notify({ type: "error", message: "Custom timing", duration: 7500 });
+      const notification = useNotificationStore.getState().notifications[0];
+      expect(notification!.duration).toBe(7500);
+    });
+
+    it("action-bearing rule wins over severity default (sticky for actions)", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      notify({
+        type: "error",
+        message: "Try again?",
+        action: { label: "Retry", onClick: () => {} },
+      });
+      const notification = useNotificationStore.getState().notifications[0];
+      expect(notification!.duration).toBe(0);
     });
   });
 

@@ -104,8 +104,11 @@ function Toast({ notification }: { notification: Notification }) {
   }, [notification.dismissed, notification.id, isVisible, removeNotification, restoreFocus]);
 
   useEffect(() => {
-    if (notification.duration === 0 || isPaused) return;
-    const timer = setTimeout(handleDismiss, notification.duration || 3000);
+    // duration === 0 is sticky; undefined would mean a direct addNotification
+    // caller bypassed notify()'s severity defaults — leave it sticky rather
+    // than silently auto-dismissing at 0ms.
+    if (!notification.duration || isPaused) return;
+    const timer = setTimeout(handleDismiss, notification.duration);
     return () => clearTimeout(timer);
   }, [notification.duration, notification.updatedAt, handleDismiss, isPaused]);
 

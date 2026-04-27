@@ -224,6 +224,7 @@ async function handleFallbackTriggered(data: {
       message: isExhausted
         ? `All fallback presets tried. Terminal will stay exited.`
         : `${fromName} provider is unreachable. Configure fallbacks in Settings to auto-recover.`,
+      duration: 12000,
     });
     return;
   }
@@ -235,6 +236,7 @@ async function handleFallbackTriggered(data: {
       priority: "high",
       title: "Fallback preset missing",
       message: `Preset "${nextPresetId}" is no longer configured. Skipping.`,
+      duration: 12000,
     });
     return;
   }
@@ -262,6 +264,7 @@ async function handleFallbackTriggered(data: {
           reason === "auth"
             ? `${fromName} authentication failed — now running "${nextPreset.name}".`
             : `${fromName} unreachable — now running "${nextPreset.name}".`,
+        duration: 4000,
       });
     } else {
       useNotificationStore.getState().addNotification({
@@ -269,6 +272,7 @@ async function handleFallbackTriggered(data: {
         priority: "high",
         title: "Fallback activation failed",
         message: `Could not switch to "${nextPreset.name}": ${result.error ?? "unknown error"}`,
+        duration: 12000,
       });
     }
   } finally {

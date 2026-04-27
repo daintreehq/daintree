@@ -2,7 +2,10 @@
 import { render, screen, act, fireEvent } from "@testing-library/react";
 import { describe, expect, it, beforeEach, vi, afterEach } from "vitest";
 import { useNotificationStore } from "@/store/notificationStore";
+import { useNotificationHistoryStore } from "@/store/slices/notificationHistorySlice";
+import { useNotificationSettingsStore } from "@/store/notificationSettingsStore";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
+import { notify } from "@/lib/notify";
 import { Toaster } from "../toaster";
 
 const dispatchMock = vi.hoisted(() => vi.fn().mockResolvedValue({ ok: true }));
@@ -506,5 +509,102 @@ describe("Toast overflow menu", () => {
     expect(dispatchMock).toHaveBeenCalledWith("project.muteNotifications", {
       projectId: "p1",
     });
+  });
+});
+
+// Regression coverage for issue #5859 — toasts must dismiss based on severity,
+// not the old 3s render-layer fallback. Routes through notify() so the
+// severity-based defaults are exercised end-to-end.
+describe("Toast severity-based dismissal (issue #5859)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    useNotificationStore.getState().reset();
+    useNotificationHistoryStore.setState({ entries: [], unreadCount: 0 });
+    useNotificationSettingsStore.setState({
+      enabled: true,
+      hydrated: true,
+      quietHoursEnabled: false,
+      quietHoursStartMin: 22 * 60,
+      quietHoursEndMin: 8 * 60,
+      quietHoursWeekdays: [],
+    });
+    useAnnouncerStore.setState({ polite: null, assertive: null });
+    vi.spyOn(document, "hasFocus").mockReturnValue(true);
+  });
+
+  afterEach(() => {
+    vi.runOnlyPendingTimers();
+    vi.useRealTimers();
+  });
+
+  it("error toast survives past the old 3s fallback", async () => {
+    render(<Toaster />);
+    await act(async () => {
+      notify({ type: "error", message: "Something failed" });
+      vi.advanceTimersByTime(16);
+    });
+
+    await act(async () => {
+      vi.advanceTimersByTime(3500);
+    });
+    expect(screen.getByText("Something failed")).toBeTruthy();
+  });
+
+  it("error toast dismisses around the 12s severity default", async () => {
+    render(<Toaster />);
+    await act(async () => {
+      notify({ type: "error", message: "Failed once" });
+      vi.advanceTimersByTime(16);
+    });
+
+    // Just before 12s — still visible.
+    await act(async () => {
+      vi.advanceTimersByTime(11500);
+    });
+    expect(screen.getByText("Failed once")).toBeTruthy();
+
+    // Past 12s + the 300ms fade — gone.
+    await act(async () => {
+      vi.advanceTimersByTime(1000);
+    });
+    expect(screen.queryByText("Failed once")).toBeNull();
+  });
+
+  it("success toast dismisses around the 4s severity default", async () => {
+    render(<Toaster />);
+    await act(async () => {
+      notify({ type: "success", message: "Saved!" });
+      vi.advanceTimersByTime(16);
+    });
+
+    // Just before 4s — still visible.
+    await act(async () => {
+      vi.advanceTimersByTime(3500);
+    });
+    expect(screen.getByText("Saved!")).toBeTruthy();
+
+    // Past 4s + the 300ms fade — gone.
+    await act(async () => {
+      vi.advanceTimersByTime(1000);
+    });
+    expect(screen.queryByText("Saved!")).toBeNull();
+  });
+
+  it("direct addNotification without duration stays sticky (no instant-dismiss)", async () => {
+    // Documents the renderer's guard for callers that bypass notify().
+    render(<Toaster />);
+    await act(async () => {
+      useNotificationStore.getState().addNotification({
+        type: "error",
+        priority: "high",
+        message: "Stuck",
+      });
+      vi.advanceTimersByTime(16);
+    });
+
+    await act(async () => {
+      vi.advanceTimersByTime(60_000);
+    });
+    expect(screen.getByText("Stuck")).toBeTruthy();
   });
 });

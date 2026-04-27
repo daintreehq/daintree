@@ -13,6 +13,24 @@ import {
 import { useNotificationSettingsStore } from "@/store/notificationSettingsStore";
 import { isScheduledQuietNow, nextOccurrenceTimestamp } from "@shared/utils/quietHours";
 
+/**
+ * Default auto-dismiss durations (ms) by notification type.
+ *
+ * Errors and warnings get a generous 12s so the user has time to read them;
+ * success and info dismiss in 4s to match Sonner / Material 3 norms. The
+ * persistent inbox is the WCAG 2.2.1 conforming alternative — users who miss
+ * a toast can always recover it from the notification center.
+ *
+ * Action-bearing toasts override this to `0` (sticky) so the action remains
+ * available; explicit `duration` on the payload always wins.
+ */
+export const TOAST_DURATION: Record<NotificationType, number> = {
+  error: 12000,
+  warning: 12000,
+  success: 4000,
+  info: 4000,
+};
+
 export interface ComboOptions {
   key: string;
   tiers: readonly string[];
@@ -177,6 +195,13 @@ export function notify(payload: NotifyPayload): string {
     payload = { ...payload, duration: 0 };
   }
 
+  // Severity-based dismiss defaults. The persistent inbox is the WCAG 2.2.1
+  // conforming alternative for time-limited content, so error/warning use a
+  // generous 12s instead of full sticky to keep the active stack from growing.
+  if (payload.duration === undefined) {
+    payload = { ...payload, duration: TOAST_DURATION[type] };
+  }
+
   const historyActions: NotificationHistoryAction[] = allActions
     .filter(
       (a): a is NotificationAction & { actionId: NonNullable<NotificationAction["actionId"]> } =>
@@ -299,11 +324,16 @@ export function notify(payload: NotifyPayload): string {
         if (notification.context?.projectId !== context?.projectId) {
           patch.context = undefined;
         }
-        // Mirror the create-path rule: if the updated toast will be action-bearing
-        // and the stored duration is still `undefined`, persist it.
+        // Mirror the create-path rule: when the updated toast will be
+        // action-bearing, promote it to sticky so the user has time to act.
+        // Preserve an explicit caller-supplied duration that differs from the
+        // type default — that signals an intentional UX choice.
         const resultingActionsCount =
           (patchAction ? 1 : 0) + (coalesce.buildAction ? 0 : (notification.actions?.length ?? 0));
-        if (notification.duration === undefined && resultingActionsCount > 0) {
+        const storedDurationIsDefault =
+          notification.duration === undefined ||
+          notification.duration === TOAST_DURATION[notification.type];
+        if (resultingActionsCount > 0 && storedDurationIsDefault) {
           patch.duration = 0;
         }
         useNotificationStore.getState().updateNotification(existing.id, patch);
