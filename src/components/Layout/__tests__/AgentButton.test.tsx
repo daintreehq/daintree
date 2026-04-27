@@ -171,7 +171,24 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
 }));
 
 vi.mock("@/components/ui/context-menu", () => ({
-  ContextMenu: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  ContextMenu: ({
+    children,
+    open,
+    onOpenChange,
+  }: {
+    children: React.ReactNode;
+    open?: boolean;
+    onOpenChange?: (next: boolean) => void;
+  }) => (
+    <div data-testid="context-menu-root" data-open={String(open ?? false)}>
+      {/* Test-only opener — Radix's right-click trigger isn't observable in the
+          minimal mock, so this lets tests transition the controlled menu to the
+          open state before exercising item interactions. Rendered as a div to
+          stay out of getByRole("button") queries used by other tests. */}
+      <div data-testid="__open-context-menu" onClick={() => onOpenChange?.(true)} />
+      {children}
+    </div>
+  ),
   ContextMenuTrigger: ({ children }: { children: React.ReactNode }) => <>{children}</>,
   ContextMenuContent: ({ children }: { children: React.ReactNode }) => (
     <div data-testid="context-menu-content">{children}</div>
@@ -224,7 +241,6 @@ vi.mock("@/components/ui/context-menu", () => ({
 
 vi.mock("lucide-react", () => ({
   ChevronDown: () => <span data-testid="chevron-icon" />,
-  LayoutGrid: () => <span data-testid="layout-grid-icon" />,
   PanelBottom: () => <span data-testid="panel-bottom-icon" />,
   Unplug: () => <span data-testid="unplug-icon" />,
 }));
@@ -686,6 +702,28 @@ describe("AgentButton preset UX", () => {
         <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
       );
       expect(queryByText("Launch in Worktree")).toBeNull();
+    });
+
+    it("closes the context menu after clicking the inline Dock icon", () => {
+      // Regression for the Radix close-chain bug: stopPropagation on the
+      // inline button cuts handleSelect → onClose, so the implementation
+      // must call closeMenu explicitly.
+      mockSettings = settingsWith({ claude: {} });
+      mockMergedPresetsFn = () => [];
+      mockWorktrees = [{ id: "wt-1", name: "Main", isMainWorktree: true }];
+
+      const { getAllByTestId, getByTestId } = render(
+        <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
+      );
+
+      // Open the controlled menu first so we can observe the close transition.
+      const openers = getAllByTestId("__open-context-menu");
+      fireEvent.click(openers[0]!);
+      const roots = getAllByTestId("context-menu-root");
+      expect(roots[0]!.getAttribute("data-open")).toBe("true");
+
+      fireEvent.click(getByTestId("agent-context-worktree-dock-wt-1"));
+      expect(getAllByTestId("context-menu-root")[0]!.getAttribute("data-open")).toBe("false");
     });
   });
 });
