@@ -1033,7 +1033,15 @@ describe("ActionService", () => {
   });
 
   describe("action definition validation", () => {
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    let warnSpy: ReturnType<typeof vi.spyOn>;
+
+    beforeAll(() => {
+      warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    });
+
+    afterAll(() => {
+      warnSpy.mockRestore();
+    });
 
     beforeEach(() => {
       warnSpy.mockClear();
@@ -1161,6 +1169,29 @@ describe("ActionService", () => {
       expect(warnSpy).toHaveBeenCalledTimes(2);
       expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('Action "test.offender1"'));
       expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('Action "test.offender3"'));
+    });
+
+    it("does not warn on duplicate registration (validate runs after duplicate-ID check)", () => {
+      const action: ActionDefinition = {
+        id: "test.duplicate" as ActionId,
+        title: "Test",
+        description: "Test",
+        category: "test",
+        kind: "command",
+        danger: "safe",
+        scope: "renderer",
+        isEnabled: () => false,
+        run: vi.fn().mockResolvedValue(undefined),
+      };
+
+      // First registration: warning fires
+      service.register(action);
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+
+      // Second registration: duplicate-ID guard throws before validate runs
+      warnSpy.mockClear();
+      expect(() => service.register(action)).toThrow(/already registered/);
+      expect(warnSpy).not.toHaveBeenCalled();
     });
   });
 });

@@ -32,7 +32,7 @@ function validateActionDefinition<S extends z.ZodTypeAny | undefined, Result>(
   if (definition.isEnabled && !definition.disabledReason) {
     console.warn(
       `[ActionRegistry] Action "${definition.id}" defines isEnabled but no disabledReason callback. ` +
-        `Users will see a disabled command with no explanation.`
+        `Users may see a disabled command with no explanation.`
     );
   }
 }
@@ -112,11 +112,13 @@ export class ActionService {
   register<S extends z.ZodTypeAny | undefined = undefined, Result = unknown>(
     definition: ActionDefinition<S, Result>
   ): void {
-    validateActionDefinition(definition);
-
     if (this.registry.has(definition.id)) {
       throw new Error(`Action "${definition.id}" is already registered.`);
     }
+    // Validate after the duplicate-ID guard: on HMR / plugin reload a
+    // re-registering action was already validated on first pass — emitting
+    // a warning before the throw would be spurious noise.
+    validateActionDefinition(definition);
     this.registry.set(definition.id, definition as AnyActionDefinition);
   }
 
