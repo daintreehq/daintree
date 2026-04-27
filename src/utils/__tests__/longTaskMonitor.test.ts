@@ -159,6 +159,40 @@ describe("startLongTaskMonitor", () => {
     });
   });
 
+  it("warns with the highest-duration script's attribution, not the first in the array", () => {
+    mockNow = 6000;
+    startLongTaskMonitor(100);
+    emitLoafEntry({
+      duration: 200,
+      blockingDuration: 150,
+      scripts: [
+        {
+          duration: 40,
+          invoker: "DIV.onclick",
+          invokerType: "event-listener",
+          sourceURL: "https://app/lo.js",
+          sourceFunctionName: "small",
+        },
+        {
+          duration: 130,
+          invoker: "TIMEOUT",
+          invokerType: "user-callback",
+          sourceURL: "https://app/hi.js",
+          sourceFunctionName: "big",
+        },
+      ],
+    });
+    expect(logWarn).toHaveBeenCalledWith(
+      "Renderer long animation frame detected",
+      expect.objectContaining({
+        invoker: "TIMEOUT",
+        invokerType: "user-callback",
+        sourceURL: "https://app/hi.js",
+        sourceFunctionName: "big",
+      })
+    );
+  });
+
   it("warns without attribution fields when scripts is empty", () => {
     mockNow = 6000;
     startLongTaskMonitor(100);

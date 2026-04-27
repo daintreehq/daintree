@@ -112,6 +112,7 @@ export function startLongTaskMonitor(thresholdMs = 100): () => void {
 
     observer.observe({ type: "long-animation-frame", durationThreshold: thresholdMs });
   } catch {
+    observer?.disconnect();
     return () => {};
   }
 
