@@ -14,8 +14,6 @@ function createTerminalInfo(overrides: Partial<TerminalInfo> = {}): TerminalInfo
     lastCheckTime: 0,
     restartCount: 0,
     ptyProcess: {} as never,
-    inputWriteQueue: [],
-    inputWriteTimeout: null,
     outputBuffer: "",
     semanticBuffer: [],
     ...overrides,

@@ -26,11 +26,11 @@ import {
   type TerminalSnapshot,
   OUTPUT_BUFFER_SIZE,
   DEFAULT_SCROLLBACK,
-  WRITE_INTERVAL_MS,
   GRACEFUL_SHUTDOWN_TIMEOUT_MS,
   GRACEFUL_SHUTDOWN_BUFFER_SIZE,
   GRACEFUL_SHUTDOWN_CLEAR_DELAY_MS,
 } from "./types.js";
+import { WriteQueue } from "./WriteQueue.js";
 import { getTerminalSerializerService } from "./TerminalSerializerService.js";
 import { events } from "../events.js";
 import { AgentSpawnedSchema } from "../../schemas/agent.js";
@@ -47,7 +47,6 @@ import {
   getSoftNewlineSequence,
   getSubmitEnterDelay,
   isBracketedPaste,
-  chunkInput,
   delay,
   BRACKETED_PASTE_START,
   BRACKETED_PASTE_END,
@@ -143,8 +142,6 @@ export interface TerminalProcessDependencies {
 export class TerminalProcess {
   private activityMonitor: ActivityMonitor | null = null;
   private processDetector: ProcessDetector | null = null;
-  private submitQueue: string[] = [];
-  private submitInFlight = false;
   private headlineGenerator = new ActivityHeadlineGenerator();
   private lastDetectedProcessIconId: string | undefined;
 
@@ -153,8 +150,7 @@ export class TerminalProcess {
 
   private semanticBufferManager!: SemanticBufferManager;
 
-  private inputWriteQueue: string[] = [];
-  private inputWriteTimeout: NodeJS.Timeout | null = null;
+  private writeQueue!: WriteQueue;
   private readonly processTreeKiller: ProcessTreeKiller;
   private shellIdentityFallbackTimer: NodeJS.Timeout | null = null;
   private shellIdentityFallbackSubmittedAt: number | null = null;
@@ -387,8 +383,6 @@ export class TerminalProcess {
       lastOutputTime: spawnedAt,
       lastCheckTime: spawnedAt,
       semanticBuffer: [],
-      inputWriteQueue: [],
-      inputWriteTimeout: null,
       headlessTerminal,
       serializeAddon,
       rawOutputBuffer: undefined,
@@ -417,6 +411,15 @@ export class TerminalProcess {
 
     this.semanticBufferManager = new SemanticBufferManager(this.terminalInfo);
     this.processTreeKiller = new ProcessTreeKiller(ptyProcess, deps.processTreeCache);
+    this.writeQueue = new WriteQueue({
+      writeToPty: (data) => {
+        this.terminalInfo.ptyProcess.write(data);
+      },
+      isExited: () => this.terminalInfo.isExited === true,
+      lastOutputTime: () => this.terminalInfo.lastOutputTime,
+      performSubmit: (text) => this.performSubmit(text),
+      onWriteError: (error, context) => this.logWriteError(error, context),
+    });
     this.setupPtyHandlers(ptyProcess);
 
     const ptyPid = ptyProcess.pid;
@@ -728,9 +731,7 @@ export class TerminalProcess {
       return;
     }
 
-    const chunks = chunkInput(data);
-    this.inputWriteQueue.push(...chunks);
-    this.startWrite();
+    this.writeQueue.enqueueChunked(data);
   }
 
   submit(text: string): void {
@@ -746,26 +747,7 @@ export class TerminalProcess {
       this.activityMonitor.notifySubmission();
     }
 
-    this.submitQueue.push(text);
-    if (this.submitInFlight) {
-      return;
-    }
-    this.submitInFlight = true;
-    void this.drainSubmitQueue();
-  }
-
-  private async drainSubmitQueue(): Promise<void> {
-    try {
-      while (this.submitQueue.length > 0) {
-        const next = this.submitQueue.shift();
-        if (next === undefined) {
-          continue;
-        }
-        await this.performSubmit(next);
-      }
-    } finally {
-      this.submitInFlight = false;
-    }
+    this.writeQueue.submit(text);
   }
 
   private async performSubmit(text: string): Promise<void> {
@@ -813,10 +795,14 @@ export class TerminalProcess {
       }
     }
 
-    await this.waitForInputWriteDrain();
+    await this.writeQueue.waitForInputWriteDrain();
 
     if (useOutputSettle) {
-      await this.waitForOutputSettle();
+      await this.writeQueue.waitForOutputSettle({
+        debounceMs: OUTPUT_SETTLE_DEBOUNCE_MS,
+        maxWaitMs: OUTPUT_SETTLE_MAX_WAIT_MS,
+        pollMs: OUTPUT_SETTLE_POLL_INTERVAL_MS,
+      });
     } else {
       await delay(getSubmitEnterDelay(terminal));
     }
@@ -828,51 +814,6 @@ export class TerminalProcess {
     this.suppressNextShellSubmitSignal = true;
     this.markShellCommandSubmitted(body);
     this.write(enterSuffix);
-  }
-
-  private async waitForInputWriteDrain(): Promise<void> {
-    if (this.inputWriteQueue.length === 0 && this.inputWriteTimeout === null) {
-      return;
-    }
-
-    await new Promise<void>((resolve) => {
-      const check = () => {
-        if (this.terminalInfo.isExited || !this.terminalInfo.ptyProcess) {
-          resolve();
-          return;
-        }
-        if (this.inputWriteQueue.length === 0 && this.inputWriteTimeout === null) {
-          resolve();
-          return;
-        }
-        setTimeout(check, 0);
-      };
-      check();
-    });
-  }
-
-  private async waitForOutputSettle(): Promise<void> {
-    const startWait = Date.now();
-    const terminal = this.terminalInfo;
-
-    while (true) {
-      if (terminal.isExited || !terminal.ptyProcess || terminal.wasKilled) {
-        return;
-      }
-
-      const settleFrom = Math.max(startWait, terminal.lastOutputTime);
-      const timeSinceOutput = Date.now() - settleFrom;
-
-      if (timeSinceOutput >= OUTPUT_SETTLE_DEBOUNCE_MS) {
-        return;
-      }
-
-      if (Date.now() - startWait > OUTPUT_SETTLE_MAX_WAIT_MS) {
-        return;
-      }
-
-      await delay(OUTPUT_SETTLE_POLL_INTERVAL_MS);
-    }
   }
 
   resize(cols: number, rows: number): void {
@@ -1028,11 +969,7 @@ export class TerminalProcess {
 
     this.semanticBufferManager.flush();
 
-    if (this.inputWriteTimeout) {
-      clearTimeout(this.inputWriteTimeout);
-      this.inputWriteTimeout = null;
-    }
-    this.inputWriteQueue = [];
+    this.writeQueue.dispose();
 
     // Flush session snapshot synchronously before marking as killed.
     // Once wasKilled is set, all persistence paths are blocked, and
@@ -1718,10 +1655,7 @@ export class TerminalProcess {
 
     this.clearSessionPersistTimer();
 
-    if (this.inputWriteTimeout) {
-      clearTimeout(this.inputWriteTimeout);
-      this.inputWriteTimeout = null;
-    }
+    this.writeQueue.dispose();
 
     this.disposeHeadless();
 
@@ -1801,11 +1735,7 @@ export class TerminalProcess {
       this.stopShellIdentityFallbackWatcher();
       this.semanticBufferManager.flush();
 
-      if (this.inputWriteTimeout) {
-        clearTimeout(this.inputWriteTimeout);
-        this.inputWriteTimeout = null;
-      }
-      this.inputWriteQueue = [];
+      this.writeQueue.dispose();
 
       this.clearSessionPersistTimer();
       this.sessionPersistDirty = false;
@@ -2073,41 +2003,6 @@ export class TerminalProcess {
         timestamp: Date.now(),
         lastCommand,
       });
-    }
-  }
-
-  private startWrite(): void {
-    if (this.inputWriteTimeout !== null || this.inputWriteQueue.length === 0) {
-      return;
-    }
-
-    this.doWrite();
-
-    if (this.inputWriteQueue.length > 0) {
-      this.inputWriteTimeout = setTimeout(() => {
-        this.inputWriteTimeout = null;
-        this.startWrite();
-      }, WRITE_INTERVAL_MS);
-    }
-  }
-
-  private doWrite(): void {
-    if (this.inputWriteQueue.length === 0) {
-      return;
-    }
-
-    const chunk = this.inputWriteQueue.shift()!;
-    const terminal = this.terminalInfo;
-    if (terminal.isExited) {
-      return;
-    }
-    if (!terminal.ptyProcess) {
-      return;
-    }
-    try {
-      terminal.ptyProcess.write(chunk);
-    } catch (error) {
-      this.logWriteError(error, { operation: "write(chunk)" });
     }
   }
 }

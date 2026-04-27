@@ -17,8 +17,6 @@ function createTerminal(overrides: Partial<TerminalInfo> = {}): TerminalInfo {
     launchAgentId: "claude",
     agentState: "idle",
     ptyProcess: {} as never,
-    inputWriteQueue: [],
-    inputWriteTimeout: null,
     outputBuffer: "",
     semanticBuffer: [],
     ...overrides,
