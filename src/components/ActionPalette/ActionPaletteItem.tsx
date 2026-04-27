@@ -1,7 +1,6 @@
 import React from "react";
 import { cn } from "@/lib/utils";
 import type { ActionPaletteItem as ActionPaletteItemType } from "@/hooks/useActionPalette";
-import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 import { ACTION_CATEGORY_COLORS, ACTION_CATEGORY_DEFAULT_COLOR } from "@/config/categoryColors";
 
 interface ActionPaletteItemProps {
@@ -48,6 +47,9 @@ export const ActionPaletteItem = React.memo(function ActionPaletteItem({
         {item.description && (
           <div className="text-xs text-daintree-text/50 truncate">{item.description}</div>
         )}
+        {!item.enabled && item.disabledReason && (
+          <div className="text-[10px] text-daintree-text/40 italic">{item.disabledReason}</div>
+        )}
       </div>
 
       {item.keybinding && (
@@ -57,19 +59,6 @@ export const ActionPaletteItem = React.memo(function ActionPaletteItem({
       )}
     </button>
   );
-
-  if (!item.enabled && item.disabledReason) {
-    return (
-      <TooltipProvider>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <span className="inline-flex w-full">{buttonContent}</span>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">{item.disabledReason}</TooltipContent>
-        </Tooltip>
-      </TooltipProvider>
-    );
-  }
 
   return buttonContent;
 });
