@@ -1,11 +1,17 @@
 import { useEffect, useMemo, useState } from "react";
-import { Bell, CheckCheck, Moon, Settings2, Trash2 } from "lucide-react";
+import { Bell, CheckCheck, Ellipsis, Moon, Settings2, Trash2 } from "lucide-react";
 import {
   useNotificationHistoryStore,
   type NotificationHistoryEntry,
 } from "@/store/slices/notificationHistorySlice";
 import { NotificationCenterEntry } from "./NotificationCenterEntry";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { actionService } from "@/services/ActionService";
 import { muteForDuration, muteUntilNextMorning, notify } from "@/lib/notify";
 import type { NotificationType } from "@/store/notificationStore";
@@ -203,19 +209,30 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
             Configure
           </Button>
           {entries.length > 0 && (
-            <Button
-              type="button"
-              variant="ghost"
-              size="xs"
-              onClick={() => {
-                clearAll();
-                onClose();
-              }}
-              className="text-daintree-text/50"
-            >
-              <Trash2 />
-              Clear all
-            </Button>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button
+                  type="button"
+                  className="p-1 hover:bg-daintree-text/10 text-daintree-text/50 hover:text-daintree-text/80 transition-colors rounded-[var(--radius-sm)]"
+                  aria-label="More notification actions"
+                  title="More notification actions"
+                >
+                  <Ellipsis className="w-3 h-3" aria-hidden="true" />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="min-w-[160px]">
+                <DropdownMenuItem
+                  destructive
+                  onSelect={() => {
+                    clearAll();
+                    onClose();
+                  }}
+                >
+                  <Trash2 className="w-3 h-3 mr-2" aria-hidden="true" />
+                  Clear all
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           )}
         </div>
       </div>
