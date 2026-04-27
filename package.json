@@ -57,6 +57,8 @@
     "renderer-bundle-budget:build": "vite build",
     "renderer-bundle-budget:check": "node scripts/check-renderer-bundle-budget.mjs",
     "renderer-bundle-budget:update": "vite build && node scripts/check-renderer-bundle-budget.mjs --update",
+    "test-ratio:check": "node scripts/check-test-ratio.mjs",
+    "test-ratio:update": "node scripts/check-test-ratio.mjs --update",
     "check": "npm run typecheck && npm run check:channels && npm run lint:ratchet && npm run format:check",
     "fix": "npm run format && npm run lint:fix",
     "test:smoke": "node scripts/run-smoke.mjs",

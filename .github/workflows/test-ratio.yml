@@ -1,0 +1,44 @@
+name: Test Ratio
+
+on:
+  schedule:
+    - cron: "37 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run test ratio check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node scripts/check-test-ratio.mjs
+
+      - name: Upload summary
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-ratio-summary
+          path: dist/test-ratio-summary.md
+          retention-days: 30
+          if-no-files-found: ignore

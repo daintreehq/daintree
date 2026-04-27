@@ -1,0 +1,10 @@
+{
+  "rollingWindowSize": 100,
+  "updatedAt": "2026-04-27T15:31:48.928Z",
+  "fixWithTestRatio": 0.9090909090909091,
+  "fixCount": 44,
+  "fixWithTestCount": 40,
+  "allWithTestRatio": 0.91,
+  "totalCount": 100,
+  "allWithTestCount": 91
+}
