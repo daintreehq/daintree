@@ -7,11 +7,11 @@ export interface ConfirmDialogProps {
   title: React.ReactNode;
   description?: React.ReactNode;
   children?: React.ReactNode;
-  confirmLabel?: string;
+  confirmLabel: string;
   cancelLabel?: string;
   onConfirm: () => void | Promise<void>;
   isConfirmLoading?: boolean;
-  variant?: "default" | "destructive" | "info";
+  variant: "default" | "destructive" | "info";
   zIndex?: DialogZIndex;
 }
 
@@ -21,11 +21,11 @@ export function ConfirmDialog({
   title,
   description,
   children,
-  confirmLabel = "Confirm",
+  confirmLabel,
   cancelLabel = "Cancel",
   onConfirm,
   isConfirmLoading = false,
-  variant = "destructive",
+  variant,
   zIndex,
 }: ConfirmDialogProps) {
   const handleClose = onClose ?? (() => {});

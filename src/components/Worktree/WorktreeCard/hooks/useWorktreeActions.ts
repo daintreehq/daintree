@@ -5,12 +5,16 @@ import { useRecipeStore } from "@/store/recipeStore";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 
-export interface ConfirmDialogState {
-  isOpen: boolean;
-  title: string;
-  description: string;
-  onConfirm: () => void;
-}
+export type ConfirmDialogState =
+  | { isOpen: false }
+  | {
+      isOpen: true;
+      title: string;
+      description: string;
+      confirmLabel: string;
+      variant: "default" | "destructive" | "info";
+      onConfirm: () => void;
+    };
 
 export interface UseWorktreeActionsResult {
   runningRecipeId: string | null;
@@ -46,15 +50,12 @@ export function useWorktreeActions({
 
   const [confirmDialog, setConfirmDialog] = useState<ConfirmDialogState>({
     isOpen: false,
-    title: "",
-    description: "",
-    onConfirm: () => {},
   });
 
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
 
   const closeConfirmDialog = useCallback(() => {
-    setConfirmDialog((prev) => ({ ...prev, isOpen: false }));
+    setConfirmDialog({ isOpen: false });
   }, []);
 
   const handlePathClick = useCallback(() => {
