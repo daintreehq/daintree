@@ -210,14 +210,14 @@ export function PortalSettingsTab() {
             value={editName}
             onChange={(e) => setEditName(e.target.value)}
             className="bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-2 py-1 text-sm text-daintree-text w-32 focus:border-daintree-accent focus:outline-none"
-            placeholder="Name"
+            placeholder="e.g. My portal"
           />
           <input
             type="text"
             value={editUrl}
             onChange={(e) => setEditUrl(e.target.value)}
             className="bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-2 py-1 text-sm text-daintree-text flex-1 focus:border-daintree-accent focus:outline-none"
-            placeholder="URL"
+            placeholder="e.g. https://github.com/owner/repo"
           />
           <button
             onClick={handleSaveEdit}
