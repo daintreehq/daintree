@@ -282,15 +282,26 @@ describe("NotificationCenter overflow menu", () => {
     expect(screen.queryByLabelText("More notification actions")).toBeNull();
   });
 
-  it("renders overflow trigger when entries exist", () => {
+  it("renders overflow trigger as a button when entries exist", () => {
     setEntries([makeEntry()]);
     render(<NotificationCenter open onClose={() => {}} />);
-    expect(screen.getByLabelText("More notification actions")).toBeTruthy();
+    const trigger = screen.getByLabelText("More notification actions");
+    expect(trigger.tagName).toBe("BUTTON");
   });
 
-  it("clears entries and closes the panel when 'Clear all' is selected", async () => {
+  it("calls clearAll before onClose and removes the trigger when 'Clear all' is selected", async () => {
+    const callOrder: string[] = [];
+    const originalClearAll = useNotificationHistoryStore.getState().clearAll;
+    const clearAllSpy = vi.fn(() => {
+      callOrder.push("clearAll");
+      originalClearAll();
+    });
+    useNotificationHistoryStore.setState({ clearAll: clearAllSpy });
+
     setEntries([makeEntry(), makeEntry({ id: "entry-2" })]);
-    const onClose = vi.fn();
+    const onClose = vi.fn(() => {
+      callOrder.push("onClose");
+    });
     render(<NotificationCenter open onClose={onClose} />);
 
     const trigger = screen.getByLabelText("More notification actions");
@@ -308,5 +319,7 @@ describe("NotificationCenter overflow menu", () => {
     expect(useNotificationHistoryStore.getState().entries).toHaveLength(0);
     expect(useNotificationHistoryStore.getState().unreadCount).toBe(0);
     expect(onClose).toHaveBeenCalledTimes(1);
+    expect(callOrder).toEqual(["clearAll", "onClose"]);
+    expect(screen.queryByLabelText("More notification actions")).toBeNull();
   });
 });
