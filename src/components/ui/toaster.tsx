@@ -39,6 +39,14 @@ const TYPE_ICON_CONFIG: Record<string, IconConfig> = {
   warning: { Icon: AlertTriangle, className: "text-status-warning" },
 };
 
+/**
+ * Hard cap on total visible time for any toast, regardless of how many
+ * coalesced updates restart its timer. Bounds chatty same-entity bursts
+ * (e.g. agent state churn under #5863).
+ */
+const MAX_VISIBLE_DURATION_MS = 15000;
+const VISIBLE_DURATION_MULTIPLIER = 3;
+
 function Toast({ notification }: { notification: Notification }) {
   const { dismissNotification, removeNotification } = useNotificationStore(
     useShallow((state) => ({
@@ -103,14 +111,26 @@ function Toast({ notification }: { notification: Notification }) {
     }
   }, [notification.dismissed, notification.id, isVisible, removeNotification, restoreFocus]);
 
+  // Latest-ref for handleDismiss so the auto-dismiss effect doesn't restart
+  // every time the callback identity changes — the effect should restart only
+  // on contentKey (true message change) or when pause/duration toggles.
+  const dismissRef = useRef(handleDismiss);
+  useLayoutEffect(() => {
+    dismissRef.current = handleDismiss;
+  });
+
   useEffect(() => {
-    // duration === 0 is sticky; undefined would mean a direct addNotification
-    // caller bypassed notify()'s severity defaults — leave it sticky rather
-    // than silently auto-dismissing at 0ms.
+    // !notification.duration is sticky (covers both 0 and undefined): a direct
+    // addNotification caller bypassing notify()'s severity defaults stays
+    // sticky rather than silently auto-dismissing at 0ms.
     if (!notification.duration || isPaused) return;
-    const timer = setTimeout(handleDismiss, notification.duration);
+    const duration = notification.duration;
+    const cap = Math.min(duration * VISIBLE_DURATION_MULTIPLIER, MAX_VISIBLE_DURATION_MS);
+    const deadline = (notification.firstShownAt ?? Date.now()) + cap;
+    const delay = Math.min(duration, Math.max(0, deadline - Date.now()));
+    const timer = setTimeout(() => dismissRef.current(), delay);
     return () => clearTimeout(timer);
-  }, [notification.duration, notification.updatedAt, handleDismiss, isPaused]);
+  }, [notification.duration, notification.contentKey, notification.firstShownAt, isPaused]);
 
   const accentClass = ACCENT_CLASS[notification.type] ?? "border-l-status-info";
   const { Icon, className: iconClassName } =

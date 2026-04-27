@@ -35,6 +35,15 @@ export interface Notification {
   dismissed?: boolean;
   /** Bumped on each coalesced update so useEffect deps can detect changes */
   updatedAt?: number;
+  /** Wall-clock time the toast first became visible. Preserved across coalesces and updates. */
+  firstShownAt?: number;
+  /**
+   * Bumped only when the displayed message text actually changes (not on
+   * every count bump or metadata-only update). The Toast auto-dismiss timer
+   * resets on this key, so chatty same-message coalesces no longer keep the
+   * toast alive forever (issue #5863).
+   */
+  contentKey?: number;
   /** Links this toast to its notification history entry for overflow tracking */
   historyEntryId?: string;
   /**
@@ -76,6 +85,17 @@ interface NotificationStore {
 
 export const MAX_VISIBLE_TOASTS = 3;
 
+/**
+ * Compare two notification messages for the purpose of contentKey bumping.
+ * Plain strings compare by value; any ReactNode message is treated as
+ * "changed" because referential equality on JSX is unreliable and false
+ * positives are safer than false negatives (a missed timer reset would let a
+ * truly-updated toast dismiss too early).
+ */
+function messagesEqual(a: Notification["message"], b: Notification["message"]): boolean {
+  return typeof a === "string" && typeof b === "string" && a === b;
+}
+
 export const useNotificationStore = create<NotificationStore>((set) => ({
   notifications: [],
   addNotification: (notification) => {
@@ -108,6 +128,7 @@ export const useNotificationStore = create<NotificationStore>((set) => ({
           // onto a downloading-again state. Unset keys still preserve the
           // existing action (the default "missing = preserve" semantic).
           const actionResolved = "action" in notification ? notification.action : liveMatch.action;
+          const messageChanged = !messagesEqual(notification.message, liveMatch.message);
           return {
             notifications: state.notifications.map((n) =>
               n.id === liveMatch.id
@@ -125,6 +146,7 @@ export const useNotificationStore = create<NotificationStore>((set) => ({
                     historyEntryId: notification.historyEntryId ?? n.historyEntryId,
                     count: (n.count ?? 1) + 1,
                     updatedAt: Date.now(),
+                    contentKey: messageChanged ? (n.contentKey ?? 1) + 1 : (n.contentKey ?? 1),
                   }
                 : n
             ),
@@ -151,17 +173,32 @@ export const useNotificationStore = create<NotificationStore>((set) => ({
           }
         }
       }
+      const now = Date.now();
       return {
-        notifications: [...notifications, { ...notification, id, updatedAt: Date.now() }],
+        notifications: [
+          ...notifications,
+          { ...notification, id, updatedAt: now, firstShownAt: now, contentKey: 1 },
+        ],
       };
     });
     return collapsedOntoId ?? id;
   },
   updateNotification: (id, patch) =>
     set((state) => ({
-      notifications: state.notifications.map((n) =>
-        n.id === id ? { ...n, ...patch, updatedAt: Date.now() } : n
-      ),
+      notifications: state.notifications.map((n) => {
+        if (n.id !== id) return n;
+        const messageInPatch = "message" in patch;
+        const messageChanged = messageInPatch && !messagesEqual(patch.message, n.message);
+        return {
+          ...n,
+          ...patch,
+          updatedAt: Date.now(),
+          // firstShownAt is set once at creation; never overwrite (even if a
+          // caller passes it in the patch).
+          firstShownAt: n.firstShownAt,
+          contentKey: messageChanged ? (n.contentKey ?? 1) + 1 : (n.contentKey ?? 1),
+        };
+      }),
     })),
   dismissNotification: (id) =>
     set((state) => ({

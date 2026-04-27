@@ -119,6 +119,43 @@ describe("notificationStore adversarial", () => {
     expect(n?.updatedAt).toBe(2000);
   });
 
+  it("updateNotification does not bump contentKey for non-message patches", () => {
+    const id = addToast({ message: "msg" });
+    const initial = useNotificationStore.getState().notifications.find((x) => x.id === id)!;
+    expect(initial.contentKey).toBe(1);
+
+    useNotificationStore.getState().updateNotification(id, { title: "new-title" });
+    expect(useNotificationStore.getState().notifications.find((x) => x.id === id)!.contentKey).toBe(
+      1
+    );
+
+    useNotificationStore.getState().updateNotification(id, { message: "msg" }); // unchanged
+    expect(useNotificationStore.getState().notifications.find((x) => x.id === id)!.contentKey).toBe(
+      1
+    );
+
+    useNotificationStore.getState().updateNotification(id, { message: "new-msg" });
+    expect(useNotificationStore.getState().notifications.find((x) => x.id === id)!.contentKey).toBe(
+      2
+    );
+  });
+
+  it("updateNotification preserves firstShownAt even when patch tries to overwrite it", () => {
+    vi.spyOn(Date, "now").mockReturnValue(1000);
+    const id = addToast({ message: "m" });
+    const initial = useNotificationStore.getState().notifications.find((x) => x.id === id)!;
+    expect(initial.firstShownAt).toBe(1000);
+
+    vi.spyOn(Date, "now").mockReturnValue(5000);
+    useNotificationStore
+      .getState()
+      .updateNotification(id, { firstShownAt: 9999, message: "changed" });
+
+    const after = useNotificationStore.getState().notifications.find((x) => x.id === id)!;
+    expect(after.firstShownAt).toBe(1000);
+    expect(after.updatedAt).toBe(5000);
+  });
+
   it("updateNotification on a missing id is a pure no-op", () => {
     const id = addToast({ title: "keep" });
     const before = JSON.parse(JSON.stringify(useNotificationStore.getState().notifications));

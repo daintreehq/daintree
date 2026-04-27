@@ -312,7 +312,7 @@ describe("notificationStore — correlationId collapse", () => {
     expect(active[0]!.message).toBe("m-4");
   });
 
-  it("bumps updatedAt when collapsing so auto-dismiss timers reset", () => {
+  it("bumps updatedAt when collapsing so accessibility re-announce fires", () => {
     const originalNow = Date.now;
     let mockNow = 1000;
     Date.now = () => mockNow;
@@ -326,6 +326,46 @@ describe("notificationStore — correlationId collapse", () => {
 
       const after = getState().notifications.find((n) => n.id === id)!;
       expect(after.updatedAt).toBe(2500);
+    } finally {
+      Date.now = originalNow;
+    }
+  });
+
+  it("bumps contentKey only when the displayed message actually changes", () => {
+    const id = addToast({ correlationId: "entity-a", message: "same" });
+    const initial = getState().notifications.find((n) => n.id === id)!;
+    expect(initial.contentKey).toBe(1);
+
+    // Same message — contentKey must NOT bump (issue #5863 fix).
+    addToast({ correlationId: "entity-a", message: "same" });
+    expect(getState().notifications.find((n) => n.id === id)!.contentKey).toBe(1);
+
+    // New message — contentKey bumps.
+    addToast({ correlationId: "entity-a", message: "different" });
+    expect(getState().notifications.find((n) => n.id === id)!.contentKey).toBe(2);
+
+    // Same message again — no bump.
+    addToast({ correlationId: "entity-a", message: "different" });
+    expect(getState().notifications.find((n) => n.id === id)!.contentKey).toBe(2);
+  });
+
+  it("preserves firstShownAt across coalesces", () => {
+    const originalNow = Date.now;
+    let mockNow = 1000;
+    Date.now = () => mockNow;
+    try {
+      const id = addToast({ correlationId: "entity-a", message: "first" });
+      const first = getState().notifications.find((n) => n.id === id)!;
+      expect(first.firstShownAt).toBe(1000);
+
+      mockNow = 2500;
+      addToast({ correlationId: "entity-a", message: "second" });
+      mockNow = 4000;
+      addToast({ correlationId: "entity-a", message: "third" });
+
+      const after = getState().notifications.find((n) => n.id === id)!;
+      expect(after.firstShownAt).toBe(1000);
+      expect(after.updatedAt).toBe(4000);
     } finally {
       Date.now = originalNow;
     }

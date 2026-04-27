@@ -243,7 +243,7 @@ describe("Toast accessibility", () => {
     expect(toast.className).toContain("motion-reduce:duration-0");
   });
 
-  it("resets auto-dismiss timer when updatedAt changes", async () => {
+  it("resets auto-dismiss timer when the message changes", async () => {
     render(<Toaster />);
     let toastId: string;
     await act(async () => {
@@ -257,7 +257,7 @@ describe("Toast accessibility", () => {
     });
     expect(screen.getByText("Initial")).toBeTruthy();
 
-    // Update the notification — timer should reset
+    // Update with a NEW message — contentKey bumps, timer resets
     await act(async () => {
       useNotificationStore.getState().updateNotification(toastId!, {
         message: "Updated",
@@ -275,6 +275,83 @@ describe("Toast accessibility", () => {
       vi.advanceTimersByTime(1500);
     });
     expect(screen.queryByText("Updated")).toBeNull();
+  });
+
+  it("does NOT reset auto-dismiss timer on count-only coalesce (issue #5863)", async () => {
+    render(<Toaster />);
+    await act(async () => {
+      addToast({
+        duration: 3000,
+        message: "Same message",
+        correlationId: "entity-a",
+      });
+      vi.advanceTimersByTime(16);
+    });
+
+    // Advance 2s into the 3s timer
+    await act(async () => {
+      vi.advanceTimersByTime(2000);
+    });
+    expect(screen.getByText("Same message")).toBeTruthy();
+
+    // Coalesce with the SAME message — count bumps but contentKey does not,
+    // so the auto-dismiss timer must NOT restart.
+    await act(async () => {
+      addToast({
+        duration: 3000,
+        message: "Same message",
+        correlationId: "entity-a",
+      });
+    });
+
+    // Advance past the original deadline. If the timer had reset, the toast
+    // would still be visible. With the fix it dismisses on schedule.
+    await act(async () => {
+      vi.advanceTimersByTime(1500);
+    });
+    expect(screen.queryByText("Same message")).toBeNull();
+  });
+
+  it("hard cap eventually dismisses toasts updated faster than their duration", async () => {
+    render(<Toaster />);
+    await act(async () => {
+      addToast({
+        duration: 3000,
+        message: "msg-0",
+        correlationId: "entity-a",
+      });
+      vi.advanceTimersByTime(16);
+    });
+
+    // Hard cap = min(3000 * 3, 15000) = 9000ms after firstShownAt. Drive four
+    // message-changing coalesces 2000ms apart; each resets the per-update
+    // timer (without the cap, the toast would live forever).
+    for (let i = 1; i <= 4; i++) {
+      await act(async () => {
+        vi.advanceTimersByTime(2000);
+      });
+      await act(async () => {
+        addToast({
+          duration: 3000,
+          message: `msg-${i}`,
+          correlationId: "entity-a",
+        });
+      });
+    }
+
+    // After the 4th coalesce (~8016ms in), the capped delay collapses to
+    // ~984ms instead of resetting to a fresh 3000ms.
+    expect(screen.getByText("msg-4")).toBeTruthy();
+
+    // Cross the cap; timer fires, then 300ms fade-out removes the toast.
+    await act(async () => {
+      vi.advanceTimersByTime(1500);
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(400);
+    });
+
+    expect(screen.queryByText(/msg-/)).toBeNull();
   });
 
   it("fires onDismiss when the user clicks the close button", async () => {
