@@ -48,6 +48,8 @@ function resetStores(): void {
     armOrder: [],
     armOrderById: {},
     lastArmedId: null,
+    broadcastSignal: 0,
+    previewArmedIds: new Set<string>(),
   });
   usePanelStore.setState({ panelsById: {}, panelIds: [] });
 }
@@ -104,5 +106,33 @@ describe("broadcastFleetRawInput", () => {
     expect(broadcastFleetRawInput("t1", "")).toBe(false);
 
     expect(broadcastMock).not.toHaveBeenCalled();
+  });
+
+  it("increments broadcastSignal once per accepted broadcast", () => {
+    seedPanels([makeTerminal("t1"), makeTerminal("t2")]);
+    useFleetArmingStore.getState().armIds(["t1", "t2"]);
+
+    expect(useFleetArmingStore.getState().broadcastSignal).toBe(0);
+    broadcastFleetRawInput("t1", "a");
+    expect(useFleetArmingStore.getState().broadcastSignal).toBe(1);
+    broadcastFleetRawInput("t1", "b");
+    broadcastFleetRawInput("t1", "c");
+    expect(useFleetArmingStore.getState().broadcastSignal).toBe(3);
+  });
+
+  it("does not increment broadcastSignal when origin is not armed", () => {
+    seedPanels([makeTerminal("t1"), makeTerminal("t2")]);
+    useFleetArmingStore.getState().armIds(["t2"]);
+
+    broadcastFleetRawInput("t1", "rejected");
+    expect(useFleetArmingStore.getState().broadcastSignal).toBe(0);
+  });
+
+  it("does not increment broadcastSignal on empty input", () => {
+    seedPanels([makeTerminal("t1"), makeTerminal("t2")]);
+    useFleetArmingStore.getState().armIds(["t1", "t2"]);
+
+    broadcastFleetRawInput("t1", "");
+    expect(useFleetArmingStore.getState().broadcastSignal).toBe(0);
   });
 });
