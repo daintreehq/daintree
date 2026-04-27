@@ -45,12 +45,7 @@ export function NotificationCenterEntry({
   const Icon = config.icon;
 
   return (
-    <div
-      className={cn(
-        "group flex items-start gap-2.5 px-3 py-2 hover:bg-overlay-medium transition-colors border-l-2",
-        isNew ? "border-daintree-accent bg-daintree-accent/[0.04]" : "border-transparent"
-      )}
-    >
+    <div className="group flex items-start gap-2.5 px-3 py-2 hover:bg-overlay-medium transition-colors">
       <div className={cn("mt-0.5 shrink-0", config.className)}>
         <Icon className="h-3.5 w-3.5" />
       </div>
