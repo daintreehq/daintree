@@ -54,6 +54,12 @@ import type {
 } from "../shared/types/index.js";
 import type { ColorVisionMode, AppColorScheme } from "../shared/types/appTheme.js";
 import type {
+  WorktreePortAction,
+  WorktreePortPayload,
+  WorktreePortRequestArgs,
+  WorktreePortResult,
+} from "../shared/types/worktree-port.js";
+import type {
   AgentStateChangePayload,
   AgentDetectedPayload,
   AgentExitedPayload,
@@ -266,8 +272,8 @@ class WorktreePortClient {
         clearTimeout(entry.timeout);
         this.pending.delete(data.id);
 
-        if (data.error) {
-          entry.reject(new Error(data.error));
+        if (data.error != null) {
+          entry.reject(new Error(String(data.error)));
         } else {
           entry.resolve(data.result);
         }
@@ -358,9 +364,12 @@ class WorktreePortClient {
     }
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  request(action: string, payload?: Record<string, unknown>, timeoutMs = 10000): Promise<any> {
-    return new Promise((resolve, reject) => {
+  request<K extends WorktreePortAction>(
+    action: K,
+    payload?: WorktreePortPayload<K>,
+    timeoutMs = 10000
+  ): Promise<WorktreePortResult<K>> {
+    return new Promise<WorktreePortResult<K>>((resolve, reject) => {
       if (!this.port) {
         reject(new Error("Worktree port not ready"));
         return;
@@ -369,13 +378,17 @@ class WorktreePortClient {
       const id = crypto.randomUUID();
       const timeout = setTimeout(() => {
         this.pending.delete(id);
-        reject(new Error(`Worktree port request timed out: ${action}`));
+        reject(new Error(`Worktree port request timed out: ${String(action)}`));
       }, timeoutMs);
 
-      this.pending.set(id, { resolve, reject, timeout });
+      this.pending.set(id, {
+        resolve: resolve as (value: unknown) => void,
+        reject,
+        timeout,
+      });
 
       try {
-        this.port.postMessage({ id, action, payload: payload || {} });
+        this.port.postMessage({ id, action, payload: payload ?? {} });
       } catch (error) {
         clearTimeout(timeout);
         this.pending.delete(id);
@@ -616,9 +629,11 @@ const api: ElectronAPI = {
 
   // Worktree Port API (Phase 1 — dedicated MessagePort with request/response)
   worktreePort: {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    request: (action: string, payload?: Record<string, unknown>): Promise<any> =>
-      worktreePortClient.request(action, payload),
+    request: <K extends WorktreePortAction>(
+      action: K,
+      ...args: WorktreePortRequestArgs<K>
+    ): Promise<WorktreePortResult<K>> =>
+      worktreePortClient.request<K>(action, args[0] as WorktreePortPayload<K> | undefined),
 
     onEvent: (type: string, callback: (data: unknown) => void): (() => void) =>
       worktreePortClient.onEvent(type, callback),

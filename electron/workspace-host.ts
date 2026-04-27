@@ -20,6 +20,7 @@ import { fileTreeService } from "./services/FileTreeService.js";
 import { projectPulseService } from "./services/ProjectPulseService.js";
 import type { CopyTreeProgress } from "../shared/types/ipc.js";
 import type { WorkspaceHostRequest, WorkspaceHostEvent } from "../shared/types/workspace-host.js";
+import type { WorktreePortRequest } from "../shared/types/worktree-port.js";
 import { WorkspaceService } from "./workspace-host/WorkspaceService.js";
 import { gitHubRateLimitService } from "./services/github/index.js";
 import { ensureSerializable } from "../shared/utils/serialization.js";
@@ -61,14 +62,13 @@ function sendToWorktreePorts(event: WorkspaceHostEvent): void {
 
 async function handleWorktreePortRequest(
   rPort: MessagePort,
-  id: string,
-  action: string,
-  payload: Record<string, unknown>
+  msg: WorktreePortRequest
 ): Promise<void> {
+  const { id } = msg;
   try {
     let result: unknown;
 
-    switch (action) {
+    switch (msg.action) {
       case "get-all-states": {
         const states = workspaceService.getSnapshotsSync();
         result = { states };
@@ -77,25 +77,21 @@ async function handleWorktreePortRequest(
 
       case "set-active": {
         const requestId = `port-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-        workspaceService.setActiveWorktree(requestId, payload.worktreeId as string);
+        workspaceService.setActiveWorktree(requestId, msg.payload.worktreeId);
         result = { ok: true };
         break;
       }
 
       case "refresh": {
         const requestId = `port-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-        await workspaceService.refresh(requestId, payload.worktreeId as string | undefined);
+        await workspaceService.refresh(requestId, msg.payload.worktreeId);
         result = { ok: true };
         break;
       }
 
       case "create-worktree": {
         const requestId = `port-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-        await workspaceService.createWorktree(
-          requestId,
-          payload.rootPath as string,
-          payload.options as any
-        );
+        await workspaceService.createWorktree(requestId, msg.payload.rootPath, msg.payload.options);
         result = { ok: true };
         break;
       }
@@ -104,9 +100,9 @@ async function handleWorktreePortRequest(
         const requestId = `port-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
         await workspaceService.deleteWorktree(
           requestId,
-          payload.worktreeId as string,
-          payload.force as boolean | undefined,
-          payload.deleteBranch as boolean | undefined
+          msg.payload.worktreeId,
+          msg.payload.force,
+          msg.payload.deleteBranch
         );
         result = { ok: true };
         break;
@@ -114,14 +110,14 @@ async function handleWorktreePortRequest(
 
       case "list-branches": {
         const requestId = `port-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-        await workspaceService.listBranches(requestId, payload.rootPath as string);
+        await workspaceService.listBranches(requestId, msg.payload.rootPath);
         result = { ok: true };
         break;
       }
 
       case "get-recent-branches": {
         const requestId = `port-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-        await workspaceService.getRecentBranches(requestId, payload.rootPath as string);
+        await workspaceService.getRecentBranches(requestId, msg.payload.rootPath);
         result = { ok: true };
         break;
       }
@@ -137,8 +133,8 @@ async function handleWorktreePortRequest(
         const requestId = `port-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
         const actionResult = await workspaceService.runResourceAction(
           requestId,
-          payload.worktreeId as string,
-          payload.action as "provision" | "teardown" | "resume" | "pause" | "status"
+          msg.payload.worktreeId,
+          msg.payload.action
         );
         if (!actionResult.success) {
           rPort.postMessage({ id, error: actionResult.error ?? "Resource action failed" });
@@ -152,21 +148,25 @@ async function handleWorktreePortRequest(
         const requestId = `port-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
         await workspaceService.switchWorktreeEnvironment(
           requestId,
-          payload.worktreeId as string,
-          payload.envKey as string
+          msg.payload.worktreeId,
+          msg.payload.envKey
         );
         result = { ok: true };
         break;
       }
 
       case "has-resource-config": {
-        const hasConfig = await workspaceService.hasResourceConfig(payload.rootPath as string);
+        const hasConfig = await workspaceService.hasResourceConfig(msg.payload.rootPath);
         result = { hasConfig };
         break;
       }
 
-      default:
-        throw new Error(`Unknown worktree port action: ${action}`);
+      default: {
+        const _exhaustive: never = msg;
+        throw new Error(
+          `Unknown worktree port action: ${(_exhaustive as { action: string }).action}`
+        );
+      }
     }
 
     rPort.postMessage({ id, result });
@@ -180,10 +180,19 @@ function attachWorktreePort(newPort: MessagePort): void {
   worktreePorts.push(newPort);
 
   newPort.on("message", (rawMsg: any) => {
-    const msg = rawMsg?.data ? rawMsg.data : rawMsg;
-    if (!msg?.id || !msg?.action) return;
+    const raw = rawMsg?.data ? rawMsg.data : rawMsg;
+    if (!raw?.id || !raw?.action) return;
 
-    handleWorktreePortRequest(newPort, msg.id, msg.action, msg.payload || {}).catch((err) => {
+    // Renderer is trusted; runtime validation happens at the input boundary in
+    // `WorktreePortClient.request<K>` via the typed protocol map. Cast here so
+    // the dispatcher body can stay free of per-field `as` casts.
+    const msg = {
+      id: raw.id,
+      action: raw.action,
+      payload: raw.payload ?? {},
+    } as WorktreePortRequest;
+
+    handleWorktreePortRequest(newPort, msg).catch((err) => {
       try {
         newPort.postMessage({ id: msg.id, error: (err as Error).message });
       } catch {

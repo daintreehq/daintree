@@ -26,6 +26,11 @@ import type {
   IssueAssociation,
 } from "./worktree.js";
 import type {
+  WorktreePortAction,
+  WorktreePortRequestArgs,
+  WorktreePortResult,
+} from "../worktree-port.js";
+import type {
   TerminalSpawnOptions,
   TerminalReconnectResult,
   BackendTerminalInfo,
@@ -223,8 +228,10 @@ export interface ElectronAPI {
     onActivated(callback: (data: { worktreeId: string }) => void): () => void;
   };
   worktreePort: {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    request(action: string, payload?: Record<string, unknown>): Promise<any>;
+    request<K extends WorktreePortAction>(
+      action: K,
+      ...args: WorktreePortRequestArgs<K>
+    ): Promise<WorktreePortResult<K>>;
     onEvent(type: string, callback: (data: unknown) => void): () => void;
     isReady(): boolean;
     onReady(callback: () => void): () => void;

@@ -97,15 +97,15 @@ export const worktreeClient = {
     return window.electron.worktree.onActivated(callback);
   },
 
-  resourceAction: (
+  resourceAction: async (
     worktreeId: string,
     action: "provision" | "teardown" | "resume" | "pause" | "status"
   ): Promise<void> => {
-    return window.electron.worktreePort.request("resource-action", { worktreeId, action });
+    await window.electron.worktreePort.request("resource-action", { worktreeId, action });
   },
 
-  switchEnvironment: (worktreeId: string, envKey: string): Promise<void> => {
-    return window.electron.worktreePort.request("switch-worktree-environment", {
+  switchEnvironment: async (worktreeId: string, envKey: string): Promise<void> => {
+    await window.electron.worktreePort.request("switch-worktree-environment", {
       worktreeId,
       envKey,
     });
