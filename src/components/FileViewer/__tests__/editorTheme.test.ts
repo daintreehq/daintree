@@ -24,15 +24,17 @@ describe("daintreeTheme — issue #5981 (caret-only accent)", () => {
     );
   });
 
-  it("list bullets use --theme-syntax-punctuation, not the accent", () => {
+  it("does not style t.list — lezer-markdown tags entire list-item subtrees with t.list, not just markers, so any color here washes the whole list rather than the bullet", () => {
     const entry = daintreeThemeStyles.find((s) => s.tag === t.list);
-    expect(entry).toBeDefined();
-    expect(entry?.color).toBe("var(--theme-syntax-punctuation)");
-    expect(entry?.color).not.toBe("var(--theme-accent-primary)");
+    expect(entry).toBeUndefined();
   });
 
-  it("no syntax style (other than the caret setting) references the accent token", () => {
-    const accentRefs = daintreeThemeStyles.filter((s) => s.color === "var(--theme-accent-primary)");
-    expect(accentRefs).toEqual([]);
+  it("no style references the accent token in any color-bearing property", () => {
+    const accentMatches = daintreeThemeStyles.flatMap((style) =>
+      Object.entries(style)
+        .filter(([key]) => key !== "tag")
+        .filter(([, value]) => value === "var(--theme-accent-primary)")
+    );
+    expect(accentMatches).toEqual([]);
   });
 });

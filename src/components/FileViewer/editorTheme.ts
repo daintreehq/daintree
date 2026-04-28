@@ -25,7 +25,6 @@ export const daintreeThemeStyles = [
   { tag: t.url, color: "var(--theme-syntax-link)", textDecoration: "underline" },
   { tag: t.quote, color: "var(--theme-syntax-quote)", fontStyle: "italic" },
   { tag: t.link, color: "var(--theme-syntax-link)" },
-  { tag: t.list, color: "var(--theme-syntax-punctuation)" },
 ];
 
 export const daintreeTheme = createTheme({
