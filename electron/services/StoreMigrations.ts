@@ -2,6 +2,7 @@ import Store from "electron-store";
 import type { StoreSchema } from "../store.js";
 import fs from "fs";
 import { z } from "zod";
+import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 
 export const LATEST_SCHEMA_VERSION = 19;
 
@@ -225,7 +226,7 @@ export class MigrationRunner {
 
       console.log("[Migrations] All migrations completed successfully");
     } catch (error) {
-      const innerMessage = error instanceof Error ? error.message : String(error);
+      const innerMessage = formatErrorMessage(error, String(error));
       const errorContext =
         stage === "loop" && activeMigrationVersion > 0
           ? `Migration v${activeMigrationVersion} failed: ${innerMessage}`
