@@ -199,7 +199,7 @@ export function AutomationTab({
                         }
                       }}
                       disabled={index === 0}
-                      className="p-1 rounded hover:bg-daintree-border/50 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                      className="p-1 rounded hover:bg-daintree-border/50 disabled:opacity-30 disabled:cursor-not-allowed disabled:pointer-events-none transition-colors"
                       aria-label="Move run command up"
                     >
                       <ChevronUp className="h-4 w-4" />
@@ -217,7 +217,7 @@ export function AutomationTab({
                         }
                       }}
                       disabled={index === runCommands.length - 1}
-                      className="p-1 rounded hover:bg-daintree-border/50 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                      className="p-1 rounded hover:bg-daintree-border/50 disabled:opacity-30 disabled:cursor-not-allowed disabled:pointer-events-none transition-colors"
                       aria-label="Move run command down"
                     >
                       <ChevronDown className="h-4 w-4" />

@@ -282,7 +282,7 @@ export function BrowserToolbar({
               type="button"
               onClick={onBack}
               disabled={!canGoBack}
-              className={buttonClass}
+              className={cn(buttonClass, "disabled:pointer-events-none")}
               aria-label="Go back"
               data-testid="browser-back"
             >
@@ -299,7 +299,7 @@ export function BrowserToolbar({
               type="button"
               onClick={onForward}
               disabled={!canGoForward}
-              className={buttonClass}
+              className={cn(buttonClass, "disabled:pointer-events-none")}
               aria-label="Go forward"
               data-testid="browser-forward"
             >
@@ -342,7 +342,7 @@ export function BrowserToolbar({
                   type="button"
                   onClick={() => handleZoomStep("out")}
                   disabled={!canZoomOut}
-                  className={buttonClass}
+                  className={cn(buttonClass, "disabled:pointer-events-none")}
                   aria-label="Zoom out"
                 >
                   <ZoomOut className="w-3.5 h-3.5" />
@@ -360,7 +360,7 @@ export function BrowserToolbar({
                   disabled={!isNonDefaultZoom}
                   className={cn(
                     "px-1.5 py-1 rounded text-xs font-medium transition-colors",
-                    "hover:bg-overlay-medium disabled:opacity-40 disabled:cursor-not-allowed",
+                    "hover:bg-overlay-medium disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none",
                     isNonDefaultZoom ? "text-status-info" : "text-daintree-text/60"
                   )}
                   aria-label="Reset zoom"
@@ -378,7 +378,7 @@ export function BrowserToolbar({
                   type="button"
                   onClick={() => handleZoomStep("in")}
                   disabled={!canZoomIn}
-                  className={buttonClass}
+                  className={cn(buttonClass, "disabled:pointer-events-none")}
                   aria-label="Zoom in"
                 >
                   <ZoomIn className="w-3.5 h-3.5" />
@@ -593,7 +593,7 @@ export function BrowserToolbar({
               type="button"
               onClick={onCaptureScreenshot}
               disabled={!isWebviewReady}
-              className={buttonClass}
+              className={cn(buttonClass, "disabled:hover:bg-transparent")}
               aria-label="Capture screenshot"
             >
               <Camera className="w-4 h-4" />
@@ -629,7 +629,7 @@ export function BrowserToolbar({
               type="button"
               onClick={onToggleDevTools}
               disabled={!isWebviewReady}
-              className={buttonClass}
+              className={cn(buttonClass, "disabled:hover:bg-transparent")}
               aria-label="Toggle DevTools"
             >
               <Code className="w-4 h-4" />

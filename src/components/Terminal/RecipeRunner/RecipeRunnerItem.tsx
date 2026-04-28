@@ -6,6 +6,7 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
+import { cn } from "@/lib/utils";
 import { getRecipeTerminalSummary } from "../utils/recipeUtils";
 import type { TerminalRecipe } from "@/types";
 
@@ -50,11 +51,14 @@ export function RecipeRunnerItem({
             type="button"
             onClick={() => onRun(recipe.id)}
             disabled={disabled}
-            className="group flex flex-col items-start gap-1.5 p-3 rounded-[var(--radius-md)] bg-overlay-subtle border border-border-subtle hover:bg-overlay-soft hover:border-border-default transition-colors text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-daintree-accent disabled:opacity-50 disabled:cursor-not-allowed aria-selected:ring-2 aria-selected:ring-daintree-accent/60"
+            className="group flex flex-col items-start gap-1.5 p-3 rounded-[var(--radius-md)] bg-overlay-subtle border border-border-subtle hover:bg-overlay-soft hover:border-border-default transition-colors text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-daintree-accent disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-overlay-subtle disabled:hover:border-border-subtle aria-selected:ring-2 aria-selected:ring-daintree-accent/60"
           >
             <div className="flex items-center gap-2 w-full">
               <Play
-                className="h-3.5 w-3.5 text-status-success/50 group-hover:text-status-success transition-colors shrink-0"
+                className={cn(
+                  "h-3.5 w-3.5 text-status-success/50 transition-colors shrink-0",
+                  !disabled && "group-hover:text-status-success"
+                )}
                 aria-hidden
               />
               <span className="flex-1 text-sm font-medium text-daintree-text truncate">
@@ -93,7 +97,7 @@ export function RecipeRunnerItem({
           type="button"
           onClick={() => onRun(recipe.id)}
           disabled={disabled}
-          className="group w-full flex items-center gap-2 px-3 py-2 rounded-[var(--radius-md)] bg-overlay-subtle border border-border-subtle hover:bg-overlay-soft hover:border-border-default transition-colors text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-daintree-accent disabled:opacity-50 disabled:cursor-not-allowed aria-selected:ring-2 aria-selected:ring-daintree-accent/60"
+          className="group w-full flex items-center gap-2 px-3 py-2 rounded-[var(--radius-md)] bg-overlay-subtle border border-border-subtle hover:bg-overlay-soft hover:border-border-default transition-colors text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-daintree-accent disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-overlay-subtle disabled:hover:border-border-subtle aria-selected:ring-2 aria-selected:ring-daintree-accent/60"
         >
           <Play
             className="h-3.5 w-3.5 text-status-success/50 group-hover:text-status-success transition-colors shrink-0"

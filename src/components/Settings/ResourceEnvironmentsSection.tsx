@@ -113,7 +113,7 @@ function CommandList({
                 type="button"
                 onClick={() => moveCommand(index, -1)}
                 disabled={index === 0}
-                className="p-0.5 rounded hover:bg-surface-hover disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                className="p-0.5 rounded hover:bg-surface-hover disabled:opacity-30 disabled:cursor-not-allowed disabled:pointer-events-none transition-colors"
                 aria-label={`Move command ${index + 1} up`}
               >
                 <ChevronUp className="h-3 w-3 text-daintree-text" />
@@ -122,7 +122,7 @@ function CommandList({
                 type="button"
                 onClick={() => moveCommand(index, 1)}
                 disabled={index === commands.length - 1}
-                className="p-0.5 rounded hover:bg-surface-hover disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                className="p-0.5 rounded hover:bg-surface-hover disabled:opacity-30 disabled:cursor-not-allowed disabled:pointer-events-none transition-colors"
                 aria-label={`Move command ${index + 1} down`}
               >
                 <ChevronDown className="h-3 w-3 text-daintree-text" />

@@ -1001,7 +1001,7 @@ function TerminalPaneComponent({
                         });
                       }}
                       disabled={isRestartingService}
-                      className="px-4 py-2 border border-daintree-border text-daintree-text/80 hover:bg-overlay-soft hover:text-daintree-text rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                      className="px-4 py-2 border border-daintree-border text-daintree-text/80 hover:bg-overlay-soft hover:text-daintree-text rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed disabled:pointer-events-none flex items-center justify-center gap-2"
                     >
                       {isRestartingService ? (
                         <Spinner size="md" />

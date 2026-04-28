@@ -290,7 +290,7 @@ export function FileViewerModal({
                   "px-2.5 py-1 text-xs font-medium rounded transition-colors",
                   mode === "view"
                     ? "bg-daintree-border text-daintree-text"
-                    : "text-muted-foreground hover:text-daintree-text disabled:opacity-40 disabled:cursor-not-allowed"
+                    : "text-muted-foreground hover:text-daintree-text disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
                 )}
               >
                 View

@@ -335,7 +335,7 @@ export function ProjectOnboardingWizard({
                                 }
                               }}
                               disabled={index === 0}
-                              className="p-1 rounded hover:bg-daintree-border/50 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                              className="p-1 rounded hover:bg-daintree-border/50 disabled:opacity-30 disabled:cursor-not-allowed disabled:pointer-events-none transition-colors"
                               aria-label="Move up"
                             >
                               <ChevronUp className="h-3.5 w-3.5" />
@@ -355,7 +355,7 @@ export function ProjectOnboardingWizard({
                                 }
                               }}
                               disabled={index === runCommands.length - 1}
-                              className="p-1 rounded hover:bg-daintree-border/50 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                              className="p-1 rounded hover:bg-daintree-border/50 disabled:opacity-30 disabled:cursor-not-allowed disabled:pointer-events-none transition-colors"
                               aria-label="Move down"
                             >
                               <ChevronDown className="h-3.5 w-3.5" />

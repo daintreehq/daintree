@@ -143,7 +143,7 @@ function ArtifactItem({
               className={cn(
                 "px-3 py-1 text-xs rounded transition-colors",
                 "border border-status-info/30 text-status-info hover:bg-status-info/10",
-                "disabled:opacity-50 disabled:cursor-not-allowed"
+                "disabled:opacity-50 disabled:cursor-not-allowed disabled:pointer-events-none"
               )}
             >
               Copy Code
@@ -154,7 +154,7 @@ function ArtifactItem({
               className={cn(
                 "px-3 py-1 text-xs rounded transition-colors",
                 "bg-daintree-border hover:bg-[color-mix(in_oklab,var(--color-daintree-border)_100%,white_20%)] text-daintree-text",
-                "disabled:opacity-50 disabled:cursor-not-allowed"
+                "disabled:opacity-50 disabled:cursor-not-allowed disabled:pointer-events-none"
               )}
             >
               Save to File
@@ -169,7 +169,7 @@ function ArtifactItem({
                       className={cn(
                         "px-3 py-1 text-xs rounded transition-colors",
                         "bg-status-success hover:brightness-110 text-daintree-bg",
-                        "disabled:opacity-50 disabled:cursor-not-allowed"
+                        "disabled:opacity-50 disabled:cursor-not-allowed disabled:pointer-events-none"
                       )}
                     >
                       Apply Patch
@@ -354,7 +354,7 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
                   type="button"
                   onClick={clearArtifacts}
                   disabled={isBulkActionRunning}
-                  className="text-xs text-daintree-text/40 hover:text-daintree-text transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="text-xs text-daintree-text/40 hover:text-daintree-text transition-colors disabled:opacity-50 disabled:cursor-not-allowed disabled:pointer-events-none"
                   aria-label="Clear all artifacts"
                 >
                   Clear
@@ -363,7 +363,7 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
                   type="button"
                   onClick={() => setIsExpanded(false)}
                   disabled={isBulkActionRunning}
-                  className="text-daintree-text/40 hover:text-daintree-text transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="text-daintree-text/40 hover:text-daintree-text transition-colors disabled:opacity-50 disabled:cursor-not-allowed disabled:pointer-events-none"
                   aria-label="Close artifact overlay"
                 >
                   ×
@@ -400,7 +400,7 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
                                 ? "bg-daintree-border text-daintree-text"
                                 : "bg-daintree-sidebar text-daintree-text/60",
                               "hover:brightness-110",
-                              "disabled:opacity-50 disabled:cursor-not-allowed"
+                              "disabled:opacity-50 disabled:cursor-not-allowed disabled:pointer-events-none"
                             )}
                           >
                             {includeAllTypes ? "All" : "Code"}
@@ -421,7 +421,7 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
                     className={cn(
                       "px-3 py-1 text-xs rounded transition-colors",
                       "bg-daintree-border hover:bg-[color-mix(in_oklab,var(--color-daintree-border)_100%,white_20%)] text-daintree-text",
-                      "disabled:opacity-50 disabled:cursor-not-allowed"
+                      "disabled:opacity-50 disabled:cursor-not-allowed disabled:pointer-events-none"
                     )}
                   >
                     Save All
@@ -438,7 +438,7 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
                           className={cn(
                             "px-3 py-1 text-xs rounded transition-colors",
                             "bg-status-success hover:brightness-110 text-daintree-bg",
-                            "disabled:opacity-50 disabled:cursor-not-allowed"
+                            "disabled:opacity-50 disabled:cursor-not-allowed disabled:pointer-events-none"
                           )}
                         >
                           Apply All Patches

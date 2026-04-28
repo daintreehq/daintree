@@ -702,7 +702,7 @@ export function FleetArmingRibbon(): ReactElement | null {
                 disabled={isSendingBroadcast}
                 onClick={() => void confirmPendingBroadcast()}
                 data-testid="fleet-paste-confirm-send"
-                className="rounded bg-amber-500/20 px-2 py-0.5 text-amber-100 transition-colors hover:bg-amber-500/30 disabled:cursor-not-allowed disabled:opacity-40"
+                className="rounded bg-amber-500/20 px-2 py-0.5 text-amber-100 transition-colors hover:bg-amber-500/30 disabled:cursor-not-allowed disabled:opacity-40 disabled:pointer-events-none"
               >
                 Send anyway
               </button>

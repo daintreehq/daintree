@@ -465,7 +465,7 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
           <button
             onClick={handleRefresh}
             disabled={isLoading}
-            className="pulse-control rounded-md p-1.5 text-daintree-text/55 transition-colors hover:text-daintree-text/80 disabled:opacity-50"
+            className="pulse-control rounded-md p-1.5 text-daintree-text/55 transition-colors hover:text-daintree-text/80 disabled:opacity-50 disabled:pointer-events-none"
             aria-label="Refresh"
           >
             <RefreshCw className={cn("w-3 h-3", isLoading && "animate-spin")} />

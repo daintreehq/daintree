@@ -170,7 +170,7 @@ export function ImageViewerTab() {
                 <button
                   onClick={handleSave}
                   disabled={isSaving || isLoading}
-                  className="px-4 py-2 rounded-[var(--radius-md)] bg-daintree-accent text-daintree-bg text-sm font-medium hover:bg-daintree-accent/90 disabled:opacity-50 transition-colors"
+                  className="px-4 py-2 rounded-[var(--radius-md)] bg-daintree-accent text-daintree-bg text-sm font-medium hover:bg-daintree-accent/90 disabled:opacity-50 disabled:pointer-events-none transition-colors"
                 >
                   {isSaving ? "Saving…" : "Save"}
                 </button>

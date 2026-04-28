@@ -241,7 +241,7 @@ export function PortalToolbar({
                 onClick={onGoBack}
                 disabled={!activeTabId}
                 aria-label="Go back"
-                className="p-1 rounded hover:bg-tint/[0.06] text-muted-foreground hover:text-daintree-text transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                className="p-1 rounded hover:bg-tint/[0.06] text-muted-foreground hover:text-daintree-text transition-colors disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-muted-foreground"
               >
                 <ArrowLeft className="w-3.5 h-3.5" />
               </button>
@@ -254,7 +254,7 @@ export function PortalToolbar({
                 onClick={onGoForward}
                 disabled={!activeTabId}
                 aria-label="Go forward"
-                className="p-1 rounded hover:bg-tint/[0.06] text-muted-foreground hover:text-daintree-text transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                className="p-1 rounded hover:bg-tint/[0.06] text-muted-foreground hover:text-daintree-text transition-colors disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-muted-foreground"
               >
                 <ArrowRight className="w-3.5 h-3.5" />
               </button>
@@ -267,7 +267,7 @@ export function PortalToolbar({
                 onClick={onReload}
                 disabled={!activeTabId}
                 aria-label="Reload"
-                className="p-1 rounded hover:bg-tint/[0.06] text-muted-foreground hover:text-daintree-text transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                className="p-1 rounded hover:bg-tint/[0.06] text-muted-foreground hover:text-daintree-text transition-colors disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-muted-foreground"
               >
                 <RotateCw className="w-3.5 h-3.5" />
               </button>
@@ -280,7 +280,7 @@ export function PortalToolbar({
                 onClick={onCopyUrl}
                 disabled={!activeTabId || !hasActiveUrl}
                 aria-label="Copy URL"
-                className="p-1 rounded hover:bg-tint/[0.06] text-muted-foreground hover:text-daintree-text transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                className="p-1 rounded hover:bg-tint/[0.06] text-muted-foreground hover:text-daintree-text transition-colors disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-muted-foreground"
               >
                 <Link2 className="w-3.5 h-3.5" />
               </button>
@@ -293,7 +293,7 @@ export function PortalToolbar({
                 onClick={onOpenExternal}
                 disabled={!activeTabId || !hasActiveUrl}
                 aria-label="Open in external browser"
-                className="p-1 rounded hover:bg-tint/[0.06] text-muted-foreground hover:text-daintree-text transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                className="p-1 rounded hover:bg-tint/[0.06] text-muted-foreground hover:text-daintree-text transition-colors disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-muted-foreground"
               >
                 <ExternalLink className="w-3.5 h-3.5" />
               </button>

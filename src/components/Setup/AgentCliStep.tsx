@@ -305,7 +305,7 @@ export function AgentCliStep({ availability, selections, onInstallComplete }: Ag
                       disabled={isInstalling || isBatchRunning}
                       onClick={() => handleMethodChange(agentId, idx)}
                       data-selected={idx === currentMethodIdx || undefined}
-                      className="px-1.5 py-0.5 rounded text-[10px] text-daintree-text/50 transition-colors hover:text-daintree-text/80 data-[selected]:bg-tint/[0.12] data-[selected]:text-daintree-text disabled:opacity-50"
+                      className="px-1.5 py-0.5 rounded text-[10px] text-daintree-text/50 transition-colors hover:text-daintree-text/80 data-[selected]:bg-tint/[0.12] data-[selected]:text-daintree-text disabled:opacity-50 disabled:pointer-events-none"
                     >
                       {block.label ?? `Method ${idx + 1}`}
                     </button>
@@ -365,7 +365,7 @@ export function AgentCliStep({ availability, selections, onInstallComplete }: Ag
           type="button"
           disabled={isBatchRunning}
           onClick={handleInstallAll}
-          className="flex items-center justify-center gap-2 w-full px-3 py-2 rounded-[var(--radius-md)] bg-daintree-accent text-text-inverse text-sm font-medium hover:bg-daintree-accent/90 transition-colors disabled:opacity-50"
+          className="flex items-center justify-center gap-2 w-full px-3 py-2 rounded-[var(--radius-md)] bg-daintree-accent text-text-inverse text-sm font-medium hover:bg-daintree-accent/90 transition-colors disabled:opacity-50 disabled:pointer-events-none"
         >
           {isBatchRunning ? (
             <>

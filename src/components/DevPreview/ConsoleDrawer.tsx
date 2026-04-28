@@ -124,7 +124,7 @@ export function ConsoleDrawer({
                   onClick={onHardRestart}
                   disabled={hardRestartDisabled}
                   className={cn(
-                    "p-1.5 rounded hover:bg-overlay-medium disabled:opacity-30 disabled:cursor-not-allowed transition-colors",
+                    "p-1.5 rounded hover:bg-overlay-medium disabled:opacity-30 disabled:cursor-not-allowed disabled:pointer-events-none transition-colors",
                     isRestarting && "animate-spin"
                   )}
                   aria-label={restartTooltip}
