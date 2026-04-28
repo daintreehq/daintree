@@ -384,7 +384,9 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
     if (typeof isRegex !== "boolean") {
       throw new Error("Invalid isRegex: must be a boolean");
     }
-    if (query.length === 0) {
+    // Cap query length so a pathological regex can't lock up the pty-host
+    // event loop scanning every terminal's buffer.
+    if (query.length === 0 || query.length > 500) {
       return [];
     }
     try {

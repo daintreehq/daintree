@@ -531,6 +531,54 @@ describe("FleetArmingDialog", () => {
     ).toBe("false");
   });
 
+  it("active chip overrides snippet match — buffer hit on wrong-state terminal stays hidden", async () => {
+    vi.useFakeTimers();
+    const search = vi
+      .fn()
+      .mockResolvedValue([{ terminalId: "b", line: "deep match", matchStart: 0, matchEnd: 5 }]);
+    installElectronMock(search);
+    seedTerminals([
+      makeTerminal("a", { title: "alpha", agentState: "waiting" }),
+      makeTerminal("b", { title: "beta", agentState: "working" }),
+    ]);
+    renderDialog([makeWorktreeSnap("wt-1", "Main")]);
+    fireEvent.click(screen.getByTestId("fleet-arming-dialog-chip-waiting"));
+    fireEvent.change(screen.getByTestId("fleet-arming-dialog-search"), {
+      target: { value: "deep" },
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(350);
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    // beta has a snippet match but is "working", chip filter is "waiting" — must stay hidden.
+    expect(screen.queryByText("beta")).toBeNull();
+  });
+
+  it("regex mode hides title-only matches when the backend returns no snippet", async () => {
+    vi.useFakeTimers();
+    const search = vi.fn().mockResolvedValue([]);
+    installElectronMock(search);
+    seedTerminals([makeTerminal("a", { title: "alpha" })]);
+    renderDialog([makeWorktreeSnap("wt-1", "Main")]);
+    // Switch to regex mode, then search for a literal "alpha" — title contains
+    // it, but in regex mode title-matching is bypassed and the backend
+    // returned no snippet, so the row must stay hidden.
+    fireEvent.click(screen.getByTestId("fleet-arming-dialog-regex-toggle"));
+    fireEvent.change(screen.getByTestId("fleet-arming-dialog-search"), {
+      target: { value: "alpha" },
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(350);
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(screen.queryByText("alpha")).toBeNull();
+    expect(screen.getByText("No terminals match")).toBeTruthy();
+  });
+
   it("buffer-matched terminals are not auto-selected — confirm stays disabled", async () => {
     vi.useFakeTimers();
     const search = vi
