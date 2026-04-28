@@ -167,8 +167,8 @@ export interface CustomSchemesMigrationResult<T> {
  */
 export function migrateCustomSchemes<T>(
   raw: unknown,
-  readSchema: z.ZodType<T[], z.ZodTypeDef, unknown>,
-  writeSchema: z.ZodType<T[], z.ZodTypeDef, T[]>
+  readSchema: z.ZodSchema<T[]>,
+  writeSchema: z.ZodArray<z.ZodSchema<T>>
 ): CustomSchemesMigrationResult<T> {
   const errors: string[] = [];
 

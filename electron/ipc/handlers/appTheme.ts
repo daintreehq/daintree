@@ -3,11 +3,7 @@ import { promises as fs } from "node:fs";
 import { CHANNELS } from "../channels.js";
 import { store } from "../../store.js";
 import { parseAppThemeFile } from "../../utils/appThemeImporter.js";
-import {
-  resolveAppTheme,
-  normalizeAppColorScheme,
-  normalizeAccentHex,
-} from "../../../shared/theme/index.js";
+import { resolveAppTheme, normalizeAccentHex } from "../../../shared/theme/index.js";
 import { typedHandle, typedHandleWithContext, typedSend } from "../utils.js";
 import {
   appCustomSchemesReadSchema,
