@@ -712,6 +712,85 @@ describe("DevPreviewPane webview lifecycle regression", () => {
     expect(scrollToCalls).toHaveLength(0);
   });
 
+  it("ignores in-flight scroll captures that resolve after hard restart", async () => {
+    const { container, rerender } = render(<DevPreviewPane {...baseProps} />);
+    const webview = getWebviewElement(container);
+
+    // Build a manually-resolvable promise so we can interleave the hard restart
+    // before the capture promise resolves.
+    let resolveScrollY: (v: number) => void = () => {};
+    const pending = new Promise<number>((resolve) => {
+      resolveScrollY = resolve;
+    });
+    webview.executeJavaScript.mockImplementationOnce(() => pending);
+
+    // Trigger a capture by transitioning away from running. The capture promise
+    // is now in-flight and parked on `pending`.
+    devServerStateRef.current = {
+      ...devServerStateRef.current,
+      status: "stopped",
+      url: null,
+    };
+    rerender(<DevPreviewPane {...baseProps} />);
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    // Hard restart fires before the in-flight capture resolves.
+    fireEvent.click(screen.getByTestId("hard-restart"));
+
+    // The clear must have happened.
+    expect(terminalStoreState.setDevPreviewScrollPosition).toHaveBeenCalledWith(
+      "dev-preview-panel-1",
+      undefined
+    );
+
+    terminalStoreState.setDevPreviewScrollPosition.mockClear();
+
+    // Now resolve the previously parked capture.
+    await act(async () => {
+      resolveScrollY(987);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    // The stale capture must not have written anything back over the cleared state.
+    expect(terminalStoreState.setDevPreviewScrollPosition).not.toHaveBeenCalled();
+  });
+
+  it("does not restore scroll when saved URL differs from loaded URL", async () => {
+    scrollPositionRef.current = { url: "http://localhost:5173/old", scrollY: 250 };
+    const { container } = render(<DevPreviewPane {...baseProps} />);
+    const webview = getWebviewElement(container);
+    webview.executeJavaScript.mockClear();
+
+    act(() => {
+      emitWebviewEvent(webview, "dom-ready");
+    });
+
+    const scrollToCalls = webview.executeJavaScript.mock.calls.filter(
+      (call: unknown[]) => typeof call[0] === "string" && call[0].includes("scrollTo")
+    );
+    expect(scrollToCalls).toHaveLength(0);
+  });
+
+  it("does not restore scroll when saved scrollY is 0", async () => {
+    scrollPositionRef.current = { url: "http://localhost:5173/", scrollY: 0 };
+    const { container } = render(<DevPreviewPane {...baseProps} />);
+    const webview = getWebviewElement(container);
+    webview.executeJavaScript.mockClear();
+
+    act(() => {
+      emitWebviewEvent(webview, "dom-ready");
+    });
+
+    const scrollToCalls = webview.executeJavaScript.mock.calls.filter(
+      (call: unknown[]) => typeof call[0] === "string" && call[0].includes("scrollTo")
+    );
+    expect(scrollToCalls).toHaveLength(0);
+  });
+
   it("clears stale browserUrl when panel becomes unconfigured after settings load", async () => {
     // Start with settings loading (isUnconfigured = false during load)
     useProjectSettingsStoreMock.mockImplementation(

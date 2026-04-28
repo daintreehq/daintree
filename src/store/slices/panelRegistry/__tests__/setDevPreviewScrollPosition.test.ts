@@ -152,6 +152,27 @@ describe("setDevPreviewScrollPosition", () => {
     expect(saveMock).not.toHaveBeenCalled();
   });
 
+  it("skips persistence when clearing an already-cleared position", () => {
+    usePanelStore.setState({
+      panelsById: {
+        "dev-1": {
+          id: "dev-1",
+          kind: "dev-preview",
+          title: "Dev",
+          cwd: "/repo",
+          cols: 80,
+          rows: 24,
+          location: "grid",
+        },
+      },
+      panelIds: ["dev-1"],
+    });
+
+    usePanelStore.getState().setDevPreviewScrollPosition("dev-1", undefined);
+
+    expect(saveMock).not.toHaveBeenCalled();
+  });
+
   it("skips persistence when value is identical", () => {
     usePanelStore.setState({
       panelsById: {

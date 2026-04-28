@@ -238,6 +238,10 @@ export function DevPreviewPane({
   const loadTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const failLoadRetryRef = useRef<NodeJS.Timeout | null>(null);
   const failLoadRetryCountRef = useRef<number>(0);
+  // Generation token to invalidate in-flight async scroll captures when the
+  // user clears scroll state via hard restart. A pending executeJavaScript
+  // promise that resolves after the clear must NOT write the stale position back.
+  const scrollCaptureGenerationRef = useRef<number>(0);
   const isConsoleOpen = terminal?.devPreviewConsoleOpen ?? false;
   const [webviewLoadError, setWebviewLoadError] = useState<string | null>(null);
   const [isAutoDetecting, setIsAutoDetecting] = useState(false);
@@ -279,9 +283,11 @@ export function DevPreviewPane({
           const prevWebview = webviewRef.current;
           const currentWebviewUrl = prevWebview.getURL();
           if (currentWebviewUrl && currentWebviewUrl !== "about:blank") {
+            const captureGeneration = scrollCaptureGenerationRef.current;
             prevWebview
               .executeJavaScript("window.scrollY")
               .then((scrollY: number) => {
+                if (scrollCaptureGenerationRef.current !== captureGeneration) return;
                 if (typeof scrollY === "number" && Number.isFinite(scrollY)) {
                   setDevPreviewScrollPosition(id, { url: currentWebviewUrl, scrollY });
                 }
@@ -321,9 +327,11 @@ export function DevPreviewPane({
       try {
         const currentWebviewUrl = webviewElement.getURL();
         if (currentWebviewUrl && currentWebviewUrl !== "about:blank") {
+          const captureGeneration = scrollCaptureGenerationRef.current;
           webviewElement
             .executeJavaScript("window.scrollY")
             .then((scrollY: number) => {
+              if (scrollCaptureGenerationRef.current !== captureGeneration) return;
               if (typeof scrollY === "number" && Number.isFinite(scrollY)) {
                 setDevPreviewScrollPosition(id, { url: currentWebviewUrl, scrollY });
               }
@@ -416,6 +424,9 @@ export function DevPreviewPane({
   }, [start]);
 
   const handleHardRestart = useCallback(() => {
+    // Invalidate any in-flight async scroll captures so they can't write
+    // stale data back over the cleared position.
+    scrollCaptureGenerationRef.current += 1;
     setDevPreviewScrollPosition(id, undefined);
     if (loadTimeoutRef.current) {
       clearTimeout(loadTimeoutRef.current);
@@ -691,6 +702,19 @@ export function DevPreviewPane({
         } catch {
           // WebContents not available
         }
+        // dom-ready already fired before this listener attached. Run scroll
+        // restore here so the position survives tab switches and other
+        // re-renders that don't trigger another dom-ready.
+        const saved = usePanelStore.getState().getTerminal(id)?.devPreviewScrollPosition;
+        if (saved && Number.isFinite(saved.scrollY) && saved.scrollY > 0 && saved.url) {
+          if (existingUrl === saved.url) {
+            webview
+              .executeJavaScript(
+                `requestAnimationFrame(() => window.scrollTo(0, ${saved.scrollY}))`
+              )
+              .catch(() => {});
+          }
+        }
       }
     } catch {
       // Webview not yet attached to DOM - dom-ready handler will take over
@@ -739,8 +763,10 @@ export function DevPreviewPane({
         const wv = webviewRef.current;
         const currentWebviewUrl = wv.getURL();
         if (currentWebviewUrl && currentWebviewUrl !== "about:blank") {
+          const captureGeneration = scrollCaptureGenerationRef.current;
           wv.executeJavaScript("window.scrollY")
             .then((scrollY: number) => {
+              if (scrollCaptureGenerationRef.current !== captureGeneration) return;
               if (typeof scrollY === "number" && Number.isFinite(scrollY)) {
                 setDevPreviewScrollPosition(id, { url: currentWebviewUrl, scrollY });
               }
