@@ -6,7 +6,7 @@ import {
   isAgentBlocked,
   isAgentUnauthenticated,
   isAgentLaunchable,
-} from "../agentAvailability";
+} from "../agentAvailability.js";
 
 const ALL_STATES = ["missing", "installed", "ready", "blocked", "unauthenticated"] as const;
 
