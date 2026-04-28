@@ -549,7 +549,7 @@ describe("ProjectViewManager — listener cleanup", () => {
     await manager.switchTo("proj-b", "/path/b");
     const bEntry = manager.getAllViews().find((v) => v.projectId === "proj-b");
     expect(bEntry).toBeDefined();
-    const wcB = bEntry!.view.webContents as ReturnType<typeof createMockWebContents>;
+    const wcB = bEntry!.view.webContents as unknown as ReturnType<typeof createMockWebContents>;
 
     // Sanity: each persistent event should have exactly one listener attached.
     for (const event of PERSISTENT_EVENTS) {
@@ -600,7 +600,7 @@ describe("ProjectViewManager — listener cleanup", () => {
 
     await manager.switchTo("proj-b", "/path/b");
     const bEntry = manager.getAllViews().find((v) => v.projectId === "proj-b");
-    const wcB = bEntry!.view.webContents as ReturnType<typeof createMockWebContents>;
+    const wcB = bEntry!.view.webContents as unknown as ReturnType<typeof createMockWebContents>;
 
     // Snapshot loadView's one-shot teardown calls so we can isolate cleanup activity.
     const removeCallsBeforeCleanup = wcB.removeListener.mock.calls.length;
@@ -635,7 +635,7 @@ describe("ProjectViewManager — listener cleanup", () => {
 
     await manager.switchTo("proj-b", "/path/b");
     const bEntry = manager.getAllViews().find((v) => v.projectId === "proj-b");
-    const wcB = bEntry!.view.webContents as ReturnType<typeof createMockWebContents>;
+    const wcB = bEntry!.view.webContents as unknown as ReturnType<typeof createMockWebContents>;
 
     // Snapshot the persistent did-finish-load handler that setupViewHandlers attached
     // (loadView's once-listener is registered via `once`, not `on`, so it's excluded).
@@ -670,7 +670,7 @@ describe("ProjectViewManager — listener cleanup", () => {
 
     await manager.switchTo("proj-b", "/path/b");
     const wcB = manager.getAllViews().find((v) => v.projectId === "proj-b")!.view
-      .webContents as ReturnType<typeof createMockWebContents>;
+      .webContents as unknown as ReturnType<typeof createMockWebContents>;
 
     manager.destroyView("proj-b");
 
@@ -695,9 +695,9 @@ describe("ProjectViewManager — listener cleanup", () => {
     await manager.switchTo("proj-c", "/path/c");
 
     const wcB = manager.getAllViews().find((v) => v.projectId === "proj-b")!.view
-      .webContents as ReturnType<typeof createMockWebContents>;
+      .webContents as unknown as ReturnType<typeof createMockWebContents>;
     const wcC = manager.getAllViews().find((v) => v.projectId === "proj-c")!.view
-      .webContents as ReturnType<typeof createMockWebContents>;
+      .webContents as unknown as ReturnType<typeof createMockWebContents>;
 
     manager.dispose();
 
