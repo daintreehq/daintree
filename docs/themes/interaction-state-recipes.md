@@ -136,6 +136,54 @@ This document maps each interactive component role to its canonical Tailwind cla
 
 ---
 
+### Segmented Toggle Group Active State
+
+**Role:** Active segment in a mutually exclusive toggle group (e.g., filter chips, tab-style selectors). Active state uses neutral overlay lift — never accent.
+
+```tsx
+"bg-overlay-medium text-daintree-text border-border-strong aria-selected:bg-overlay-medium aria-selected:text-daintree-text";
+```
+
+**Usage:** Combine with `transition-colors` for smooth toggle transitions. The active segment gets a neutral background fill and text emphasis; the border distinguishes it from inactive peers. Accent must NOT appear on any toggle segment. Current implementation in `FleetArmingDialog.tsx` ChipButton (lines 370-390) uses `bg-overlay-subtle`; this recipe prescribes the canonical target (`overlay-medium`).
+
+---
+
+### Switch-Row ON State
+
+**Role:** Settings row containing a toggle switch. The row styling stays neutral regardless of switch state; accent is confined to the switch widget's track.
+
+```tsx
+"border-daintree-border text-daintree-text";
+```
+
+**Usage:** The row card always uses neutral border and text. A 2px left rail (`bg-daintree-accent`) on the row signals modified state. The switch track uses `bg-daintree-border` in OFF state and `data-[state=checked]:bg-daintree-accent` in ON state — accent is exclusively on the switch widget. Apply `focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2` to the switch Root for keyboard focus. Used in `SettingsSwitchCard.tsx` + `SettingsSwitch.tsx`.
+
+---
+
+### Drag Handle During Sort
+
+**Role:** Visual feedback on a drag handle during an active sort/drag operation. Uses neutral elevation and scale — never accent.
+
+```tsx
+"opacity-80 scale-105 shadow-[var(--theme-shadow-floating)] cursor-grabbing";
+```
+
+**Usage:** Apply during `isDragging` state. The floating shadow and slight scale-up signal elevation without color changes. **Caution:** Sortable containers must NOT use `content-visibility: auto` — it virtualizes layout and causes dnd-kit drag coordinate desync. Set `contentVisibility: 'visible'` during drag operations. (See lesson #4438.) Used in `PortalToolbar.tsx` (lines 107-109).
+
+---
+
+### Inline Rename Input
+
+**Role:** Inline text input for renaming (e.g., tab labels, file names). Neutral border with accent focus outline — accent only on keyboard focus.
+
+```tsx
+"border border-border-strong text-daintree-text focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent";
+```
+
+**Usage:** The base border is neutral (`border-border-strong`), not accent-tinged. Accent only appears on the focus outline. Use `text-xs` for compact inline inputs. Current implementation in `TabButton.tsx` (line 275) uses `border-daintree-accent/50`; this recipe prescribes the canonical target (`border-border-strong` with accent only on focus).
+
+---
+
 ## Transition Patterns
 
 | Need                    | Use Instead                                     | Why                                                                        |
@@ -179,6 +227,24 @@ Each recipe is a class fragment to apply to a suitable base component, not a sta
 | Worktree Card         | `WorktreeCard.tsx`                       | Card hover with accent-tinged border + elevation |
 | GitHub Settings Tab   | `GitHubSettingsTab.tsx` (line 213)       | Input focus with border-shift (no outline)       |
 | Notification Settings | `NotificationSettingsTab.tsx` (line 217) | Input focus with border-shift (no outline)       |
+| Segmented Toggle      | `FleetArmingDialog.tsx` (line 370)       | Active segment with neutral overlay lift         |
+| Settings Switch Row   | `SettingsSwitchCard.tsx`                 | Neutral row, accent only on switch track         |
+| Portal Drag Handle    | `PortalToolbar.tsx` (line 107)           | Drag state with elevation + scale, no accent     |
+| Inline Rename Input   | `TabButton.tsx` (line 274)               | Neutral border with accent focus outline only    |
+
+---
+
+## Where Accent IS Allowed
+
+Accent color is a scarce resource, not a default. These are the only contexts where accent is permitted:
+
+- **Focus rings** — Every interactive element. `focus-visible:outline-daintree-accent` on buttons, inputs, list items, tree nodes.
+- **Primary view anchor** — The single load-bearing signal per view: armed terminal, focused worktree card, primary CTA button.
+- **Editor caret** — The terminal cursor is a singleton position anchor. (`--color-terminal-cursor-accent` in `src/index.css` line 97.)
+- **Theme mockup chrome** — Swatches and preview strips that display a theme's accent color are data, not interactive chrome (e.g., `PaletteStrip.tsx`, `AppThemePicker.tsx`).
+- **Status-tone routing** — Where `accent` is one option among `success`/`warning`/`danger` for mapping a semantic state to a color (e.g., `SettingsSwitch.tsx` `COLOR_SCHEMES`).
+
+For everything else, use the neutral overlay ladder (`bg-overlay-*`, `border-overlay`) or structural tokens (`border-border-strong`, `text-daintree-text`).
 
 ---
 
