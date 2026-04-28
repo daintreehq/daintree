@@ -4,6 +4,7 @@ import { FolderGit2 } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { EmojiPicker } from "@/components/ui/emoji-picker";
+import { SettingsSwitchCard } from "@/components/Settings/SettingsSwitchCard";
 import { getProjectGradient, isValidHexColor } from "@/lib/colorUtils";
 import { cn } from "@/lib/utils";
 import { sanitizeSvg, svgToDataUrl } from "@/lib/svg";
@@ -552,54 +553,15 @@ export function GeneralTab({
           </div>
         )}
 
-        <button
-          type="button"
-          onClick={handleInRepoToggle}
+        <SettingsSwitchCard
+          icon={FolderGit2}
+          title="Store settings in repository"
+          subtitle="Writes to .daintree/project.json and .daintree/settings.json"
+          isEnabled={currentProject?.inRepoSettings ?? false}
+          onChange={handleInRepoToggle}
+          ariaLabel="Store settings in repository"
           disabled={inRepoEnabling}
-          role="switch"
-          aria-checked={currentProject?.inRepoSettings ?? false}
-          aria-label="Store settings in repository"
-          className={cn(
-            "w-full flex items-center justify-between p-4 rounded-[var(--radius-lg)] border transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-daintree-accent",
-            currentProject?.inRepoSettings
-              ? "bg-daintree-accent/10 border-daintree-accent text-daintree-accent"
-              : "border-daintree-border hover:bg-tint/5 text-daintree-text/70",
-            inRepoEnabling && "opacity-50 cursor-not-allowed"
-          )}
-        >
-          <div className="flex items-center gap-3">
-            <FolderGit2
-              className={cn(
-                "w-5 h-5",
-                currentProject?.inRepoSettings ? "text-daintree-accent" : "text-daintree-text/50"
-              )}
-              aria-hidden="true"
-            />
-            <div className="text-left">
-              <div className="text-sm font-medium">Store settings in repository</div>
-              <div className="text-xs opacity-70">
-                Writes to <code className="font-mono">.daintree/project.json</code> and{" "}
-                <code className="font-mono">.daintree/settings.json</code>
-              </div>
-            </div>
-          </div>
-          <div
-            className={cn(
-              "w-11 h-6 rounded-full relative transition-colors",
-              currentProject?.inRepoSettings ? "bg-daintree-accent" : "bg-daintree-border"
-            )}
-            aria-hidden="true"
-          >
-            <div
-              className={cn(
-                "absolute top-1 w-4 h-4 rounded-full transition-transform",
-                currentProject?.inRepoSettings
-                  ? "translate-x-6 bg-text-inverse"
-                  : "translate-x-1 bg-daintree-text"
-              )}
-            />
-          </div>
-        </button>
+        />
 
         {inRepoError && (
           <div
