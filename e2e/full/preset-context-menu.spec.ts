@@ -86,7 +86,7 @@ test.describe.serial("Presets: Context Menu Integration (93–96)", () => {
 
         const submenuContent = ctx.window.locator('[data-testid="context-submenu-content"]');
         if (await submenuContent.isVisible({ timeout: T_SHORT }).catch(() => false)) {
-          const items = submenuContent.locator('[role="menuitem"]');
+          const items = submenuContent.locator('[role^="menuitem"]');
           const count = await items.count();
           expect(count).toBeGreaterThanOrEqual(1);
         }
@@ -108,7 +108,7 @@ test.describe.serial("Presets: Context Menu Integration (93–96)", () => {
 
         const submenuContent = ctx.window.locator('[data-testid="context-submenu-content"]');
         if (await submenuContent.isVisible({ timeout: T_SHORT }).catch(() => false)) {
-          const firstItem = submenuContent.locator('[role="menuitem"]').first();
+          const firstItem = submenuContent.locator('[role^="menuitem"]').first();
           if (await firstItem.isVisible({ timeout: T_SHORT }).catch(() => false)) {
             await firstItem.click();
             await ctx.window.waitForTimeout(T_SETTLE);
@@ -152,26 +152,13 @@ test.describe.serial("Presets: Context Menu Integration (93–96)", () => {
 
         const submenuContent = ctx.window.locator('[data-testid="context-submenu-content"]');
         if (await submenuContent.isVisible({ timeout: T_SHORT }).catch(() => false)) {
-          const items = submenuContent.locator('[role="menuitem"]');
+          const items = submenuContent.locator('[role^="menuitem"]');
           if ((await items.count()) > 0) {
-            const firstItem = items.first();
-            const hasCheckmark =
-              (await firstItem.locator('svg, [aria-checked="true"], .checkmark').count()) > 0;
-            const hasHighlight =
-              (await firstItem
-                .evaluate((el) => {
-                  const style = window.getComputedStyle(el);
-                  return (
-                    style.fontWeight === "bold" ||
-                    style.fontWeight === "600" ||
-                    style.fontWeight === "700" ||
-                    el.getAttribute("aria-checked") === "true" ||
-                    el.classList.contains("active") ||
-                    el.classList.contains("selected")
-                  );
-                })
-                .catch(() => false)) ?? false;
-            expect(hasCheckmark || hasHighlight).toBeTruthy();
+            // The selected preset is rendered as a RadioItem with
+            // aria-checked="true" (Radix sets this on the chosen value).
+            const checkedItem = submenuContent.locator('[aria-checked="true"]');
+            const hasCheckedItem = (await checkedItem.count()) > 0;
+            expect(hasCheckedItem).toBeTruthy();
           }
         }
       }

@@ -124,7 +124,7 @@ test.describe.serial("Presets: Tray Default Launch (101–106)", () => {
     await expect(submenuContent).toBeVisible({ timeout: T_MEDIUM });
 
     // "Default" must be the first item
-    const firstItem = submenuContent.locator('[role="menuitem"]').first();
+    const firstItem = submenuContent.locator('[role^="menuitem"]').first();
     const firstText = (await firstItem.textContent()) ?? "";
     expect(firstText.toLowerCase()).toContain("default");
 
@@ -155,7 +155,7 @@ test.describe.serial("Presets: Tray Default Launch (101–106)", () => {
       return;
     }
 
-    const items = submenuContent.locator('[role="menuitem"]');
+    const items = submenuContent.locator('[role^="menuitem"]');
     const texts = await items.allTextContents();
     expect(texts.some((t) => t.includes("Tray Model A"))).toBe(true);
     expect(texts.some((t) => t.includes("Tray Model B"))).toBe(true);
@@ -222,7 +222,7 @@ test.describe.serial("Presets: Tray Default Launch (101–106)", () => {
       return;
     }
 
-    const items = submenuContent.locator('[role="menuitem"]');
+    const items = submenuContent.locator('[role^="menuitem"]');
     const count = await items.count();
     // Default + 2 CCR + 1 custom = at least 4
     expect(count).toBeGreaterThanOrEqual(4);
