@@ -586,6 +586,74 @@ export class ProjectStore {
     return this.fileStore.getRecipes(projectId);
   }
 
+  /**
+   * Reconcile the two recipe stores so ProjectFileStore matches the canonical
+   * .daintree/recipes/ files. Handles four cases:
+   *
+   * 1. Recipe in both stores → in-repo wins (canonical), overrides ProjectFileStore
+   * 2. Recipe only in .daintree/ → backfill to ProjectFileStore
+   * 3. Recipe only in ProjectFileStore, non-inrepo id → promote to .daintree/
+   *    (legacy from migration 003), then backfill
+   * 4. Recipe only in ProjectFileStore, inrepo- id → remove stale copy
+   *    (was deleted from .daintree/ but lingered in ProjectFileStore)
+   *
+   * Idempotent: running twice produces no additional writes.
+   */
+  async reconcileProjectRecipes(projectPath: string, projectId: string): Promise<void> {
+    const inRepoRecipes = await this.identityFiles.readInRepoRecipes(projectPath);
+    const fileStoreRecipes = await this.fileStore.getRecipes(projectId);
+
+    const inRepoById = new Map(inRepoRecipes.map((r) => [r.id, r]));
+    const fileStoreIds = new Set(fileStoreRecipes.map((r) => r.id));
+
+    let promoted = false;
+
+    for (const recipe of fileStoreRecipes) {
+      if (inRepoById.has(recipe.id)) continue;
+      if (recipe.id.startsWith("inrepo-")) continue; // stale, removed below
+      // Legacy recipe (migration 003 era) — promote to .daintree/recipes/
+      await this.identityFiles.writeInRepoRecipe(projectPath, recipe);
+      inRepoById.set(recipe.id, recipe);
+      promoted = true;
+    }
+
+    const hasStale = fileStoreRecipes.some(
+      (r) => r.id.startsWith("inrepo-") && !inRepoById.has(r.id)
+    );
+
+    const reconciledIds = new Set(inRepoById.keys());
+    const sizeChanged = reconciledIds.size !== fileStoreIds.size;
+    const idsChanged = ![...reconciledIds].every((id) => fileStoreIds.has(id));
+
+    // Check if content differs for shared recipes. In-repo writes strip
+    // projectId/worktreeId and redact env values, so normalize before comparing.
+    let contentChanged = false;
+    if (!sizeChanged && !idsChanged) {
+      const byId = new Map(fileStoreRecipes.map((r) => [r.id, r]));
+      for (const recipe of inRepoById.values()) {
+        const existing = byId.get(recipe.id);
+        if (!existing) continue;
+        const {
+          projectId: _p1,
+          worktreeId: _w1,
+          ...inRepoNorm
+        } = recipe as Record<string, unknown>;
+        const { projectId: _p2, worktreeId: _w2, ...fsNorm } = existing as Record<string, unknown>;
+        if (JSON.stringify(inRepoNorm) !== JSON.stringify(fsNorm)) {
+          contentChanged = true;
+          break;
+        }
+      }
+    }
+
+    const needsWrite = promoted || hasStale || sizeChanged || idsChanged || contentChanged;
+
+    if (needsWrite) {
+      const reconciled = Array.from(inRepoById.values());
+      await this.fileStore.saveRecipes(projectId, reconciled);
+    }
+  }
+
   async saveRecipes(projectId: string, recipes: TerminalRecipe[]): Promise<void> {
     return this.fileStore.saveRecipes(projectId, recipes);
   }
