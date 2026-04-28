@@ -1,4 +1,5 @@
 import { create, type StateCreator } from "zustand";
+import type { GitOperationReason } from "@shared/types/ipc/errors";
 
 export type ErrorType =
   | "git"
@@ -32,6 +33,8 @@ export interface ErrorRecord {
   correlationId?: string;
   recoveryHint?: string;
   retryProgress?: { attempt: number; maxAttempts: number };
+  /** Classified reason when this error originated from a git operation */
+  gitReason?: GitOperationReason;
 }
 
 interface ErrorStore {

@@ -4,13 +4,48 @@ import { isElectronAvailable } from "./useElectron";
 import { errorsClient } from "@/clients";
 import { logErrorWithContext } from "@/utils/errorContext";
 import { notify, shouldEscalateTransientError, consumeEscalation } from "@/lib/notify";
-import type { NotificationPriority } from "@/store/notificationStore";
+import type { NotificationAction, NotificationPriority } from "@/store/notificationStore";
+import { humanizeAppError } from "@shared/utils/errorMessage";
 
 export function getErrorPriority(
   error: Pick<ErrorRecord, "type" | "isTransient">
 ): NotificationPriority {
   if (error.isTransient) return "low";
   return "high";
+}
+
+function buildCopyDetailsAction(error: ErrorRecord): NotificationAction {
+  return {
+    label: "Copy details",
+    variant: "secondary",
+    onClick: () => {
+      const payload = JSON.stringify(
+        {
+          type: error.type,
+          source: error.source,
+          message: error.message,
+          gitReason: error.gitReason,
+          recoveryHint: error.recoveryHint,
+          correlationId: error.correlationId,
+          details: error.details,
+        },
+        null,
+        2
+      );
+      try {
+        const result = navigator.clipboard?.writeText(payload);
+        if (result && typeof result.catch === "function") {
+          result.catch(() => {
+            // Clipboard writes can reject in non-HTTPS or unfocused contexts.
+            // Failure is non-fatal — the toast already showed the user the
+            // friendly summary; the raw payload is recoverable from logs.
+          });
+        }
+      } catch {
+        // navigator.clipboard may be undefined in restricted contexts.
+      }
+    },
+  };
 }
 
 function routeError(error: ErrorRecord): void {
@@ -29,14 +64,23 @@ function routeError(error: ErrorRecord): void {
     fromPreviousSession: error.fromPreviousSession,
     correlationId: error.correlationId,
     recoveryHint: error.recoveryHint,
+    gitReason: error.gitReason,
   });
+
+  const { title, body } = humanizeAppError(error);
+
+  // "Copy details" is omitted for low-priority errors: those route to the
+  // history inbox without a toast, so the action would never be reachable —
+  // and notify() auto-promotes action-bearing toasts to sticky.
+  const action = priority === "low" ? undefined : buildCopyDetailsAction(error);
 
   const toastId = notify({
     type: "error",
-    title: error.source,
-    message: error.message,
+    title,
+    message: body,
     correlationId: error.correlationId,
     priority,
+    action,
   });
 
   if (escalated && toastId) {

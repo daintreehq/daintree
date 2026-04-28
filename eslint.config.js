@@ -158,6 +158,18 @@ export default tseslint.config(
           message:
             "Don't use `void window.electron.X()` for fire-and-forget IPC — wrap the promise in safeFireAndForget(promise, { context }) from @/utils/safeFireAndForget so rejections reach reportRendererGlobalError with call-site context.",
         },
+        {
+          // Block raw `error.message` / `err.message` / `e.message` inside
+          // notify({...}) and addNotification({...}) message properties.
+          // These calls go to user-facing toasts; raw library messages leak
+          // jargon (paths, errno strings, internal source IDs). Use
+          // humanizeAppError() from @shared/utils/errorMessage instead.
+          // See issue #6050.
+          selector:
+            "CallExpression[callee.name=/^(notify|addNotification)$/] ObjectExpression > Property[key.name='message'] MemberExpression[object.name=/^(error|err|e)$/][property.name='message']",
+          message:
+            "Don't pipe raw error.message into user-facing notifications. Use humanizeAppError(error) from @shared/utils/errorMessage to produce a friendly title and body, and stash the raw message in a 'Copy details' action. See #6050.",
+        },
       ],
     },
   },
