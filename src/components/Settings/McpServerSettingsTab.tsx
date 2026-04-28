@@ -53,7 +53,10 @@ export function McpServerSettingsTab() {
         setLoading(false);
       });
 
-    return () => clearTimeout(timer);
+    return () => {
+      clearTimeout(timer);
+      if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
+    };
   }, []);
 
   const handleToggle = useCallback(async () => {
@@ -100,6 +103,7 @@ export function McpServerSettingsTab() {
       const key = await window.electron.mcpServer.generateApiKey();
       setStatus((prev) => ({ ...prev, apiKey: key }));
       setShowApiKey(true);
+      setCopiedKey(false);
     } catch (err) {
       setError(formatErrorMessage(err, "Failed to generate API key"));
     }
@@ -110,6 +114,7 @@ export function McpServerSettingsTab() {
       setError(null);
       const newStatus = await window.electron.mcpServer.setApiKey("");
       setStatus(newStatus);
+      setCopiedKey(false);
     } catch (err) {
       setError(formatErrorMessage(err, "Failed to clear API key"));
     }
