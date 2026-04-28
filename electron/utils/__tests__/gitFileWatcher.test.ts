@@ -793,6 +793,7 @@ describe("GitFileWatcher", () => {
     const onWatcherFailed = vi.fn();
     const onEmfileLimitReached = vi.fn();
     let errorHandler: ((error: NodeJS.ErrnoException) => void) | undefined;
+    let recursiveWatcher: FSWatcher | undefined;
 
     const origPlatform = process.platform;
     Object.defineProperty(process, "platform", { value: "darwin", configurable: true });
@@ -804,6 +805,7 @@ describe("GitFileWatcher", () => {
     ) => {
       const w = createMockWatcher();
       if (opts?.recursive) {
+        recursiveWatcher = w;
         vi.mocked(w.on).mockImplementation(((event: string, handler: unknown) => {
           if (event === "error") {
             errorHandler = handler as (error: NodeJS.ErrnoException) => void;
@@ -831,6 +833,13 @@ describe("GitFileWatcher", () => {
 
     expect(onEmfileLimitReached).toHaveBeenCalledTimes(1);
     expect(onWatcherFailed).toHaveBeenCalledTimes(1);
+    // The broken watcher must be closed and removed from internal state so a
+    // subsequent dispose() doesn't double-close (and so it stops receiving
+    // OS events that could fire duplicate EMFILE callbacks).
+    expect(recursiveWatcher).toBeDefined();
+    expect(recursiveWatcher?.close).toHaveBeenCalledTimes(1);
+    gitWatcher.dispose();
+    expect(recursiveWatcher?.close).toHaveBeenCalledTimes(1);
 
     Object.defineProperty(process, "platform", { value: origPlatform, configurable: true });
   });

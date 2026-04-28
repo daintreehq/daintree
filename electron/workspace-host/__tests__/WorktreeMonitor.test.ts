@@ -43,6 +43,7 @@ let mockWatcherStartResult = false;
 let mockWatcherStartFiresFailure = false;
 let capturedOnWatcherFailed: (() => void) | undefined;
 let capturedOnInotifyLimitReached: (() => void) | undefined;
+let capturedOnEmfileLimitReached: (() => void) | undefined;
 let capturedWatcherOptions: Record<string, unknown> | undefined;
 let watcherStartCallCount = 0;
 
@@ -54,11 +55,13 @@ vi.mock("../../utils/gitFileWatcher.js", () => {
         opts: {
           onWatcherFailed?: () => void;
           onInotifyLimitReached?: () => void;
+          onEmfileLimitReached?: () => void;
         } & Record<string, unknown>
       ) {
         this.onWatcherFailed = opts.onWatcherFailed;
         capturedOnWatcherFailed = opts.onWatcherFailed;
         capturedOnInotifyLimitReached = opts.onInotifyLimitReached;
+        capturedOnEmfileLimitReached = opts.onEmfileLimitReached;
         capturedWatcherOptions = opts;
       }
       start() {
@@ -131,6 +134,7 @@ describe("WorktreeMonitor", () => {
     watcherStartCallCount = 0;
     capturedOnWatcherFailed = undefined;
     capturedOnInotifyLimitReached = undefined;
+    capturedOnEmfileLimitReached = undefined;
     capturedWatcherOptions = undefined;
   });
 
@@ -519,6 +523,29 @@ describe("WorktreeMonitor", () => {
       capturedOnInotifyLimitReached?.();
       expect(onInotifyLimitReached).toHaveBeenCalledWith(TEST_WORKTREE.id);
       expect(onInotifyLimitReached).toHaveBeenCalledTimes(1);
+
+      monitor.stop();
+    });
+
+    it("forwards emfile-limit signal to callbacks with the worktree id", async () => {
+      mockWatcherStartResult = true;
+      mockGetWorktreeChangesWithStats.mockResolvedValue({
+        worktreeId: "/test/worktree",
+        rootPath: "/test",
+        changes: [],
+        changedFileCount: 0,
+        lastUpdated: Date.now(),
+      });
+
+      const onEmfileLimitReached = vi.fn();
+      const callbacks = makeCallbacks({ onEmfileLimitReached });
+      const monitor = new WorktreeMonitor(TEST_WORKTREE, WATCH_CONFIG, callbacks, "main");
+      await monitor.start();
+
+      expect(capturedOnEmfileLimitReached).toBeDefined();
+      capturedOnEmfileLimitReached?.();
+      expect(onEmfileLimitReached).toHaveBeenCalledWith(TEST_WORKTREE.id);
+      expect(onEmfileLimitReached).toHaveBeenCalledTimes(1);
 
       monitor.stop();
     });
