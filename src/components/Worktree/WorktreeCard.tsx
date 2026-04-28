@@ -770,7 +770,7 @@ export const WorktreeCard = React.memo(function WorktreeCard({
                 className={cn(
                   "shrink-0 w-4 flex items-center justify-center cursor-grab active:cursor-grabbing touch-none select-none transition-colors",
                   isDraggingSort
-                    ? "bg-accent-primary/20 text-accent-primary"
+                    ? "bg-overlay-emphasis text-text-primary"
                     : isWorktreeSortDragging
                       ? "text-text-primary/30 hover:text-text-primary/50 hover:bg-overlay-soft"
                       : "text-transparent hover:text-text-primary/30 hover:bg-overlay-soft"
