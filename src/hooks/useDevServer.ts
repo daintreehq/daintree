@@ -35,7 +35,6 @@ const MAX_AUTO_RECOVERY_ATTEMPTS = 1;
 /**
  * Module-level cache that persists the last successful ensure configKey across
  * React unmount/remount cycles (e.g. dock ↔ grid transitions). Keyed by panelId.
- * Mirrors the scrollCache pattern in DevPreviewPane.tsx.
  */
 const persistedEnsureCache = new Map<string, string>();
 

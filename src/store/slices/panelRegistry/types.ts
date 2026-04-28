@@ -160,6 +160,10 @@ export interface PanelRegistrySlice {
     id: string,
     preset: import("@shared/types/panel.js").ViewportPresetId | undefined
   ) => void;
+  setDevPreviewScrollPosition: (
+    id: string,
+    position: { url: string; scrollY: number } | undefined
+  ) => void;
   setDevServerState: (
     id: string,
     status: "stopped" | "starting" | "installing" | "running" | "error",

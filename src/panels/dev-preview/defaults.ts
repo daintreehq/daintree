@@ -17,5 +17,6 @@ export function createDevPreviewDefaults(
     devPreviewConsoleOpen: options.devPreviewConsoleOpen,
     exitBehavior: options.exitBehavior,
     viewportPreset: options.viewportPreset,
+    devPreviewScrollPosition: options.devPreviewScrollPosition,
   };
 }

@@ -126,6 +126,8 @@ export interface DevPreviewPanelOptions extends AddPanelOptionsBase {
   devPreviewConsoleOpen?: boolean;
   /** Active viewport preset for responsive emulation (undefined = fill) */
   viewportPreset?: ViewportPresetId;
+  /** Last captured scroll position, paired with URL for stale-scroll prevention */
+  devPreviewScrollPosition?: { url: string; scrollY: number };
 }
 
 /**

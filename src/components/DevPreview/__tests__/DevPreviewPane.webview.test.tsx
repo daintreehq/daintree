@@ -2,7 +2,7 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import type { DevPreviewPaneProps } from "../DevPreviewPane";
-import { DevPreviewPane, _resetScrollCacheForTests } from "../DevPreviewPane";
+import { DevPreviewPane } from "../DevPreviewPane";
 
 type MockWebviewElement = HTMLElement & {
   reload: ReturnType<typeof vi.fn>;
@@ -57,6 +57,7 @@ type DevServerState = {
 
 const {
   terminalStoreState,
+  scrollPositionRef,
   usePanelStoreMock,
   useProjectStoreMock,
   useProjectSettingsStoreMock,
@@ -64,15 +65,27 @@ const {
   useDevServerMock,
   useIsDraggingMock,
 } = vi.hoisted(() => {
+  const scrollPositionRef: { current: { url: string; scrollY: number } | undefined } = {
+    current: undefined,
+  };
   const terminalStoreState = {
     getTerminal: vi.fn(),
     setBrowserUrl: vi.fn(),
     setBrowserHistory: vi.fn(),
     setBrowserZoom: vi.fn(),
     setDevPreviewConsoleOpen: vi.fn(),
+    setViewportPreset: vi.fn(),
+    setDevPreviewScrollPosition: vi.fn(
+      (_id: string, position: { url: string; scrollY: number } | undefined) => {
+        scrollPositionRef.current = position;
+      }
+    ),
   };
-  const usePanelStoreMock = vi.fn((selector: (state: typeof terminalStoreState) => unknown) =>
-    selector(terminalStoreState)
+  const usePanelStoreMock = Object.assign(
+    vi.fn((selector: (state: typeof terminalStoreState) => unknown) =>
+      selector(terminalStoreState)
+    ),
+    { getState: () => terminalStoreState }
   );
 
   const projectStoreState = {
@@ -118,6 +131,7 @@ const {
 
   return {
     terminalStoreState,
+    scrollPositionRef,
     usePanelStoreMock,
     useProjectStoreMock,
     useProjectSettingsStoreMock,
@@ -223,7 +237,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.clearAllMocks();
-    _resetScrollCacheForTests();
+    scrollPositionRef.current = undefined;
     originalCreateElement = document.createElement.bind(document);
     document.createElement = ((tagName: string, options?: ElementCreationOptions) => {
       const element = originalCreateElement(tagName, options);
@@ -242,6 +256,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
       browserZoom: 1.4,
       devPreviewConsoleOpen: false,
       devCommand: "npm run dev",
+      devPreviewScrollPosition: scrollPositionRef.current,
     }));
     devServerStateRef.current = {
       status: "running",
@@ -588,6 +603,10 @@ describe("DevPreviewPane webview lifecycle regression", () => {
     });
 
     expect(webview.executeJavaScript).toHaveBeenCalledWith("window.scrollY");
+    expect(terminalStoreState.setDevPreviewScrollPosition).toHaveBeenCalledWith(
+      "dev-preview-panel-1",
+      { url: "http://localhost:5173/", scrollY: 250 }
+    );
   });
 
   it("restores scroll position on dom-ready after remount", async () => {
@@ -625,7 +644,9 @@ describe("DevPreviewPane webview lifecycle regression", () => {
       emitWebviewEvent(newWebview, "dom-ready");
     });
 
-    expect(newWebview.executeJavaScript).toHaveBeenCalledWith("window.scrollTo(0, 250)");
+    expect(newWebview.executeJavaScript).toHaveBeenCalledWith(
+      "requestAnimationFrame(() => window.scrollTo(0, 250))"
+    );
   });
 
   it("clears scroll cache on hard restart", async () => {
@@ -659,6 +680,11 @@ describe("DevPreviewPane webview lifecycle regression", () => {
 
     // Hard restart clears cache
     fireEvent.click(screen.getByTestId("hard-restart"));
+
+    expect(terminalStoreState.setDevPreviewScrollPosition).toHaveBeenCalledWith(
+      "dev-preview-panel-1",
+      undefined
+    );
 
     // Remount
     devServerStateRef.current = {

@@ -49,6 +49,7 @@ type PersistedDevPreviewFields =
   | "browserHistory"
   | "browserZoom"
   | "devPreviewConsoleOpen"
+  | "devPreviewScrollPosition"
   | "exitBehavior";
 
 const browserHistoryArb = fc.record({
@@ -94,6 +95,11 @@ const browserArbSpec = {
   browserConsoleOpen: fc.option(fc.boolean(), { nil: undefined }),
 } satisfies { [K in PersistedBrowserFields]-?: fc.Arbitrary<BrowserData[K]> };
 
+const scrollPositionArb = fc.record({
+  url: fc.string(),
+  scrollY: fc.double({ min: 0, max: 1_000_000, noNaN: true, noDefaultInfinity: true }),
+});
+
 const devPreviewArbSpec = {
   cwd: fc.string(),
   devCommand: fc.option(fc.string(), { nil: undefined }),
@@ -101,6 +107,7 @@ const devPreviewArbSpec = {
   browserHistory: fc.option(browserHistoryArb, { nil: undefined }),
   browserZoom: fc.option(zoomArb, { nil: undefined }),
   devPreviewConsoleOpen: fc.option(fc.boolean(), { nil: undefined }),
+  devPreviewScrollPosition: fc.option(scrollPositionArb, { nil: undefined }),
   exitBehavior: fc.option(exitBehaviorArb, { nil: undefined }),
 } satisfies { [K in PersistedDevPreviewFields]-?: fc.Arbitrary<DevPreviewData[K]> };
 
@@ -203,6 +210,7 @@ describe("panel serializer round-trip (property tests)", () => {
         expect(restored.browserHistory).toEqual(fields.browserHistory);
         expect(restored.browserZoom).toBe(fields.browserZoom);
         expect(restored.devPreviewConsoleOpen).toBe(fields.devPreviewConsoleOpen);
+        expect(restored.devPreviewScrollPosition).toEqual(fields.devPreviewScrollPosition);
 
         // exitBehavior is NOT returned by getDeserializer("dev-preview"); the real
         // restore path adds it via buildArgsForNonPtyRecreation's base args before

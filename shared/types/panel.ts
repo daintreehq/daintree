@@ -369,6 +369,8 @@ export interface DevPreviewPanelData extends BasePanelData {
   exitBehavior?: PanelExitBehavior;
   /** Active viewport preset (undefined = fill/full-width) */
   viewportPreset?: ViewportPresetId;
+  /** Last captured scroll position, paired with URL for stale-scroll prevention */
+  devPreviewScrollPosition?: { url: string; scrollY: number };
 }
 
 export type PanelInstance = PtyPanelData | BrowserPanelData | DevPreviewPanelData;
@@ -465,6 +467,8 @@ export interface TerminalInstance {
   devPreviewConsoleOpen?: boolean;
   /** Active viewport preset for dev-preview responsive emulation (undefined = fill) */
   viewportPreset?: ViewportPresetId;
+  /** Last captured dev-preview scroll position, paired with URL for stale-scroll prevention */
+  devPreviewScrollPosition?: { url: string; scrollY: number };
   /** Behavior when terminal exits: "keep" preserves for review, "trash" sends to trash, "remove" deletes completely */
   exitBehavior?: PanelExitBehavior;
   /** Legacy persisted creation timestamp (milliseconds since epoch) */

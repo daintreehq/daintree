@@ -21,6 +21,7 @@ const DESERIALIZERS: Record<string, PanelKindDeserializer> = {
       browserZoom: saved.browserZoom,
       devPreviewConsoleOpen: saved.devPreviewConsoleOpen,
       viewportPreset: saved.viewportPreset as ViewportPresetId | undefined,
+      devPreviewScrollPosition: saved.devPreviewScrollPosition,
       createdAt: saved.createdAt,
     };
   },

@@ -37,6 +37,7 @@ export interface AddTerminalArgs extends AddPanelOptionsBase {
   devServerTerminalId?: string | null;
   devPreviewConsoleOpen?: boolean;
   viewportPreset?: string;
+  devPreviewScrollPosition?: { url: string; scrollY: number };
 }
 
 export interface SavedTerminalData {
@@ -61,6 +62,7 @@ export interface SavedTerminalData {
   devCommand?: string;
   devPreviewConsoleOpen?: boolean;
   viewportPreset?: string;
+  devPreviewScrollPosition?: { url: string; scrollY: number };
   exitBehavior?: PanelExitBehavior;
   agentSessionId?: string;
   agentLaunchFlags?: string[];
@@ -215,6 +217,7 @@ export function buildArgsForBackendTerminal(
     browserHistory: isDevPreview ? saved.browserHistory : undefined,
     browserZoom: isDevPreview ? saved.browserZoom : undefined,
     devPreviewConsoleOpen: isDevPreview ? saved.devPreviewConsoleOpen : undefined,
+    devPreviewScrollPosition: isDevPreview ? saved.devPreviewScrollPosition : undefined,
     exitBehavior: saved.exitBehavior,
     agentSessionId: backendTerminal.agentSessionId ?? saved.agentSessionId,
     agentLaunchFlags: backendTerminal.agentLaunchFlags ?? saved.agentLaunchFlags,
@@ -275,6 +278,7 @@ export function buildArgsForReconnectedFallback(
     browserHistory: isDevPreview ? saved.browserHistory : undefined,
     browserZoom: isDevPreview ? saved.browserZoom : undefined,
     devPreviewConsoleOpen: isDevPreview ? saved.devPreviewConsoleOpen : undefined,
+    devPreviewScrollPosition: isDevPreview ? saved.devPreviewScrollPosition : undefined,
     exitBehavior: saved.exitBehavior,
     agentSessionId: reconnectedTerminal.agentSessionId ?? saved.agentSessionId,
     agentLaunchFlags: reconnectedTerminal.agentLaunchFlags ?? saved.agentLaunchFlags,

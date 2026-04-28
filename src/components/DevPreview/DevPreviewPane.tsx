@@ -34,12 +34,6 @@ import { useFindInPage } from "@/hooks/useFindInPage";
 import { getViewportPreset } from "@/panels/dev-preview/viewportPresets";
 import type { ViewportPresetId } from "@shared/types/panel";
 
-const scrollCache = new Map<string, { url: string; scrollY: number }>();
-
-export function _resetScrollCacheForTests(): void {
-  scrollCache.clear();
-}
-
 import { looksLikeOAuthUrl } from "@shared/utils/urlUtils";
 
 type SessionStorageEntry = [string, string];
@@ -194,6 +188,7 @@ export function DevPreviewPane({
   const setBrowserZoom = usePanelStore((state) => state.setBrowserZoom);
   const setDevPreviewConsoleOpen = usePanelStore((state) => state.setDevPreviewConsoleOpen);
   const setViewportPreset = usePanelStore((state) => state.setViewportPreset);
+  const setDevPreviewScrollPosition = usePanelStore((state) => state.setDevPreviewScrollPosition);
   const currentProjectId = useProjectStore((state) => state.currentProject?.id);
   const projectSettings = useProjectSettingsStore((state) => state.settings);
   const projectEnv = projectSettings?.environmentVariables;
@@ -288,7 +283,7 @@ export function DevPreviewPane({
               .executeJavaScript("window.scrollY")
               .then((scrollY: number) => {
                 if (typeof scrollY === "number" && Number.isFinite(scrollY)) {
-                  scrollCache.set(id, { url: currentWebviewUrl, scrollY });
+                  setDevPreviewScrollPosition(id, { url: currentWebviewUrl, scrollY });
                 }
               })
               .catch(() => {});
@@ -308,7 +303,7 @@ export function DevPreviewPane({
       }
       setWebviewElement(node);
     },
-    [id]
+    [id, setDevPreviewScrollPosition]
   );
 
   useEffect(() => {
@@ -330,7 +325,7 @@ export function DevPreviewPane({
             .executeJavaScript("window.scrollY")
             .then((scrollY: number) => {
               if (typeof scrollY === "number" && Number.isFinite(scrollY)) {
-                scrollCache.set(id, { url: currentWebviewUrl, scrollY });
+                setDevPreviewScrollPosition(id, { url: currentWebviewUrl, scrollY });
               }
             })
             .catch(() => {});
@@ -339,7 +334,7 @@ export function DevPreviewPane({
         // Webview already detached
       }
     }
-  }, [status, id, webviewElement]);
+  }, [status, id, webviewElement, setDevPreviewScrollPosition]);
 
   useEffect(() => {
     setConsoleTerminalId(terminalId);
@@ -421,7 +416,7 @@ export function DevPreviewPane({
   }, [start]);
 
   const handleHardRestart = useCallback(() => {
-    scrollCache.delete(id);
+    setDevPreviewScrollPosition(id, undefined);
     if (loadTimeoutRef.current) {
       clearTimeout(loadTimeoutRef.current);
       loadTimeoutRef.current = null;
@@ -433,7 +428,7 @@ export function DevPreviewPane({
     setIsWebviewReady(false);
     setWebviewLoadError(null);
     void restart();
-  }, [id, restart, setBrowserUrl]);
+  }, [id, restart, setBrowserUrl, setDevPreviewScrollPosition]);
 
   const handleAutoDetect = useCallback(async () => {
     if (!currentProjectId || isAutoDetecting) return;
@@ -659,12 +654,16 @@ export function DevPreviewPane({
         loadTimeoutRef.current = null;
       }
 
-      const saved = scrollCache.get(id);
-      if (saved) {
+      const saved = usePanelStore.getState().getTerminal(id)?.devPreviewScrollPosition;
+      if (saved && Number.isFinite(saved.scrollY) && saved.scrollY > 0 && saved.url) {
         try {
           const loadedUrl = webview.getURL();
-          if (loadedUrl === saved.url && saved.scrollY > 0) {
-            webview.executeJavaScript(`window.scrollTo(0, ${saved.scrollY})`).catch(() => {});
+          if (loadedUrl === saved.url) {
+            webview
+              .executeJavaScript(
+                `requestAnimationFrame(() => window.scrollTo(0, ${saved.scrollY}))`
+              )
+              .catch(() => {});
           }
         } catch {
           // Webview not ready
@@ -743,7 +742,7 @@ export function DevPreviewPane({
           wv.executeJavaScript("window.scrollY")
             .then((scrollY: number) => {
               if (typeof scrollY === "number" && Number.isFinite(scrollY)) {
-                scrollCache.set(id, { url: currentWebviewUrl, scrollY });
+                setDevPreviewScrollPosition(id, { url: currentWebviewUrl, scrollY });
               }
             })
             .catch(() => {});
@@ -761,7 +760,7 @@ export function DevPreviewPane({
         failLoadRetryRef.current = null;
       }
     }
-  }, [isEvicted, id]);
+  }, [isEvicted, id, setDevPreviewScrollPosition]);
 
   useWebviewThrottle(id, location, isEvicted ? null : webviewElement, isWebviewReady && !isEvicted);
 

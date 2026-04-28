@@ -93,6 +93,8 @@ export interface PanelSnapshot {
   devPreviewConsoleOpen?: boolean;
   /** Active viewport preset for dev-preview responsive emulation */
   viewportPreset?: ViewportPresetId;
+  /** Last captured dev-preview scroll position, paired with URL for stale-scroll prevention */
+  devPreviewScrollPosition?: { url: string; scrollY: number };
   /** Behavior when terminal exits */
   exitBehavior?: PanelExitBehavior;
   /** Captured agent session ID from graceful shutdown (used for session resume) */
