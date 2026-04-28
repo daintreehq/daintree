@@ -46,7 +46,6 @@ export interface ContextOpSpec<K extends Channel> {
   schema?: undefined;
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export interface PlainOpValidatedSpec<K extends Channel, S extends z.ZodTypeAny = z.ZodTypeAny> {
   channel: K;
   schema: S;
@@ -54,7 +53,6 @@ export interface PlainOpValidatedSpec<K extends Channel, S extends z.ZodTypeAny 
   withContext?: false;
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export interface ContextOpValidatedSpec<K extends Channel, S extends z.ZodTypeAny = z.ZodTypeAny> {
   channel: K;
   schema: S;
