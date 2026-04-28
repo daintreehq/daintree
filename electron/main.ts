@@ -4,6 +4,7 @@ import "./setup/environment.js";
 import nodeV8 from "node:v8";
 import { app, BrowserWindow, crashReporter, protocol } from "electron";
 import { registerGlobalErrorHandlers } from "./setup/globalErrorHandlers.js";
+import { startDevDiagnostics } from "./setup/devDiagnostics.js";
 import path from "path";
 import { fileURLToPath } from "url";
 import { PERF_MARKS } from "../shared/perf/marks.js";
@@ -153,6 +154,10 @@ if (!gotTheLock) {
   crashReporter.start({ uploadToServer: false });
   initializeCrashLoopGuard();
   registerGlobalErrorHandlers();
+
+  if (!app.isPackaged) {
+    startDevDiagnostics();
+  }
 
   const distPath = path.join(__dirname, "../../dist");
 
