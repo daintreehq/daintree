@@ -218,20 +218,18 @@ describe("PanelHeader", () => {
       expect(findMenuButton(menu, "Duplicate")).toBeDefined();
     });
 
-    it("renders Lock Input and View Terminal Info for PTY panels", () => {
+    it("renders Lock Input for PTY panels", () => {
       mockHasPty = true;
       render(<PanelHeader {...makeProps({ kind: "terminal" })} />);
       const menu = screen.getByTestId("overflow-menu");
       expect(findMenuButton(menu, "Lock Input")).toBeDefined();
-      expect(findMenuButton(menu, "View Terminal Info")).toBeDefined();
     });
 
-    it("does not render Lock Input or View Terminal Info for non-PTY panels", () => {
+    it("does not render Lock Input for non-PTY panels", () => {
       mockHasPty = false;
       render(<PanelHeader {...makeProps({ kind: "browser" })} />);
       const menu = screen.getByTestId("overflow-menu");
       expect(findMenuButton(menu, "Lock Input")).toBeUndefined();
-      expect(findMenuButton(menu, "View Terminal Info")).toBeUndefined();
     });
 
     it("renders Watch for unwatched agent panels", () => {
@@ -310,18 +308,6 @@ describe("PanelHeader", () => {
       findMenuButton(menu, "Lock Input")?.click();
       expect(mockDispatch).toHaveBeenCalledWith(
         "terminal.toggleInputLock",
-        { terminalId: "test-panel" },
-        { source: "menu" }
-      );
-    });
-
-    it("dispatches terminal.viewInfo when clicking View Terminal Info", () => {
-      mockHasPty = true;
-      render(<PanelHeader {...makeProps({ kind: "terminal" })} />);
-      const menu = screen.getByTestId("overflow-menu");
-      findMenuButton(menu, "View Terminal Info")?.click();
-      expect(mockDispatch).toHaveBeenCalledWith(
-        "terminal.viewInfo",
         { terminalId: "test-panel" },
         { source: "menu" }
       );

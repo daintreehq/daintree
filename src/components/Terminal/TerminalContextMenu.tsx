@@ -19,7 +19,6 @@ import {
   CopyPlus,
   ExternalLink,
   Globe,
-  Info,
   Link,
   Lock,
   Maximize2,
@@ -205,13 +204,6 @@ export function TerminalContextMenu({
             { source: "context-menu" }
           );
           break;
-        case "redraw":
-          void actionService.dispatch(
-            "terminal.redraw",
-            { terminalId },
-            { source: "context-menu" }
-          );
-          break;
         case "force-resume":
           void actionService.dispatch(
             "terminal.forceResume",
@@ -239,13 +231,6 @@ export function TerminalContextMenu({
         case "rename":
           void actionService.dispatch(
             "terminal.rename",
-            { terminalId },
-            { source: "context-menu" }
-          );
-          break;
-        case "view-info":
-          void actionService.dispatch(
-            "terminal.viewInfo",
             { terminalId },
             { source: "context-menu" }
           );
@@ -549,12 +534,6 @@ export function TerminalContextMenu({
             Restart Terminal
           </ContextMenuItem>
         )}
-        {hasPty && (
-          <ContextMenuItem onSelect={() => handleAction("redraw")}>
-            <RefreshCw className={ICON_CLASS} aria-hidden="true" />
-            Redraw Terminal
-          </ContextMenuItem>
-        )}
         {isPaused && (
           <ContextMenuItem onSelect={() => handleAction("force-resume")}>
             <Play className={ICON_CLASS} aria-hidden="true" />
@@ -588,10 +567,6 @@ export function TerminalContextMenu({
         <ContextMenuItem onSelect={() => handleAction("rename")}>
           <Pencil className={ICON_CLASS} aria-hidden="true" />
           Rename Terminal
-        </ContextMenuItem>
-        <ContextMenuItem onSelect={() => handleAction("view-info")}>
-          <Info className={ICON_CLASS} aria-hidden="true" />
-          View Terminal Info
         </ContextMenuItem>
         <ContextMenuSeparator />
         <ContextMenuItem onSelect={() => handleAction("background")}>

@@ -20,7 +20,6 @@ import {
   ChevronRight,
   CopyPlus,
   Ellipsis,
-  Info,
   Lock,
   Pencil,
   Trash2,
@@ -994,20 +993,6 @@ function PanelHeaderComponent({
                     <Bell className="w-3 h-3 mr-2" aria-hidden="true" />
                   )}
                   {isWatched ? "Cancel Watch" : "Watch"}
-                </DropdownMenuItem>
-              )}
-              {hasPty && (
-                <DropdownMenuItem
-                  onSelect={() =>
-                    void actionService.dispatch(
-                      "terminal.viewInfo",
-                      { terminalId: id },
-                      { source: "menu" }
-                    )
-                  }
-                >
-                  <Info className="w-3 h-3 mr-2" aria-hidden="true" />
-                  View Terminal Info
                 </DropdownMenuItem>
               )}
 
