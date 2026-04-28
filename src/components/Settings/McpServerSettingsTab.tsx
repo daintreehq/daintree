@@ -27,6 +27,7 @@ export function McpServerSettingsTab() {
   const [showApiKey, setShowApiKey] = useState(false);
   const [copiedKey, setCopiedKey] = useState(false);
   const copyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const copyConfigTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     let settled = false;
@@ -56,6 +57,7 @@ export function McpServerSettingsTab() {
     return () => {
       clearTimeout(timer);
       if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
+      if (copyConfigTimeoutRef.current) clearTimeout(copyConfigTimeoutRef.current);
     };
   }, []);
 
@@ -74,7 +76,11 @@ export function McpServerSettingsTab() {
       const snippet = await window.electron.mcpServer.getConfigSnippet();
       await navigator.clipboard.writeText(snippet);
       setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
+      if (copyConfigTimeoutRef.current) clearTimeout(copyConfigTimeoutRef.current);
+      copyConfigTimeoutRef.current = setTimeout(() => {
+        setCopied(false);
+        copyConfigTimeoutRef.current = null;
+      }, 2000);
     } catch (err) {
       setError(formatErrorMessage(err, "Failed to copy config"));
     }
@@ -145,7 +151,7 @@ export function McpServerSettingsTab() {
         disabled={loading}
       />
 
-      {!status.enabled && !loading && (
+      {!status.enabled && !loading && !error && (
         <p className="text-xs text-daintree-text/50 leading-relaxed">
           Turn the server on to let MCP-aware agents like Claude Code and Cursor call Daintree
           actions over a local connection. Connection details and an optional API key appear once

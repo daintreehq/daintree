@@ -734,11 +734,12 @@ export function GitHubResourceList({
       );
     }
 
-    if (debouncedSearch) {
+    const trimmedSearch = debouncedSearch.trim();
+    if (trimmedSearch) {
       return (
         <EmptyState
           variant="filtered-empty"
-          message={`No ${type === "issue" ? "issues" : "pull requests"} match "${debouncedSearch}"`}
+          message={`No ${type === "issue" ? "issues" : "pull requests"} match "${trimmedSearch}"`}
           onClear={handleClearSearch}
         />
       );

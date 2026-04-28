@@ -147,4 +147,18 @@ describe("McpServerSettingsTab", () => {
     expect(screen.queryByText("API key active")).toBeNull();
     expect(container.textContent).toMatch(/MCP-aware agents like Claude Code and Cursor/);
   });
+
+  it("hides the disabled hint while a status load error is shown", async () => {
+    window.electron = {
+      mcpServer: createMcpApi({
+        getStatus: vi.fn().mockRejectedValue(new Error("Failed to load MCP status")),
+      }),
+    } as unknown as typeof window.electron;
+
+    const { container } = render(<McpServerSettingsTab />);
+    await waitForContent(container, "Failed to load MCP status");
+
+    // Hint must not appear alongside an error — the error is the truth signal
+    expect(container.textContent).not.toMatch(/Turn the server on/);
+  });
 });

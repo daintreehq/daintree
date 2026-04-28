@@ -437,6 +437,35 @@ describe("GitHubResourceList retry behavior", () => {
     expect(screen.getByText(/Pull requests against this repository will appear here/)).toBeTruthy();
   });
 
+  it("treats whitespace-only search as zero-data, not filtered-empty", async () => {
+    vi.useRealTimers();
+    useGitHubFilterStore.getState().setIssueSearchQuery("   ");
+    mockListIssues.mockResolvedValue(makeResponse([]));
+
+    render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
+
+    await waitFor(() => {
+      expect(screen.getByText("No issues yet")).toBeTruthy();
+    });
+    // No filtered-empty message with quoted whitespace should appear
+    expect(screen.queryByText(/No issues match "/)).toBeNull();
+  });
+
+  it("shows exact-number not-found state with Clear search affordance", async () => {
+    vi.useRealTimers();
+    useGitHubFilterStore.getState().setIssueSearchQuery("#42");
+    mockGetIssueByNumber.mockResolvedValue(null);
+
+    render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Issue #42 not found")).toBeTruthy();
+    });
+    const region = document.querySelector('[role="status"]');
+    expect(region).toBeTruthy();
+    expect(region?.textContent).toContain("Clear search");
+  });
+
   it("does not retry rate-limit errors", async () => {
     mockListIssues.mockRejectedValue(
       new Error("GitHub rate limit exceeded. Try again in a few minutes.")
