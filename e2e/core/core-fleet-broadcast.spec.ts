@@ -218,9 +218,17 @@ test.describe.serial("Core: Fleet terminal broadcast", () => {
 
     const { window } = ctx;
 
-    // The previous test left 3 agents armed in the fleet. Activate fleet
-    // scope so ContentGrid renders the flat fleet grid — this is the path
-    // where useGridNavigation regressed in #5989.
+    // Self-contained: arm whatever grid panels exist (idempotent if a prior
+    // test already armed them) so this test passes when run in isolation
+    // (e.g., `playwright test --grep "#5989"`).
+    const gridIds = await getGridPanelIds(window);
+    expect(gridIds.length).toBeGreaterThanOrEqual(2);
+    for (const id of gridIds) {
+      await dispatchAction(window, "terminal.arm", { terminalId: id }, { source: "user" });
+    }
+
+    // Activate fleet scope so ContentGrid renders the flat fleet grid —
+    // the path where useGridNavigation regressed in #5989.
     const enter = await dispatchAction(window, "fleet.scope.enter", undefined, { source: "user" });
     expect(enter.ok, enter.error?.message).toBe(true);
 

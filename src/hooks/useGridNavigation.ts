@@ -1,4 +1,4 @@
-import { useMemo, useCallback, useRef, useEffect, useState } from "react";
+import { useMemo, useCallback, useEffect, useState } from "react";
 import { usePanelStore, useLayoutConfigStore, useWorktreeSelectionStore } from "@/store";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { useFleetScopeFlagStore } from "@/store/fleetScopeFlagStore";
@@ -67,10 +67,21 @@ export function useGridNavigation(options: UseGridNavigationOptions = {}) {
     [panelIds, panelsById, activeWorktreeId]
   );
 
-  const directionCache = useRef(new Map<string, string | null>());
-
   // Track container width for responsive layout (mirrors ContentGrid)
   const [gridWidth, setGridWidth] = useState<number | null>(null);
+
+  // Fleet scope projection: must mirror ContentGrid's fleetPanels exactly so
+  // the focus model lines up with what's rendered. Drift here was the cause
+  // of #5989 (Cmd+Alt+Arrow no-op when fleet scope spanned worktrees).
+  const fleetPanels = useMemo(() => {
+    if (!isFleetScopeEnabled) return [];
+    return buildFleetPanels(armOrder, armedIds, panelsById);
+  }, [isFleetScopeEnabled, armOrder, armedIds, panelsById]);
+
+  // Mirrors ContentGrid.isFleetScopeRender — when fleet scope is on but every
+  // armed panel has been moved to dock/trash, ContentGrid falls through to
+  // the normal active-worktree grid; the nav model has to match.
+  const isFleetScopeRender = isFleetScopeEnabled && fleetPanels.length > 0;
 
   useEffect(() => {
     const findAndObserve = () => {
@@ -98,20 +109,11 @@ export function useGridNavigation(options: UseGridNavigationOptions = {}) {
     }
 
     return () => observer.disconnect();
-  }, [containerSelector]);
-
-  // Fleet scope projection: must mirror ContentGrid's fleetPanels exactly so
-  // the focus model lines up with what's rendered. Drift here was the cause
-  // of #5989 (Cmd+Alt+Arrow no-op when fleet scope spanned worktrees).
-  const fleetPanels = useMemo(() => {
-    if (!isFleetScopeEnabled) return [];
-    return buildFleetPanels(armOrder, armedIds, panelsById);
-  }, [isFleetScopeEnabled, armOrder, armedIds, panelsById]);
-
-  // Mirrors ContentGrid.isFleetScopeRender — when fleet scope is on but every
-  // armed panel has been moved to dock/trash, ContentGrid falls through to
-  // the normal active-worktree grid; the nav model has to match.
-  const isFleetScopeRender = isFleetScopeEnabled && fleetPanels.length > 0;
+    // isFleetScopeRender is a dep because ContentGrid swaps the rendered tree
+    // (different React key) when fleet scope toggles, which detaches the old
+    // #panel-grid node. Re-running the effect re-binds the observer to the
+    // new node so gridCols continues to track resizes.
+  }, [containerSelector, isFleetScopeRender]);
 
   // Derive visual grid groups (one cell per tab group), matching ContentGrid.
   // getTabGroups reads tabGroups/panelIds/panelsById from the store via get();
@@ -198,15 +200,19 @@ export function useGridNavigation(options: UseGridNavigationOptions = {}) {
     return buckets;
   }, [gridLayout]);
 
-  useEffect(() => {
-    directionCache.current.clear();
-  }, [gridLayout, rowMajor, columnBuckets]);
+  // Tied structurally to gridLayout: a fresh Map is allocated synchronously
+  // when the layout changes, so a fleet-scope toggle can never serve a stale
+  // cached result on the next keypress.
+  const directionCache = useMemo(() => {
+    void gridLayout;
+    return new Map<string, string | null>();
+  }, [gridLayout]);
 
   const findNearest = useCallback(
     (currentId: string, direction: NavigationDirection): string | null => {
       const cacheKey = `${currentId}:${direction}`;
-      if (directionCache.current.has(cacheKey)) {
-        return directionCache.current.get(cacheKey) ?? null;
+      if (directionCache.has(cacheKey)) {
+        return directionCache.get(cacheKey) ?? null;
       }
 
       if (rowMajor.length === 0) return null;
@@ -251,10 +257,10 @@ export function useGridNavigation(options: UseGridNavigationOptions = {}) {
         }
       }
 
-      directionCache.current.set(cacheKey, result);
+      directionCache.set(cacheKey, result);
       return result;
     },
-    [rowMajor, indexById, columnBuckets, positionById]
+    [rowMajor, indexById, columnBuckets, positionById, directionCache]
   );
 
   // Build a group-aware ordered list matching ContentGrid's visual order.
