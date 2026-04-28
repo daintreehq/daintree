@@ -116,7 +116,7 @@ export function GitHubSettingsTab() {
       logError("Failed to clear GitHub token", error);
       notify({
         type: "error",
-        title: "GitHub token clear failed",
+        title: "GitHub token removal failed",
         message: "Couldn't remove the GitHub token. Try again.",
         priority: "low",
       });

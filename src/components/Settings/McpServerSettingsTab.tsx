@@ -36,6 +36,13 @@ export function McpServerSettingsTab() {
       settled = true;
       setError("Settings load timed out");
       setLoading(false);
+      notify({
+        type: "error",
+        title: "MCP status failed",
+        message: "Loading MCP server status timed out. The settings panel may be out of date.",
+        priority: "low",
+      });
+      logError("MCP status load timed out");
     }, 10_000);
     window.electron.mcpServer
       .getStatus()
