@@ -52,13 +52,22 @@ export function resolveAgentLaunchBaseCommand(
   registryCommand: string,
   detail: AgentCliDetail | undefined
 ): string {
-  const resolvedPath = detail?.state === "ready" ? detail.resolvedPath?.trim() : undefined;
+  const resolvedPath =
+    detail &&
+    detail.state !== "missing" &&
+    detail.state !== "blocked" &&
+    detail.state !== "installed"
+      ? detail.resolvedPath?.trim()
+      : undefined;
   return resolvedPath ? escapeShellArgOptional(resolvedPath) : registryCommand;
 }
 
 async function getCurrentLaunchCliDetail(agentId: string): Promise<AgentCliDetail | undefined> {
   const current = useCliAvailabilityStore.getState().details[agentId];
-  if (current?.state === "ready" && current.resolvedPath?.trim()) {
+  if (
+    (current?.state === "ready" || current?.state === "unauthenticated") &&
+    current.resolvedPath?.trim()
+  ) {
     return current;
   }
 

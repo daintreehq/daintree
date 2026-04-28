@@ -41,7 +41,12 @@ export interface SystemWakePayload {
  *   Distinct from `missing` because the fix is a permissions/allowlist change, not
  *   a reinstall.
  */
-export type AgentAvailabilityState = "missing" | "installed" | "ready" | "blocked";
+export type AgentAvailabilityState =
+  | "missing"
+  | "installed"
+  | "ready"
+  | "blocked"
+  | "unauthenticated";
 
 /** CLI availability status for AI agents */
 export type CliAvailability = Record<AgentId, AgentAvailabilityState>;

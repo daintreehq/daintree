@@ -33,9 +33,13 @@ import {
 import { ChevronDown, PanelBottom, Unplug } from "lucide-react";
 import type { BuiltInAgentId } from "@shared/config/agentIds";
 import type { AgentAvailabilityState, AgentState } from "@shared/types";
-import { isAgentReady, isAgentInstalled } from "../../../shared/utils/agentAvailability";
+import {
+  isAgentLaunchable,
+  isAgentInstalled,
+  isAgentUnauthenticated,
+} from "../../../shared/utils/agentAvailability";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
-import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
+
 import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
 import { useProjectPresetsStore } from "@/store/projectPresetsStore";
 import { usePanelStore } from "@/store/panelStore";
@@ -145,7 +149,6 @@ export function AgentButton({
   const { worktrees } = useWorktrees();
   const displayCombo = useKeybindingDisplay(`agent.${type}`);
   const agentSettings = useAgentSettingsStore((s) => s.settings);
-  const cliDetail = useCliAvailabilityStore((s) => s.details[type]);
   const ccrPresets = useCcrPresetsStore((s) => s.ccrPresetsByAgent[type]);
   const projectPresets = useProjectPresetsStore((s) => s.presetsByAgent[type]);
 
@@ -245,21 +248,21 @@ export function AgentButton({
   const tooltipDetails = config.tooltip ? ` — ${config.tooltip}` : "";
   const shortcut = displayCombo ? ` (${displayCombo})` : "";
   const isLoading = availability === undefined;
-  const isReady = isAgentReady(availability);
+  const isLaunchable = isAgentLaunchable(availability);
   // `installed` now only fires for WSL-capped binaries (launch not wired
   // through wsl.exe yet); all other binary-on-PATH agents reach `ready`.
   // `needsSetup` dims the button and routes clicks to Settings for these
   // genuinely non-launchable cases.
-  const needsSetup = isAgentInstalled(availability) && !isReady;
+  const needsSetup = isAgentInstalled(availability) && !isLaunchable;
   // Surfaced in the tooltip only — launchable agents whose passive auth
   // probe came back empty get a soft cue rather than a disabled look,
   // because the CLI itself will prompt for sign-in on first run.
-  const signInUnconfirmed = isReady && cliDetail?.authConfirmed === false;
+  const signInUnconfirmed = isAgentUnauthenticated(availability);
 
   const presetSegment = activePresetName ? ` · ${activePresetName}` : "";
   const tooltip = isLoading
     ? `Checking ${config.name} CLI availability...`
-    : isReady
+    : isLaunchable
       ? signInUnconfirmed
         ? `Start ${config.name}${presetSegment} — sign-in not detected${shortcut}`
         : `Start ${config.name}${presetSegment}${tooltipDetails}${shortcut}`
@@ -270,14 +273,14 @@ export function AgentButton({
 
   const ariaLabel = isLoading
     ? `Checking ${config.name} availability`
-    : isReady
+    : isLaunchable
       ? `Start ${config.name} Agent`
       : needsSetup
         ? `${config.name} needs setup`
         : `${config.name} CLI not installed`;
 
   const handleClick = () => {
-    if (isReady) {
+    if (isLaunchable) {
       // Defer all preset resolution to useAgentLauncher. Forwarding the
       // resolved savedPresetId explicitly would block the launcher's
       // stale-fallback path: when a worktree-scoped pick references a
@@ -355,7 +358,7 @@ export function AgentButton({
         </ContextMenuTrigger>
         <ContextMenuContent className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto">
           <ContextMenuItem
-            disabled={!isReady}
+            disabled={!isLaunchable}
             onSelect={() =>
               void actionService.dispatch(
                 "agent.launch",
@@ -367,7 +370,7 @@ export function AgentButton({
             Launch {config.name}
           </ContextMenuItem>
           <ContextMenuItem
-            disabled={!isReady}
+            disabled={!isLaunchable}
             onSelect={() =>
               void actionService.dispatch(
                 "agent.launch",
@@ -380,7 +383,9 @@ export function AgentButton({
           </ContextMenuItem>
           {worktrees.length > 0 && (
             <ContextMenuSub>
-              <ContextMenuSubTrigger disabled={!isReady}>Launch in Worktree</ContextMenuSubTrigger>
+              <ContextMenuSubTrigger disabled={!isLaunchable}>
+                Launch in Worktree
+              </ContextMenuSubTrigger>
               <ContextMenuSubContent className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto">
                 <WorktreeMenuItems agentType={type} worktrees={worktrees} />
               </ContextMenuSubContent>
@@ -456,13 +461,13 @@ export function AgentButton({
                 <DropdownMenuTrigger asChild>
                   <Button
                     variant="ghost"
-                    disabled={isLoading || !isReady}
+                    disabled={isLoading || !isLaunchable}
                     data-toolbar-item={dataToolbarItem}
                     onPointerEnter={clearFocusRestoreSuppression}
                     className={cn(
                       "toolbar-agent-button text-daintree-text transition-colors rounded-l-none",
                       "h-8 w-6 p-0 flex items-center justify-center",
-                      !isReady && !isLoading && "opacity-60"
+                      !isLaunchable && !isLoading && "opacity-60"
                     )}
                     aria-label={chevronTooltip}
                   >
@@ -593,7 +598,7 @@ export function AgentButton({
       </ContextMenuTrigger>
       <ContextMenuContent className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto">
         <ContextMenuItem
-          disabled={!isReady}
+          disabled={!isLaunchable}
           onSelect={() =>
             void actionService.dispatch(
               "agent.launch",
@@ -605,7 +610,7 @@ export function AgentButton({
           Launch {config.name}
         </ContextMenuItem>
         <ContextMenuItem
-          disabled={!isReady}
+          disabled={!isLaunchable}
           onSelect={() =>
             void actionService.dispatch(
               "agent.launch",
@@ -618,7 +623,9 @@ export function AgentButton({
         </ContextMenuItem>
         {hasPresets && (
           <ContextMenuSub>
-            <ContextMenuSubTrigger disabled={!isReady}>Launch with Preset</ContextMenuSubTrigger>
+            <ContextMenuSubTrigger disabled={!isLaunchable}>
+              Launch with Preset
+            </ContextMenuSubTrigger>
             <ContextMenuSubContent
               data-testid="context-submenu-content"
               className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto"
@@ -659,7 +666,9 @@ export function AgentButton({
         )}
         {worktrees.length > 0 && (
           <ContextMenuSub>
-            <ContextMenuSubTrigger disabled={!isReady}>Launch in Worktree</ContextMenuSubTrigger>
+            <ContextMenuSubTrigger disabled={!isLaunchable}>
+              Launch in Worktree
+            </ContextMenuSubTrigger>
             <ContextMenuSubContent className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto">
               <WorktreeMenuItems agentType={type} worktrees={worktrees} />
             </ContextMenuSubContent>

@@ -50,7 +50,7 @@ function defaultAvailability(): CliAvailability {
 // v2 evicts stale false-positive `ready` states cached under the pre-#5641
 // npx-cache probe (see CliAvailabilityService.probeNpmGlobal). Bump on any
 // future probe semantics change that could invert a prior verdict.
-const CACHE_STORAGE_KEY = "daintree:cliAvailability:v2";
+const CACHE_STORAGE_KEY = "daintree:cliAvailability:v3";
 // Stale cache is still shown but triggers a synchronous refresh on init.
 const CACHE_STALE_AFTER_MS = 24 * 60 * 60 * 1000; // 24h
 // Short-window throttle for mid-session refreshes (tray-open, visibility,
@@ -63,6 +63,7 @@ const VALID_STATES: ReadonlySet<AgentAvailabilityState> = new Set<AgentAvailabil
   "installed",
   "missing",
   "blocked",
+  "unauthenticated",
 ]);
 
 interface PersistedCache {

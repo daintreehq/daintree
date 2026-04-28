@@ -12,7 +12,11 @@ import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import { cliAvailabilityClient } from "@/clients";
 import { logError } from "@/utils/logger";
 import type { CliAvailability } from "@shared/types";
-import { isAgentInstalled, isAgentReady } from "../../../shared/utils/agentAvailability";
+import {
+  isAgentInstalled,
+  isAgentReady,
+  isAgentLaunchable,
+} from "../../../shared/utils/agentAvailability";
 import { Sparkles, ChevronLeft, ChevronRight, ArrowRight, Check, Sun, Moon } from "lucide-react";
 import { AnimatePresence, motion, useReducedMotion, type Variants } from "framer-motion";
 import { Sprout } from "@/components/icons";
@@ -453,7 +457,7 @@ export function AgentSetupWizard({
   }, []);
 
   const installedAgents = useMemo(
-    () => AGENT_ORDER.filter((id) => isAgentReady(state.availability[id])),
+    () => AGENT_ORDER.filter((id) => isAgentLaunchable(state.availability[id])),
     [state.availability]
   );
 

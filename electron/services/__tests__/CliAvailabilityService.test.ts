@@ -101,25 +101,24 @@ describe("CliAvailabilityService", () => {
   });
 
   describe("checkAvailability", () => {
-    it("returns 'ready' when binary found even when no auth file exists (decoupled from auth)", async () => {
+    it("returns 'unauthenticated' when binary found but no auth file exists (decoupled from auth)", async () => {
       // Mock all CLIs as available (binary found)
       mockedExecFileSync.mockImplementation(() => Buffer.from(""));
 
       const result = await service.checkAvailability();
 
-      // Binary-on-PATH is sufficient for "ready"; auth discovery populates
-      // `detail.authConfirmed` but never blocks launch (see #5483).
+      // Binary-on-PATH without auth is now `unauthenticated`, not `ready`.
+      // The CLI is still launchable — auth discovery populates
+      // `detail.authConfirmed` but the state signalled is distinct so
+      // the UI can show a "Login required" nudge.
       for (const state of Object.values(result)) {
-        expect(state).toBe("ready");
+        expect(state).toBe("unauthenticated");
       }
 
       const details = service.getDetails();
       expect(details).not.toBeNull();
-      // All built-in agents ship with an authCheck config, so without any
-      // auth file or env var they surface `authConfirmed: false` for the
-      // onboarding nudge while still being launchable.
       for (const detail of Object.values(details!)) {
-        expect(detail?.state).toBe("ready");
+        expect(detail?.state).toBe("unauthenticated");
         expect(detail?.authConfirmed).toBe(false);
       }
 
@@ -233,7 +232,7 @@ describe("CliAvailabilityService", () => {
 
       const result = await service.checkAvailability();
 
-      expect(result.claude).toBe("ready");
+      expect(result.claude).toBe("unauthenticated");
       expect(service.getDetails()?.claude?.resolvedPath).toBe("/tmp/daintree-fake-bin/claude");
       expect(mockedExecFileSync).not.toHaveBeenCalledWith("which", ["claude"], expect.any(Object));
     });
@@ -456,7 +455,7 @@ describe("CliAvailabilityService", () => {
       const result = await service.checkAvailability();
       // Binary on PATH is sufficient for `ready`; the missing credential
       // surfaces as `authConfirmed: false` for onboarding UI.
-      expect(result.opencode).toBe("ready");
+      expect(result.opencode).toBe("unauthenticated");
       expect(service.getDetails()!.opencode?.authConfirmed).toBe(false);
     });
 
@@ -507,7 +506,7 @@ describe("CliAvailabilityService", () => {
       expect(cached).not.toBeNull();
       // All agents should have some state (not null)
       for (const state of Object.values(cached!)) {
-        expect(["missing", "installed", "ready", "blocked"]).toContain(state);
+        expect(["missing", "installed", "ready", "blocked", "unauthenticated"]).toContain(state);
       }
     });
   });
@@ -552,7 +551,7 @@ describe("CliAvailabilityService", () => {
       const result = await freshService.refresh();
 
       for (const state of Object.values(result)) {
-        expect(["missing", "installed", "ready", "blocked"]).toContain(state);
+        expect(["missing", "installed", "ready", "blocked", "unauthenticated"]).toContain(state);
       }
       expect(freshService.getAvailability()).toEqual(result);
     });
@@ -631,9 +630,8 @@ describe("CliAvailabilityService", () => {
 
       const result = await service.checkAvailability();
 
-      // Binary on PATH is now always `ready`; the missing SSO token cache
-      // surfaces as `authConfirmed: false` for the setup nudge.
-      expect(result.kiro).toBe("ready");
+      // Binary on PATH + no credential detected → `unauthenticated`.
+      expect(result.kiro).toBe("unauthenticated");
       expect(service.getDetails()!.kiro?.authConfirmed).toBe(false);
 
       const probedPaths = mockedAccess.mock.calls.map((call) => String(call[0]));
@@ -683,7 +681,7 @@ describe("CliAvailabilityService", () => {
       // Binary on PATH is launchable regardless of auth; keychain-auth users
       // still reach `ready` and see `authConfirmed: false` until the CLI
       // prompts them to sign in.
-      expect(result.copilot).toBe("ready");
+      expect(result.copilot).toBe("unauthenticated");
       expect(service.getDetails()!.copilot?.authConfirmed).toBe(false);
 
       const probedPaths = mockedAccess.mock.calls.map((call) => String(call[0]));
@@ -721,8 +719,8 @@ describe("CliAvailabilityService", () => {
       });
 
       const result = await service.checkAvailability();
-      // Binary on PATH = ready; authConfirmed: false drives the nudge.
-      expect(result.copilot).toBe("ready");
+      // Binary on PATH, no auth detected → `unauthenticated`.
+      expect(result.copilot).toBe("unauthenticated");
       expect(service.getDetails()!.copilot?.authConfirmed).toBe(false);
 
       const copilotLogs = consoleLogSpy.mock.calls.filter((call: unknown[]) =>
@@ -803,8 +801,8 @@ describe("CliAvailabilityService", () => {
         await vi.advanceTimersByTimeAsync(4_000);
         const result = await checkPromise;
 
-        // Binary found, auth inconclusive due to timeout → ready + authConfirmed: false.
-        expect(result.copilot).toBe("ready");
+        // Binary found, auth inconclusive due to timeout → unauthenticated.
+        expect(result.copilot).toBe("unauthenticated");
         expect(service.getDetails()!.copilot?.authConfirmed).toBe(false);
 
         const copilotLogs = consoleLogSpy.mock.calls.filter((call: unknown[]) =>
@@ -943,10 +941,10 @@ describe("CliAvailabilityService", () => {
       const result = await service.checkAvailability();
       // Binary discovered via native path → "ready" (auth not a launch gate).
       // The missing auth file surfaces as `authConfirmed: false` in the detail.
-      expect(result.claude).toBe("ready");
+      expect(result.claude).toBe("unauthenticated");
 
       const details = service.getDetails();
-      expect(details!.claude?.state).toBe("ready");
+      expect(details!.claude?.state).toBe("unauthenticated");
       expect(details!.claude?.resolvedPath).toBe(claudeNative);
       expect(details!.claude?.via).toBe("native");
       expect(details!.claude?.authConfirmed).toBe(false);
@@ -1055,10 +1053,10 @@ describe("CliAvailabilityService", () => {
       });
 
       const result = await service.checkAvailability();
-      expect(result.gemini).toBe("ready");
+      expect(result.gemini).toBe("unauthenticated");
 
       const details = service.getDetails();
-      expect(details!.gemini?.state).toBe("ready");
+      expect(details!.gemini?.state).toBe("unauthenticated");
       expect(details!.gemini?.via).toBe("npm-global");
       expect(details!.gemini?.resolvedPath).toBe(geminiShim);
 
@@ -1144,7 +1142,7 @@ describe("CliAvailabilityService", () => {
         });
 
         const result = await service.checkAvailability();
-        expect(result.gemini).toBe("ready");
+        expect(result.gemini).toBe("unauthenticated");
 
         const details = service.getDetails();
         expect(details!.gemini?.via).toBe("npm-global");
@@ -1255,7 +1253,7 @@ describe("CliAvailabilityService", () => {
       });
 
       const result = await service.checkAvailability();
-      expect(result.cursor).toBe("ready");
+      expect(result.cursor).toBe("unauthenticated");
 
       const details = service.getDetails();
       expect(details!.cursor?.via).toBe("native");
@@ -1277,7 +1275,7 @@ describe("CliAvailabilityService", () => {
       });
 
       const result = await service.checkAvailability();
-      expect(result.cursor).toBe("ready");
+      expect(result.cursor).toBe("unauthenticated");
 
       const details = service.getDetails();
       expect(details!.cursor?.resolvedPath).toBe(appBundleNative);
@@ -1299,7 +1297,7 @@ describe("CliAvailabilityService", () => {
       });
 
       const result = await service.checkAvailability();
-      expect(result.opencode).toBe("ready");
+      expect(result.opencode).toBe("unauthenticated");
 
       const details = service.getDetails();
       expect(details!.opencode?.via).toBe("native");

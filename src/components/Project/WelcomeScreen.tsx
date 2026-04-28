@@ -27,7 +27,7 @@ import { CHECKLIST_ITEMS } from "@/components/Onboarding/checklistItems";
 import { useAgentDiscoveryOnboarding } from "@/hooks/app/useAgentDiscoveryOnboarding";
 import { getAgentConfig } from "@/config/agents";
 import { BUILT_IN_AGENT_IDS, type BuiltInAgentId } from "@shared/config/agentIds";
-import { isAgentReady } from "../../../shared/utils/agentAvailability";
+import { isAgentLaunchable } from "../../../shared/utils/agentAvailability";
 import { isAgentPinned } from "../../../shared/utils/agentPinned";
 import type { GettingStartedChecklistState } from "@/hooks/app/useGettingStartedChecklist";
 
@@ -307,7 +307,7 @@ function AgentWelcomeCard() {
   const [pinError, setPinError] = useState(false);
 
   const readyAgentIds = useMemo<BuiltInAgentId[]>(() => {
-    return BUILT_IN_AGENT_IDS.filter((id) => isAgentReady(availability?.[id]));
+    return BUILT_IN_AGENT_IDS.filter((id) => isAgentLaunchable(availability?.[id]));
   }, [availability]);
 
   const hasNoPinnedAgents = useMemo(() => {

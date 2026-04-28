@@ -1,7 +1,11 @@
 import type { ComponentType, ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import { AGENT_DESCRIPTIONS, getAgentConfig, type AgentIconProps } from "@/config/agents";
-import { isAgentInstalled, isAgentBlocked } from "@shared/utils/agentAvailability";
+import {
+  isAgentInstalled,
+  isAgentBlocked,
+  isAgentUnauthenticated,
+} from "@shared/utils/agentAvailability";
 import type { AgentAvailabilityState, AgentCliDetail } from "@shared/types";
 import { Button } from "@/components/ui/button";
 import { RefreshCw, ExternalLink } from "lucide-react";
@@ -200,9 +204,10 @@ export function AgentInstallSection({
   // section (as "Authentication") so users see the sign-in cue and install
   // docs. `undefined` means no auth probe applies — hide the section when
   // availability is `ready`.
-  const authMissing = availability === "ready" && detail?.authConfirmed === false;
+  const authMissing = isAgentUnauthenticated(availability);
 
   // "ready" + confirmed-or-no-probe hides the whole install section.
+  // "unauthenticated" keeps it visible for the auth nudge.
   // "blocked" keeps it visible so the user gets actionable info (allowlist
   // guidance, resolved path) — the binary exists, reinstall instructions
   // would be misleading, but we do want to show why it isn't runnable and

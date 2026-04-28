@@ -46,7 +46,7 @@ import { useAgentDiscoveryOnboarding } from "@/hooks/app/useAgentDiscoveryOnboar
 import { BUILT_IN_AGENT_IDS, type BuiltInAgentId } from "@shared/config/agentIds";
 import type { CliAvailability, AgentState } from "@shared/types";
 import { resolveEffectivePresetId } from "@shared/types";
-import { isAgentReady, isAgentInstalled } from "../../../shared/utils/agentAvailability";
+import { isAgentLaunchable, isAgentInstalled } from "../../../shared/utils/agentAvailability";
 import { isAgentPinned } from "../../../shared/utils/agentPinned";
 import {
   getDominantAgentState,
@@ -358,7 +358,7 @@ export function AgentTrayButton({
   }, [panelsById, panelIds, activeWorktreeId]);
 
   const readyAgentIds = useMemo(() => {
-    return BUILT_IN_AGENT_IDS.filter((id) => isAgentReady(agentAvailability?.[id]));
+    return BUILT_IN_AGENT_IDS.filter((id) => isAgentLaunchable(agentAvailability?.[id]));
   }, [agentAvailability]);
 
   const hasNoPinnedAgents = useMemo(() => {
@@ -416,17 +416,15 @@ export function AgentTrayButton({
       if (!row) continue;
 
       const state = agentAvailability?.[id];
-      if (isAgentReady(state)) {
+      if (isAgentLaunchable(state)) {
         // Launchable. Passive auth discovery (`authConfirmed: false`) never
         // moves an agent out of Launch — clicking starts the CLI, which
         // prompts for sign-in on first run. The decoupling goal of
         // #5483 requires this path to stay hot.
         launchable.push(row);
       } else if (isAgentInstalled(state)) {
-        // Reached only for the WSL `installed` cap (direct launch isn't
-        // wired through wsl.exe yet) and any future non-launchable
-        // installed state. These belong in "Needs Setup" — routing to
-        // Settings gives the user actionable install docs.
+        // Reached for WSL `installed`, blocked agents, and any future
+        // non-launchable installed state.
         needsSetup.push(row);
       }
       // Always build a fallback row so we can offer discovery when

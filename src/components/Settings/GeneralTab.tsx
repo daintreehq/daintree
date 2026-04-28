@@ -31,6 +31,7 @@ import {
   isAgentInstalled,
   isAgentReady,
   isAgentBlocked,
+  isAgentUnauthenticated,
 } from "../../../shared/utils/agentAvailability";
 import { usePreferencesStore } from "@/store";
 import { keybindingService } from "@/services/KeybindingService";
@@ -497,17 +498,26 @@ export function GeneralTab({
                       const config = getAgentConfig(id);
                       const name = config?.name ?? id;
                       const ready = isAgentReady(cliAvailability[id]);
+                      const unauthenticated = isAgentUnauthenticated(cliAvailability[id]);
                       const blocked = isAgentBlocked(cliAvailability[id]);
                       // A blocked agent is installed but can't run — show it
                       // distinctly from the authentication-needed case so the
                       // user doesn't waste time re-authenticating a binary
                       // that an endpoint security tool is blocking.
-                      const statusLabel = blocked ? "Blocked" : ready ? "Ready" : "Needs setup";
+                      const statusLabel = blocked
+                        ? "Blocked"
+                        : unauthenticated
+                          ? "Login required"
+                          : ready
+                            ? "Ready"
+                            : "Needs setup";
                       const statusClass = blocked
                         ? "text-status-warning"
-                        : ready
-                          ? "text-status-success"
-                          : "text-status-warning";
+                        : unauthenticated
+                          ? "text-status-warning"
+                          : ready
+                            ? "text-status-success"
+                            : "text-status-warning";
 
                       return (
                         <button

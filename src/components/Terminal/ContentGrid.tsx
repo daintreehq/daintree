@@ -16,7 +16,7 @@ import {
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { useFleetScopeFlagStore } from "@/store/fleetScopeFlagStore";
 import { useProjectStore } from "@/store/projectStore";
-import { isAgentReady } from "../../../shared/utils/agentAvailability";
+import { isAgentLaunchable } from "../../../shared/utils/agentAvailability";
 import { computeGridCanLaunch, computeGridSelectedAgentIds } from "./contentGridAgentFilter";
 import { buildFleetPanels } from "./contentGridFleetPanels";
 import { GridPanel } from "./GridPanel";
@@ -203,7 +203,7 @@ function RotatingTip() {
     () =>
       TIPS.filter(
         (tip) =>
-          !tip.requiredAgents || tip.requiredAgents.some((a) => isAgentReady(availability[a]))
+          !tip.requiredAgents || tip.requiredAgents.some((a) => isAgentLaunchable(availability[a]))
       ),
     [availability]
   );

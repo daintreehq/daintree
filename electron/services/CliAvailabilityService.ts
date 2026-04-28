@@ -215,18 +215,20 @@ export class CliAvailabilityService {
     }
 
     // Binary found on PATH (or via native/npx) = launchable. Auth discovery
-    // runs in parallel only to populate `authConfirmed` for onboarding UI;
-    // it never gates the state. Agents without an `authCheck` config leave
-    // `authConfirmed` undefined so consumers can distinguish "no check
-    // applicable" from "check ran, nothing found".
+    // runs in parallel only to populate `authConfirmed` for onboarding UI.
+    // When auth discovery explicitly returns false (credential check ran and
+    // found nothing), classify as `unauthenticated` — the binary exists but
+    // will require login on first launch. The CLI handles auth at runtime.
     const authConfirmed = config.authCheck
       ? await this.checkAuth(config.name, config.authCheck)
       : undefined;
 
+    const state: AgentAvailabilityState = authConfirmed === false ? "unauthenticated" : "ready";
+
     return {
-      state: "ready",
+      state,
       detail: {
-        state: "ready",
+        state,
         resolvedPath: probe.path,
         via: probe.via,
         authConfirmed,

@@ -81,14 +81,14 @@ describe("AgentInstallSection tri-state rendering", () => {
     expect(container.textContent).toBe("");
   });
 
-  it("renders the Authentication header when ready and authConfirmed is false", () => {
+  it("renders the Authentication header when state is unauthenticated", () => {
     const detail: AgentCliDetail = {
-      state: "ready",
+      state: "unauthenticated",
       resolvedPath: "/usr/local/bin/claude",
       via: "which",
       authConfirmed: false,
     };
-    const { container } = renderSection({ availability: "ready", detail });
+    const { container } = renderSection({ availability: "unauthenticated", detail });
     expect(container.textContent).toContain("Authentication");
     expect(container.textContent).toContain("not signed in");
   });

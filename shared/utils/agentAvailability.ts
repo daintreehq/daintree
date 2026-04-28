@@ -13,7 +13,19 @@ export function isAgentReady(state: AgentAvailabilityState | undefined): boolean
  * alongside truly uninstalled agents.
  */
 export function isAgentInstalled(state: AgentAvailabilityState | undefined): boolean {
-  return state === "installed" || state === "ready" || state === "blocked";
+  return (
+    state === "installed" || state === "ready" || state === "blocked" || state === "unauthenticated"
+  );
+}
+
+/** True when the binary is on PATH but no credentials were detected. */
+export function isAgentUnauthenticated(state: AgentAvailabilityState | undefined): boolean {
+  return state === "unauthenticated";
+}
+
+/** True when the binary can be launched (CLI handles auth at runtime). */
+export function isAgentLaunchable(state: AgentAvailabilityState | undefined): boolean {
+  return state === "ready" || state === "unauthenticated";
 }
 
 /**

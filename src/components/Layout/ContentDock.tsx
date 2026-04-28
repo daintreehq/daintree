@@ -45,7 +45,7 @@ import {
 } from "@/components/ui/context-menu";
 
 import { getAgentConfig, getAgentIds } from "@/config/agents";
-import { isAgentInstalled, isAgentReady } from "@shared/utils/agentAvailability";
+import { isAgentInstalled, isAgentLaunchable } from "@shared/utils/agentAvailability";
 import { useHelpPanelStore } from "@/store/helpPanelStore";
 import { buildDockRenderItems, type DockRenderItem } from "./dockRenderItems";
 import type { DockDensity } from "@/store/preferencesStore";
@@ -126,7 +126,7 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
           name: config?.name ?? id,
           icon: config?.icon,
           brandColor: config?.color,
-          isEnabled: isAgentReady(agentAvailability?.[id]),
+          isEnabled: isAgentLaunchable(agentAvailability?.[id]),
         };
       });
   }, [agentAvailability, agentSettings]);
