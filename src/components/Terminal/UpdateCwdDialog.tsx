@@ -3,6 +3,7 @@ import type { KeyboardEvent } from "react";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { Button } from "@/components/ui/button";
 import { FolderOpen, AlertCircle } from "lucide-react";
+import { logError } from "@/utils/logger";
 import { systemClient } from "@/clients/systemClient";
 import { usePanelStore } from "@/store/panelStore";
 
@@ -55,7 +56,7 @@ export function UpdateCwdDialog({ isOpen, terminalId, currentCwd, onClose }: Upd
       onClose();
     } catch (error) {
       setValidationError("Could not restart terminal. Please try again.");
-      console.error("Failed to update CWD and restart:", error);
+      logError("Failed to update CWD and restart", error);
     } finally {
       setValidating(false);
     }

@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { actionService } from "@/services/ActionService";
+import { logError } from "@/utils/logger";
 import type { ActionId } from "@shared/types/actions";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 
@@ -18,7 +19,7 @@ export function useMcpBridge(): void {
         const manifest = actionService.list();
         window.electron.mcpBridge.sendGetManifestResponse(requestId, manifest);
       } catch (err) {
-        console.error("[MCP Bridge] Failed to build manifest:", err);
+        logError("[MCP Bridge] Failed to build manifest", err);
         window.electron.mcpBridge.sendGetManifestResponse(requestId, []);
       }
     });

@@ -4,6 +4,7 @@ import { cn } from "@/lib/utils";
 import { BUILT_IN_APP_SCHEMES } from "@/config/appColorSchemes";
 import { injectSchemeToDOM, useAppThemeStore } from "@/store/appThemeStore";
 import { useThemeBrowserStore } from "@/store/themeBrowserStore";
+import { logError } from "@/utils/logger";
 import { appThemeClient } from "@/clients/appThemeClient";
 import { runThemeReveal } from "@/lib/appThemeViewTransition";
 import {
@@ -190,7 +191,9 @@ export function ThemeBrowser() {
 
     if (followSystem) {
       setFollowSystem(false);
-      appThemeClient.setFollowSystem(false).catch(console.error);
+      appThemeClient
+        .setFollowSystem(false)
+        .catch((err) => logError("Failed to clear follow system", err));
     }
 
     // Clear preview state BEFORE the View Transition fires. Otherwise the
@@ -212,7 +215,7 @@ export function ThemeBrowser() {
       await appThemeClient.setColorScheme(targetId);
       await appThemeClient.setRecentSchemeIds(useAppThemeStore.getState().recentSchemeIds);
     } catch (error) {
-      console.error("Failed to persist app theme:", error);
+      logError("Failed to persist app theme", error);
     }
   }, [
     close,

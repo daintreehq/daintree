@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useShallow } from "zustand/react/shallow";
 import type { WorktreeState } from "../../types";
 import type { GitHubIssue } from "@shared/types/github";
+import { logError } from "@/utils/logger";
 import { useWorktreeTerminals } from "../../hooks/useWorktreeTerminals";
 
 import { useDroppable } from "@dnd-kit/core";
@@ -355,7 +356,7 @@ export const WorktreeCard = React.memo(function WorktreeCard({
         await errorsClient.retry(errorId, action, args);
         removeError(errorId);
       } catch (error) {
-        console.error("Error retry failed:", error);
+        logError("Error retry failed", error);
       }
     },
     [removeError]

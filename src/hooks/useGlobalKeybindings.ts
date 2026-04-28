@@ -1,6 +1,7 @@
 import { useEffect, useSyncExternalStore } from "react";
 import { keybindingService, normalizeKeyForBinding } from "../services/KeybindingService";
 import { actionService } from "../services/ActionService";
+import { logError } from "@/utils/logger";
 import { openPanelContextMenu } from "../lib/panelContextMenu";
 import { usePanelStore } from "../store";
 
@@ -96,9 +97,10 @@ export function useGlobalKeybindings(enabled: boolean = true): void {
             )
             .then((dispatchResult) => {
               if (!dispatchResult.ok) {
-                console.error(
-                  `[GlobalKeybinding] Action "${result.match!.actionId}" failed:`,
-                  dispatchResult.error
+                logError(
+                  `[GlobalKeybinding] Action "${result.match!.actionId}" failed`,
+                  undefined,
+                  { error: dispatchResult.error }
                 );
               }
             });

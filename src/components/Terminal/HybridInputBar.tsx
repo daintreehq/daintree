@@ -13,6 +13,7 @@ import { EditorView, drawSelection } from "@codemirror/view";
 import { EditorSelection, EditorState } from "@codemirror/state";
 import type { BuiltInAgentId } from "@shared/config/agentIds";
 import type { AgentState } from "@/types";
+import { logError } from "@/utils/logger";
 import { getAgentConfig } from "@/config/agents";
 import { cn } from "@/lib/utils";
 import { useFileAutocomplete } from "@/hooks/useFileAutocomplete";
@@ -891,7 +892,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         if (result.success && result.prompt) {
           sendText(result.prompt);
         } else if (!result.success && result.error) {
-          console.error("[HybridInputBar] Command execution failed:", result.error);
+          logError("[HybridInputBar] Command execution failed", result.error);
         }
       },
       [sendText]

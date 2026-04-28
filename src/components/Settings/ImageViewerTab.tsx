@@ -3,6 +3,7 @@ import { Image } from "lucide-react";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
 import { useProjectStore } from "@/store";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { logError } from "@/utils/logger";
 
 type ImageViewerMode = "os" | "custom";
 
@@ -50,7 +51,7 @@ export function ImageViewerTab() {
       })
       .catch((err) => {
         if (cancelled || !isMountedRef.current) return;
-        console.error("[ImageViewerTab] Failed to load settings:", err);
+        logError("[ImageViewerTab] Failed to load settings", err);
       })
       .finally(() => {
         clearTimeout(timer);

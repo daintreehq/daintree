@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import { useNotificationStore } from "@/store/notificationStore";
+import { logError } from "@/utils/logger";
 import { notify } from "@/lib/notify";
 
 const AVAILABLE_HINT = 'Use "Check for Updates..." to check again.';
@@ -75,7 +76,7 @@ export function useUpdateListener(suppressToasts = false): void {
         onDismiss: () => {
           void window.electron?.update
             ?.notifyDismiss?.(version)
-            ?.catch((err) => console.error("[useUpdateListener] notifyDismiss failed:", err));
+            ?.catch((err) => logError("[useUpdateListener] notifyDismiss failed", err));
         },
       });
     }
@@ -116,7 +117,7 @@ export function useUpdateListener(suppressToasts = false): void {
         onDismiss: () => {
           void window.electron?.update
             ?.notifyDismiss?.(version)
-            ?.catch((err) => console.error("[useUpdateListener] notifyDismiss failed:", err));
+            ?.catch((err) => logError("[useUpdateListener] notifyDismiss failed", err));
         },
       });
     });

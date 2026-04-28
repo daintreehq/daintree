@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { hydrateAppState, type HydrationOptions } from "../../utils/stateHydration";
 import { isElectronAvailable } from "../useElectron";
 import { setStartupQuietPeriod } from "@/lib/notify";
+import { logError } from "@/utils/logger";
 import { usePanelStore } from "@/store";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useRecipeStore } from "@/store/recipeStore";
@@ -72,7 +73,7 @@ export function useAppHydration(enabled = true) {
           }
         }
       } catch (error) {
-        console.error("Failed to restore app state:", error);
+        logError("Failed to restore app state", error);
       } finally {
         setIsStateLoaded(true);
         setStartupQuietPeriod(5000);

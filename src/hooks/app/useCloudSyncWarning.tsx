@@ -3,6 +3,7 @@ import { useProjectStore } from "@/store";
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 import { useProjectSettings } from "../useProjectSettings";
 import { notify } from "@/lib/notify";
+import { logError } from "@/utils/logger";
 import { useNotificationStore } from "@/store/notificationStore";
 import { detectCloudSyncService, type Platform } from "@/utils/cloudSyncDetection";
 import { isMac, isLinux } from "@/lib/platform";
@@ -64,7 +65,7 @@ export function useCloudSyncWarning(homeDir?: string) {
               });
               removeNotification(notificationId);
             } catch (err) {
-              console.error("Failed to save cloud sync warning preference:", err);
+              logError("Failed to save cloud sync warning preference", err);
               notify({
                 type: "error",
                 title: "Failed to save preference",

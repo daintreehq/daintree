@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import { logError } from "@/utils/logger";
 import { useTerminalFontStore, useScreenReaderStore } from "@/store";
 import { useTerminalColorSchemeStore } from "@/store/terminalColorSchemeStore";
 import { useAppThemeStore } from "@/store/appThemeStore";
@@ -59,7 +60,7 @@ export function useTerminalConfig() {
         }
       })
       .catch((error) => {
-        console.error("Failed to load terminal config:", error);
+        logError("Failed to load terminal config", error);
       });
 
     return () => {

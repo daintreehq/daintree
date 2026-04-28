@@ -9,6 +9,7 @@ import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { TerminalRecipe, Worktree } from "@/types";
+import { logError } from "@/utils/logger";
 import { isInRepoRecipeId } from "@shared/utils/recipeFilename";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 
@@ -52,7 +53,7 @@ export function RecipesTab({
     if (isOpen && !hasLoadedRecipes.current && !recipesLoading && projectId) {
       hasLoadedRecipes.current = true;
       loadRecipes(projectId).catch((err) => {
-        console.error("Failed to load recipes:", err);
+        logError("Failed to load recipes", err);
       });
     }
   }, [isOpen, recipesLoading, loadRecipes, projectId]);
@@ -114,7 +115,7 @@ export function RecipesTab({
       }
       setRecipeToDelete(null);
     } catch (err) {
-      console.error("Failed to delete recipe:", err);
+      logError("Failed to delete recipe", err);
       setDeleteError(formatErrorMessage(err, "Failed to delete recipe"));
     }
   };
@@ -135,7 +136,7 @@ export function RecipesTab({
           exportTimeoutRef.current = null;
         }, 2000);
       } catch (err) {
-        console.error("Failed to copy to clipboard:", err);
+        logError("Failed to copy to clipboard", err);
         setExportError(formatErrorMessage(err, "Failed to copy to clipboard"));
       }
     }

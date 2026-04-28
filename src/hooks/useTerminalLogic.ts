@@ -1,6 +1,7 @@
 import { useState, useCallback, useEffect } from "react";
 import type { RetryAction } from "@/store/errorStore";
 import { useErrorStore } from "@/store/errorStore";
+import { logError } from "@/utils/logger";
 import { errorsClient } from "@/clients";
 
 interface UseTerminalLogicOptions {
@@ -50,7 +51,7 @@ export function useTerminalLogic({
         await errorsClient.retry(errorId, action, args);
         removeError(errorId);
       } catch (error) {
-        console.error("Error retry failed:", error);
+        logError("Error retry failed", error);
       } finally {
         clearRetryProgress(errorId);
       }

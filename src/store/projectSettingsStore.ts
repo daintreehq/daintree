@@ -2,6 +2,7 @@ import { create, type StateCreator } from "zustand";
 import type { ProjectSettings, RunCommand } from "@shared/types";
 import { projectClient } from "@/clients";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { logError } from "@/utils/logger";
 
 interface ProjectSettingsState {
   /** Cached settings for the current project */
@@ -107,7 +108,7 @@ const createProjectSettingsStore: StateCreator<ProjectSettingsState & ProjectSet
       });
       evictOldestSettings();
     } catch (err) {
-      console.error("Failed to load project settings:", err);
+      logError("Failed to load project settings", err);
 
       // Verify we're still loading for this project
       if (get().projectId !== projectId) {

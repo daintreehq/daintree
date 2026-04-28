@@ -9,6 +9,7 @@ import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { DEFAULT_COPYTREE_FORMAT } from "@/lib/copyTreeFormat";
 import { notify } from "@/lib/notify";
 import { getVisibleWorktreesForCycling } from "@/lib/worktreeCyclingOrder";
+import { logError, logWarn } from "@/utils/logger";
 
 export function registerWorktreeActions(actions: ActionRegistry, callbacks: ActionCallbacks): void {
   // Query action: list all worktrees with metadata
@@ -806,11 +807,11 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
         try {
           const url = new URL(worktree.prUrl);
           if (!["https:", "http:"].includes(url.protocol)) {
-            console.error(`Invalid PR URL protocol: ${url.protocol}`);
+            logWarn(`Invalid PR URL protocol: ${url.protocol}`);
             return;
           }
         } catch (error) {
-          console.error(`Invalid PR URL: ${worktree.prUrl}`, error);
+          logError(`Invalid PR URL: ${worktree.prUrl}`, error);
           return;
         }
 

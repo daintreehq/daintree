@@ -1,5 +1,6 @@
 import React, { useCallback, useMemo, useEffect, useEffectEvent, useRef } from "react";
 import { usePanelStore, type TerminalInstance } from "@/store";
+import { logError } from "@/utils/logger";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
 import { useProjectPresetsStore } from "@/store/projectPresetsStore";
@@ -313,7 +314,7 @@ export const GridTabGroup = React.memo(function GridTabGroup({
       setActiveTab(group.id, newPanelId);
       setFocused(newPanelId);
     } catch (error) {
-      console.error("Failed to add tab:", error);
+      logError("Failed to add tab", error);
     }
   }, [activePanel, group.id, addPanel, addPanelToGroup, setActiveTab, setFocused]);
 

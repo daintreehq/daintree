@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { logError } from "@/utils/logger";
 
 export type FleetScopeMode = "legacy" | "scoped";
 
@@ -31,6 +32,6 @@ async function persistMode(mode: FleetScopeMode): Promise<void> {
     const { appClient } = await import("@/clients");
     await appClient.setState({ fleetScopeMode: mode });
   } catch (error) {
-    console.error("Failed to persist fleet scope mode:", error);
+    logError("Failed to persist fleet scope mode", error);
   }
 }

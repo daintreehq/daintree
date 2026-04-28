@@ -4,6 +4,7 @@ import { debounce } from "@/utils/debounce";
 import { isRendererPerfCaptureEnabled, markRendererPerformance } from "@/utils/performance";
 import { getPanelKindConfig } from "@shared/config/panelKindRegistry";
 import { isSmokeTestTerminalId } from "@shared/utils/smokeTestTerminals";
+import { logError } from "@/utils/logger";
 
 type ProjectClientType = typeof projectClient;
 
@@ -179,7 +180,7 @@ export class PanelPersistence {
       const payloadBytes = collectPerf ? estimatePayloadBytes(transformed) : null;
 
       this.pendingPersist = this.client.setTerminals(projectId, transformed).catch((error) => {
-        console.error("Failed to persist terminals:", error);
+        logError("Failed to persist terminals", error);
         if (collectPerf) {
           const now = typeof performance !== "undefined" ? performance.now() : Date.now();
           markRendererPerformance("persistence_terminals_save", {
@@ -234,7 +235,7 @@ export class PanelPersistence {
       this.pendingTabGroupPersist = this.client
         .setTabGroups(projectId, tabGroups)
         .catch((error) => {
-          console.error("Failed to persist tab groups:", error);
+          logError("Failed to persist tab groups", error);
           if (collectPerf) {
             const now = typeof performance !== "undefined" ? performance.now() : Date.now();
             markRendererPerformance("persistence_tab_groups_save", {

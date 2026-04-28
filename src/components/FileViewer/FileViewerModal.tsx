@@ -13,6 +13,7 @@ import { formatBytes } from "@/lib/formatBytes";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { FileReadErrorCode } from "@shared/types/ipc/files";
 import { sanitizeSvg } from "@shared/utils/svgSanitizer";
+import { logError } from "@/utils/logger";
 
 export interface FileViewerModalProps {
   isOpen: boolean;
@@ -180,7 +181,7 @@ export function FileViewerModal({
         { path: filePath, line: initialLine, col: initialCol },
         { source: "user" }
       )
-      .catch((err) => console.error("[FileViewerModal] openInEditor failed:", err));
+      .catch((err) => logError("[FileViewerModal] openInEditor failed", err));
   }, [filePath, initialLine, initialCol]);
 
   const handleImageError = useCallback(() => {
@@ -191,7 +192,7 @@ export function FileViewerModal({
   const handleOpenInImageViewer = useCallback(() => {
     actionService
       .dispatch("file.openImageViewer", { path: filePath }, { source: "user" })
-      .catch((err) => console.error("[FileViewerModal] openImageViewer failed:", err));
+      .catch((err) => logError("[FileViewerModal] openImageViewer failed", err));
   }, [filePath]);
 
   const handleCopyDiff = useCallback(async () => {

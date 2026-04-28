@@ -2,6 +2,7 @@ import type { Terminal, ILinkProvider, ILink, IBufferRange } from "@xterm/xterm"
 import { systemClient } from "@/clients";
 import * as path from "path-browserify";
 import { actionService } from "@/services/ActionService";
+import { logError } from "@/utils/logger";
 
 interface ResolvedFilePath {
   absolutePath: string;
@@ -153,7 +154,9 @@ class FileLink implements ILink {
           });
         })
         .catch((error) => {
-          console.error("[FileLinksAddon] Failed to open in editor:", this._absolutePath, error);
+          logError("[FileLinksAddon] Failed to open in editor", error, {
+            absolutePath: this._absolutePath,
+          });
         });
     } else {
       actionService
@@ -167,7 +170,9 @@ class FileLink implements ILink {
           return systemClient.openPath(this._absolutePath);
         })
         .catch((error) => {
-          console.error("[FileLinksAddon] Failed to view file:", this._absolutePath, error);
+          logError("[FileLinksAddon] Failed to view file", error, {
+            absolutePath: this._absolutePath,
+          });
         });
     }
   }

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import { cn } from "@/lib/utils";
+import { logError } from "@/utils/logger";
 import { SearchablePalette } from "@/components/ui/SearchablePalette";
 import { PaletteStrip } from "@/components/ui/PaletteStrip";
 import { useSearchablePalette } from "@/hooks/useSearchablePalette";
@@ -150,7 +151,7 @@ export function ThemePalette({ isOpen, onClose }: ThemePaletteProps) {
       committedRef.current = true;
       setSelectedSchemeId(scheme.id);
       appThemeClient.setColorScheme(scheme.id).catch((error) => {
-        console.error("Failed to persist theme selection:", error);
+        logError("Failed to persist theme selection", error);
         useNotificationStore.getState().addNotification({
           type: "error",
           priority: "low",

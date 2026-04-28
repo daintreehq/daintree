@@ -6,6 +6,7 @@ import { editorClient } from "@/clients/editorClient";
 import type { EditorConfig, DiscoveredEditor, KnownEditorId } from "@shared/types/editor";
 import { useProjectStore } from "@/store";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { logError } from "@/utils/logger";
 
 const EDITOR_LABELS: Record<KnownEditorId, string> = {
   vscode: "VS Code",
@@ -76,7 +77,7 @@ export function EditorIntegrationTab() {
       })
       .catch((err) => {
         if (cancelled || !isMountedRef.current) return;
-        console.error("[EditorIntegrationTab] Failed to load config:", err);
+        logError("[EditorIntegrationTab] Failed to load config", err);
       });
     return () => {
       cancelled = true;
@@ -90,7 +91,7 @@ export function EditorIntegrationTab() {
       if (!isMountedRef.current) return;
       setDiscoveredEditors(editors);
     } catch (err) {
-      console.error("[EditorIntegrationTab] Rescan failed:", err);
+      logError("[EditorIntegrationTab] Rescan failed", err);
     } finally {
       if (isMountedRef.current) setIsRescanning(false);
     }

@@ -8,6 +8,7 @@ import { useDiagnosticsStore } from "@/store/diagnosticsStore";
 import { usePortalStore } from "@/store/portalStore";
 import { usePanelStore, type TerminalInstance } from "@/store/panelStore";
 import { useUIStore } from "@/store/uiStore";
+import { logError } from "@/utils/logger";
 
 export function registerPanelActions(actions: ActionRegistry, callbacks: ActionCallbacks): void {
   // Query action: list all panels with metadata
@@ -149,7 +150,7 @@ export function registerPanelActions(actions: ActionRegistry, callbacks: ActionC
       }
       await window.electron.portal.show({ tabId, bounds });
     } catch (error) {
-      console.error("Failed to activate portal tab:", error);
+      logError("Failed to activate portal tab", error);
     }
   };
 
@@ -535,7 +536,7 @@ export function registerPanelActions(actions: ActionRegistry, callbacks: ActionC
           await window.electron.portal.create({ tabId: newTabId, url });
           state.markTabCreated(newTabId);
         } catch (error) {
-          console.error("Failed to create background portal tab:", error);
+          logError("Failed to create background portal tab", error);
           usePortalStore.setState((s) => ({
             tabs: s.tabs.filter((t) => t.id !== newTabId),
           }));
@@ -697,7 +698,7 @@ export function registerPanelActions(actions: ActionRegistry, callbacks: ActionC
         state.markTabCreated(newTabId);
         await window.electron.portal.show({ tabId: newTabId, bounds });
       } catch (error) {
-        console.error("Failed to duplicate portal tab:", error);
+        logError("Failed to duplicate portal tab", error);
         state.closeTab(newTabId);
       }
     },

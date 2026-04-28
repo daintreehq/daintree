@@ -10,6 +10,7 @@ import {
   XCircle,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { logError } from "@/utils/logger";
 import { useNotificationStore, type Notification } from "@/store/notificationStore";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { useShallow } from "zustand/react/shallow";
@@ -69,8 +70,8 @@ function Toast({ notification }: { notification: Notification }) {
       typeof notification.message !== "string" &&
       !notification.inboxMessage
     ) {
-      console.error(
-        "[Toaster] non-string message without inboxMessage — aria-live announcement will be empty."
+      logError(
+        "[Toaster] non-string message without inboxMessage — aria-live announcement will be empty"
       );
     }
     const text =
@@ -105,7 +106,7 @@ function Toast({ notification }: { notification: Notification }) {
     try {
       notification.onDismiss?.();
     } catch (err) {
-      console.error("[Toast] onDismiss handler threw:", err);
+      logError("[Toast] onDismiss handler threw", err);
     }
     dismissNotification(notification.id);
     setIsVisible(false);

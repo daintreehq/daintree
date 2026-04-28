@@ -736,7 +736,8 @@ describe("Toast severity-based dismissal (issue #5859)", () => {
       });
 
       expect(consoleSpy).toHaveBeenCalledWith(
-        expect.stringContaining("[Toaster] non-string message without inboxMessage")
+        expect.stringContaining("[Toaster] non-string message without inboxMessage"),
+        expect.anything()
       );
       consoleSpy.mockRestore();
     });

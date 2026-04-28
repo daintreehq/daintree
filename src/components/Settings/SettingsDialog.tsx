@@ -12,6 +12,7 @@ import {
   useContext,
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
+import { logError } from "@/utils/logger";
 import {
   usePortalStore,
   usePerformanceModeStore,
@@ -322,7 +323,7 @@ function SettingsDialogInner({
         .getVersion()
         .then(setAppVersion)
         .catch((error) => {
-          console.error("Failed to fetch app version:", error);
+          logError("Failed to fetch app version", error);
           setAppVersion("Unavailable");
         });
     }

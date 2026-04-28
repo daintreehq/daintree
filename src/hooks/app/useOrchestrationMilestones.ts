@@ -4,6 +4,7 @@ import { usePanelStore } from "@/store/panelStore";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { useRecipeStore } from "@/store/recipeStore";
 import { notify } from "@/lib/notify";
+import { logError } from "@/utils/logger";
 
 interface MilestoneDefinition {
   id: string;
@@ -209,7 +210,7 @@ export function useOrchestrationMilestones(isStateLoaded: boolean): void {
           window.removeEventListener("daintree:context-injected", onContextInjected)
         );
       })
-      .catch(console.error);
+      .catch((err) => logError("Failed to load milestones", err));
 
     return () => {
       disposed = true;

@@ -1,5 +1,6 @@
 import { useCallback } from "react";
 import { usePanelStore } from "@/store";
+import { logError } from "@/utils/logger";
 import { getTerminalAnimationDuration } from "@/lib/animationUtils";
 import type { PanelLifecycle } from "./usePanelLifecycle";
 
@@ -41,7 +42,7 @@ export function usePanelHandlers({
           try {
             trashPanelGroup(terminalId);
           } catch (error) {
-            console.error("Failed to trash terminal:", error);
+            logError("Failed to trash terminal", error);
           } finally {
             if (lifecycle.mountedRef.current) {
               lifecycle.setIsTrashing(false);

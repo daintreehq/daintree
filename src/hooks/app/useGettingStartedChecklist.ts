@@ -4,6 +4,7 @@ import { useProjectStore } from "@/store/projectStore";
 import { usePanelStore } from "@/store/panelStore";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { notify } from "@/lib/notify";
+import { logError } from "@/utils/logger";
 import type { ChecklistState, ChecklistItemId } from "@shared/types/ipc/maps";
 import { ACTIVE_AGENT_STATES } from "@shared/types/agent";
 import type { TerminalInstance } from "@shared/types/panel";
@@ -129,7 +130,7 @@ export function useGettingStartedChecklist(isStateLoaded: boolean): GettingStart
         setOnboardingCompleted(onboarding.completed);
         setChecklist(checklistState);
       })
-      .catch(console.error);
+      .catch((err) => logError("Failed to load checklist state", err));
   }, [isStateLoaded]);
 
   // Subscribe to main-process checklist pushes. Every active WebContentsView
@@ -218,7 +219,7 @@ export function useGettingStartedChecklist(isStateLoaded: boolean): GettingStart
           .then((state) => {
             setChecklist({ ...state, dismissed: false });
           })
-          .catch(console.error);
+          .catch((err) => logError("Failed to show getting started checklist", err));
       }
     };
     window.addEventListener("daintree:show-getting-started", handleShow);
@@ -236,7 +237,7 @@ export function useGettingStartedChecklist(isStateLoaded: boolean): GettingStart
         // Reconcile after hydration in case stores already have data
         setTimeout(() => reconcileCurrentState(markItem, () => checklistRef.current), 0);
       })
-      .catch(console.error);
+      .catch((err) => logError("Failed to notify onboarding complete", err));
   }, [markItem]);
 
   // Auto-clear celebration after animation completes

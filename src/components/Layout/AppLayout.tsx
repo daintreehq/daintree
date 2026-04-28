@@ -33,6 +33,7 @@ import type { CliAvailability, AgentSettings } from "@shared/types";
 import { useLayoutState } from "@/hooks";
 import type { UseProjectSwitcherPaletteReturn } from "@/hooks";
 import { suppressSidebarResizes } from "@/lib/sidebarToggle";
+import { logError } from "@/utils/logger";
 
 interface AppLayoutProps {
   children?: ReactNode;
@@ -122,7 +123,7 @@ export function AppLayout({
         });
         useFleetScopeFlagStore.getState().hydrate(appState.fleetScopeMode);
       } catch (error) {
-        console.error("Failed to restore app state:", error);
+        logError("Failed to restore app state", error);
       }
     };
     restoreState();
@@ -135,7 +136,7 @@ export function AppLayout({
       try {
         await appClient.setState({ sidebarWidth });
       } catch (error) {
-        console.error("Failed to persist sidebar width:", error);
+        logError("Failed to persist sidebar width", error);
       }
     };
 
@@ -157,7 +158,7 @@ export function AppLayout({
         try {
           await appClient.setState({ focusMode: layout.isFocusMode });
         } catch (error) {
-          console.error("Failed to persist focus mode to global state:", error);
+          logError("Failed to persist focus mode to global state", error);
         }
         return;
       }
@@ -169,7 +170,7 @@ export function AppLayout({
           layout.savedPanelState as PanelState | undefined
         );
       } catch (error) {
-        console.error("Failed to persist focus mode to project state:", error);
+        logError("Failed to persist focus mode to project state", error);
       }
     };
 
@@ -191,14 +192,14 @@ export function AppLayout({
         try {
           await window.electron.project.setFocusMode(currentProject.id, false, undefined);
         } catch (error) {
-          console.error("Failed to clear focus panel state:", error);
+          logError("Failed to clear focus panel state", error);
         }
       } else {
         // Fall back to global state if no project
         try {
           await appClient.setState({ focusPanelState: undefined });
         } catch (error) {
-          console.error("Failed to clear focus panel state:", error);
+          logError("Failed to clear focus panel state", error);
         }
       }
     } else {
@@ -212,14 +213,14 @@ export function AppLayout({
         try {
           await window.electron.project.setFocusMode(currentProject.id, true, currentPanelState);
         } catch (error) {
-          console.error("Failed to persist focus panel state:", error);
+          logError("Failed to persist focus panel state", error);
         }
       } else {
         // Fall back to global state if no project
         try {
           await appClient.setState({ focusPanelState: currentPanelState });
         } catch (error) {
-          console.error("Failed to persist focus panel state:", error);
+          logError("Failed to persist focus panel state", error);
         }
       }
     }

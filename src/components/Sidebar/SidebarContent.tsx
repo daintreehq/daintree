@@ -63,6 +63,7 @@ import type { UseAgentLauncherReturn } from "@/hooks/useAgentLauncher";
 import { RecipeEditor } from "@/components/TerminalRecipe/RecipeEditor";
 import { RecipeManager } from "@/components/TerminalRecipe/RecipeManager";
 import { isAgentTerminal } from "@/utils/terminalType";
+import { logError } from "@/utils/logger";
 
 export function preloadNewWorktreeDialog() {
   return import("@/components/Worktree/NewWorktreeDialog");
@@ -401,7 +402,10 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   const [homeDir, setHomeDir] = useState<string | undefined>(undefined);
 
   useEffect(() => {
-    systemClient.getHomeDir().then(setHomeDir).catch(console.error);
+    systemClient
+      .getHomeDir()
+      .then(setHomeDir)
+      .catch((err) => logError("Failed to get home dir", err));
   }, []);
 
   const handleRefreshAll = useCallback(() => {

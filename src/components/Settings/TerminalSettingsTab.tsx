@@ -26,6 +26,7 @@ import { SettingsSwitchCard } from "@/components/Settings/SettingsSwitchCard";
 import { SettingsNumberInput } from "@/components/Settings/SettingsNumberInput";
 import { SettingsSubtabBar } from "./SettingsSubtabBar";
 import type { SettingsSubtabItem } from "./SettingsSubtabBar";
+import { logError } from "@/utils/logger";
 import {
   useLayoutConfigStore,
   usePerformanceModeStore,
@@ -194,7 +195,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
         throw new Error(result.error.message);
       }
     } catch (error) {
-      console.error("Failed to persist scrollback setting:", error);
+      logError("Failed to persist scrollback setting", error);
     }
   };
 
@@ -221,7 +222,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
         throw new Error(result.error.message);
       }
     } catch (error) {
-      console.error("Failed to persist performance mode setting:", error);
+      logError("Failed to persist performance mode setting", error);
     }
   };
 
@@ -237,7 +238,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
         throw new Error(result.error.message);
       }
     } catch (error) {
-      console.error("Failed to persist hybrid input setting:", error);
+      logError("Failed to persist hybrid input setting", error);
     }
   };
 
@@ -253,7 +254,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
         throw new Error(result.error.message);
       }
     } catch (error) {
-      console.error("Failed to persist hybrid input focus setting:", error);
+      logError("Failed to persist hybrid input focus setting", error);
     }
   };
 
@@ -268,7 +269,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
         throw new Error(result.error.message);
       }
     } catch (error) {
-      console.error("Failed to persist screen reader mode:", error);
+      logError("Failed to persist screen reader mode", error);
     }
   };
 
@@ -283,7 +284,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
         throw new Error(result.error.message);
       }
     } catch (error) {
-      console.error("Failed to persist cached project views setting:", error);
+      logError("Failed to persist cached project views setting", error);
     }
   };
 

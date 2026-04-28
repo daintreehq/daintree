@@ -2,6 +2,7 @@ import { useCallback, useMemo } from "react";
 import type { WorktreeSnapshot, RecipeTerminal } from "@/types";
 import { useErrorStore, type AppError } from "@/store";
 import { useRecipeStore } from "@/store/recipeStore";
+import { logError } from "@/utils/logger";
 import { useNotificationStore } from "@/store/notificationStore";
 import { formatBytes } from "@/lib/formatBytes";
 import { actionService } from "@/services/ActionService";
@@ -166,7 +167,7 @@ export function useWorktreeActions({
           correlationId: crypto.randomUUID(),
         });
 
-        console.error("Failed to copy context:", message);
+        logError("Failed to copy context", undefined, { message });
         return undefined;
       }
     },

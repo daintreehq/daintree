@@ -22,6 +22,7 @@ import { useUrlHistoryStore, getFrecencySuggestions } from "@/store/urlHistorySt
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { ViewportPresetId } from "@shared/types/panel";
 import { VIEWPORT_PRESET_LIST, getViewportPreset } from "@/panels/dev-preview/viewportPresets";
+import { logError } from "@/utils/logger";
 
 const ZOOM_PRESETS = [
   { value: 0.25, label: "25%" },
@@ -221,7 +222,7 @@ export function BrowserToolbar({
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch (err) {
-      console.error("Failed to copy URL:", err);
+      logError("Failed to copy URL", err);
     }
   }, [terminalId, url]);
 

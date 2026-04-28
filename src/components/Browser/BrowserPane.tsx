@@ -29,6 +29,7 @@ import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 import { useProjectSettings } from "@/hooks/useProjectSettings";
 import { useUrlHistoryStore } from "@/store/urlHistoryStore";
 import { useFindInPage } from "@/hooks/useFindInPage";
+import { logError } from "@/utils/logger";
 
 export interface BrowserPaneProps extends BasePanelProps {
   initialUrl: string;
@@ -498,7 +499,7 @@ export function BrowserPane({
     try {
       await saveProjectSettings({ ...baseSettings, browserAllowedHosts: nextAllowed });
     } catch (err) {
-      console.error("[BrowserPane] Failed to save approved host", err);
+      logError("[BrowserPane] Failed to save approved host", err);
       return;
     }
     commitNavigation(url);
@@ -584,7 +585,7 @@ export function BrowserPane({
       const pngData = new Uint8Array(image.toPNG());
       await window.electron.clipboard.writeImage(pngData);
     } catch (err) {
-      console.error("[BrowserPane] Screenshot capture failed:", err);
+      logError("[BrowserPane] Screenshot capture failed", err);
     }
   }, [isWebviewReady]);
 

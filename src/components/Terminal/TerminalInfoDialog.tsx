@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { Button } from "@/components/ui/button";
 import { Info } from "lucide-react";
+import { logError } from "@/utils/logger";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { TerminalInfoPayload } from "@/types/electron";
 import { actionService } from "@/services/ActionService";
@@ -255,7 +256,7 @@ Performance & Diagnostics:
     try {
       await navigator.clipboard.writeText(diagnosticInfo);
     } catch (err) {
-      console.error("Failed to copy to clipboard:", err);
+      logError("Failed to copy to clipboard", err);
     }
   };
 

@@ -3,6 +3,7 @@ import { useShallow } from "zustand/react/shallow";
 import { SortableContext, rectSortingStrategy } from "@dnd-kit/sortable";
 import { useDroppable } from "@dnd-kit/core";
 import { cn } from "@/lib/utils";
+import { logError } from "@/utils/logger";
 import { useMacroFocusStore } from "@/store/macroFocusStore";
 import {
   usePanelStore,
@@ -496,7 +497,7 @@ export function ContentGrid({
         setActiveTab(groupId, newPanelId);
         setFocused(newPanelId);
       } catch (error) {
-        console.error("Failed to add tab:", error);
+        logError("Failed to add tab", error);
         if (createdNewGroup && groupId!) {
           deleteTabGroup(groupId);
         }

@@ -2,6 +2,7 @@ import { useEffect, useRef, useCallback } from "react";
 import { usePortalStore } from "@/store";
 import { useUIStore } from "@/store/uiStore";
 import { getPortalPlaceholderBounds } from "@/lib/portalBounds";
+import { logError } from "@/utils/logger";
 
 /**
  * Zero-UI controller component that manages portal visibility.
@@ -78,7 +79,7 @@ export function PortalVisibilityController(): null {
 
         await window.electron.portal.show({ tabId, bounds });
       } catch (error) {
-        console.error("Failed to restore tab:", error);
+        logError("Failed to restore tab", error);
       } finally {
         isRestoringRef.current = false;
         const pending = pendingRestoreRef.current as { tabId: string; tabUrl: string } | null;

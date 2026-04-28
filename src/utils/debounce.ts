@@ -1,3 +1,5 @@
+import { logError } from "@/utils/logger";
+
 /**
  * Debounce utility with cancel and flush methods for persistence batching.
  * Collects rapid calls and executes only the final state after delay.
@@ -22,7 +24,7 @@ export function debounce<Args extends unknown[]>(
         lastArgs = null;
         const p = Promise.resolve()
           .then(() => func(...args))
-          .catch((err) => console.error("Debounce execution failed:", err))
+          .catch((err) => logError("Debounce execution failed", err))
           .finally(() => {
             if (runningPromise === p) {
               runningPromise = null;
@@ -49,7 +51,7 @@ export function debounce<Args extends unknown[]>(
       lastArgs = null;
       const p = Promise.resolve()
         .then(() => func(...args))
-        .catch((err) => console.error("Debounce flush failed:", err))
+        .catch((err) => logError("Debounce flush failed", err))
         .finally(() => {
           if (runningPromise === p) {
             runningPromise = null;

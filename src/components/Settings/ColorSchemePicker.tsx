@@ -10,6 +10,7 @@ import {
 import { useTerminalColorSchemeStore } from "@/store/terminalColorSchemeStore";
 import { useAppThemeStore } from "@/store/appThemeStore";
 import { terminalConfigClient } from "@/clients/terminalConfigClient";
+import { logError } from "@/utils/logger";
 
 function SchemePreview({ scheme }: { scheme: TerminalColorScheme }) {
   const c = scheme.colors;
@@ -144,7 +145,7 @@ export function ColorSchemePicker() {
           useTerminalColorSchemeStore.getState().recentSchemeIds
         );
       } catch (error) {
-        console.error("Failed to persist color scheme:", error);
+        logError("Failed to persist color scheme", error);
       }
     },
     [setSelectedSchemeId, setPreviewSchemeId]
@@ -164,7 +165,7 @@ export function ColorSchemePicker() {
       await persistCustomSchemes();
       await handleSelect(scheme.id);
     } catch (error) {
-      console.error("Failed to import color scheme:", error);
+      logError("Failed to import color scheme", error);
     }
   }, [addCustomScheme, handleSelect]);
 

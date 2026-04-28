@@ -5,6 +5,7 @@ import { useLayoutConfigStore } from "@/store/layoutConfigStore";
 import type { AgentState } from "@/types";
 import { isRuntimeAgentTerminal } from "../../utils/terminalType";
 import { validateTerminals, type ValidationResult } from "@/utils/terminalValidation";
+import { logError } from "@/utils/logger";
 
 export interface BulkRestartValidation {
   valid: TerminalInstance[];
@@ -56,7 +57,7 @@ export const createTerminalBulkActionsSlice = (
         try {
           await restartTerminal(id);
         } catch (error) {
-          console.error(`Failed to restart terminal ${id}:`, error);
+          logError(`Failed to restart terminal ${id}`, error);
         }
       })
     );
@@ -122,7 +123,7 @@ export const createTerminalBulkActionsSlice = (
         const valid = activeTerminals.filter((t) => !validationResults.get(t.id));
         await restartTerminals(valid);
       } catch (error) {
-        console.error("Failed to validate terminals for restart:", error);
+        logError("Failed to validate terminals for restart", error);
         await restartTerminals(activeTerminals);
       }
     },
@@ -253,7 +254,7 @@ export const createTerminalBulkActionsSlice = (
         const valid = activeTerminals.filter((t) => !validationResults.get(t.id));
         await restartTerminals(valid);
       } catch (error) {
-        console.error("Failed to validate terminals for restart:", error);
+        logError("Failed to validate terminals for restart", error);
         await restartTerminals(activeTerminals);
       }
     },

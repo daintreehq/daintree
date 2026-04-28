@@ -8,6 +8,7 @@ import { LiveTimeAgo } from "./LiveTimeAgo";
 import { cn } from "../../lib/utils";
 import { GitCommit, Copy, Check, ExternalLink } from "lucide-react";
 import { parseNoteWithLinks, formatPath, type TextSegment } from "../../utils/textParsing";
+import { logError } from "@/utils/logger";
 import { actionService } from "@/services/ActionService";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
@@ -96,7 +97,7 @@ export function WorktreeDetails({
         }
       }, 2000);
     } catch (err) {
-      console.error("Failed to copy path:", err);
+      logError("Failed to copy path", err);
     }
   };
 

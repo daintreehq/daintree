@@ -8,6 +8,7 @@ import type { AgentHelpResult } from "@shared/types/ipc/agent";
 import type { AgentAvailabilityState } from "@shared/types";
 import { isAgentInstalled, isAgentMissing } from "../../../shared/utils/agentAvailability";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { logError } from "@/utils/logger";
 
 interface AgentHelpOutputProps {
   agentId: string;
@@ -115,7 +116,7 @@ export function AgentHelpOutput({ agentId, agentName, usageUrl }: AgentHelpOutpu
         copyTimeoutRef.current = null;
       }, 2000);
     } catch (err) {
-      console.error("Failed to copy to clipboard:", err);
+      logError("Failed to copy to clipboard", err);
     }
   }, [helpResult]);
 

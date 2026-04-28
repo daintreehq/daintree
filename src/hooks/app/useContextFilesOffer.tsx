@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 import { useProjectStore } from "@/store";
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 import { notify } from "@/lib/notify";
+import { logError } from "@/utils/logger";
 import { useNotificationStore } from "@/store/notificationStore";
 import { projectClient } from "@/clients";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
@@ -51,7 +52,7 @@ export function useContextFilesOffer() {
       try {
         foundFiles = await projectClient.detectContextFiles(targetProjectId);
       } catch (error) {
-        console.error("Failed to detect project context files:", error);
+        logError("Failed to detect project context files", error);
         if (inFlightProjectRef.current === targetProjectId) {
           inFlightProjectRef.current = null;
         }
@@ -107,7 +108,7 @@ export function useContextFilesOffer() {
                   notificationIdRef.current = null;
                 }
               } catch (err) {
-                console.error("Failed to enable in-repo settings from context offer:", err);
+                logError("Failed to enable in-repo settings from context offer", err);
                 notify({
                   type: "error",
                   title: "Failed to enable project context",
@@ -132,7 +133,7 @@ export function useContextFilesOffer() {
                   notificationIdRef.current = null;
                 }
               } catch (err) {
-                console.error("Failed to dismiss context files offer:", err);
+                logError("Failed to dismiss context files offer", err);
                 notify({
                   type: "error",
                   title: "Failed to save preference",

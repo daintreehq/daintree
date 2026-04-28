@@ -10,6 +10,7 @@ import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
 import { useAgentSettingsStore } from "@/store";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import { cliAvailabilityClient } from "@/clients";
+import { logError } from "@/utils/logger";
 import type { CliAvailability } from "@shared/types";
 import { isAgentInstalled, isAgentReady } from "../../../shared/utils/agentAvailability";
 import { Sparkles, ChevronLeft, ChevronRight, ArrowRight, Check, Sun, Moon } from "lucide-react";
@@ -384,7 +385,7 @@ export function AgentSetupWizard({
             dispatch({ type: "SET_AVAILABILITY", payload: result });
           }
         })
-        .catch(console.error);
+        .catch((err) => logError("Failed to refresh CLI availability", err));
     };
 
     poll();
@@ -422,7 +423,9 @@ export function AgentSetupWizard({
       // Auto-select mirrors OS appearance — not a direct user pick, so use the
       // silent setter to avoid polluting the recently-used list.
       setSelectedSchemeIdSilent(targetId);
-      appThemeClient.setColorScheme(targetId).catch(console.error);
+      appThemeClient
+        .setColorScheme(targetId)
+        .catch((err) => logError("Failed to set color scheme", err));
     }
   }, [isFirstRun, isOpen, state.step.type, selectedSchemeId, setSelectedSchemeIdSilent]);
 
@@ -432,7 +435,7 @@ export function AgentSetupWizard({
       try {
         await appThemeClient.setColorScheme(id);
       } catch (error) {
-        console.error("Failed to persist app theme:", error);
+        logError("Failed to persist app theme", error);
       }
     },
     [setSelectedSchemeId]
@@ -445,7 +448,7 @@ export function AgentSetupWizard({
       await window.electron.telemetry.markPromptShown();
       telemetryCommittedRef.current = true;
     } catch (error) {
-      console.error("Failed to commit telemetry preference:", error);
+      logError("Failed to commit telemetry preference", error);
     }
   }, []);
 

@@ -19,6 +19,7 @@ import { terminalFontReady } from "@/config/terminalFont";
 import { getSoftNewlineSequence } from "../../../shared/utils/terminalInputProtocol.js";
 import { keybindingService } from "@/services/KeybindingService";
 import { actionService } from "@/services/ActionService";
+import { logError } from "@/utils/logger";
 import { useTerminalFileTransfer } from "./useTerminalFileTransfer";
 
 export interface XtermAdapterProps {
@@ -216,6 +217,8 @@ function XtermAdapterComponent({
     const container = containerRef.current;
     if (!container) return;
 
+    let disposed = false;
+
     const managed = terminalInstanceService.getOrCreate(
       terminalId,
       launchAgentId,
@@ -311,14 +314,15 @@ function XtermAdapterComponent({
                 )
                 .then((dispatchResult) => {
                   if (!dispatchResult.ok) {
-                    console.error(
-                      `[XtermKeybinding] Action "${result.match!.actionId}" failed:`,
-                      dispatchResult.error
+                    logError(
+                      `[XtermKeybinding] Action "${result.match!.actionId}" failed`,
+                      undefined,
+                      { error: dispatchResult.error }
                     );
                   }
                 })
                 .catch((error) => {
-                  console.error(`[XtermKeybinding] Unexpected error:`, error);
+                  logError("[XtermKeybinding] Unexpected error", error);
                 });
             }
             // Chord prefix consumed to prevent terminal leakage
@@ -399,16 +403,23 @@ function XtermAdapterComponent({
       !(wasDetachedForSwitch && hasSavedTargetDims) &&
       !hasVisibleBufferContent()
     ) {
-      void terminalInstanceService.fetchAndRestore(terminalId).then((restored) => {
-        if (restored) {
-          requestAnimationFrame(() => performFit());
-        }
-      });
+      void terminalInstanceService
+        .fetchAndRestore(terminalId)
+        .then((restored) => {
+          if (disposed) return;
+          if (restored) {
+            requestAnimationFrame(() => performFit());
+          }
+        })
+        .catch((err) => {
+          if (!disposed) logError("Failed to restore terminal buffer", err);
+        });
     }
 
     onReady?.();
 
     return () => {
+      disposed = true;
       // Pass the captured generation so stale dock→grid unmount cleanup
       // doesn't background a terminal that has already been re-attached elsewhere.
       terminalInstanceService.setVisible(terminalId, false, attachGen);

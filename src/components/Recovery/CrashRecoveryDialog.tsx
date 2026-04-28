@@ -12,6 +12,7 @@ import {
 import { Plug } from "@/components/icons";
 import { AppDialog } from "../ui/AppDialog";
 import { Button } from "../ui/button";
+import { logError } from "@/utils/logger";
 import type {
   PendingCrash,
   PanelSummary,
@@ -107,7 +108,9 @@ export function CrashRecoveryDialog({
   }, [allSelected, panels]);
 
   const handleOpenLogFile = useCallback(() => {
-    window.electron.system.openPath(crash.logPath).catch(console.error);
+    window.electron.system
+      .openPath(crash.logPath)
+      .catch((err) => logError("Failed to open crash log path", err));
   }, [crash.logPath]);
 
   const handleReport = useCallback(() => {
@@ -120,7 +123,9 @@ export function CrashRecoveryDialog({
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     });
-    window.electron.system.openExternal(ISSUES_URL).catch(console.error);
+    window.electron.system
+      .openExternal(ISSUES_URL)
+      .catch((err) => logError("Failed to open issues URL", err));
   }, [privacyWarningShown, crash]);
 
   const handleAutoRestore = useCallback(

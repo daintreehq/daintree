@@ -33,6 +33,7 @@ import { FindBar } from "../Browser/FindBar";
 import { useFindInPage } from "@/hooks/useFindInPage";
 import { getViewportPreset } from "@/panels/dev-preview/viewportPresets";
 import type { ViewportPresetId } from "@shared/types/panel";
+import { logError } from "@/utils/logger";
 
 import { looksLikeOAuthUrl } from "@shared/utils/urlUtils";
 
@@ -468,7 +469,7 @@ export function DevPreviewPane({
         devServerDismissed: false,
       });
     } catch (err) {
-      console.error("Failed to auto-detect dev server:", err);
+      logError("Failed to auto-detect dev server", err);
     } finally {
       if (isMountedRef.current) {
         setIsAutoDetecting(false);
@@ -841,6 +842,7 @@ export function DevPreviewPane({
 
   // Listen for blocked navigation events from main process
   useEffect(() => {
+    let disposed = false;
     const cleanup = window.electron.webview.onNavigationBlocked((data) => {
       if (data.panelId !== id) return;
       const sessionStorageSnapshotPromise = looksLikeOAuthUrl(data.url)
@@ -850,17 +852,23 @@ export function DevPreviewPane({
         clearTimeout(blockedNavTimerRef.current);
       }
       blockedNavTimerRef.current = setTimeout(() => {
-        void sessionStorageSnapshotPromise.then((sessionStorageSnapshot) => {
-          setBlockedNav({
-            url: data.url,
-            canOpenExternal: data.canOpenExternal,
-            sessionStorageSnapshot,
+        void sessionStorageSnapshotPromise
+          .then((sessionStorageSnapshot) => {
+            if (disposed) return;
+            setBlockedNav({
+              url: data.url,
+              canOpenExternal: data.canOpenExternal,
+              sessionStorageSnapshot,
+            });
+            blockedNavTimerRef.current = null;
+          })
+          .catch((err) => {
+            if (!disposed) logError("Failed to capture session storage snapshot", err);
           });
-          blockedNavTimerRef.current = null;
-        });
       }, 150);
     });
     return () => {
+      disposed = true;
       cleanup();
       if (blockedNavTimerRef.current) {
         clearTimeout(blockedNavTimerRef.current);

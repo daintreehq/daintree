@@ -7,6 +7,7 @@ import {
 import { useWorktreeSelectionStore, usePanelStore } from "@/store";
 import { useProjectStore } from "@/store/projectStore";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
+import { logError } from "@/utils/logger";
 import type { WorktreeState } from "@/types";
 import { useSearchablePalette, type UseSearchablePaletteReturn } from "./useSearchablePalette";
 import { actionService } from "@/services/ActionService";
@@ -105,11 +106,13 @@ export function useNewTerminalPalette({
           { source: "user" }
         );
         if (!result.ok) {
-          console.error(`Failed to launch ${option.launchAgentId} terminal:`, result.error);
+          logError(`Failed to launch ${option.launchAgentId} terminal`, undefined, {
+            error: result.error,
+          });
         }
         close();
       } catch (error) {
-        console.error(`Failed to launch ${option.launchAgentId} terminal:`, error);
+        logError(`Failed to launch ${option.launchAgentId} terminal`, error);
       }
     },
     [activeWorktreeId, worktreeMap, currentProject, addPanel, close]

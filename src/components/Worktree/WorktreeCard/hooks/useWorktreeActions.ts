@@ -1,5 +1,6 @@
 import { useCallback, useState } from "react";
 import type { WorktreeState } from "@/types";
+import { logError } from "@/utils/logger";
 import { actionService } from "@/services/ActionService";
 import { useRecipeStore } from "@/store/recipeStore";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
@@ -77,7 +78,7 @@ export function useWorktreeActions({
           branchName: worktree.branch,
         });
       } catch (error) {
-        console.error("Failed to run recipe:", error);
+        logError("Failed to run recipe", error);
       } finally {
         setRunningRecipeId(null);
       }

@@ -18,6 +18,7 @@ import { useWorktrees } from "@/hooks/useWorktrees";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { RunCommand } from "@/types";
+import { logError } from "@/utils/logger";
 import { RunningTaskList } from "./RunningTaskList";
 
 interface QuickRunProps {
@@ -118,7 +119,7 @@ export function QuickRun({ projectId }: QuickRunProps) {
           localStorage.removeItem(`${HISTORY_KEY_PREFIX}${projectId}`);
         }
       } catch (e) {
-        console.error("Failed to parse command history", e);
+        logError("Failed to parse command history", e);
         localStorage.removeItem(`${HISTORY_KEY_PREFIX}${projectId}`);
       }
     }
@@ -161,7 +162,7 @@ export function QuickRun({ projectId }: QuickRunProps) {
     try {
       await promoteToSaved(commandToSave);
     } catch (err) {
-      console.error("Failed to pin command:", err);
+      logError("Failed to pin command", err);
     }
   };
 
@@ -172,7 +173,7 @@ export function QuickRun({ projectId }: QuickRunProps) {
     try {
       await removeFromSaved(item.value);
     } catch (err) {
-      console.error("Failed to unpin command:", err);
+      logError("Failed to unpin command", err);
     }
   };
 
@@ -317,7 +318,7 @@ export function QuickRun({ projectId }: QuickRunProps) {
         spawnedBy: "quickrun",
       });
     } catch (error) {
-      console.error("Failed to spawn terminal:", error);
+      logError("Failed to spawn terminal", error);
     } finally {
       isRunningRef.current = false;
     }

@@ -4,6 +4,7 @@ import { isMac } from "@/lib/platform";
 import { keybindingService, normalizeKeyForBinding } from "@/services/KeybindingService";
 import { actionService } from "@/services/ActionService";
 import { useNotificationStore } from "@/store/notificationStore";
+import { logError, logWarn } from "@/utils/logger";
 
 const CHORD_TIMEOUT_MS = 1000;
 
@@ -195,7 +196,7 @@ export function SettingsShortcutCapture({
           throw new Error(setResult.error?.message || "Failed to update keybinding");
         }
       } else {
-        console.error("Could not identify conflicting combo");
+        logWarn("Could not identify conflicting combo");
         setIsUnbinding(false);
         return;
       }
@@ -226,7 +227,7 @@ export function SettingsShortcutCapture({
               }
               setConflictRefreshKey((prev) => prev + 1);
             } catch (err) {
-              console.error("Failed to undo keybinding change:", err);
+              logError("Failed to undo keybinding change", err);
               useNotificationStore.getState().addNotification({
                 type: "error",
                 message: "Failed to undo keybinding change",
@@ -238,7 +239,7 @@ export function SettingsShortcutCapture({
         },
       });
     } catch (err) {
-      console.error("Failed to unbind keybinding:", err);
+      logError("Failed to unbind keybinding", err);
       useNotificationStore.getState().addNotification({
         type: "error",
         message: "Failed to unbind keybinding",

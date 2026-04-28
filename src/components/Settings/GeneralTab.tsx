@@ -36,6 +36,7 @@ import { usePreferencesStore } from "@/store";
 import { keybindingService } from "@/services/KeybindingService";
 import { actionService } from "@/services/ActionService";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { logError } from "@/utils/logger";
 
 const GENERAL_SUBTABS: SettingsSubtabItem[] = [
   { id: "overview", label: "Overview" },
@@ -143,8 +144,9 @@ export function GeneralTab({
       .then((ch) => {
         if (!cancelled) setUpdateChannel(ch);
       })
-      .catch(() => {
+      .catch((error) => {
         if (!cancelled) setUpdateChannel("stable");
+        logError("Failed to get update channel", error);
       });
     return () => {
       cancelled = true;
@@ -158,7 +160,7 @@ export function GeneralTab({
       const result = await window.electron.update.setChannel(channel);
       if (isMountedRef.current) setUpdateChannel(result);
     } catch (error) {
-      console.error("Failed to set update channel:", error);
+      logError("Failed to set update channel", error);
     } finally {
       if (isMountedRef.current) setChannelSaving(false);
     }
@@ -186,7 +188,7 @@ export function GeneralTab({
       .catch((error) => {
         clearTimeout(timer);
         if (cancelled) return;
-        console.error("Failed to load hibernation config:", error);
+        logError("Failed to load hibernation config", error);
         setConfigError(formatErrorMessage(error, "Failed to load hibernation settings"));
       });
 
@@ -201,7 +203,7 @@ export function GeneralTab({
       })
       .catch((error) => {
         if (cancelled) return;
-        console.error("Failed to load idle terminal notify config:", error);
+        logError("Failed to load idle terminal notify config", error);
       });
 
     return () => {
@@ -243,7 +245,7 @@ export function GeneralTab({
       })
       .catch((error) => {
         if (cancelled) return;
-        console.error("[GeneralTab] Failed to load agent availability:", error);
+        logError("[GeneralTab] Failed to load agent availability", error);
         setCliCheckFailed(true);
       })
       .finally(() => clearTimeout(timeoutId));
@@ -316,7 +318,7 @@ export function GeneralTab({
       setHibernationConfig(result.result as HibernationConfig);
     } catch (error) {
       if (!isMountedRef.current) return;
-      console.error("Failed to update hibernation config:", error);
+      logError("Failed to update hibernation config", error);
     } finally {
       if (isMountedRef.current) {
         setIsSaving(false);
@@ -340,7 +342,7 @@ export function GeneralTab({
       setIdleNotifyConfig(result.result as IdleTerminalNotifyConfig);
     } catch (error) {
       if (!isMountedRef.current) return;
-      console.error("Failed to update idle terminal notify config:", error);
+      logError("Failed to update idle terminal notify config", error);
     } finally {
       if (isMountedRef.current) {
         setIsIdleNotifySaving(false);
@@ -364,7 +366,7 @@ export function GeneralTab({
       setIdleNotifyConfig(result.result as IdleTerminalNotifyConfig);
     } catch (error) {
       if (!isMountedRef.current) return;
-      console.error("Failed to update idle terminal notify threshold:", error);
+      logError("Failed to update idle terminal notify threshold", error);
     } finally {
       if (isMountedRef.current) {
         setIsIdleNotifySaving(false);
@@ -388,7 +390,7 @@ export function GeneralTab({
       setHibernationConfig(result.result as HibernationConfig);
     } catch (error) {
       if (!isMountedRef.current) return;
-      console.error("Failed to update hibernation threshold:", error);
+      logError("Failed to update hibernation threshold", error);
     } finally {
       if (isMountedRef.current) {
         setIsSaving(false);

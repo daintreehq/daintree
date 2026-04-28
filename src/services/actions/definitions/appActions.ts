@@ -11,6 +11,7 @@ import { useNotificationStore } from "@/store/notificationStore";
 import { keybindingService } from "@/services/KeybindingService";
 import { actionService } from "@/services/ActionService";
 import { getBuiltInAppSchemeForType, resolveAppTheme } from "@shared/theme";
+import { logError } from "@/utils/logger";
 
 async function refreshRendererConfig(): Promise<void> {
   await Promise.all([
@@ -114,7 +115,7 @@ export function registerAppActions(actions: ActionRegistry, callbacks: ActionCal
     try {
       await refreshRendererConfig();
     } catch (e) {
-      console.error("[app.reloadConfig] Failed to refresh renderer config:", e);
+      logError("[app.reloadConfig] Failed to refresh renderer config", e);
     }
   };
   if (
@@ -188,7 +189,7 @@ export function registerAppActions(actions: ActionRegistry, callbacks: ActionCal
       try {
         await appThemeClient.setColorScheme(target.id);
       } catch (error) {
-        console.error("Failed to persist theme toggle:", error);
+        logError("Failed to persist theme toggle", error);
         useNotificationStore.getState().addNotification({
           type: "error",
           priority: "low",

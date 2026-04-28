@@ -20,6 +20,7 @@ import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useRecipeStore } from "@/store/recipeStore";
 import { useProjectStore } from "@/store/projectStore";
+import { logError } from "@/utils/logger";
 import { LiveTimeAgo } from "@/components/Worktree/LiveTimeAgo";
 import type { TerminalRecipe } from "@/types";
 import { useRef } from "react";
@@ -84,7 +85,7 @@ export function RecipeManager({
       await deleteRecipe(recipeId);
       setRecipeToDelete(null);
     } catch (err) {
-      console.error("Failed to delete recipe:", err);
+      logError("Failed to delete recipe", err);
       setDeleteError(formatErrorMessage(err, "Failed to delete recipe"));
     }
   };
@@ -102,7 +103,7 @@ export function RecipeManager({
             exportTimeoutRef.current = null;
           }, 2000);
         } catch (err) {
-          console.error("Failed to copy to clipboard:", err);
+          logError("Failed to copy to clipboard", err);
         }
       }
     },
@@ -130,7 +131,7 @@ export function RecipeManager({
     try {
       await deleteRecipe(recipeToDeleteAfterSave);
     } catch (err) {
-      console.error("Failed to delete original recipe:", err);
+      logError("Failed to delete original recipe", err);
     }
     setRecipeToDeleteAfterSave(null);
   };

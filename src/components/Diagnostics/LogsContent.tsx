@@ -9,6 +9,7 @@ import { LogFilters } from "../Logs/LogFilters";
 import type { LogEntry as LogEntryType, LogLevel } from "@/types";
 
 import { logsClient, appClient } from "@/clients";
+import { logError } from "@/utils/logger";
 
 export interface LogsContentProps {
   className?: string;
@@ -111,11 +112,11 @@ export function LogsContent({ className, onSourcesChange }: LogsContentProps) {
 
     Promise.all([
       logsClient.getAll().catch((error) => {
-        console.error("Failed to load logs:", error);
+        logError("Failed to load logs", error);
         return [];
       }),
       logsClient.getSources().catch((error) => {
-        console.error("Failed to load log sources:", error);
+        logError("Failed to load log sources", error);
         return [];
       }),
     ]).then(([existingLogs, existingSources]) => {

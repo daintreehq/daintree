@@ -2,6 +2,7 @@ import { useEffect, useRef, useCallback, useId, createContext, useContext } from
 import { createPortal } from "react-dom";
 import { useShallow } from "zustand/react/shallow";
 import { cn } from "@/lib/utils";
+import { logError } from "@/utils/logger";
 import { ScrollShadow } from "@/components/ui/ScrollShadow";
 import { useOverlayState, useEscapeStack } from "@/hooks";
 import { usePortalStore } from "@/store";
@@ -133,7 +134,7 @@ export function AppDialog({
       const canClose = await onBeforeClose();
       if (canClose) onClose();
     } catch (error) {
-      console.error("AppDialog onBeforeClose failed", error);
+      logError("AppDialog onBeforeClose failed", error);
     } finally {
       closeInFlightRef.current = false;
     }

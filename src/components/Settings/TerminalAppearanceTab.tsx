@@ -18,6 +18,7 @@ import { AppThemePicker } from "./AppThemePicker";
 import { ColorVisionPicker } from "./ColorVisionPicker";
 import { DockDensityPicker } from "./DockDensityPicker";
 import { useSettingsTabValidation } from "./SettingsValidationRegistry";
+import { logError } from "@/utils/logger";
 
 const MIN_FONT_SIZE = 8;
 const MAX_FONT_SIZE = 24;
@@ -111,7 +112,7 @@ export function TerminalAppearanceTab({
         throw new Error(result.error.message);
       }
     } catch (error) {
-      console.error("Failed to persist terminal font size:", error);
+      logError("Failed to persist terminal font size", error);
       setFontSizeInput(String(previous));
       setFontSizeError("Failed to save font size.");
     }
@@ -134,7 +135,7 @@ export function TerminalAppearanceTab({
         throw new Error(result.error.message);
       }
     } catch (error) {
-      console.error("Failed to persist terminal font family:", error);
+      logError("Failed to persist terminal font family", error);
     }
   };
 

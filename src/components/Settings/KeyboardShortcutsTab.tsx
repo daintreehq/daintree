@@ -3,6 +3,7 @@ import { Search, X, RotateCcw } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { keybindingService, KeybindingConfig } from "@/services/KeybindingService";
 import { actionService } from "@/services/ActionService";
+import { logError } from "@/utils/logger";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { KeybindingProfileActions } from "./KeybindingProfileActions";
@@ -149,7 +150,7 @@ export function KeyboardShortcutsTab() {
       { source: "user" }
     );
     if (!result.ok) {
-      console.error("Failed to save keybinding override:", result.error);
+      logError("Failed to save keybinding override", undefined, { error: result.error });
     }
     setEditingActionId(null);
     loadBindings();
@@ -162,7 +163,7 @@ export function KeyboardShortcutsTab() {
       { source: "user" }
     );
     if (!result.ok) {
-      console.error("Failed to reset keybinding override:", result.error);
+      logError("Failed to reset keybinding override", undefined, { error: result.error });
     }
     loadBindings();
   };
@@ -181,7 +182,7 @@ export function KeyboardShortcutsTab() {
         confirmed: true,
       });
       if (!result.ok) {
-        console.error("Failed to reset all keybinding overrides:", result.error);
+        logError("Failed to reset all keybinding overrides", undefined, { error: result.error });
         return;
       }
       await keybindingService.loadOverrides();

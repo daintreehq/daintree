@@ -8,6 +8,7 @@ import { SettingsSubtabBar } from "./SettingsSubtabBar";
 import type { SettingsSubtabItem } from "./SettingsSubtabBar";
 import { ANALYTICS_EVENTS } from "@shared/config/telemetry";
 import { actionService } from "@/services/ActionService";
+import { logError } from "@/utils/logger";
 
 type TelemetryLevel = "off" | "errors" | "full";
 type LogRetention = 7 | 30 | 90 | 0;
@@ -114,7 +115,7 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
           title: "Failed to load settings",
           message: "Privacy settings could not be loaded.",
         });
-        console.error("Failed to load privacy settings:", err);
+        logError("Failed to load privacy settings", err);
       });
   }, []);
 
@@ -138,7 +139,7 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
           title: "Failed to save setting",
           message: "Telemetry level could not be saved. Please try again.",
         });
-        console.error("Failed to set telemetry level:", err);
+        logError("Failed to set telemetry level", err);
       }
     },
     [telemetryLevel]
@@ -157,7 +158,7 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
           title: "Failed to save setting",
           message: "Log retention could not be saved. Please try again.",
         });
-        console.error("Failed to set log retention:", err);
+        logError("Failed to set log retention", err);
       }
     },
     [logRetentionDays]
@@ -175,7 +176,7 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
       setCacheCleared(true);
       setTimeout(() => setCacheCleared(false), 3000);
     } catch (err) {
-      console.error("Failed to clear cache:", err);
+      logError("Failed to clear cache", err);
     } finally {
       setCacheClearing(false);
     }

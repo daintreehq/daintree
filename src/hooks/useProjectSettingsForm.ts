@@ -3,6 +3,7 @@ import { useProjectSettings } from "@/hooks/useProjectSettings";
 import { useProjectStore } from "@/store/projectStore";
 import { useWorktrees } from "@/hooks/useWorktrees";
 import { useRecipeStore } from "@/store/recipeStore";
+import { logError } from "@/utils/logger";
 import { debounce } from "@/utils/debounce";
 import {
   createProjectSettingsSnapshot,
@@ -404,7 +405,7 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
         lastSavedSnapshotRef.current = currentProjectSnapshot;
       }
     } catch (err) {
-      console.error("Failed to auto-save project settings:", err);
+      logError("Failed to auto-save project settings", err);
       setProjectAutoSaveError(formatErrorMessage(err, "Failed to save settings"));
     }
   };

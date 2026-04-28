@@ -6,6 +6,7 @@ import { AGENT_REGISTRY } from "@shared/config/agentRegistry";
 import { isBuiltInAgentId } from "@shared/config/agentIds";
 import { ABSOLUTE_MAX_GRID_TERMINALS } from "@/lib/terminalLayout";
 import { deriveTerminalChrome, type TerminalChromeInput } from "@/utils/terminalChrome";
+import { logError } from "@/utils/logger";
 
 // Re-export for backward compatibility
 export const MAX_GRID_TERMINALS = ABSOLUTE_MAX_GRID_TERMINALS;
@@ -106,9 +107,6 @@ export function stopDevPreviewByPanelId(panelId: string): void {
   if (!stopByPanel) return;
 
   void stopByPanel({ panelId }).catch((error) => {
-    console.error(
-      `[TerminalStore] Failed to stop dev preview session for panel ${panelId}:`,
-      error
-    );
+    logError(`[TerminalStore] Failed to stop dev preview session for panel ${panelId}`, error);
   });
 }

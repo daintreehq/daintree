@@ -8,6 +8,7 @@ import { replaceRecipeVariables, type RecipeContext } from "@/utils/recipeVariab
 import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
 import { stableInRepoId, isInRepoRecipeId } from "@shared/utils/recipeFilename";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { logError } from "@/utils/logger";
 
 export interface RecipeSpawnResult {
   index: number;
@@ -198,7 +199,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
       if (requestId !== loadRecipesRequestId || get().currentProjectId !== projectId) {
         return;
       }
-      console.error("Failed to load recipes:", error);
+      logError("Failed to load recipes", error);
       set({
         recipes: [],
         globalRecipes: [],
@@ -255,7 +256,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
         await projectClient.updateInRepoRecipe(projectId, newRecipe);
       }
     } catch (error) {
-      console.error("Failed to persist recipe:", error);
+      logError("Failed to persist recipe", error);
       set({
         globalRecipes: prevGlobal,
         projectRecipes: prevProject,
@@ -340,7 +341,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
         await projectClient.updateRecipe(recipe.projectId!, id, sanitizedUpdates);
       }
     } catch (error) {
-      console.error("Failed to persist recipe update:", error);
+      logError("Failed to persist recipe update", error);
       set({
         globalRecipes: prevGlobal,
         projectRecipes: prevProject,
@@ -388,7 +389,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
         await projectClient.deleteRecipe(recipe.projectId!, id);
       }
     } catch (error) {
-      console.error("Failed to persist recipe deletion:", error);
+      logError("Failed to persist recipe deletion", error);
       set({
         globalRecipes: prevGlobal,
         projectRecipes: prevProject,
@@ -431,7 +432,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
     try {
       await projectClient.updateInRepoRecipe(currentProjectId, promoted);
     } catch (error) {
-      console.error("Failed to save recipe to repo:", error);
+      logError("Failed to save recipe to repo", error);
       set({
         globalRecipes: prevGlobal,
         projectRecipes: prevProject,
@@ -450,7 +451,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
         }
       } catch (error) {
         // In-repo write succeeded; roll back only the delete portion
-        console.error("Failed to delete original recipe:", error);
+        logError("Failed to delete original recipe", error);
         set({
           globalRecipes: prevGlobal,
           projectRecipes: prevProject,
@@ -489,7 +490,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
     get()
       .updateRecipe(recipeId, { lastUsedAt: now, usageHistory })
       .catch((error) => {
-        console.warn("Failed to update lastUsedAt for recipe:", error);
+        logError("Failed to update lastUsedAt for recipe", error);
       });
 
     const terminalStore = usePanelStore.getState();
@@ -512,7 +513,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
         agentSettings = settings;
         clipboardDirectory = tmpDir ? `${tmpDir}/daintree-clipboard` : undefined;
       } catch (error) {
-        console.warn("Failed to fetch agent settings for recipe:", error);
+        logError("Failed to fetch agent settings for recipe", error);
       }
     }
 
@@ -593,7 +594,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
         }
       } catch (error) {
         const message = formatErrorMessage(error, "Failed to spawn terminal");
-        console.error(`Failed to spawn terminal for recipe ${recipeId}:`, error);
+        logError(`Failed to spawn terminal for recipe ${recipeId}`, error);
         results.failed.push({ index, error: message });
       }
     }
@@ -762,7 +763,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
         await projectClient.updateInRepoRecipe(projectId, importedRecipe);
       }
     } catch (_error) {
-      console.error("Failed to persist imported recipe:", _error);
+      logError("Failed to persist imported recipe", _error);
       set({
         globalRecipes: prevGlobal,
         projectRecipes: prevProject,

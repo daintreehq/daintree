@@ -35,6 +35,7 @@ import { notify } from "@/lib/notify";
 import { systemClient } from "@/clients/systemClient";
 import { useRecipeStore } from "@/store/recipeStore";
 import { mapCreationError, type WorktreeCreationError } from "./worktreeCreationErrors";
+import { logError } from "@/utils/logger";
 import { useProjectStore } from "@/store/projectStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 
@@ -638,7 +639,7 @@ export function NewWorktreeDialog({
                       runRecipe(recipeId, recipePath, worktreeId, {
                         worktreePath: recipePath,
                         branchName: selectedExistingBranch,
-                      }).catch(console.error);
+                      }).catch((err) => logError("Failed to run recipe", err));
                     },
                   },
                 ],
@@ -820,8 +821,8 @@ export function NewWorktreeDialog({
                 {
                   label: "Retry Recipe",
                   onClick: () => {
-                    runRecipe(recipeId, recipePath, recipeWorktreeId, recipeContext).catch(
-                      console.error
+                    runRecipe(recipeId, recipePath, recipeWorktreeId, recipeContext).catch((err) =>
+                      logError("Failed to run recipe", err)
                     );
                   },
                 },
@@ -1417,7 +1418,7 @@ export function NewWorktreeDialog({
                         setCreationError(null);
                       }
                     } catch (err: unknown) {
-                      console.error("Failed to open directory picker:", err);
+                      logError("Failed to open directory picker", err);
                       const message = formatErrorMessage(err, "Failed to open directory picker");
                       setValidationError(`Failed to open directory picker: ${message}`);
                       setErrorField(null);

@@ -6,6 +6,7 @@ import type { CommandManifestEntry, CommandOverride } from "@shared/types/comman
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { extractTemplateVariables, validatePromptTemplate } from "@shared/utils/promptTemplate";
+import { logError } from "@/utils/logger";
 
 interface CommandOverridesTabProps {
   projectId: string;
@@ -35,7 +36,7 @@ export function CommandOverridesTab({ projectId, overrides, onChange }: CommandO
           setCommands(result);
         }
       } catch (error) {
-        console.error("Failed to load commands:", error);
+        logError("Failed to load commands", error);
       } finally {
         if (mounted) {
           setIsLoading(false);

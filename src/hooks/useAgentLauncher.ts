@@ -8,6 +8,7 @@ import { isElectronAvailable } from "./useElectron";
 
 import { agentSettingsClient, systemClient } from "@/clients";
 import { useHomeDir } from "@/hooks/app/useHomeDir";
+import { logError, logWarn } from "@/utils/logger";
 import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
 import { useProjectPresetsStore } from "@/store/projectPresetsStore";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
@@ -117,7 +118,7 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
         }
       })
       .catch((error) => {
-        console.error("Failed to load agent settings:", error);
+        logError("Failed to load agent settings", error);
       });
 
     // Re-check availability when the window regains focus so that agents
@@ -168,7 +169,7 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
           });
           return terminalId;
         } catch (error) {
-          console.error("Failed to launch browser pane:", error);
+          logError("Failed to launch browser pane", error);
           return null;
         }
       }
@@ -185,7 +186,7 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
           });
           return terminalId;
         } catch (error) {
-          console.error("Failed to launch dev-preview pane:", error);
+          logError("Failed to launch dev-preview pane", error);
           return null;
         }
       }
@@ -322,7 +323,7 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
           : (agentConfig?.name ?? "Terminal");
 
       if (isAgent && !command) {
-        console.error(`Cannot launch ${agentId} agent: command could not be generated`);
+        logWarn(`Cannot launch ${agentId} agent: command could not be generated`);
         return null;
       }
 
@@ -356,7 +357,7 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
         const terminalId = await addPanel(options);
         return terminalId;
       } catch (error) {
-        console.error(`Failed to launch ${agentId} agent:`, error);
+        logError(`Failed to launch ${agentId} agent`, error);
         return null;
       }
     },

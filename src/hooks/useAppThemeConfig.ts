@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { useAppThemeStore } from "@/store/appThemeStore";
 import { appThemeClient } from "@/clients/appThemeClient";
+import { logError } from "@/utils/logger";
 import { normalizeAccentHex, normalizeAppColorScheme } from "@shared/theme";
 import type { AppColorScheme } from "@shared/types/appTheme";
 import type { ColorVisionMode } from "@shared/types";
@@ -82,7 +83,7 @@ export function useAppThemeConfig() {
         }
       })
       .catch((error) => {
-        console.error("Failed to load app theme config:", error);
+        logError("Failed to load app theme config", error);
       });
 
     return () => {

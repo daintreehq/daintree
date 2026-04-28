@@ -3,6 +3,7 @@ import { cn } from "@/lib/utils";
 import { useErrorStore, type AppError, type RetryAction } from "@/store";
 import { Copy, Check, Lightbulb } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { logError } from "@/utils/logger";
 
 const ERROR_TYPE_LABELS: Record<string, string> = {
   git: "Git",
@@ -97,7 +98,7 @@ function ErrorRow({
         copyTimeoutRef.current = null;
       }, 2000);
     } catch (err) {
-      console.error("Failed to copy to clipboard:", err);
+      logError("Failed to copy to clipboard", err);
     }
   };
 

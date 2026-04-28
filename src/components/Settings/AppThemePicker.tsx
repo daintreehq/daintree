@@ -18,6 +18,7 @@ import { PaletteStrip } from "@/components/ui/PaletteStrip";
 import { APP_THEME_PREVIEW_KEYS } from "@shared/theme";
 import type { AppColorScheme, AppThemeValidationWarning } from "@shared/types/appTheme";
 import { SettingsSwitchCard } from "./SettingsSwitchCard";
+import { logError } from "@/utils/logger";
 
 function shuffleArray<T>(arr: T[]): T[] {
   const a = [...arr];
@@ -124,7 +125,7 @@ export function AppThemePicker({ onClose }: AppThemePickerProps = {}) {
     (e: ChangeEvent<HTMLInputElement>) => {
       setAccentColorOverride(e.target.value);
       appThemeClient.setAccentColorOverride(e.target.value).catch((error) => {
-        console.error("Failed to persist accent color override:", error);
+        logError("Failed to persist accent color override", error);
       });
     },
     [setAccentColorOverride]
@@ -133,7 +134,7 @@ export function AppThemePicker({ onClose }: AppThemePickerProps = {}) {
   const handleAccentReset = useCallback(() => {
     setAccentColorOverride(null);
     appThemeClient.setAccentColorOverride(null).catch((error) => {
-      console.error("Failed to clear accent color override:", error);
+      logError("Failed to clear accent color override", error);
     });
   }, [setAccentColorOverride]);
 
@@ -141,7 +142,9 @@ export function AppThemePicker({ onClose }: AppThemePickerProps = {}) {
     async (id: string, origin?: { x: number; y: number }) => {
       if (followSystem) {
         setFollowSystem(false);
-        appThemeClient.setFollowSystem(false).catch(console.error);
+        appThemeClient
+          .setFollowSystem(false)
+          .catch((err) => logError("Failed to clear follow system", err));
       }
 
       commitSchemeSelection(id);
@@ -152,7 +155,7 @@ export function AppThemePicker({ onClose }: AppThemePickerProps = {}) {
         await appThemeClient.setColorScheme(id);
         await appThemeClient.setRecentSchemeIds(useAppThemeStore.getState().recentSchemeIds);
       } catch (error) {
-        console.error("Failed to persist app theme:", error);
+        logError("Failed to persist app theme", error);
       }
     },
     [commitSchemeSelection, followSystem, setFollowSystem]
@@ -164,7 +167,7 @@ export function AppThemePicker({ onClose }: AppThemePickerProps = {}) {
     try {
       await appThemeClient.setFollowSystem(newValue);
     } catch (error) {
-      console.error("Failed to persist follow system:", error);
+      logError("Failed to persist follow system", error);
     }
   }, [followSystem, setFollowSystem]);
 
@@ -174,7 +177,7 @@ export function AppThemePicker({ onClose }: AppThemePickerProps = {}) {
       try {
         await appThemeClient.setPreferredDarkScheme(id);
       } catch (error) {
-        console.error("Failed to persist preferred dark scheme:", error);
+        logError("Failed to persist preferred dark scheme", error);
       }
     },
     [setPreferredDarkSchemeId]
@@ -186,7 +189,7 @@ export function AppThemePicker({ onClose }: AppThemePickerProps = {}) {
       try {
         await appThemeClient.setPreferredLightScheme(id);
       } catch (error) {
-        console.error("Failed to persist preferred light scheme:", error);
+        logError("Failed to persist preferred light scheme", error);
       }
     },
     [setPreferredLightSchemeId]
@@ -218,7 +221,7 @@ export function AppThemePicker({ onClose }: AppThemePickerProps = {}) {
         setImportMessage(`Imported "${result.scheme.name}".`);
       }
     } catch (error) {
-      console.error("Failed to import app theme:", error);
+      logError("Failed to import app theme", error);
       setImportMessage("Failed to import app theme.");
     }
   }, [addCustomScheme, handleSelect]);
@@ -229,7 +232,7 @@ export function AppThemePicker({ onClose }: AppThemePickerProps = {}) {
       const effectiveScheme = applyAccentOverrideToScheme(selectedScheme, accentColorOverride);
       await appThemeClient.exportTheme(effectiveScheme);
     } catch (error) {
-      console.error("Failed to export app theme:", error);
+      logError("Failed to export app theme", error);
       setImportMessage("Failed to export app theme.");
     }
   }, [selectedScheme, accentColorOverride]);

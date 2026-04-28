@@ -6,6 +6,7 @@ import { EventTimeline } from "../EventInspector/EventTimeline";
 import { EventDetail } from "../EventInspector/EventDetail";
 import { EventFilters } from "../EventInspector/EventFilters";
 import { eventInspectorClient } from "@/clients";
+import { logError } from "@/utils/logger";
 
 export interface EventsContentProps {
   className?: string;
@@ -53,7 +54,7 @@ export function EventsContent({ className }: EventsContentProps) {
         setEvents(existingEvents);
       })
       .catch((error) => {
-        console.error("Failed to load events:", error);
+        logError("Failed to load events", error);
       });
 
     const unsubscribe = eventInspectorClient.onEventBatch((events) => {

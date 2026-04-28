@@ -5,6 +5,7 @@ import { SettingsCheckbox } from "@/components/Settings/SettingsCheckbox";
 import { SettingsSelect } from "@/components/Settings/SettingsSelect";
 import { SettingsSwitchCard } from "@/components/Settings/SettingsSwitchCard";
 import type { NotificationSettings } from "@shared/types/ipc/api";
+import { logError } from "@/utils/logger";
 
 const AVAILABLE_SOUNDS: { file: string; label: string }[] = [
   { file: "chime.wav", label: "Chime" },
@@ -40,7 +41,7 @@ export function ProjectNotificationsTab({ overrides, onChange }: ProjectNotifica
         if (mounted) setGlobalSettings(settings);
       })
       .catch((err) => {
-        console.error("[ProjectNotificationsTab] Failed to load global settings:", err);
+        logError("[ProjectNotificationsTab] Failed to load global settings", err);
         if (mounted) setGlobalError("Failed to load global settings");
       });
 
@@ -85,7 +86,7 @@ export function ProjectNotificationsTab({ overrides, onChange }: ProjectNotifica
               .getSettings()
               .then(setGlobalSettings)
               .catch((err) => {
-                console.error("[ProjectNotificationsTab] Retry failed:", err);
+                logError("[ProjectNotificationsTab] Retry failed", err);
                 setGlobalError("Failed to load global settings");
               });
           }}

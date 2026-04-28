@@ -2,6 +2,12 @@
 import { act, renderHook } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { WorktreeState } from "@/types";
+import { logError } from "@/utils/logger";
+
+vi.mock("@/utils/logger", () => ({
+  logError: vi.fn(),
+  logWarn: vi.fn(),
+}));
 
 const {
   dispatchMock,
@@ -115,7 +121,7 @@ function makeWorktreeMap(): Map<string, WorktreeState> {
 }
 
 describe("useNewTerminalPalette", () => {
-  let consoleErrorSpy: ReturnType<typeof vi.spyOn>;
+  const logErrorMock = vi.mocked(logError);
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -137,7 +143,7 @@ describe("useNewTerminalPalette", () => {
     ]);
 
     dispatchMock.mockResolvedValue({ ok: true, result: { terminalId: "term-1" } });
-    consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    logErrorMock.mockClear();
   });
 
   function render() {
@@ -275,9 +281,12 @@ describe("useNewTerminalPalette", () => {
       await result.current.handleSelect(option!);
     });
 
-    expect(consoleErrorSpy).toHaveBeenCalledWith(
-      "Failed to launch claude terminal:",
-      expect.objectContaining({ message: "Action not found" })
+    expect(logErrorMock).toHaveBeenCalledWith(
+      "Failed to launch claude terminal",
+      undefined,
+      expect.objectContaining({
+        error: expect.objectContaining({ message: "Action not found" }),
+      })
     );
   });
 });

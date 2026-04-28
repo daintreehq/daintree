@@ -8,6 +8,7 @@ import { TRASH_TTL_MS } from "@shared/config/trash";
 import { saveNormalized, saveTabGroups } from "./persistence";
 import { optimizeForDock } from "./layout";
 import { stopDevPreviewByPanelId } from "./helpers";
+import { logError } from "@/utils/logger";
 
 type Set = PanelRegistryStoreApi["setState"];
 type Get = PanelRegistryStoreApi["getState"];
@@ -47,7 +48,7 @@ export const createTrashActions = (
     // Only call PTY operations for PTY-backed terminals
     if (panelKindHasPty(terminal.kind ?? "terminal")) {
       terminalClient.trash(id).catch((error) => {
-        console.error("Failed to trash terminal:", error);
+        logError("Failed to trash terminal", error);
       });
     }
 
@@ -154,7 +155,7 @@ export const createTrashActions = (
       }
       if (terminal && panelKindHasPty(terminal.kind ?? "terminal")) {
         terminalClient.trash(id).catch((error) => {
-          console.error("Failed to trash terminal:", error);
+          logError("Failed to trash terminal", error);
         });
       }
     }
@@ -216,7 +217,7 @@ export const createTrashActions = (
 
     if (terminal && panelKindHasPty(terminal.kind ?? "terminal")) {
       terminalClient.restore(id).catch((error) => {
-        console.error("Failed to restore terminal:", error);
+        logError("Failed to restore terminal", error);
       });
     }
 
@@ -273,7 +274,7 @@ export const createTrashActions = (
       const terminal = get().panelsById[id];
       if (terminal && panelKindHasPty(terminal.kind ?? "terminal")) {
         terminalClient.restore(id).catch((error) => {
-          console.error("Failed to restore terminal:", error);
+          logError("Failed to restore terminal", error);
         });
       }
     }

@@ -3,6 +3,7 @@ import type { ProjectSettings, RunCommand } from "../types";
 import { useProjectStore } from "../store/projectStore";
 import { useProjectSettingsStore } from "../store/projectSettingsStore";
 import { projectClient } from "@/clients";
+import { logError } from "@/utils/logger";
 import { updateBrandingCache } from "./useProjectBranding";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 
@@ -75,7 +76,7 @@ export function useProjectSettings(projectId?: string): UseProjectSettingsReturn
         setLocalDetectedRunners(newDetected);
       }
     } catch (err) {
-      console.error("Failed to load project settings:", err);
+      logError("Failed to load project settings", err);
       if (requestedProjectId === latestTargetIdRef.current) {
         setLocalError(formatErrorMessage(err, "Failed to load project settings"));
         setLocalSettings({ runCommands: [] });
@@ -146,7 +147,7 @@ export function useProjectSettings(projectId?: string): UseProjectSettingsReturn
 
         setLocalError(null);
       } catch (err) {
-        console.error("Failed to save project settings:", err);
+        logError("Failed to save project settings", err);
         const errorMsg = formatErrorMessage(err, "Failed to save project settings");
         setLocalError(errorMsg);
         throw err;
@@ -201,7 +202,7 @@ export function useProjectSettings(projectId?: string): UseProjectSettingsReturn
 
         setLocalError(null);
       } catch (err) {
-        console.error("Failed to promote command:", err);
+        logError("Failed to promote command", err);
         setLocalError(formatErrorMessage(err, "Failed to promote command"));
         throw err;
       }
@@ -263,7 +264,7 @@ export function useProjectSettings(projectId?: string): UseProjectSettingsReturn
 
         setLocalError(null);
       } catch (err) {
-        console.error("Failed to remove command:", err);
+        logError("Failed to remove command", err);
         setLocalError(formatErrorMessage(err, "Failed to remove command"));
         throw err;
       }

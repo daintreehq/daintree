@@ -9,6 +9,7 @@ import {
 import { useAppThemeStore } from "@/store/appThemeStore";
 import { appThemeClient } from "@/clients/appThemeClient";
 import type { ColorVisionMode } from "@shared/types";
+import { logError } from "@/utils/logger";
 
 const COLOR_VISION_OPTIONS: Array<{ id: ColorVisionMode; label: string; description: string }> = [
   { id: "default", label: "Default", description: "No color adjustments" },
@@ -73,7 +74,7 @@ export function ColorVisionPicker() {
       try {
         await appThemeClient.setColorVisionMode(mode);
       } catch (error) {
-        console.error("Failed to persist color vision mode:", error);
+        logError("Failed to persist color vision mode", error);
       }
     },
     [setColorVisionMode]

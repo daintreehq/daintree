@@ -3,6 +3,7 @@ import { cn } from "@/lib/utils";
 import { useEventStore, type EventRecord, type EventFilterOptions } from "@/store/eventStore";
 import { Copy, Check, ChevronDown, ChevronRight, Filter, X } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { logError } from "@/utils/logger";
 
 interface EventDetailProps {
   event: EventRecord | null;
@@ -115,7 +116,7 @@ export function EventDetail({ event, className }: EventDetailProps) {
         copyTimeoutRef.current = null;
       }, 2000);
     } catch (err) {
-      console.error("Failed to copy payload:", err);
+      logError("Failed to copy payload", err);
     }
   };
 
