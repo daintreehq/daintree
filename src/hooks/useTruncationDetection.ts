@@ -84,7 +84,7 @@ export function useTruncationDetection() {
     if (!el || typeof ResizeObserver !== "undefined") return;
     const truncated = el.scrollWidth > el.clientWidth + TOLERANCE;
     setIsTruncated(truncated);
-  });
+  }, []);
 
   return { ref, isTruncated };
 }

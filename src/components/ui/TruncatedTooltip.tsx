@@ -45,10 +45,10 @@ export function TruncatedTooltip({
 
   const mergedRef = mergeRefs(
     isTruncatedProp ? undefined : ownDetection.ref,
-    (children as any).ref
+    (children as React.ReactElement & { ref?: React.Ref<unknown> }).ref
   );
 
-  const extraProps: any = { ref: mergedRef };
+  const extraProps: Record<string, unknown> = { ref: mergedRef };
   if (!isFocusable && showTooltip) {
     extraProps.tabIndex = 0;
   }
