@@ -108,6 +108,21 @@ export function registerProjectRecipesHandlers(_deps: HandlerDependencies): () =
     if (typeof recipeId !== "string" || !recipeId) {
       throw new Error("Invalid recipe ID");
     }
+    // If this recipe also exists in .daintree/ (e.g. a promoted legacy recipe
+    // whose ID doesn't start with inrepo-), clean the canonical copy too.
+    // Otherwise reconciliation on next load will resurrect it.
+    const project = projectStore.getProjectById(projectId);
+    if (project) {
+      try {
+        const inRepoRecipes = await projectStore.readInRepoRecipes(project.path);
+        const match = inRepoRecipes.find((r) => r.id === recipeId);
+        if (match) {
+          await projectStore.deleteInRepoRecipe(project.path, match.name);
+        }
+      } catch (error) {
+        console.error(`[projectRecipes] Failed to clean in-repo copy for ${recipeId}:`, error);
+      }
+    }
     return projectStore.deleteRecipe(projectId, recipeId);
   };
   handlers.push(typedHandle(CHANNELS.PROJECT_DELETE_RECIPE, handleProjectDeleteRecipe));
@@ -238,10 +253,18 @@ export function registerProjectRecipesHandlers(_deps: HandlerDependencies): () =
     if (!project) {
       throw new Error(`Project not found: ${projectId}`);
     }
+    let recipeId: string | null = null;
+    try {
+      const inRepoRecipes = await projectStore.readInRepoRecipes(project.path);
+      const match = inRepoRecipes.find((r) => r.name === recipeName);
+      if (match) recipeId = match.id;
+    } catch {
+      // If we can't read in-repo, fall back to the computed ID
+    }
     await projectStore.deleteInRepoRecipe(project.path, recipeName);
     try {
-      const recipeId = stableInRepoId(recipeName);
-      await projectStore.deleteRecipe(projectId, recipeId);
+      const targetId = recipeId ?? stableInRepoId(recipeName);
+      await projectStore.deleteRecipe(projectId, targetId);
     } catch {
       // Best-effort: reconciliation on next load will catch any misses
     }
