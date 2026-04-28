@@ -20,10 +20,8 @@ export function registerSystemShellHandlers(_deps: HandlerDependencies): () => v
   const handlers: Array<() => void> = [];
 
   const handleSystemOpenExternal = async ({ url }: SystemOpenExternalPayload) => {
-    console.log("[IPC] system:open-external called with:", url);
     try {
       await openExternalUrl(url);
-      console.log("[IPC] system:open-external completed successfully");
     } catch (error) {
       console.error("[IPC] Failed to open external URL:", error);
       throw error;
