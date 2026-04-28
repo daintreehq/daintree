@@ -417,7 +417,7 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
                     className="text-text-inverse bg-status-error border-status-error hover:bg-status-error/80"
                   >
                     <AlertTriangle className="w-4 h-4" />
-                    Reset Everything & Restart
+                    Reset everything &amp; restart
                   </Button>
                 </div>
               </div>

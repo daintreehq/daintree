@@ -140,14 +140,14 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
         <div className="space-y-4">
           <p className="text-sm text-daintree-text/80">
             This will permanently delete the worktree directory
-            {worktree.branch && (
+            {deleteBranch && worktree.branch && (
               <>
                 {" "}
                 and branch{" "}
                 <span className="font-mono font-medium text-daintree-text">{worktree.branch}</span>
               </>
             )}
-            . All associated terminals will be closed.
+            .{closeTerminals && hasTerminals && " All associated terminals will be closed."}
             {hasChanges &&
               " Uncommitted changes will be lost unless the worktree is first restored from git."}
           </p>

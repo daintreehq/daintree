@@ -398,13 +398,13 @@ export function RecipeManager({
 
       <ConfirmDialog
         isOpen={recipeToSave !== null}
-        title="Save to Team Recipes?"
+        title={`Save '${globalRecipes.find((r) => r.id === recipeToSave)?.name ?? projectRecipes.find((r) => r.id === recipeToSave)?.name ?? inRepoRecipes.find((r) => r.id === recipeToSave)?.name ?? "recipe"}' to team recipes?`}
         description={
           saveError
             ? `Error: ${saveError}`
             : "This recipe will be written to .daintree/recipes/ in the repository where it can be committed and shared with the team."
         }
-        confirmLabel={saveError ? "Retry" : "Save to Repo"}
+        confirmLabel={saveError ? "Retry" : "Save to repo"}
         variant="default"
         isConfirmLoading={isSaving}
         onConfirm={() => void handleSaveToRepo()}
@@ -417,7 +417,7 @@ export function RecipeManager({
       <ConfirmDialog
         isOpen={recipeToDeleteAfterSave !== null}
         title="Delete original?"
-        description="The recipe has been saved to the repository. Do you want to remove the original copy from this machine?"
+        description="The recipe has been saved to the repository. The original copy on this machine will be permanently removed."
         confirmLabel="Delete original"
         cancelLabel="Keep Both"
         variant="destructive"
