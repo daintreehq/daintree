@@ -587,7 +587,11 @@ describe("CliAvailabilityService", () => {
       expect(refreshed.codex).toBe("missing");
 
       expect(service.getAvailability()).toEqual(refreshed);
-      expect(mockedExecFileSync).toHaveBeenCalledTimes(7);
+      // 7 successful primary calls + 6 BusyBox-style bare-`which` retries
+      // (the 6 agents whose mock throws a generic `Error` with no errno
+      // code — which `probeViaShell` retries without `-a` to recover
+      // BusyBox/minimal `which` builds that reject the flag).
+      expect(mockedExecFileSync).toHaveBeenCalledTimes(13);
     });
 
     it("works on cold start before initial check", async () => {
@@ -1615,6 +1619,37 @@ describe("CliAvailabilityService", () => {
       expect(message).not.toContain("/d/bin/claude");
       expect(message).not.toContain("/e/bin/claude");
       expect(message).toContain("and 2 more");
+    });
+
+    it("falls back to bare `which` when BusyBox-style `which -a` exits non-zero", async () => {
+      // BusyBox/minimal `which` builds reject `-a` with a non-zero exit
+      // (no errno code). Without a fallback, every agent on Alpine would
+      // silently surface as "missing".
+      mockedExecFileSync.mockImplementation((_file, args) => {
+        const argv = args as string[] | undefined;
+        if (argv?.[0] === "-a") {
+          const e = new Error("which: invalid option -- a");
+          throw Object.assign(e, { status: 1 });
+        }
+        // Plain `which kiro-cli` succeeds.
+        if (cmdOf(args) === "kiro-cli") {
+          return Buffer.from("/usr/local/bin/kiro-cli\n");
+        }
+        const enoent = new Error("not found");
+        throw Object.assign(enoent, { status: 1 });
+      });
+
+      const result = await service.checkAvailability();
+      expect(result.kiro).toBe("ready");
+      const detail = service.getDetails()!.kiro!;
+      expect(detail.resolvedPath).toBe("/usr/local/bin/kiro-cli");
+      // Single-result fallback never surfaces duplicates.
+      expect(detail.allResolvedPaths).toBeUndefined();
+
+      const toastCalls = mockedBroadcast.mock.calls.filter(
+        (call) => call[0] === CHANNELS.NOTIFICATION_SHOW_TOAST
+      );
+      expect(toastCalls).toHaveLength(0);
     });
 
     it("survives a milestone load with falsy/undefined value (legacy stores)", async () => {
