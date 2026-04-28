@@ -397,9 +397,7 @@ export function QuickRun({ projectId }: QuickRunProps) {
                 )}
               >
                 {/* Prompt Symbol */}
-                <div className="select-none pl-3 pr-2 font-mono font-bold text-accent-primary">
-                  $
-                </div>
+                <div className="select-none pl-3 pr-2 font-mono font-bold text-text-muted">$</div>
 
                 {/* Input */}
                 <input
@@ -434,7 +432,7 @@ export function QuickRun({ projectId }: QuickRunProps) {
                         className={cn(
                           "p-1.5 rounded-[var(--radius-sm)] transition",
                           autoRestart
-                            ? "bg-daintree-accent/20 text-daintree-accent"
+                            ? "bg-overlay-medium text-daintree-text"
                             : "text-text-muted hover:bg-overlay-soft hover:text-text-secondary"
                         )}
                         aria-label={autoRestart ? "Disable auto-restart" : "Enable auto-restart"}
@@ -457,7 +455,7 @@ export function QuickRun({ projectId }: QuickRunProps) {
                         className={cn(
                           "p-1.5 rounded-[var(--radius-sm)] transition",
                           runAsDocked
-                            ? "bg-daintree-accent/20 text-daintree-accent"
+                            ? "bg-overlay-medium text-daintree-text"
                             : "text-text-muted hover:bg-overlay-soft hover:text-text-secondary"
                         )}
                         aria-label={
@@ -533,7 +531,7 @@ export function QuickRun({ projectId }: QuickRunProps) {
                           }}
                         >
                           {item.type === "saved" ? (
-                            <Pin className="h-3 w-3 text-daintree-accent shrink-0 fill-daintree-accent" />
+                            <Pin className="h-3 w-3 text-text-secondary shrink-0" />
                           ) : item.type === "history" ? (
                             <Clock className="h-3 w-3 opacity-40 shrink-0" />
                           ) : (
@@ -544,7 +542,6 @@ export function QuickRun({ projectId }: QuickRunProps) {
                               <span
                                 className={cn(
                                   "group-hover:text-daintree-text",
-                                  index === focusedSuggestionIndex ? "text-daintree-accent" : "",
                                   item.type === "saved" ? "font-semibold text-daintree-text" : ""
                                 )}
                               >
