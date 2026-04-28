@@ -68,7 +68,9 @@ describe("ErrorBoundary", () => {
     const shortId = storeId.slice(-7);
     // In dev mode, incident ID is not displayed (only in prod)
     // but we can verify the error was added to the store
-    expect(storeId).toMatch(/^error-\d+-[a-z0-9]{7}$/);
+    expect(storeId).toMatch(
+      /^error-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+    );
     expect(shortId).toHaveLength(7);
   });
 
