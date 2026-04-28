@@ -314,14 +314,14 @@ function parseMarkeredPath(stdout: string, marker: string): string | null {
 function runShellProbe(): Promise<string | null> {
   return new Promise((resolve) => {
     let resolved = false;
-    let termTimer: NodeJS.Timeout | undefined;
-    let killTimer: NodeJS.Timeout | undefined;
+    let termTimer: NodeJS.Timeout | undefined = undefined;
+    let killTimer: NodeJS.Timeout | undefined = undefined;
 
     const settle = (value: string | null) => {
       if (resolved) return;
       resolved = true;
-      if (termTimer) clearTimeout(termTimer);
-      if (killTimer) clearTimeout(killTimer);
+      if (termTimer !== undefined) clearTimeout(termTimer);
+      if (killTimer !== undefined) clearTimeout(killTimer);
       resolve(value);
     };
 
