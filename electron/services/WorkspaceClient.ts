@@ -383,6 +383,7 @@ export class WorkspaceClient extends EventEmitter {
       requestId,
       rootPath: entry.projectPath,
       globalEnvVars: store.get("globalEnvironmentVariables") ?? {},
+        wslGitByWorktree: store.get("wslGitByWorktree") ?? {},
     });
 
     // Re-establish direct renderer ports after host restart
@@ -524,6 +525,7 @@ export class WorkspaceClient extends EventEmitter {
         requestId,
         rootPath: normalizedPath,
         globalEnvVars: store.get("globalEnvironmentVariables") ?? {},
+        wslGitByWorktree: store.get("wslGitByWorktree") ?? {},
       });
     })();
 
@@ -588,6 +590,7 @@ export class WorkspaceClient extends EventEmitter {
         requestId,
         rootPath: normalizedPath,
         globalEnvVars: store.get("globalEnvironmentVariables") ?? {},
+        wslGitByWorktree: store.get("wslGitByWorktree") ?? {},
       });
     })();
 
@@ -879,6 +882,17 @@ export class WorkspaceClient extends EventEmitter {
   setPollingEnabled(enabled: boolean): void {
     for (const entry of this.entries.values()) {
       entry.host.send({ type: "set-polling-enabled", enabled });
+    }
+  }
+
+  /**
+   * Forward a per-worktree WSL git opt-in / dismissed change to every host.
+   * Each host filters by worktree id internally — broadcasting is cheaper
+   * than tracking which host owns which worktree from this layer.
+   */
+  setWslOptIn(worktreeId: string, enabled: boolean, dismissed: boolean): void {
+    for (const entry of this.entries.values()) {
+      entry.host.send({ type: "set-wsl-opt-in", worktreeId, enabled, dismissed });
     }
   }
 

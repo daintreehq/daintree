@@ -141,6 +141,21 @@ export interface WorktreeSnapshot {
 
   /** Cached display label for the environment (e.g., "Docker", "Akash") */
   worktreeEnvironmentLabel?: string;
+
+  /** True when the worktree path is mounted via \\wsl$\ or \\wsl.localhost\. */
+  isWslPath?: boolean;
+
+  /** Distro name parsed from the WSL UNC mount, when `isWslPath` is true. */
+  wslDistro?: string;
+
+  /** Whether `wslDistro` matches the WSL default distro (gates "Enable" UI). */
+  wslGitEligible?: boolean;
+
+  /** User has opted in to WSL-routed git for this worktree. */
+  wslGitOptIn?: boolean;
+
+  /** User dismissed the WSL git suggestion banner without opting in. */
+  wslGitDismissed?: boolean;
 }
 
 /** Monitor configuration for polling intervals */
@@ -166,6 +181,12 @@ export type WorkspaceHostRequest =
       requestId: string;
       rootPath: string;
       globalEnvVars?: Record<string, string>;
+      /**
+       * Persisted per-worktree WSL git opt-in state (Windows only). Map key is
+       * the worktree id; values capture the user's previous Enable/Dismiss
+       * decisions so the host can apply them when constructing monitors.
+       */
+      wslGitByWorktree?: Record<string, { enabled: boolean; dismissed: boolean }>;
     }
   | {
       type: "sync";
@@ -218,6 +239,13 @@ export type WorkspaceHostRequest =
     }
   // Polling control
   | { type: "set-polling-enabled"; enabled: boolean }
+  // WSL-routed git opt-in / banner dismissal (Windows only)
+  | {
+      type: "set-wsl-opt-in";
+      worktreeId: string;
+      enabled: boolean;
+      dismissed: boolean;
+    }
   // Background/foreground lifecycle
   | { type: "background" }
   | { type: "foreground" }

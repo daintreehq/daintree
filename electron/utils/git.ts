@@ -5,7 +5,8 @@ import type { FileChangeDetail, GitStatus, WorktreeChanges } from "../types/inde
 import { WorktreeRemovedError, toGitOperationError } from "./errorTypes.js";
 import { logWarn, logError } from "./logger.js";
 import { Cache } from "./cache.js";
-import { createHardenedGit } from "./hardenedGit.js";
+import { createHardenedGit, createWslHardenedGit } from "./hardenedGit.js";
+import type { WslGitInvocation } from "./hardenedGit.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 
 const GIT_WORKTREE_CHANGES_CACHE = new Cache<string, WorktreeChanges>({
@@ -176,6 +177,24 @@ export async function getLatestTrackedFileMtime(worktreePath: string): Promise<n
 export interface GetWorktreeChangesOptions {
   forceRefresh?: boolean;
   cacheTTL?: number;
+  /**
+   * When set, route git through WSL using `createWslHardenedGit`. The caller
+   * must provide the distro name and POSIX path (already translated from the
+   * UNC). Set only on Windows for worktrees the user has opted into.
+   */
+  wsl?: WslGitInvocation;
+}
+
+function gitForChanges(cwd: string, opts: GetWorktreeChangesOptions): SimpleGit {
+  if (opts.wsl) {
+    try {
+      return createWslHardenedGit(opts.wsl);
+    } catch {
+      // Fall back to native git if the WSL invocation is rejected (e.g. wrong
+      // platform, missing distro). Polling continues using the slower path.
+    }
+  }
+  return createHardenedGit(cwd);
 }
 
 export async function getWorktreeChangesWithStats(
@@ -220,7 +239,7 @@ export async function getWorktreeChangesWithStats(
     }
 
     try {
-      const git: SimpleGit = createHardenedGit(cwd);
+      const git: SimpleGit = gitForChanges(cwd, options);
       const status: StatusResult = await git.status();
       const gitRoot = realpathSync((await git.revparse(["--show-toplevel"])).trim());
 

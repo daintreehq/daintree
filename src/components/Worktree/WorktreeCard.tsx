@@ -27,6 +27,7 @@ import { WorktreeDetailsSection } from "./WorktreeCard/WorktreeDetailsSection";
 import { WorktreeDialogs } from "./WorktreeCard/WorktreeDialogs";
 import { WorktreeHeader } from "./WorktreeCard/WorktreeHeader";
 import { WorktreeTerminalSection } from "./WorktreeCard/WorktreeTerminalSection";
+import { WslGitBanner } from "./WorktreeCard/WslGitBanner";
 import {
   MainWorktreeSummaryRows,
   type AggregateCounts,
@@ -81,6 +82,11 @@ export function worktreeCardPropsAreEqual(
       a.taskId !== b.taskId ||
       a.hasPlanFile !== b.hasPlanFile ||
       a.planFilePath !== b.planFilePath ||
+      a.isWslPath !== b.isWslPath ||
+      a.wslDistro !== b.wslDistro ||
+      a.wslGitEligible !== b.wslGitEligible ||
+      a.wslGitOptIn !== b.wslGitOptIn ||
+      a.wslGitDismissed !== b.wslGitDismissed ||
       a.worktreeChanges !== b.worktreeChanges
     ) {
       return false;
@@ -884,6 +890,15 @@ export const WorktreeCard = React.memo(function WorktreeCard({
 
               {!effectiveIsCollapsed && (
                 <div id={`worktree-body-${worktree.id}`}>
+                  {worktree.isWslPath &&
+                    !worktree.wslGitOptIn &&
+                    !worktree.wslGitDismissed && (
+                      <WslGitBanner
+                        worktreeId={worktree.id}
+                        wslDistro={worktree.wslDistro}
+                        wslGitEligible={worktree.wslGitEligible}
+                      />
+                    )}
                   {isMainWorktree && (
                     <MainWorktreeSummaryRows
                       aggregateCounts={aggregateCounts}

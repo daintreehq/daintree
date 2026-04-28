@@ -881,6 +881,14 @@ export interface ElectronAPI {
     get(): Promise<WorktreeConfig>;
     /** Set worktree path pattern */
     setPattern(pattern: string): Promise<WorktreeConfig>;
+    /**
+     * Toggle WSL-routed git for a single worktree. Persists the preference
+     * and forwards to the workspace host so the next git invocation uses the
+     * matching factory. Windows-only.
+     */
+    setWslGit(worktreeId: string, enabled: boolean): Promise<void>;
+    /** Hide the WSL git suggestion banner for this worktree without enabling. */
+    dismissWslBanner(worktreeId: string): Promise<void>;
   };
   window: {
     /** Subscribe to fullscreen state changes */

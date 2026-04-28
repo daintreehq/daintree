@@ -6,11 +6,23 @@ const mockGetWorktreeChangesWithStats = vi.fn();
 const mockInvalidateGitStatusCache = vi.fn();
 const mockGitRaw = vi.fn();
 
+const { mockCreateHardenedGit, mockCreateWslHardenedGit } = vi.hoisted(() => ({
+  mockCreateHardenedGit: vi.fn(),
+  mockCreateWslHardenedGit: vi.fn(),
+}));
+
+mockCreateHardenedGit.mockImplementation(() => ({
+  raw: (...args: unknown[]) => mockGitRaw(...args),
+  log: vi.fn().mockResolvedValue({ latest: null }),
+}));
+mockCreateWslHardenedGit.mockImplementation(() => ({
+  raw: (...args: unknown[]) => mockGitRaw(...args),
+  log: vi.fn().mockResolvedValue({ latest: null }),
+}));
+
 vi.mock("../../utils/hardenedGit.js", () => ({
-  createHardenedGit: vi.fn(() => ({
-    raw: (...args: unknown[]) => mockGitRaw(...args),
-    log: vi.fn().mockResolvedValue({ latest: null }),
-  })),
+  createHardenedGit: mockCreateHardenedGit,
+  createWslHardenedGit: mockCreateWslHardenedGit,
   validateCwd: vi.fn(),
 }));
 
@@ -1036,6 +1048,99 @@ describe("WorktreeMonitor", () => {
       expect(callCount).toBe(3);
 
       monitor.stop();
+    });
+  });
+
+  describe("WSL git routing", () => {
+    beforeEach(() => {
+      mockCreateHardenedGit.mockClear();
+      mockCreateWslHardenedGit.mockClear();
+      mockGetWorktreeChangesWithStats.mockResolvedValue({
+        changes: [],
+        changedFileCount: 0,
+        totalInsertions: 0,
+        totalDeletions: 0,
+        latestFileMtime: null,
+        lastUpdated: Date.now(),
+      });
+    });
+
+    it("does not pass wsl invocation when not opted in", async () => {
+      const wsl: Worktree = {
+        ...TEST_WORKTREE,
+        path: "\\\\wsl$\\Ubuntu\\home\\user\\repo",
+        isWslPath: true,
+        wslDistro: "Ubuntu",
+        wslGitEligible: true,
+        wslGitOptIn: false,
+      };
+      const monitor = new WorktreeMonitor(wsl, TEST_CONFIG, makeCallbacks(), "main");
+      await monitor.start();
+
+      const lastCall =
+        mockGetWorktreeChangesWithStats.mock.calls[
+          mockGetWorktreeChangesWithStats.mock.calls.length - 1
+        ];
+      expect(lastCall[1]?.wsl).toBeUndefined();
+
+      monitor.stop();
+    });
+
+    it("passes wsl invocation when eligible + opted in (Windows only)", async () => {
+      const original = process.platform;
+      Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+      try {
+        const wsl: Worktree = {
+          ...TEST_WORKTREE,
+          path: "\\\\wsl$\\Ubuntu\\home\\user\\repo",
+          isWslPath: true,
+          wslDistro: "Ubuntu",
+          wslGitEligible: true,
+          wslGitOptIn: true,
+        };
+        const monitor = new WorktreeMonitor(wsl, TEST_CONFIG, makeCallbacks(), "main");
+        await monitor.start();
+
+        const lastCall =
+          mockGetWorktreeChangesWithStats.mock.calls[
+            mockGetWorktreeChangesWithStats.mock.calls.length - 1
+          ];
+        expect(lastCall[1]?.wsl).toEqual({
+          distro: "Ubuntu",
+          posixPath: "/home/user/repo",
+        });
+
+        monitor.stop();
+      } finally {
+        Object.defineProperty(process, "platform", { value: original, configurable: true });
+      }
+    });
+
+    it("setWslOptIn re-emits snapshot when value changes", async () => {
+      const original = process.platform;
+      Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+      try {
+        const wsl: Worktree = {
+          ...TEST_WORKTREE,
+          path: "\\\\wsl$\\Ubuntu\\home\\user\\repo",
+          isWslPath: true,
+          wslDistro: "Ubuntu",
+          wslGitEligible: true,
+          wslGitOptIn: false,
+        };
+        const callbacks = makeCallbacks();
+        const monitor = new WorktreeMonitor(wsl, TEST_CONFIG, callbacks, "main");
+        await monitor.start();
+
+        const updateCallsBefore = (callbacks.onUpdate as ReturnType<typeof vi.fn>).mock.calls.length;
+        monitor.setWslOptIn(true, true);
+        const updateCallsAfter = (callbacks.onUpdate as ReturnType<typeof vi.fn>).mock.calls.length;
+        expect(updateCallsAfter).toBeGreaterThan(updateCallsBefore);
+
+        monitor.stop();
+      } finally {
+        Object.defineProperty(process, "platform", { value: original, configurable: true });
+      }
     });
   });
 });

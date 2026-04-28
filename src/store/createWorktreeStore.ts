@@ -195,6 +195,11 @@ function snapshotsEqual(a: WorktreeSnapshot, b: WorktreeSnapshot): boolean {
     a.hasResumeCommand === b.hasResumeCommand &&
     a.hasTeardownCommand === b.hasTeardownCommand &&
     a.resourceConnectCommand === b.resourceConnectCommand &&
+    a.isWslPath === b.isWslPath &&
+    a.wslDistro === b.wslDistro &&
+    a.wslGitEligible === b.wslGitEligible &&
+    a.wslGitOptIn === b.wslGitOptIn &&
+    a.wslGitDismissed === b.wslGitDismissed &&
     resourceStatusEqual(a.resourceStatus, b.resourceStatus) &&
     worktreeChangesEqual(a.worktreeChanges, b.worktreeChanges) &&
     lifecycleStatusEqual(a.lifecycleStatus, b.lifecycleStatus)

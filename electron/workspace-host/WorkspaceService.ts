@@ -17,6 +17,7 @@ import type {
   PRServiceStatus,
 } from "../../shared/types/workspace-host.js";
 import { invalidateGitStatusCache } from "../utils/git.js";
+import { detectWslPath, listFirstWslDistro } from "../utils/wsl.js";
 import { getGitDir, clearGitDirCache } from "../utils/gitUtils.js";
 import { extractIssueNumberSync, extractIssueNumber } from "../services/issueExtractor.js";
 import { GitHubAuth } from "../services/github/GitHubAuth.js";
@@ -142,6 +143,11 @@ export class WorkspaceService {
    *  descriptor ceiling only once, even if many worktrees hit EMFILE concurrently. */
   private emfileLimitNotified = false;
 
+  /** Per-worktree WSL git opt-in state forwarded from main on load and toggle. */
+  private wslGitByWorktree: Record<string, { enabled: boolean; dismissed: boolean }> = {};
+  /** Cached default WSL distro (populated lazily on first WSL-path detection). */
+  private wslDefaultDistroPromise: Promise<string | null> | null = null;
+
   constructor(private readonly sendEvent: (event: WorkspaceHostEvent) => void) {
     this.prService = new PRIntegrationService(pullRequestService, events, {
       onPRDetected: (worktreeId, data) => {
@@ -223,10 +229,14 @@ export class WorkspaceService {
   async loadProject(
     requestId: string,
     projectRootPath: string,
-    globalEnvVars?: Record<string, string>
+    globalEnvVars?: Record<string, string>,
+    wslGitByWorktree?: Record<string, { enabled: boolean; dismissed: boolean }>
   ): Promise<void> {
     try {
       this.projectRootPath = projectRootPath;
+      if (wslGitByWorktree && typeof wslGitByWorktree === "object") {
+        this.wslGitByWorktree = { ...wslGitByWorktree };
+      }
       // Merge: global (lowest priority) < project-level < DAINTREE_* (set in buildEnv)
       const projectEnvVars = await this.loadProjectEnvVars(projectRootPath);
       this.projectEnvVars = { ...(globalEnvVars ?? {}), ...projectEnvVars };
@@ -395,6 +405,48 @@ export class WorkspaceService {
    * If a monitor already exists for `wt.id`, this is a no-op (race safety for
    * overlapping create/delete on the same path).
    */
+  /**
+   * Detect whether a worktree is mounted via WSL and, if so, attach the
+   * detection metadata + persisted opt-in state. No-op on non-Windows. Bind
+   * time only — the result is folded into the `Worktree` passed to
+   * `WorktreeMonitor`.
+   */
+  private async enrichWorktreeWithWsl(wt: Worktree): Promise<Worktree> {
+    if (process.platform !== "win32") return wt;
+    const detected = detectWslPath(wt.path);
+    if (!detected) return wt;
+
+    if (!this.wslDefaultDistroPromise) {
+      this.wslDefaultDistroPromise = listFirstWslDistro().catch(() => null);
+    }
+    const defaultDistro = await this.wslDefaultDistroPromise;
+    const eligible = defaultDistro !== null && defaultDistro === detected.distro;
+    const persisted = this.wslGitByWorktree[wt.id];
+
+    return {
+      ...wt,
+      isWslPath: true,
+      wslDistro: detected.distro,
+      wslGitEligible: eligible,
+      wslGitOptIn: Boolean(persisted?.enabled),
+      wslGitDismissed: Boolean(persisted?.dismissed),
+    };
+  }
+
+  /**
+   * Update WSL git routing state for a single worktree. Persists the new
+   * preference into the in-memory map and forwards to the matching monitor
+   * (which re-emits its snapshot). Called by the workspace-host message
+   * handler in response to renderer-driven IPC.
+   */
+  setWslOptIn(worktreeId: string, enabled: boolean, dismissed: boolean): void {
+    this.wslGitByWorktree[worktreeId] = { enabled, dismissed };
+    const monitor = this.monitors.get(worktreeId);
+    if (monitor) {
+      monitor.setWslOptIn(enabled, dismissed);
+    }
+  }
+
   private async addNewWorktreeMonitor(
     wt: Worktree,
     isActive: boolean,
@@ -403,6 +455,9 @@ export class WorkspaceService {
     if (this.monitors.has(wt.id)) {
       return;
     }
+
+    const enrichedWt = await this.enrichWorktreeWithWsl(wt);
+    wt = enrichedWt;
 
     await ensureNoteFile(wt.path);
     const issueNumber = wt.branch ? extractIssueNumberSync(wt.branch, wt.name) : null;

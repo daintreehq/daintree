@@ -148,6 +148,12 @@ export interface StoreSchema {
     }
   >;
   worktreeIssueMap: Record<string, IssueAssociation>;
+  /**
+   * Per-worktree WSL git routing state. Key is the worktree id (UNC path on
+   * Windows). `enabled` opts into routing git through `wsl.exe git`; `dismissed`
+   * hides the suggestion banner without enabling. Only meaningful on Windows.
+   */
+  wslGitByWorktree: Record<string, { enabled: boolean; dismissed: boolean }>;
   appTheme: Partial<AppThemeConfig>;
   privacy: {
     telemetryLevel: "off" | "errors" | "full";
@@ -284,6 +290,7 @@ const storeOptions = {
     appAgentConfig: DEFAULT_APP_AGENT_CONFIG,
     windowStates: {},
     worktreeIssueMap: {},
+    wslGitByWorktree: {},
     appTheme: {},
     privacy: {
       telemetryLevel: "off" as const,
