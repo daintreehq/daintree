@@ -43,6 +43,8 @@ import { removeStartupSkeleton } from "./utils/removeStartupSkeleton";
 import { useCrashRecoveryGate } from "./hooks/app/useCrashRecoveryGate";
 import { CrashRecoveryDialog } from "./components/Recovery/CrashRecoveryDialog";
 import { SafeModeBanner } from "./components/Recovery/SafeModeBanner";
+import { CloudSyncBanner } from "./components/Recovery/CloudSyncBanner";
+import { GitHubTokenBanner } from "./components/Recovery/GitHubTokenBanner";
 import {
   useAppHydration,
   useProjectSwitchRehydration,
@@ -480,6 +482,8 @@ function App() {
         <TooltipProvider delayDuration={500} skipDelayDuration={150}>
           <E2EFaultInjector />
           {isSafeMode && <SafeModeBanner />}
+          <GitHubTokenBanner />
+          <CloudSyncBanner />
           <DndProvider>
             <VoiceRecordingAnnouncer />
             <AccessibilityAnnouncer />
