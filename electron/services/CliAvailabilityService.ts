@@ -673,7 +673,6 @@ export class CliAvailabilityService {
     });
   }
 
-
   private expandPath(input: string, home: string): string | null {
     if (!input) return null;
     let expanded = input;

@@ -62,7 +62,9 @@ export const WslGitBanner = React.memo(function WslGitBanner({
         )}
       >
         <div className="flex-1">
-          <div className="font-medium text-daintree-text-primary">Speed up git on this WSL worktree</div>
+          <div className="font-medium text-daintree-text-primary">
+            Speed up git on this WSL worktree
+          </div>
           <div className="mt-0.5 text-daintree-text-secondary">
             This worktree lives in WSL ({wslDistro ?? "unknown distro"}). Routing git through{" "}
             <code className="rounded bg-overlay-subtle px-1 py-0.5">wsl git</code> avoids the
@@ -108,10 +110,13 @@ export const WslGitBanner = React.memo(function WslGitBanner({
       )}
     >
       <div className="flex-1">
-        <div className="font-medium text-daintree-text-primary">WSL worktree (non-default distro)</div>
+        <div className="font-medium text-daintree-text-primary">
+          WSL worktree (non-default distro)
+        </div>
         <div className="mt-0.5 text-daintree-text-secondary">
-          This worktree is in <code className="rounded bg-overlay-subtle px-1 py-0.5">{wslDistro ?? "WSL"}</code>,
-          which isn't the default WSL distro. Daintree can't yet route git through this distro
+          This worktree is in{" "}
+          <code className="rounded bg-overlay-subtle px-1 py-0.5">{wslDistro ?? "WSL"}</code>, which
+          isn't the default WSL distro. Daintree can't yet route git through this distro
           automatically — git will run from Windows and may be slower than usual.
         </div>
       </div>

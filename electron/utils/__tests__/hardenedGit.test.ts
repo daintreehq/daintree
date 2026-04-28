@@ -410,13 +410,21 @@ describe("createWslHardenedGit", () => {
 
   it("throws when distro is empty", () => {
     expect(() =>
-      createWslHardenedGit({ distro: "", uncPath: "\\\\wsl$\\Ubuntu\\home\\user\\proj", posixPath: "/home/user/proj" })
+      createWslHardenedGit({
+        distro: "",
+        uncPath: "\\\\wsl$\\Ubuntu\\home\\user\\proj",
+        posixPath: "/home/user/proj",
+      })
     ).toThrow("WSL distro");
   });
 
   it("throws when posix path does not start with /", () => {
     expect(() =>
-      createWslHardenedGit({ distro: "Ubuntu", uncPath: "\\\\wsl$\\Ubuntu\\home\\user\\proj", posixPath: "home/user/proj" })
+      createWslHardenedGit({
+        distro: "Ubuntu",
+        uncPath: "\\\\wsl$\\Ubuntu\\home\\user\\proj",
+        posixPath: "home/user/proj",
+      })
     ).toThrow("posix path");
   });
 
@@ -445,14 +453,22 @@ describe("createWslHardenedGit", () => {
   });
 
   it("sets binary to wsl.exe + git two-tuple", () => {
-    createWslHardenedGit({ distro: "Ubuntu", uncPath: "\\\\wsl$\\Ubuntu\\home\\user\\proj", posixPath: "/home/user/proj" });
+    createWslHardenedGit({
+      distro: "Ubuntu",
+      uncPath: "\\\\wsl$\\Ubuntu\\home\\user\\proj",
+      posixPath: "/home/user/proj",
+    });
 
     const options = (simpleGit as ReturnType<typeof vi.fn>).mock.calls[0][0];
     expect(options.binary).toEqual(["wsl.exe", "git"]);
   });
 
   it("carries the full HARDENED_GIT_CONFIG", () => {
-    createWslHardenedGit({ distro: "Ubuntu", uncPath: "\\\\wsl$\\Ubuntu\\home\\user\\proj", posixPath: "/home/user/proj" });
+    createWslHardenedGit({
+      distro: "Ubuntu",
+      uncPath: "\\\\wsl$\\Ubuntu\\home\\user\\proj",
+      posixPath: "/home/user/proj",
+    });
 
     const options = (simpleGit as ReturnType<typeof vi.fn>).mock.calls[0][0];
     for (const entry of HARDENED_GIT_CONFIG) {
@@ -462,7 +478,11 @@ describe("createWslHardenedGit", () => {
   });
 
   it("sets WSL_DISTRO_NAME in env for diagnostics", () => {
-    createWslHardenedGit({ distro: "Ubuntu", uncPath: "\\\\wsl$\\Ubuntu\\home\\user\\proj", posixPath: "/home/user/proj" });
+    createWslHardenedGit({
+      distro: "Ubuntu",
+      uncPath: "\\\\wsl$\\Ubuntu\\home\\user\\proj",
+      posixPath: "/home/user/proj",
+    });
 
     const envArg = mockGitInstance.env.mock.calls[0][0];
     expect(envArg.WSL_DISTRO_NAME).toBe("Ubuntu");
@@ -472,14 +492,25 @@ describe("createWslHardenedGit", () => {
 
   it("forwards abort signal when provided", () => {
     const controller = new AbortController();
-    createWslHardenedGit({ distro: "Ubuntu", uncPath: "\\\\wsl$\\Ubuntu\\home\\user\\proj", posixPath: "/home/user/proj" }, controller.signal);
+    createWslHardenedGit(
+      {
+        distro: "Ubuntu",
+        uncPath: "\\\\wsl$\\Ubuntu\\home\\user\\proj",
+        posixPath: "/home/user/proj",
+      },
+      controller.signal
+    );
 
     const options = (simpleGit as ReturnType<typeof vi.fn>).mock.calls[0][0];
     expect(options.abort).toBe(controller.signal);
   });
 
   it("enables allowUnsafe flags matching createHardenedGit", () => {
-    createWslHardenedGit({ distro: "Ubuntu", uncPath: "\\\\wsl$\\Ubuntu\\home\\user\\proj", posixPath: "/home/user/proj" });
+    createWslHardenedGit({
+      distro: "Ubuntu",
+      uncPath: "\\\\wsl$\\Ubuntu\\home\\user\\proj",
+      posixPath: "/home/user/proj",
+    });
 
     const options = (simpleGit as ReturnType<typeof vi.fn>).mock.calls[0][0];
     expect(options.unsafe).toEqual({

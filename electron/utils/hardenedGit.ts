@@ -102,7 +102,10 @@ export interface WslGitInvocation {
  *
  * Windows-only: throws on other platforms.
  */
-export function createWslHardenedGit(invocation: WslGitInvocation, signal?: AbortSignal): SimpleGit {
+export function createWslHardenedGit(
+  invocation: WslGitInvocation,
+  signal?: AbortSignal
+): SimpleGit {
   if (process.platform !== "win32") {
     throw new Error("createWslHardenedGit is only available on Windows");
   }

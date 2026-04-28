@@ -383,7 +383,7 @@ export class WorkspaceClient extends EventEmitter {
       requestId,
       rootPath: entry.projectPath,
       globalEnvVars: store.get("globalEnvironmentVariables") ?? {},
-        wslGitByWorktree: store.get("wslGitByWorktree") ?? {},
+      wslGitByWorktree: store.get("wslGitByWorktree") ?? {},
     });
 
     // Re-establish direct renderer ports after host restart

@@ -1133,7 +1133,8 @@ describe("WorktreeMonitor", () => {
         const monitor = new WorktreeMonitor(wsl, TEST_CONFIG, callbacks, "main");
         await monitor.start();
 
-        const updateCallsBefore = (callbacks.onUpdate as ReturnType<typeof vi.fn>).mock.calls.length;
+        const updateCallsBefore = (callbacks.onUpdate as ReturnType<typeof vi.fn>).mock.calls
+          .length;
         monitor.setWslOptIn(true, true);
         const updateCallsAfter = (callbacks.onUpdate as ReturnType<typeof vi.fn>).mock.calls.length;
         expect(updateCallsAfter).toBeGreaterThan(updateCallsBefore);

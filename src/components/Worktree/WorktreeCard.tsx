@@ -890,15 +890,13 @@ export const WorktreeCard = React.memo(function WorktreeCard({
 
               {!effectiveIsCollapsed && (
                 <div id={`worktree-body-${worktree.id}`}>
-                  {worktree.isWslPath &&
-                    !worktree.wslGitOptIn &&
-                    !worktree.wslGitDismissed && (
-                      <WslGitBanner
-                        worktreeId={worktree.id}
-                        wslDistro={worktree.wslDistro}
-                        wslGitEligible={worktree.wslGitEligible}
-                      />
-                    )}
+                  {worktree.isWslPath && !worktree.wslGitOptIn && !worktree.wslGitDismissed && (
+                    <WslGitBanner
+                      worktreeId={worktree.id}
+                      wslDistro={worktree.wslDistro}
+                      wslGitEligible={worktree.wslGitEligible}
+                    />
+                  )}
                   {isMainWorktree && (
                     <MainWorktreeSummaryRows
                       aggregateCounts={aggregateCounts}

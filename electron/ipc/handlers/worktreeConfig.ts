@@ -104,9 +104,7 @@ export function registerWorktreeConfigHandlers(deps: HandlerDependencies): () =>
     writeWslGitEntry(worktreeId, { enabled, dismissed: true });
     deps.worktreeService?.setWslOptIn(worktreeId, enabled, true);
   };
-  handlers.push(
-    typedHandle(CHANNELS.WORKTREE_CONFIG_DISMISS_WSL_BANNER, handleDismissWslBanner)
-  );
+  handlers.push(typedHandle(CHANNELS.WORKTREE_CONFIG_DISMISS_WSL_BANNER, handleDismissWslBanner));
 
   return () => handlers.forEach((cleanup) => cleanup());
 }
