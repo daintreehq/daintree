@@ -3,6 +3,7 @@ import { usePanelStore } from "@/store/panelStore";
 import { useNotificationStore } from "@/store/notificationStore";
 import { notify } from "@/lib/notify";
 import { isElectronAvailable } from "../useElectron";
+import { safeFireAndForget } from "@/utils/safeFireAndForget";
 
 export function useAgentWaitingNudge(isStateLoaded: boolean): void {
   const removeNotification = useNotificationStore((s) => s.removeNotification);
@@ -14,7 +15,9 @@ export function useAgentWaitingNudge(isStateLoaded: boolean): void {
     if (firedRef.current) return;
     firedRef.current = true;
 
-    void window.electron.onboarding.markWaitingNudgeSeen();
+    safeFireAndForget(window.electron.onboarding.markWaitingNudgeSeen(), {
+      context: "Marking agent waiting nudge seen",
+    });
 
     const id = notify({
       type: "info",
@@ -30,9 +33,12 @@ export function useAgentWaitingNudge(isStateLoaded: boolean): void {
           label: "Enable Notifications",
           variant: "primary",
           onClick: () => {
-            void window.electron.notification.setSettings({
-              waitingEnabled: true,
-            });
+            safeFireAndForget(
+              window.electron.notification.setSettings({
+                waitingEnabled: true,
+              }),
+              { context: "Enabling waiting agent notifications" }
+            );
             if (notificationIdRef.current) {
               removeNotification(notificationIdRef.current);
               notificationIdRef.current = null;
@@ -85,7 +91,7 @@ export function useAgentWaitingNudge(isStateLoaded: boolean): void {
       }
     }
 
-    void hydrate();
+    safeFireAndForget(hydrate(), { context: "Hydrating agent waiting nudge state" });
     return () => {
       cancelled = true;
     };

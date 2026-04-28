@@ -25,6 +25,7 @@ import { getProjectGradient, getBrandColorHex } from "@/lib/colorUtils";
 import { formatTimeAgo } from "@/utils/timeAgo";
 import { CHECKLIST_ITEMS } from "@/components/Onboarding/checklistItems";
 import { useAgentDiscoveryOnboarding } from "@/hooks/app/useAgentDiscoveryOnboarding";
+import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { getAgentConfig } from "@/config/agents";
 import { BUILT_IN_AGENT_IDS, type BuiltInAgentId } from "@shared/config/agentIds";
 import { isAgentReady } from "../../../shared/utils/agentAvailability";
@@ -166,9 +167,14 @@ export function WelcomeScreen({ gettingStarted }: WelcomeScreenProps) {
         <div className="flex items-center gap-4 text-xs text-daintree-text/40 pt-2">
           <button
             type="button"
-            onClick={() =>
-              void window.electron?.system?.openExternal("https://daintree.org/newsletter")
-            }
+            onClick={() => {
+              const promise = window.electron?.system?.openExternal(
+                "https://daintree.org/newsletter"
+              );
+              if (promise) {
+                safeFireAndForget(promise, { context: "Opening newsletter link" });
+              }
+            }}
             className="flex items-center gap-1.5 hover:text-daintree-text/60 transition-colors"
           >
             <Newspaper className="h-3 w-3" />

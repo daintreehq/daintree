@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { RefreshCw, ExternalLink } from "lucide-react";
 import { getInstallBlocksForCurrentOS } from "@/lib/agentInstall";
 import { InstallBlock } from "@/components/Setup/InstallBlock";
+import { safeFireAndForget } from "@/utils/safeFireAndForget";
 
 interface AgentIdentity {
   name: string;
@@ -333,7 +334,11 @@ export function AgentInstallSection({
             variant="ghost"
             onClick={() => {
               const url = agentConfig?.install?.docsUrl;
-              if (url) void window.electron.system.openExternal(url);
+              if (url) {
+                safeFireAndForget(window.electron.system.openExternal(url), {
+                  context: "Opening agent install docs",
+                });
+              }
             }}
             className="text-daintree-accent hover:text-daintree-accent/80"
           >
@@ -355,7 +360,11 @@ export function AgentInstallSection({
           variant="ghost"
           onClick={() => {
             const url = agentConfig?.install?.docsUrl;
-            if (url) void window.electron.system.openExternal(url);
+            if (url) {
+              safeFireAndForget(window.electron.system.openExternal(url), {
+                context: "Opening agent install docs",
+              });
+            }
           }}
           className="w-full text-daintree-text/50 hover:text-daintree-text"
         >

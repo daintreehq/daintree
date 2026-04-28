@@ -5,6 +5,7 @@ import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { useRecipeStore } from "@/store/recipeStore";
 import { notify } from "@/lib/notify";
 import { logError } from "@/utils/logger";
+import { safeFireAndForget } from "@/utils/safeFireAndForget";
 
 interface MilestoneDefinition {
   id: string;
@@ -107,13 +108,17 @@ export function useOrchestrationMilestones(isStateLoaded: boolean): void {
 
     const markShownSilent = (id: string) => {
       shownRef.current[id] = true;
-      void window.electron.milestones.markShown(id);
+      safeFireAndForget(window.electron.milestones.markShown(id), {
+        context: "Marking orchestration milestone shown (silent)",
+      });
     };
 
     const showToast = (id: string) => {
       if (shownRef.current[id]) return;
       shownRef.current[id] = true;
-      void window.electron.milestones.markShown(id);
+      safeFireAndForget(window.electron.milestones.markShown(id), {
+        context: "Marking orchestration milestone shown",
+      });
       queueRef.current.push(id);
       drainQueue();
     };

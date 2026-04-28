@@ -23,6 +23,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { usePortalStore } from "@/store/portalStore";
 import { PortalIcon } from "./PortalIcon";
 import { useKeybindingDisplay } from "@/hooks";
+import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -369,12 +370,18 @@ export function PortalToolbar({
                     onContextMenu={(e) => {
                       e.preventDefault();
                       e.stopPropagation();
-                      void window.electron.portal.showNewTabMenu({
-                        x: e.screenX,
-                        y: e.screenY,
-                        links: enabledLinks.map((link) => ({ title: link.title, url: link.url })),
-                        defaultNewTabUrl,
-                      });
+                      safeFireAndForget(
+                        window.electron.portal.showNewTabMenu({
+                          x: e.screenX,
+                          y: e.screenY,
+                          links: enabledLinks.map((link) => ({
+                            title: link.title,
+                            url: link.url,
+                          })),
+                          defaultNewTabUrl,
+                        }),
+                        { context: "Opening portal new-tab menu" }
+                      );
                     }}
                     className="flex items-center justify-center w-8 h-[26px] rounded-full bg-overlay-subtle hover:bg-overlay-soft text-daintree-text/70 hover:text-daintree-text border border-divider transition"
                     aria-label="New Tab"

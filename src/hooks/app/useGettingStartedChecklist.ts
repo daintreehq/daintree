@@ -5,6 +5,7 @@ import { usePanelStore } from "@/store/panelStore";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { notify } from "@/lib/notify";
 import { logError } from "@/utils/logger";
+import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import type { ChecklistState, ChecklistItemId } from "@shared/types/ipc/maps";
 import { ACTIVE_AGENT_STATES } from "@shared/types/agent";
 import type { TerminalInstance } from "@shared/types/panel";
@@ -76,7 +77,9 @@ export function useGettingStartedChecklist(isStateLoaded: boolean): GettingStart
 
   const markItem = useCallback((item: ChecklistItemId) => {
     if (!isElectronAvailable()) return;
-    void window.electron.onboarding.markChecklistItem(item);
+    safeFireAndForget(window.electron.onboarding.markChecklistItem(item), {
+      context: "Marking onboarding checklist item",
+    });
     let shouldCelebrate = false;
     let shouldDismiss = false;
     setChecklist((prev) => {
@@ -95,7 +98,9 @@ export function useGettingStartedChecklist(isStateLoaded: boolean): GettingStart
       return updated;
     });
     if (shouldDismiss) {
-      void window.electron.onboarding.dismissChecklist();
+      safeFireAndForget(window.electron.onboarding.dismissChecklist(), {
+        context: "Dismissing onboarding checklist",
+      });
     }
     if (shouldCelebrate) {
       notify({
@@ -105,13 +110,17 @@ export function useGettingStartedChecklist(isStateLoaded: boolean): GettingStart
         duration: 5000,
       });
       setShowCelebration(true);
-      void window.electron.onboarding.markChecklistCelebrationShown();
+      safeFireAndForget(window.electron.onboarding.markChecklistCelebrationShown(), {
+        context: "Marking onboarding celebration shown",
+      });
     }
   }, []);
 
   const dismiss = useCallback(() => {
     if (!isElectronAvailable()) return;
-    void window.electron.onboarding.dismissChecklist();
+    safeFireAndForget(window.electron.onboarding.dismissChecklist(), {
+      context: "Dismissing onboarding checklist (user action)",
+    });
     setChecklist((prev) => (prev ? { ...prev, dismissed: true } : prev));
     setForceShow(false);
   }, []);

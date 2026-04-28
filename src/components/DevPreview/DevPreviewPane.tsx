@@ -31,6 +31,7 @@ import { useWebviewDialog } from "@/hooks/useWebviewDialog";
 import { WebviewDialog } from "../Browser/WebviewDialog";
 import { FindBar } from "../Browser/FindBar";
 import { useFindInPage } from "@/hooks/useFindInPage";
+import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { getViewportPreset } from "@/panels/dev-preview/viewportPresets";
 import type { ViewportPresetId } from "@shared/types/panel";
 import { logError } from "@/utils/logger";
@@ -139,7 +140,9 @@ function BlockedNavBanner({
         <button
           type="button"
           onClick={() => {
-            void window.electron.system.openExternal(blockedNav.url);
+            safeFireAndForget(window.electron.system.openExternal(blockedNav.url), {
+              context: "Opening blocked dev preview URL externally",
+            });
             onDismiss();
           }}
           className="shrink-0 px-2 py-0.5 rounded text-xs bg-status-warning/20 hover:bg-status-warning/30 text-daintree-text/90 transition-colors"
@@ -406,7 +409,9 @@ export function DevPreviewPane({
     if (!webview || !isWebviewReady) return;
     try {
       const wcId = (webview as unknown as { getWebContentsId(): number }).getWebContentsId();
-      void window.electron.webview.reloadIgnoringCache(wcId, id);
+      safeFireAndForget(window.electron.webview.reloadIgnoringCache(wcId, id), {
+        context: "Reloading dev preview ignoring cache",
+      });
     } catch {
       webview.reload();
     }
@@ -414,7 +419,9 @@ export function DevPreviewPane({
 
   const handleOpenExternal = useCallback(() => {
     if (currentUrl) {
-      window.electron.system.openExternal(currentUrl);
+      safeFireAndForget(window.electron.system.openExternal(currentUrl), {
+        context: "Opening dev preview URL externally",
+      });
     }
   }, [currentUrl]);
 

@@ -44,7 +44,7 @@ function getStack(reason: unknown): string | undefined {
   return undefined;
 }
 
-function reportRendererGlobalError(
+export function reportRendererGlobalError(
   kind: "unhandledrejection" | "error",
   rawError: unknown,
   metadata: { message?: string; filename?: string; lineno?: number; colno?: number }

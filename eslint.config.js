@@ -132,6 +132,9 @@ export default tseslint.config(
   // use formatErrorMessage(err, "domain fallback") from shared/utils/errorMessage
   // so every call site supplies its own operation-specific fallback string.
   // See issue #5845.
+  // Also ban `void window.electron.X()` — fire-and-forget IPC must route
+  // through safeFireAndForget so rejections reach reportRendererGlobalError
+  // with call-site context. See issue #6029.
   {
     files: ["**/*.{ts,tsx}"],
     rules: {
@@ -142,6 +145,40 @@ export default tseslint.config(
             "ConditionalExpression[test.type='BinaryExpression'][test.operator='instanceof'][test.right.name='Error'][consequent.type='MemberExpression'][consequent.property.name='message']",
           message:
             "Use formatErrorMessage(err, 'operation-specific fallback') from @shared/utils/errorMessage instead of the inline `instanceof Error ? .message : ...` ternary.",
+        },
+        {
+          selector:
+            "UnaryExpression[operator='void'] > CallExpression[callee.type='MemberExpression'][callee.object.type='MemberExpression'][callee.object.object.name='window'][callee.object.property.name='electron']",
+          message:
+            "Don't use `void window.electron.X()` for fire-and-forget IPC — wrap the promise in safeFireAndForget(promise, { context }) from @/utils/safeFireAndForget so rejections reach reportRendererGlobalError with call-site context.",
+        },
+      ],
+    },
+  },
+
+  // Catch un-awaited promises in renderer code. `safeFireAndForget` is the
+  // sanctioned escape hatch for fire-and-forget IPC — see issue #6029.
+  {
+    files: ["src/**/*.{ts,tsx}"],
+    languageOptions: {
+      parserOptions: {
+        projectService: true,
+        tsconfigRootDir: import.meta.dirname,
+      },
+    },
+    rules: {
+      // why: ratcheting plan from #6029 — start at `warn` to surface the
+      // remaining bare orphan promise calls (settings hydrators, lazy
+      // preloads, store actions) without breaking CI, then ratchet to
+      // `error` once the codebase is swept. `ignoreVoid: true` keeps the
+      // explicit `void X()` escape hatch available for non-IPC fire-and-
+      // forget; `no-restricted-syntax` above bans `void window.electron.*`
+      // at error so IPC calls are forced through `safeFireAndForget`.
+      "@typescript-eslint/no-floating-promises": [
+        "warn",
+        {
+          ignoreVoid: true,
+          allowForKnownSafeCalls: [{ from: "file", name: "safeFireAndForget" }],
         },
       ],
     },

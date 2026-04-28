@@ -22,6 +22,7 @@ import { WebviewDialog } from "./WebviewDialog";
 import { FindBar } from "./FindBar";
 import { useIsDragging } from "@/components/DragDrop";
 import { cn } from "@/lib/utils";
+import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { useConsoleCaptureStore } from "@/store/consoleCaptureStore";
 import type { SerializedConsoleRow } from "@shared/types/ipc/webviewConsole";
 import { useProjectStore } from "@/store";
@@ -250,7 +251,9 @@ export function BrowserPane({
     })();
 
     return () => {
-      void window.electron.webview.stopConsoleCapture(wcId, id);
+      safeFireAndForget(window.electron.webview.stopConsoleCapture(wcId, id), {
+        context: "Stopping browser console capture",
+      });
       cleanupMessage();
       cleanupContext();
       webContentsIdRef.current = null;
@@ -569,7 +572,9 @@ export function BrowserPane({
     if (!webview || !isWebviewReady) return;
     try {
       const wcId = (webview as unknown as { getWebContentsId(): number }).getWebContentsId();
-      void window.electron.webview.reloadIgnoringCache(wcId, id);
+      safeFireAndForget(window.electron.webview.reloadIgnoringCache(wcId, id), {
+        context: "Reloading browser webview ignoring cache",
+      });
     } catch {
       webview.reload();
     }
@@ -606,7 +611,9 @@ export function BrowserPane({
   const handleClearConsole = useCallback(() => {
     const wcId = webContentsIdRef.current;
     if (wcId != null) {
-      void window.electron.webview.clearConsoleCapture(wcId, id);
+      safeFireAndForget(window.electron.webview.clearConsoleCapture(wcId, id), {
+        context: "Clearing browser console capture",
+      });
     }
     clearConsoleMessages(id);
   }, [id, clearConsoleMessages]);

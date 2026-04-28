@@ -20,6 +20,7 @@ import type { DiagnosticsReviewPayload } from "@shared/types/ipc/system";
 import type { ReplacementRule } from "@shared/utils/diagnosticsTransform";
 import { actionService } from "@/services/ActionService";
 import { logError, logWarn } from "@/utils/logger";
+import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { SettingsSection } from "./SettingsSection";
 import { SettingsSwitchCard } from "./SettingsSwitchCard";
 import { DiagnosticsReviewDialog } from "./DiagnosticsReviewDialog";
@@ -174,7 +175,9 @@ function HardwareAccelerationSection() {
   const handleToggle = useCallback(() => {
     if (disabled === null) return;
     const newEnabled = disabled; // if currently disabled, we're enabling
-    void window.electron.gpu.setHardwareAcceleration(newEnabled);
+    safeFireAndForget(window.electron.gpu.setHardwareAcceleration(newEnabled), {
+      context: "Setting hardware acceleration preference",
+    });
   }, [disabled]);
 
   if (disabled === null) return null;

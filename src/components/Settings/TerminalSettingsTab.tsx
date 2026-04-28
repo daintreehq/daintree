@@ -27,6 +27,7 @@ import { SettingsNumberInput } from "@/components/Settings/SettingsNumberInput";
 import { SettingsSubtabBar } from "./SettingsSubtabBar";
 import type { SettingsSubtabItem } from "./SettingsSubtabBar";
 import { logError } from "@/utils/logger";
+import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import {
   useLayoutConfigStore,
   usePerformanceModeStore,
@@ -351,13 +352,17 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
             onChange={() => {
               const newValue = !resourceMonitoringEnabled;
               setResourceMonitoringEnabled(newValue);
-              window.electron.terminalConfig.setResourceMonitoring(newValue);
+              safeFireAndForget(window.electron.terminalConfig.setResourceMonitoring(newValue), {
+                context: "Setting terminal resource monitoring",
+              });
             }}
             ariaLabel="Resource Monitoring Toggle"
             isModified={resourceMonitoringEnabled}
             onReset={() => {
               setResourceMonitoringEnabled(false);
-              window.electron.terminalConfig.setResourceMonitoring(false);
+              safeFireAndForget(window.electron.terminalConfig.setResourceMonitoring(false), {
+                context: "Resetting terminal resource monitoring",
+              });
             }}
           />
         </SettingsSection>
@@ -378,13 +383,17 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
             onChange={() => {
               const newValue = !memoryLeakDetectionEnabled;
               setMemoryLeakDetectionEnabled(newValue);
-              window.electron.terminalConfig.setMemoryLeakDetection(newValue);
+              safeFireAndForget(window.electron.terminalConfig.setMemoryLeakDetection(newValue), {
+                context: "Setting terminal memory leak detection",
+              });
             }}
             ariaLabel="Memory Leak Detection Toggle"
             isModified={memoryLeakDetectionEnabled}
             onReset={() => {
               setMemoryLeakDetectionEnabled(false);
-              window.electron.terminalConfig.setMemoryLeakDetection(false);
+              safeFireAndForget(window.electron.terminalConfig.setMemoryLeakDetection(false), {
+                context: "Resetting terminal memory leak detection",
+              });
             }}
             disabled={!resourceMonitoringEnabled}
           />
@@ -408,7 +417,10 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
                 if (!isNaN(val)) {
                   setAutoRestartThresholdMb(val);
                   if (val >= 1024 && val <= 32768) {
-                    window.electron.terminalConfig.setMemoryLeakAutoRestartThresholdMb(val);
+                    safeFireAndForget(
+                      window.electron.terminalConfig.setMemoryLeakAutoRestartThresholdMb(val),
+                      { context: "Setting memory leak auto-restart threshold" }
+                    );
                   }
                 }
               }}

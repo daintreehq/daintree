@@ -9,6 +9,7 @@ import { usePanelStore } from "@/store/panelStore";
 import { useProjectStore } from "@/store/projectStore";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
+import { safeFireAndForget } from "@/utils/safeFireAndForget";
 
 export type { ActionCallbacks };
 
@@ -104,8 +105,11 @@ export function useActionRegistry(options: ActionCallbacks): void {
     if (!registeredRef.current) return;
     if (validatedRef.current) return;
     validatedRef.current = true;
-    void window.electron.plugin
-      .validateActionIds(actionService.list().map((entry) => entry.id))
-      .catch(() => {});
+    safeFireAndForget(
+      window.electron.plugin
+        .validateActionIds(actionService.list().map((entry) => entry.id))
+        .catch(() => {}),
+      { context: "Validating plugin action IDs" }
+    );
   }, []);
 }
