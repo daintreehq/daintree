@@ -17,6 +17,7 @@ import { TrashContainer } from "./TrashContainer";
 import { WaitingContainer } from "./WaitingContainer";
 import { BackgroundContainer } from "./BackgroundContainer";
 import { HelpAgentDockButton } from "./HelpAgentDockButton";
+import { DockLaunchButton } from "./DockLaunchButton";
 import {
   SortableDockItem,
   SortableDockPlaceholder,
@@ -38,7 +39,7 @@ import { useHelpPanelStore } from "@/store/helpPanelStore";
 import { buildDockRenderItems, type DockRenderItem } from "./dockRenderItems";
 import type { DockDensity } from "@/store/preferencesStore";
 
-const AGENT_OPTIONS = [
+export const AGENT_OPTIONS = [
   ...BUILT_IN_AGENT_IDS.map((id) => ({
     type: id,
     label: AGENT_REGISTRY[id]?.name ?? id,
@@ -292,8 +293,14 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
             <TrashContainer trashedTerminals={trashedItems} compact={isCompact} />
           </div>
 
-          {/* Help button — right-aligned, always last */}
-          <div className="ml-auto shrink-0">
+          {/* Right-aligned launcher cluster: launch + help */}
+          <div className="ml-auto shrink-0 flex items-center gap-2">
+            <DockLaunchButton
+              agentOptions={AGENT_OPTIONS}
+              onLaunchAgent={handleAddTerminal}
+              activeWorktreeId={activeWorktreeId}
+              cwd={cwd}
+            />
             <HelpAgentDockButton />
           </div>
         </div>

@@ -26,4 +26,13 @@ describe("ContentDock regression test", () => {
     expect(content).toContain("closeDockTerminal()");
     expect(content).toContain("!s.trashedTerminals.has(t.id)");
   });
+
+  it("renders the visible DockLaunchButton wired to handleAddTerminal", () => {
+    const content = readFileSync(resolve(__dirname, "../ContentDock.tsx"), "utf-8");
+
+    expect(content).toContain("DockLaunchButton");
+    expect(content).toContain("agentOptions={AGENT_OPTIONS}");
+    expect(content).toContain("onLaunchAgent={handleAddTerminal}");
+    expect(content).toContain("export const AGENT_OPTIONS");
+  });
 });
