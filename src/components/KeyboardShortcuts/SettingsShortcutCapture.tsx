@@ -3,6 +3,7 @@ import { AlertTriangle, X } from "lucide-react";
 import { isMac } from "@/lib/platform";
 import { keybindingService, normalizeKeyForBinding } from "@/services/KeybindingService";
 import { actionService } from "@/services/ActionService";
+import { notify } from "@/lib/notify";
 import { useNotificationStore } from "@/store/notificationStore";
 import { logError, logWarn } from "@/utils/logger";
 
@@ -228,11 +229,10 @@ export function SettingsShortcutCapture({
               setConflictRefreshKey((prev) => prev + 1);
             } catch (err) {
               logError("Failed to undo keybinding change", err);
-              useNotificationStore.getState().addNotification({
+              notify({
                 type: "error",
                 message: "Failed to undo keybinding change",
                 duration: 3000,
-                priority: "low",
               });
             }
           },
@@ -240,11 +240,10 @@ export function SettingsShortcutCapture({
       });
     } catch (err) {
       logError("Failed to unbind keybinding", err);
-      useNotificationStore.getState().addNotification({
+      notify({
         type: "error",
         message: "Failed to unbind keybinding",
         duration: 3000,
-        priority: "low",
       });
     } finally {
       setIsUnbinding(false);

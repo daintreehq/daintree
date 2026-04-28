@@ -5,7 +5,7 @@ import { SearchablePalette } from "@/components/ui/SearchablePalette";
 import { PaletteStrip } from "@/components/ui/PaletteStrip";
 import { useSearchablePalette } from "@/hooks/useSearchablePalette";
 import { useAppThemeStore, injectSchemeToDOM } from "@/store/appThemeStore";
-import { useNotificationStore } from "@/store/notificationStore";
+import { notify } from "@/lib/notify";
 import { appThemeClient } from "@/clients/appThemeClient";
 import { BUILT_IN_APP_SCHEMES } from "@/config/appColorSchemes";
 import { resolveAppTheme } from "@shared/theme";
@@ -152,9 +152,8 @@ export function ThemePalette({ isOpen, onClose }: ThemePaletteProps) {
       setSelectedSchemeId(scheme.id);
       appThemeClient.setColorScheme(scheme.id).catch((error) => {
         logError("Failed to persist theme selection", error);
-        useNotificationStore.getState().addNotification({
+        notify({
           type: "error",
-          priority: "low",
           message: `Failed to save theme: ${scheme.name}`,
           duration: 3000,
         });

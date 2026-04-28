@@ -7,6 +7,7 @@ import { appThemeClient } from "@/clients/appThemeClient";
 import { useUserAgentRegistryStore } from "@/store/userAgentRegistryStore";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { useAppThemeStore } from "@/store/appThemeStore";
+import { notify } from "@/lib/notify";
 import { useNotificationStore } from "@/store/notificationStore";
 import { keybindingService } from "@/services/KeybindingService";
 import { actionService } from "@/services/ActionService";
@@ -190,9 +191,8 @@ export function registerAppActions(actions: ActionRegistry, callbacks: ActionCal
         await appThemeClient.setColorScheme(target.id);
       } catch (error) {
         logError("Failed to persist theme toggle", error);
-        useNotificationStore.getState().addNotification({
+        notify({
           type: "error",
-          priority: "low",
           message: `Failed to save theme: ${target.name}`,
           duration: 3000,
         });
