@@ -103,3 +103,5 @@ export type { UseUnsavedChangesOptions } from "./useUnsavedChanges";
 export { useDebounce } from "./useDebounce";
 
 export { useShortcutHintHover } from "./useShortcutHintHover";
+
+export { useTruncationDetection, isElementTruncated } from "./useTruncationDetection";

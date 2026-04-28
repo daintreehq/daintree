@@ -5,6 +5,7 @@ import type { CrossWorktreeFile } from "@shared/types/ipc/git";
 import type { GitOperationReason } from "@shared/types/ipc/errors";
 import { cn } from "@/lib/utils";
 import { useOverlayState } from "@/hooks";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import {
   X,
   RefreshCw,
@@ -99,6 +100,42 @@ function statusLabel(status: string): { label: string; className: string } {
     default:
       return { label: status, className: "text-text-muted" };
   }
+}
+
+interface BaseBranchFileRowProps {
+  file: CrossWorktreeFile;
+  onClick: () => void;
+}
+
+function BaseBranchFileRow({ file, onClick }: BaseBranchFileRowProps) {
+  const { label, className: statusClass } = statusLabel(file.status);
+  const filename = file.path.split(/[/\\]/).filter(Boolean).pop() || file.path;
+  const dirPath = /[/\\]/.test(file.path)
+    ? file.path.substring(0, Math.max(file.path.lastIndexOf("/"), file.path.lastIndexOf("\\")))
+    : "";
+
+  return (
+    <TruncatedTooltip content={file.path}>
+      <button
+        type="button"
+        onClick={onClick}
+        className={cn(
+          "w-full flex items-center gap-2 px-2 py-1.5 rounded text-left text-xs",
+          "hover:bg-tint/[0.05] transition-colors",
+          "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-daintree-accent"
+        )}
+      >
+        <span className={cn("font-mono font-bold shrink-0 w-3 text-center", statusClass)}>
+          {label}
+        </span>
+        <FileIcon className="w-3 h-3 shrink-0 text-daintree-text/40" />
+        <span className="text-daintree-text/80 truncate min-w-0">{filename}</span>
+        <span className="text-daintree-text/30 truncate min-w-0 text-[10px] ml-auto pl-2">
+          {dirPath}
+        </span>
+      </button>
+    </TruncatedTooltip>
+  );
 }
 
 export function ReviewHub({ isOpen, worktreePath, onClose }: ReviewHubProps) {
@@ -524,13 +561,12 @@ export function ReviewHub({ isOpen, worktreePath, onClose }: ReviewHubProps) {
                 Review & Commit
               </h2>
               {status?.currentBranch && (
-                <span
-                  title={status.currentBranch}
-                  className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-tint/[0.07] border border-tint/[0.08] text-[11px] text-daintree-text/60 font-mono truncate max-w-[200px]"
-                >
-                  <GitBranch className="w-3 h-3 shrink-0" />
-                  <span className="truncate">{status.currentBranch}</span>
-                </span>
+                <TruncatedTooltip content={status.currentBranch}>
+                  <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-tint/[0.07] border border-tint/[0.08] text-[11px] text-daintree-text/60 font-mono truncate max-w-[200px]">
+                    <GitBranch className="w-3 h-3 shrink-0" />
+                    <span className="truncate">{status.currentBranch}</span>
+                  </span>
+                </TruncatedTooltip>
               )}
               {status?.hasRemote && worktreePR && worktreePR.prUrl && (
                 <button
@@ -756,44 +792,13 @@ export function ReviewHub({ isOpen, worktreePath, onClose }: ReviewHubProps) {
                     </span>
                   </div>
                   <div className="px-2 py-1 flex flex-col gap-0.5">
-                    {baseBranchFiles.map((file) => {
-                      const { label, className: statusClass } = statusLabel(file.status);
-                      return (
-                        <button
-                          key={`${file.status}:${file.path}`}
-                          onClick={() => setSelectedBaseBranchFile(file)}
-                          className={cn(
-                            "w-full flex items-center gap-2 px-2 py-1.5 rounded text-left text-xs",
-                            "hover:bg-tint/[0.05] transition-colors",
-                            "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-daintree-accent"
-                          )}
-                        >
-                          <span
-                            className={cn(
-                              "font-mono font-bold shrink-0 w-3 text-center",
-                              statusClass
-                            )}
-                          >
-                            {label}
-                          </span>
-                          <FileIcon className="w-3 h-3 shrink-0 text-daintree-text/40" />
-                          <span
-                            className="text-daintree-text/80 truncate min-w-0"
-                            title={file.path}
-                          >
-                            {file.path.split(/[/\\]/).filter(Boolean).pop()}
-                          </span>
-                          <span className="text-daintree-text/30 truncate min-w-0 text-[10px] ml-auto pl-2">
-                            {/[/\\]/.test(file.path)
-                              ? file.path.substring(
-                                  0,
-                                  Math.max(file.path.lastIndexOf("/"), file.path.lastIndexOf("\\"))
-                                )
-                              : ""}
-                          </span>
-                        </button>
-                      );
-                    })}
+                    {baseBranchFiles.map((file) => (
+                      <BaseBranchFileRow
+                        key={`${file.status}:${file.path}`}
+                        file={file}
+                        onClick={() => setSelectedBaseBranchFile(file)}
+                      />
+                    ))}
                   </div>
                 </div>
               ) : null

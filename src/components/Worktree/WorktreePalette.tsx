@@ -1,6 +1,8 @@
 import { cn } from "@/lib/utils";
 import { SearchablePalette } from "@/components/ui/SearchablePalette";
 import { useKeybindingDisplay } from "@/hooks/useKeybinding";
+import { useTruncationDetection } from "@/hooks/useTruncationDetection";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import type { WorktreeState } from "@/types";
 
 interface WorktreeListItemProps {
@@ -11,37 +13,43 @@ interface WorktreeListItemProps {
 }
 
 function WorktreeListItem({ worktree, isActive, isSelected, onClick }: WorktreeListItemProps) {
+  const { ref, isTruncated } = useTruncationDetection();
+
   return (
-    <button
-      type="button"
-      tabIndex={-1}
-      onPointerDown={(e) => e.preventDefault()}
-      id={`worktree-option-${worktree.id}`}
-      onClick={onClick}
-      className={cn(
-        "w-full text-left px-3 py-2 rounded-[var(--radius-lg)] border flex flex-col gap-0.5",
-        "border-daintree-border/40 hover:border-daintree-border/60",
-        "bg-daintree-bg hover:bg-surface transition-colors",
-        isSelected && "border-daintree-accent/60 bg-daintree-accent/10"
-      )}
-      aria-selected={isSelected}
-      role="option"
-    >
-      <div className="flex items-center justify-between text-sm">
-        <span className="font-medium text-daintree-text">{worktree.name}</span>
-        <div className="flex items-center gap-2 text-xs text-daintree-text/60">
-          {worktree.branch && (
-            <span className="font-mono text-daintree-text/70">{worktree.branch}</span>
-          )}
-          {isActive && (
-            <span className="px-1.5 py-0.5 rounded-[var(--radius-md)] bg-[var(--color-state-active)]/15 text-[var(--color-state-active)] text-[11px] font-semibold">
-              Active
-            </span>
-          )}
+    <TruncatedTooltip content={worktree.path} isTruncated={isTruncated}>
+      <button
+        type="button"
+        tabIndex={-1}
+        onPointerDown={(e) => e.preventDefault()}
+        id={`worktree-option-${worktree.id}`}
+        onClick={onClick}
+        className={cn(
+          "w-full text-left px-3 py-2 rounded-[var(--radius-lg)] border flex flex-col gap-0.5",
+          "border-daintree-border/40 hover:border-daintree-border/60",
+          "bg-daintree-bg hover:bg-surface transition-colors",
+          isSelected && "border-daintree-accent/60 bg-daintree-accent/10"
+        )}
+        aria-selected={isSelected}
+        role="option"
+      >
+        <div className="flex items-center justify-between text-sm">
+          <span className="font-medium text-daintree-text">{worktree.name}</span>
+          <div className="flex items-center gap-2 text-xs text-daintree-text/60">
+            {worktree.branch && (
+              <span className="font-mono text-daintree-text/70">{worktree.branch}</span>
+            )}
+            {isActive && (
+              <span className="px-1.5 py-0.5 rounded-[var(--radius-md)] bg-[var(--color-state-active)]/15 text-[var(--color-state-active)] text-[11px] font-semibold">
+                Active
+              </span>
+            )}
+          </div>
         </div>
-      </div>
-      <div className="text-[11px] text-daintree-text/50 truncate">{worktree.path}</div>
-    </button>
+        <div ref={ref} className="text-[11px] text-daintree-text/50 truncate">
+          {worktree.path}
+        </div>
+      </button>
+    </TruncatedTooltip>
   );
 }
 

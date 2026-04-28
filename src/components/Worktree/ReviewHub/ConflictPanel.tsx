@@ -13,6 +13,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Spinner } from "@/components/ui/Spinner";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 
 const OPERATION_LABEL: Record<Exclude<RepoState, "CLEAN" | "DIRTY">, string> = {
   MERGING: "Merge",
@@ -162,22 +163,21 @@ export function ConflictPanel({
                 >
                   <AlertTriangle className="w-3 h-3 shrink-0 text-status-error" />
                   <FileIcon className="w-3 h-3 shrink-0 text-daintree-text/40" />
-                  <div
-                    className="flex-1 min-w-0 flex items-baseline"
-                    title={`${file.path} (${file.label})`}
-                  >
-                    {dir && (
-                      <span className="shrink truncate text-daintree-text/50 font-mono text-[11px]">
-                        {dir}/
+                  <TruncatedTooltip content={`${file.path} (${file.label})`}>
+                    <div className="flex-1 min-w-0 flex items-baseline">
+                      {dir && (
+                        <span className="shrink truncate text-daintree-text/50 font-mono text-[11px]">
+                          {dir}/
+                        </span>
+                      )}
+                      <span className="shrink truncate text-daintree-text font-medium font-mono text-[11px]">
+                        {base}
                       </span>
-                    )}
-                    <span className="shrink truncate text-daintree-text font-medium font-mono text-[11px]">
-                      {base}
-                    </span>
-                    <span className="ml-2 text-[10px] uppercase tracking-wider text-daintree-text/50 font-mono">
-                      {file.label}
-                    </span>
-                  </div>
+                      <span className="ml-2 text-[10px] uppercase tracking-wider text-daintree-text/50 font-mono">
+                        {file.label}
+                      </span>
+                    </div>
+                  </TruncatedTooltip>
                   <div className="flex items-center gap-1 shrink-0">
                     <Button
                       variant="ghost"
@@ -235,16 +235,18 @@ export function ConflictPanel({
                   className="flex items-center gap-2 px-2 py-1 text-xs"
                 >
                   <Check className="w-3 h-3 shrink-0 text-status-success" />
-                  <div className="flex-1 min-w-0 flex items-baseline" title={file.path}>
-                    {dir && (
-                      <span className="shrink truncate text-daintree-text/50 font-mono text-[11px]">
-                        {dir}/
+                  <TruncatedTooltip content={file.path}>
+                    <div className="flex-1 min-w-0 flex items-baseline">
+                      {dir && (
+                        <span className="shrink truncate text-daintree-text/50 font-mono text-[11px]">
+                          {dir}/
+                        </span>
+                      )}
+                      <span className="shrink truncate text-daintree-text/80 font-mono text-[11px]">
+                        {base}
                       </span>
-                    )}
-                    <span className="shrink truncate text-daintree-text/80 font-mono text-[11px]">
-                      {base}
-                    </span>
-                  </div>
+                    </div>
+                  </TruncatedTooltip>
                 </li>
               );
             })}

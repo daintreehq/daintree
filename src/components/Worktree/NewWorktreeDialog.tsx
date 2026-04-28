@@ -28,6 +28,7 @@ import { IssueSelector } from "@/components/GitHub/IssueSelector";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { parseBranchInput } from "./branchPrefixUtils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { cn } from "@/lib/utils";
 import { usePreferencesStore } from "@/store/preferencesStore";
 import { useGitHubConfigStore } from "@/store/githubConfigStore";
@@ -871,10 +872,12 @@ export function NewWorktreeDialog({
             {initialPR ? (
               <div className="flex items-center gap-2.5 px-3 py-2.5 rounded-[var(--radius-md)] bg-daintree-accent/5 border border-daintree-accent/20 text-sm min-w-0">
                 <FolderGit2 className="w-4 h-4 text-daintree-accent shrink-0" aria-hidden="true" />
-                <span className="text-daintree-text/80 min-w-0 truncate">
-                  PR <span className="font-medium text-daintree-text">#{initialPR.number}</span> —{" "}
-                  {initialPR.title}
-                </span>
+                <TruncatedTooltip content={`PR #${initialPR.number} — ${initialPR.title}`}>
+                  <span className="text-daintree-text/80 min-w-0 truncate">
+                    PR <span className="font-medium text-daintree-text">#{initialPR.number}</span> —{" "}
+                    {initialPR.title}
+                  </span>
+                </TruncatedTooltip>
               </div>
             ) : (
               <div className="space-y-2">

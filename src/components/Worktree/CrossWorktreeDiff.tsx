@@ -9,6 +9,8 @@ import { DiffViewer } from "./DiffViewer";
 import { WorktreeSelector } from "./WorktreeSelector";
 import { sortWorktreesForComparison } from "./crossWorktreeDiffUtils";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { useTruncationDetection } from "@/hooks/useTruncationDetection";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 
 interface CrossWorktreeDiffProps {
   isOpen: boolean;
@@ -31,6 +33,38 @@ function statusLabel(status: string): { label: string; className: string } {
     default:
       return { label: status, className: "text-text-muted" };
   }
+}
+
+interface CrossWorktreeFileRowProps {
+  file: CrossWorktreeFile;
+  isSelected: boolean;
+  onClick: () => void;
+}
+
+function CrossWorktreeFileRow({ file, isSelected, onClick }: CrossWorktreeFileRowProps) {
+  const { ref, isTruncated } = useTruncationDetection();
+  const { label, className: statusClass } = statusLabel(file.status);
+
+  return (
+    <TruncatedTooltip content={file.path} isTruncated={isTruncated}>
+      <button
+        type="button"
+        onClick={onClick}
+        className={cn(
+          "w-full flex items-center gap-2 px-3 py-1.5 text-left text-xs hover:bg-surface-panel-elevated transition-colors",
+          isSelected && "bg-surface-panel-elevated"
+        )}
+      >
+        <span className={cn("font-mono font-bold shrink-0 w-3 text-center", statusClass)}>
+          {label}
+        </span>
+        <FileIcon className="w-3 h-3 shrink-0 text-text-muted" />
+        <span ref={ref} className="text-text-secondary truncate min-w-0">
+          {file.path.split(/[/\\]/).filter(Boolean).pop()}
+        </span>
+      </button>
+    </TruncatedTooltip>
+  );
 }
 
 export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossWorktreeDiffProps) {
@@ -218,28 +252,14 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
                 No differences between these branches
               </div>
             )}
-            {result?.files.map((file) => {
-              const { label, className: statusClass } = statusLabel(file.status);
-              const isSelected = selectedFile?.path === file.path;
-              return (
-                <button
-                  key={`${file.status}:${file.path}`}
-                  onClick={() => void fetchFileDiff(file)}
-                  className={cn(
-                    "w-full flex items-center gap-2 px-3 py-1.5 text-left text-xs hover:bg-surface-panel-elevated transition-colors",
-                    isSelected && "bg-surface-panel-elevated"
-                  )}
-                >
-                  <span className={cn("font-mono font-bold shrink-0 w-3 text-center", statusClass)}>
-                    {label}
-                  </span>
-                  <FileIcon className="w-3 h-3 shrink-0 text-text-muted" />
-                  <span className="text-text-secondary truncate min-w-0" title={file.path}>
-                    {file.path.split(/[/\\]/).filter(Boolean).pop()}
-                  </span>
-                </button>
-              );
-            })}
+            {result?.files.map((file) => (
+              <CrossWorktreeFileRow
+                key={`${file.status}:${file.path}`}
+                file={file}
+                isSelected={selectedFile?.path === file.path}
+                onClick={() => void fetchFileDiff(file)}
+              />
+            ))}
           </div>
         </div>
 

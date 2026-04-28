@@ -15,6 +15,8 @@ import {
   getEffectiveStateColor,
 } from "../terminalStateConfig";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../../ui/tooltip";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
+import { useTruncationDetection } from "@/hooks/useTruncationDetection";
 import {
   ChevronRight,
   GripVertical,
@@ -77,6 +79,7 @@ interface TerminalRowProps {
 }
 
 function TerminalRow({ term, listeners, onClick }: TerminalRowProps) {
+  const { ref, isTruncated } = useTruncationDetection();
   const isArmed = useFleetArmingStore((s) => s.armedIds.has(term.id));
   const armBadge = useFleetArmingStore((s) => s.armOrderById[term.id]);
   const chrome = deriveTerminalChrome(term);
@@ -102,34 +105,39 @@ function TerminalRow({ term, listeners, onClick }: TerminalRowProps) {
       )}
     >
       <div className="worktree-section-button group/termrow flex items-center justify-between gap-2.5 px-3 py-2 transition-colors">
-        <button
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation();
-            onClick(term);
-          }}
-          aria-selected={isArmed}
-          className="flex items-center gap-2 min-w-0 flex-1 text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-[-2px] rounded"
-        >
-          <div className="shrink-0 opacity-60 group-hover/termrow:opacity-100 transition-opacity">
-            <TerminalIcon kind={term.kind} chrome={chrome} className="w-3 h-3" />
-          </div>
-          <div className="flex flex-col min-w-0">
-            <span className="truncate text-xs font-medium text-text-secondary transition-colors group-hover/termrow:text-daintree-text">
-              {term.title}
-            </span>
-            {!chrome.isAgent && term.activityStatus === "working" && term.lastCommand && (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <span className="truncate text-[11px] font-mono text-text-muted">
-                    {term.lastCommand}
-                  </span>
-                </TooltipTrigger>
-                <TooltipContent side="bottom">{term.lastCommand}</TooltipContent>
-              </Tooltip>
-            )}
-          </div>
-        </button>
+        <TruncatedTooltip content={term.title} isTruncated={isTruncated}>
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onClick(term);
+            }}
+            aria-selected={isArmed}
+            className="flex items-center gap-2 min-w-0 flex-1 text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-[-2px] rounded"
+          >
+            <div className="shrink-0 opacity-60 group-hover/termrow:opacity-100 transition-opacity">
+              <TerminalIcon kind={term.kind} chrome={chrome} className="w-3 h-3" />
+            </div>
+            <div className="flex flex-col min-w-0">
+              <span
+                ref={ref}
+                className="truncate text-xs font-medium text-text-secondary transition-colors group-hover/termrow:text-daintree-text"
+              >
+                {term.title}
+              </span>
+              {!chrome.isAgent && term.activityStatus === "working" && term.lastCommand && (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span className="truncate text-[11px] font-mono text-text-muted">
+                      {term.lastCommand}
+                    </span>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">{term.lastCommand}</TooltipContent>
+                </Tooltip>
+              )}
+            </div>
+          </button>
+        </TruncatedTooltip>
 
         <div className="flex items-center gap-2.5 shrink-0">
           {isArmed && armBadge !== undefined && (

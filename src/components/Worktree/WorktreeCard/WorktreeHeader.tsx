@@ -21,6 +21,7 @@ import {
   DropdownMenuTrigger,
 } from "../../ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../../ui/tooltip";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { Popover, PopoverContent, PopoverTrigger } from "../../ui/popover";
 import {
   ChevronRight,
@@ -569,19 +570,21 @@ export function WorktreeHeader({
               underlineOnHover={underlineOnHover}
             />
           ) : isMainStandardLayout ? (
-            <span
-              className={cn(
-                "truncate text-[13px] font-medium transition-colors duration-150",
-                isActive
-                  ? "text-text-primary/90"
-                  : isMuted
-                    ? "text-text-muted"
-                    : "text-text-secondary"
-              )}
-              data-testid="primary-worktree-project-name"
-            >
-              {worktree.name}
-            </span>
+            <TruncatedTooltip content={worktree.name}>
+              <span
+                className={cn(
+                  "truncate text-[13px] font-medium transition-colors duration-150",
+                  isActive
+                    ? "text-text-primary/90"
+                    : isMuted
+                      ? "text-text-muted"
+                      : "text-text-secondary"
+                )}
+                data-testid="primary-worktree-project-name"
+              >
+                {worktree.name}
+              </span>
+            </TruncatedTooltip>
           ) : (
             <BranchLabel
               label={branchLabel}

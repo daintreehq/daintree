@@ -68,7 +68,10 @@ vi.mock("react-dom", async () => {
   return { ...actual, createPortal: (children: ReactNode) => children };
 });
 
-vi.mock("@/hooks", () => ({ useOverlayState: vi.fn() }));
+vi.mock("@/hooks", () => ({
+  useOverlayState: vi.fn(),
+  useTruncationDetection: vi.fn(() => ({ ref: vi.fn(), isTruncated: false })),
+}));
 
 vi.mock("../../FileDiffModal", () => ({ FileDiffModal: () => null }));
 vi.mock("../BaseBranchDiffModal", () => ({ BaseBranchDiffModal: () => null }));
@@ -680,7 +683,7 @@ describe("ReviewHub", () => {
       await waitFor(() => screen.getByText("index.ts"));
 
       // Click the file row button to open its diff (sets selectedFile)
-      const fileRow = screen.getByTitle("src/index.ts");
+      const fileRow = screen.getByText("index.ts").closest("button")!;
       fireEvent.click(fileRow);
 
       // First Escape should clear selectedFile, not close modal

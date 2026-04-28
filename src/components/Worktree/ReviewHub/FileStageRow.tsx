@@ -5,6 +5,7 @@ import type { GitStatus } from "@shared/types";
 import { cn } from "@/lib/utils";
 import { Plus, Minus } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 
 const STATUS_CONFIG: Record<GitStatus, { label: string; bg: string; text: string }> = {
   modified: {
@@ -108,35 +109,36 @@ export function FileStageRow({ file, isStaged, onToggle, onFileClick }: FileStag
         <TooltipContent side="right">{isStaged ? "Unstage" : "Stage"}</TooltipContent>
       </Tooltip>
 
-      <button
-        type="button"
-        title={file.path}
-        aria-label={`View diff: ${file.path}`}
-        className={cn(
-          "flex min-w-0 flex-1 items-baseline rounded text-left",
-          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-daintree-accent"
-        )}
-      >
-        <span
-          aria-hidden="true"
+      <TruncatedTooltip content={file.path}>
+        <button
+          type="button"
+          aria-label={`View diff: ${file.path}`}
           className={cn(
-            "inline-flex items-center justify-center rounded-sm px-1 mr-2 shrink-0",
-            "text-[10px] font-medium leading-4 h-4 min-w-[16px]",
-            config.bg,
-            config.text
+            "flex min-w-0 flex-1 items-baseline rounded text-left",
+            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-daintree-accent"
           )}
         >
-          {config.label}
-        </span>
-        {dir && (
-          <span className="shrink truncate text-daintree-text/50 group-hover/stagerow:text-daintree-text/70 font-mono text-[11px] transition-colors">
-            {dir}/
+          <span
+            aria-hidden="true"
+            className={cn(
+              "inline-flex items-center justify-center rounded-sm px-1 mr-2 shrink-0",
+              "text-[10px] font-medium leading-4 h-4 min-w-[16px]",
+              config.bg,
+              config.text
+            )}
+          >
+            {config.label}
           </span>
-        )}
-        <span className="shrink truncate text-daintree-text group-hover/stagerow:text-daintree-text font-medium font-mono text-[11px] transition-colors">
-          {base}
-        </span>
-      </button>
+          {dir && (
+            <span className="shrink truncate text-daintree-text/50 group-hover/stagerow:text-daintree-text/70 font-mono text-[11px] transition-colors">
+              {dir}/
+            </span>
+          )}
+          <span className="shrink truncate text-daintree-text group-hover/stagerow:text-daintree-text font-medium font-mono text-[11px] transition-colors">
+            {base}
+          </span>
+        </button>
+      </TruncatedTooltip>
     </div>
   );
 }

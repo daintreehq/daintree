@@ -7,6 +7,7 @@ import { ExternalLink } from "lucide-react";
 import path from "path-browserify";
 import { getLanguageForFile } from "@/components/FileViewer/languageUtils";
 import { actionService } from "@/services/ActionService";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 
 export interface DiffViewerProps {
   diff: string;
@@ -149,7 +150,9 @@ function FileDiff({ file, viewType, language, rootPath }: FileDiffProps) {
     <div className="mb-2">
       {relPath && (
         <div className="flex items-center justify-between px-3 py-1.5 bg-daintree-sidebar border-b border-daintree-border text-xs text-daintree-text/60 font-mono">
-          <span className="truncate">{relPath}</span>
+          <TruncatedTooltip content={relPath}>
+            <span className="truncate">{relPath}</span>
+          </TruncatedTooltip>
           <div className="flex items-center gap-2 shrink-0">
             {(additions > 0 || deletions > 0) && (
               <span className="flex items-center gap-1">
