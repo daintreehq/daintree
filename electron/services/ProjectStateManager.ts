@@ -149,7 +149,13 @@ export class ProjectStateManager {
           ? rawVersion
           : 0;
       if (onDiskVersion > PROJECT_STATE_SCHEMA_VERSION) {
-        const quarantinePath = `${filePath}.future-v${onDiskVersion}`;
+        // Avoid a deterministic destination so neither POSIX silently
+        // clobbers a prior quarantine nor Windows throws EEXIST. A previously
+        // quarantined .future-v{N} file is preserved with a timestamp suffix.
+        let quarantinePath = `${filePath}.future-v${onDiskVersion}`;
+        if (existsSync(quarantinePath)) {
+          quarantinePath = `${quarantinePath}.${Date.now()}`;
+        }
         markPerformance(PERF_MARKS.PROJECT_STATE_QUARANTINE, { projectId });
         try {
           await resilientRename(filePath, quarantinePath);

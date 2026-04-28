@@ -415,6 +415,44 @@ describe("ProjectStateManager schema version", () => {
     expect(result).not.toBeNull();
   });
 
+  it("preserves a prior quarantine when a second future-version file lands at the same version", async () => {
+    const firstPayload = {
+      _schemaVersion: 2,
+      projectId,
+      sidebarWidth: 350,
+      terminals: [],
+      featureA: "first quarantine — must survive",
+    };
+    await writeRaw(firstPayload);
+    await manager.getProjectState(projectId);
+
+    const originalQuarantine = JSON.parse(await fs.readFile(`${filePath}.future-v2`, "utf-8"));
+    expect(originalQuarantine).toEqual(firstPayload);
+
+    const secondPayload = {
+      _schemaVersion: 2,
+      projectId,
+      sidebarWidth: 350,
+      terminals: [],
+      featureA: "second quarantine — must NOT clobber the first",
+    };
+    await writeRaw(secondPayload);
+    const result = await manager.getProjectState(projectId);
+
+    expect(result).toBeNull();
+    // Original quarantine still intact at the canonical path.
+    const stillThere = JSON.parse(await fs.readFile(`${filePath}.future-v2`, "utf-8"));
+    expect(stillThere).toEqual(firstPayload);
+
+    // Second future-version file moved to a timestamp-suffixed sibling.
+    const dir = path.dirname(filePath);
+    const entries = await fs.readdir(dir);
+    const suffixed = entries.find((name) => /^state\.json\.future-v2\.\d+$/.test(name));
+    expect(suffixed).toBeDefined();
+    const suffixedContent = JSON.parse(await fs.readFile(path.join(dir, suffixed!), "utf-8"));
+    expect(suffixedContent).toEqual(secondPayload);
+  });
+
   it("quarantines a very large future-version number to .future-v{N}", async () => {
     await writeRaw({
       _schemaVersion: 999999,
