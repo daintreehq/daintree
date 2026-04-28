@@ -718,13 +718,16 @@ function SelectionStep({
           <p className="text-sm text-daintree-text/60 mb-4">
             Choose your preferred theme. More options available in Settings.
           </p>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-2 gap-4" role="listbox" aria-label="Theme">
             {schemes.map((scheme) => {
               const isSelected = selectedSchemeId === scheme.id;
               const isDark = scheme.type === "dark";
               return (
                 <button
                   key={scheme.id}
+                  type="button"
+                  role="option"
+                  aria-selected={isSelected}
                   onClick={() => onThemeSelect(scheme.id)}
                   className={cn(
                     "flex flex-col gap-2 p-3 rounded-[var(--radius-md)] border transition-colors text-left",
