@@ -301,4 +301,67 @@ describe("FleetArmingDialog", () => {
     fireEvent.click(screen.getByText("Arm 1 selected"));
     expect(useFleetArmingStore.getState().armOrder).toEqual(["a"]);
   });
+
+  it("confirm replaces (not extends) the existing armed set", () => {
+    seedTerminals([makeTerminal("a", { title: "alpha" }), makeTerminal("b", { title: "beta" })]);
+    useFleetArmingStore.getState().armIds(["old"]);
+    expect(useFleetArmingStore.getState().armOrder).toEqual(["old"]);
+    renderDialog([makeWorktreeSnap("wt-1", "Main")]);
+    fireEvent.click(screen.getByLabelText("Select beta"));
+    fireEvent.click(screen.getByText("Arm 1 selected"));
+    expect(useFleetArmingStore.getState().armOrder).toEqual(["b"]);
+    expect(useFleetArmingStore.getState().armedIds.has("old")).toBe(false);
+  });
+
+  it("group header stays visible when a chip filters all but one group", () => {
+    seedTerminals([
+      makeTerminal("a", { title: "alpha", worktreeId: "wt-1", agentState: "waiting" }),
+      makeTerminal("b", { title: "beta", worktreeId: "wt-2", agentState: "working" }),
+    ]);
+    renderDialog([makeWorktreeSnap("wt-1", "Main"), makeWorktreeSnap("wt-2", "Other")]);
+    fireEvent.click(screen.getByTestId("fleet-arming-dialog-chip-waiting"));
+    // Only Main has waiting terminals; its header must remain visible so the
+    // user knows which worktree the row belongs to.
+    expect(screen.getByTestId("fleet-arming-dialog-group-wt-1")).toBeTruthy();
+  });
+
+  it("excludes background and error-status terminals", () => {
+    seedTerminals([
+      makeTerminal("a", { title: "alpha" }),
+      makeTerminal("bg", { title: "background", location: "background" }),
+      makeTerminal("err", { title: "errored", runtimeStatus: "error" }),
+    ]);
+    renderDialog([makeWorktreeSnap("wt-1", "Main")]);
+    expect(screen.getByText("alpha")).toBeTruthy();
+    expect(screen.queryByText("background")).toBeNull();
+    expect(screen.queryByText("errored")).toBeNull();
+  });
+
+  it("terminals without a worktreeId fall under 'Unassigned' and search hits the fallback name", () => {
+    seedTerminals([
+      makeTerminal("orphan", { title: "homeless", worktreeId: undefined }),
+      makeTerminal("a", { title: "alpha", worktreeId: "wt-1" }),
+    ]);
+    renderDialog([makeWorktreeSnap("wt-1", "Main")]);
+    expect(screen.getByText("Unassigned")).toBeTruthy();
+    const search = screen.getByTestId("fleet-arming-dialog-search") as HTMLInputElement;
+    fireEvent.change(search, { target: { value: "unassigned" } });
+    expect(screen.getByText("homeless")).toBeTruthy();
+    expect(screen.queryByText("alpha")).toBeNull();
+  });
+
+  it("group safe-reset clears only that group, not other groups", () => {
+    seedTerminals([
+      makeTerminal("a", { title: "alpha", worktreeId: "wt-1" }),
+      makeTerminal("b", { title: "beta", worktreeId: "wt-1" }),
+      makeTerminal("c", { title: "gamma", worktreeId: "wt-2" }),
+    ]);
+    renderDialog([makeWorktreeSnap("wt-1", "Main"), makeWorktreeSnap("wt-2", "Other")]);
+    fireEvent.click(screen.getByLabelText("Select alpha"));
+    fireEvent.click(screen.getByLabelText("Select gamma"));
+    expect(screen.getByText("Arm 2 selected")).toBeTruthy();
+    // Click Main's header (indeterminate: 1/2 selected) — should deselect Main only.
+    fireEvent.click(screen.getByLabelText("Select all 2 terminals in Main"));
+    expect(screen.getByText("Arm 1 selected")).toBeTruthy();
+  });
 });

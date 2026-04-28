@@ -127,7 +127,11 @@ export function FleetArmingDialog({
       if (activeChip === "waiting" && !isWaiting(t)) return false;
       if (activeChip === "working" && !isWorking(t)) return false;
       if (needle === "") return true;
-      const haystack = `${t.title.toLowerCase()} ${(worktreeNames[t.worktreeId] ?? "").toLowerCase()}`;
+      const groupName =
+        t.worktreeId === FALLBACK_GROUP_ID
+          ? FALLBACK_GROUP_NAME
+          : (worktreeNames[t.worktreeId] ?? "");
+      const haystack = `${t.title.toLowerCase()} ${groupName.toLowerCase()}`;
       return haystack.includes(needle);
     });
   }, [eligibleTerminals, activeChip, deferredSearchTerm, worktreeNames]);
@@ -176,7 +180,15 @@ export function FleetArmingDialog({
     return out;
   }, [selectedIds, eligibleIdSet]);
 
-  const isSingleWorktree = groupedVisible.length === 1;
+  // Hide the group header when the project itself only has one eligible
+  // worktree — not when filtering happens to narrow the visible list to a
+  // single group. Otherwise the user loses the only label telling them
+  // which worktree the visible terminals belong to.
+  const isSingleWorktree = useMemo(() => {
+    const ids = new Set<string>();
+    for (const t of eligibleTerminals) ids.add(t.worktreeId);
+    return ids.size <= 1;
+  }, [eligibleTerminals]);
 
   const clearSearch = useCallback(() => setSearchTerm(""), []);
   // First Esc clears search; second Esc closes the dialog (handled by
