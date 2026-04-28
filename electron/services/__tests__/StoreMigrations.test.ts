@@ -31,7 +31,12 @@ vi.mock("../ProjectStore.js", () => ({
 }));
 
 import type { Migration } from "../StoreMigrations.js";
-import { LATEST_SCHEMA_VERSION, MigrationRunner } from "../StoreMigrations.js";
+import {
+  LATEST_SCHEMA_VERSION,
+  MigrationRunner,
+  StoreMigrationError,
+  isStoreMigrationError,
+} from "../StoreMigrations.js";
 import { migrations } from "../migrations/index.js";
 import { migration002 } from "../migrations/002-add-terminal-location.js";
 import { migration003 } from "../migrations/003-migrate-recipes-to-project.js";
@@ -194,6 +199,149 @@ describe("MigrationRunner", () => {
     const files = fs.readdirSync(tempDir);
     const backupFiles = files.filter((file) => file.startsWith("config.json.backup-"));
     expect(backupFiles).toHaveLength(1);
+  });
+
+  describe("auto-restore on migration failure", () => {
+    it("atomically restores the pre-migration store file when a migration throws", async () => {
+      const originalBytes = JSON.stringify({ _schemaVersion: 0, sentinel: "pre-migration" });
+      fs.writeFileSync(storePath, originalBytes, "utf8");
+
+      const store = createMockStore(storePath, { _schemaVersion: 0, sentinel: "pre-migration" });
+      const runner = new MigrationRunner(store as never);
+
+      await expect(
+        runner.runMigrations([
+          {
+            version: 1,
+            description: "broken",
+            up: () => {
+              throw new Error("disk full");
+            },
+          },
+        ])
+      ).rejects.toThrow("Migration v1 failed: disk full");
+
+      expect(fs.readFileSync(storePath, "utf8")).toBe(originalBytes);
+      const remainingBackups = fs
+        .readdirSync(tempDir)
+        .filter((f) => f.startsWith("config.json.backup-"));
+      expect(remainingBackups).toHaveLength(0);
+    });
+
+    it("preserves the failed migration state at .failed-<ts> for diagnostics", async () => {
+      const partialBytes = JSON.stringify({ _schemaVersion: 0, will: "be replaced" });
+      fs.writeFileSync(storePath, partialBytes, "utf8");
+      const store = createMockStore(storePath, { _schemaVersion: 0 });
+      const runner = new MigrationRunner(store as never);
+
+      await expect(
+        runner.runMigrations([
+          {
+            version: 1,
+            description: "broken",
+            up: () => {
+              throw new Error("kaboom");
+            },
+          },
+        ])
+      ).rejects.toThrow();
+
+      const failedFile = fs.readdirSync(tempDir).find((f) => f.startsWith("config.json.failed-"));
+      expect(failedFile).toBeDefined();
+      expect(fs.readFileSync(path.join(tempDir, failedFile!), "utf8")).toBe(partialBytes);
+    });
+
+    it("throws StoreMigrationError carrying backupPath, failedStatePath, restored=true", async () => {
+      fs.writeFileSync(storePath, JSON.stringify({ _schemaVersion: 0 }), "utf8");
+      const store = createMockStore(storePath, { _schemaVersion: 0 });
+      const runner = new MigrationRunner(store as never);
+
+      let caught: unknown;
+      try {
+        await runner.runMigrations([
+          {
+            version: 1,
+            description: "broken",
+            up: () => {
+              throw new Error("kaboom");
+            },
+          },
+        ]);
+      } catch (err) {
+        caught = err;
+      }
+
+      expect(isStoreMigrationError(caught)).toBe(true);
+      expect(caught).toBeInstanceOf(StoreMigrationError);
+      const migrationError = caught as StoreMigrationError;
+      expect(migrationError.backupPath).toMatch(/config\.json\.backup-/);
+      expect(migrationError.failedStatePath).toMatch(/config\.json\.failed-/);
+      expect(migrationError.restored).toBe(true);
+      expect(migrationError.restoreError).toBeNull();
+      expect(migrationError.cause).toBeInstanceOf(Error);
+      expect((migrationError.cause as Error).message).toBe("kaboom");
+    });
+
+    it("surfaces a StoreMigrationError with restored=false when no backup was available", async () => {
+      // Remove the on-disk store file so backupStore() returns null
+      fs.rmSync(storePath, { force: true });
+      const store = createMockStore(storePath, { _schemaVersion: 0 });
+      const runner = new MigrationRunner(store as never);
+
+      let caught: unknown;
+      try {
+        await runner.runMigrations([
+          {
+            version: 1,
+            description: "broken",
+            up: () => {
+              throw new Error("kaboom");
+            },
+          },
+        ]);
+      } catch (err) {
+        caught = err;
+      }
+
+      expect(isStoreMigrationError(caught)).toBe(true);
+      const migrationError = caught as StoreMigrationError;
+      expect(migrationError.backupPath).toBeNull();
+      expect(migrationError.restored).toBe(false);
+      expect(migrationError.failedStatePath).toBeNull();
+      expect(migrationError.message).toContain("no backup was available");
+    });
+
+    it("triggers restore when post-migration sanity validation rejects state", async () => {
+      const originalBytes = JSON.stringify({ _schemaVersion: 0, sentinel: true });
+      fs.writeFileSync(storePath, originalBytes, "utf8");
+
+      const store = createMockStore(storePath, { _schemaVersion: 0 });
+      // Inject a corrupt _schemaVersion read AFTER set is called once, so the
+      // post-migration sanity check sees a non-numeric value even though the
+      // runner wrote a valid number. This proves the validation is wired in.
+      let setSeen = false;
+      const realGet = store.get;
+      store.set = ((key: string, value: unknown) => {
+        if (key === "_schemaVersion") setSeen = true;
+        if (value === undefined) {
+          throw new Error(`undefined not allowed for ${key}`);
+        }
+        store.data[key] = value;
+      }) as MockStore["set"];
+      store.get = ((key: string, defaultValue?: unknown) => {
+        if (key === "_schemaVersion" && setSeen) {
+          return "corrupted-string";
+        }
+        return realGet.call(store, key, defaultValue);
+      }) as MockStore["get"];
+
+      const validatingRunner = new MigrationRunner(store as never);
+      await expect(
+        validatingRunner.runMigrations([{ version: 1, description: "noop", up: () => {} }])
+      ).rejects.toThrow(/Post-migration sanity check failed/);
+
+      expect(fs.readFileSync(storePath, "utf8")).toBe(originalBytes);
+    });
   });
 
   describe("migration 004 — upgrade correction model", () => {

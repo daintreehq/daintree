@@ -22,7 +22,11 @@ import { ProjectSwitchService } from "../services/ProjectSwitchService.js";
 import { projectStore } from "../services/ProjectStore.js";
 import { taskQueueService } from "../services/TaskQueueService.js";
 import { store } from "../store.js";
-import { LATEST_SCHEMA_VERSION, MigrationRunner } from "../services/StoreMigrations.js";
+import {
+  LATEST_SCHEMA_VERSION,
+  MigrationRunner,
+  isStoreMigrationError,
+} from "../services/StoreMigrations.js";
 import { initializeTelemetry, setOnboardingCompleteTag } from "../services/TelemetryService.js";
 import { GitHubAuth } from "../services/github/GitHubAuth.js";
 import { gitHubTokenHealthService } from "../services/github/GitHubTokenHealthService.js";
@@ -264,15 +268,20 @@ export async function setupWindowServices(
     } catch (error) {
       console.error("[MAIN] Store migration failed:", error);
       const message = formatErrorMessage(error, "Store migration failed");
-      dialog
-        .showMessageBox(win, {
-          type: "error",
-          title: "Migration Failed",
-          message: `Failed to migrate application data:\n\n${message}\n\nThe application will now exit. Please check the logs for details.`,
-          buttons: ["OK"],
-        })
-        .then(() => app.exit(1))
-        .catch(() => app.exit(1));
+      const lines = [`Couldn't migrate application data: ${message}`];
+      if (isStoreMigrationError(error)) {
+        if (error.restored && error.backupPath) {
+          lines.push("", `Your data was restored from:\n${error.backupPath}`);
+        } else if (error.backupPath) {
+          lines.push("", `Pre-migration backup:\n${error.backupPath}`);
+        }
+        if (error.failedStatePath) {
+          lines.push("", `Failed migration state preserved at:\n${error.failedStatePath}`);
+        }
+      }
+      lines.push("", "The application will exit.");
+      dialog.showErrorBox("Migration failed", lines.join("\n"));
+      app.exit(1);
       return;
     }
 

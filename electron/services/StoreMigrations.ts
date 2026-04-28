@@ -1,6 +1,7 @@
 import Store from "electron-store";
 import type { StoreSchema } from "../store.js";
 import fs from "fs";
+import { z } from "zod";
 
 export const LATEST_SCHEMA_VERSION = 19;
 
@@ -20,6 +21,56 @@ export interface MigrationRunnerOptions {
    */
   floorVersion?: number;
 }
+
+/**
+ * Thrown by `MigrationRunner.runMigrations` when a migration fails or
+ * post-migration validation rejects the resulting state. Carries the path of
+ * the pre-migration backup (preserved on disk; may have been used to restore
+ * the live store) and the path where the failed-migration state was preserved
+ * for diagnostics, both `null` when unavailable.
+ */
+export class StoreMigrationError extends Error {
+  readonly backupPath: string | null;
+  readonly failedStatePath: string | null;
+  readonly restored: boolean;
+  readonly restoreError: Error | null;
+
+  constructor(
+    message: string,
+    options: {
+      backupPath: string | null;
+      failedStatePath: string | null;
+      restored: boolean;
+      restoreError?: Error | null;
+      cause?: unknown;
+    }
+  ) {
+    super(message, options.cause !== undefined ? { cause: options.cause } : undefined);
+    this.name = "StoreMigrationError";
+    this.backupPath = options.backupPath;
+    this.failedStatePath = options.failedStatePath;
+    this.restored = options.restored;
+    this.restoreError = options.restoreError ?? null;
+  }
+}
+
+export function isStoreMigrationError(error: unknown): error is StoreMigrationError {
+  return error instanceof StoreMigrationError;
+}
+
+/**
+ * Narrow shape check applied to the in-memory store after the migration chain
+ * completes. Validates only the most critical invariant — `_schemaVersion`
+ * must be a non-negative integer — and uses `.passthrough()` so unknown keys
+ * are preserved (the parsed output is never written back to disk; this schema
+ * is for validation only). Intended as a foundation that can grow alongside a
+ * real `StoreSchema` Zod schema if one is added later.
+ */
+const PostMigrationSanitySchema = z
+  .object({
+    _schemaVersion: z.number().int().nonnegative(),
+  })
+  .passthrough();
 
 export class MigrationRunner {
   constructor(
@@ -43,6 +94,37 @@ export class MigrationRunner {
       console.warn("[Migrations] Failed to create backup:", error);
       return null;
     }
+  }
+
+  /**
+   * Restore the pre-migration store atomically. Preserves the failed-migration
+   * state at `<storePath>.failed-<ts>` for diagnostics, then atomically renames
+   * the backup over the live store path so the next boot reads pre-migration
+   * data. Returns the failed-state path on success (or `null` if the failed
+   * state could not be preserved).
+   */
+  private restoreFromBackup(backupPath: string): { failedStatePath: string | null } {
+    const storePath = this.store.path;
+    const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const failedStatePath = `${storePath}.failed-${timestamp}`;
+    let preservedFailedState = false;
+
+    try {
+      if (fs.existsSync(storePath)) {
+        fs.renameSync(storePath, failedStatePath);
+        preservedFailedState = true;
+      }
+    } catch (preserveError) {
+      console.warn(
+        "[Migrations] Could not preserve failed migration state for diagnostics:",
+        preserveError
+      );
+    }
+
+    fs.renameSync(backupPath, storePath);
+    console.log(`[Migrations] Restored store from backup ${backupPath}`);
+
+    return { failedStatePath: preservedFailedState ? failedStatePath : null };
   }
 
   getCurrentVersion(): number {
@@ -99,23 +181,65 @@ export class MigrationRunner {
       console.log(`[Migrations] Store backed up, can restore from: ${backupPath}`);
     }
 
-    for (const migration of pending.sort((a, b) => a.version - b.version)) {
-      try {
+    let stage: "loop" | "validate" = "loop";
+    let activeMigrationVersion = 0;
+    try {
+      for (const migration of pending.sort((a, b) => a.version - b.version)) {
+        activeMigrationVersion = migration.version;
         console.log(`[Migrations] Applying v${migration.version}: ${migration.description}`);
         await migration.up(this.store);
         this.store.set("_schemaVersion", migration.version);
         console.log(`[Migrations] Applied v${migration.version} successfully`);
-      } catch (error) {
-        console.error(`[Migrations] Migration v${migration.version} failed:`, error);
-        if (error instanceof Error) {
-          throw new Error(`Migration v${migration.version} failed: ${error.message}`, {
-            cause: error,
-          });
-        }
-        throw error;
       }
-    }
 
-    console.log("[Migrations] All migrations completed successfully");
+      stage = "validate";
+      const finalVersion = this.store.get("_schemaVersion");
+      const validation = PostMigrationSanitySchema.safeParse({ _schemaVersion: finalVersion });
+      if (!validation.success) {
+        throw new Error(
+          `Post-migration sanity check failed: ${validation.error.issues
+            .map((issue) => `${issue.path.join(".") || "(root)"}: ${issue.message}`)
+            .join("; ")}`
+        );
+      }
+
+      console.log("[Migrations] All migrations completed successfully");
+    } catch (error) {
+      const innerMessage = error instanceof Error ? error.message : String(error);
+      const errorContext =
+        stage === "loop" && activeMigrationVersion > 0
+          ? `Migration v${activeMigrationVersion} failed: ${innerMessage}`
+          : innerMessage;
+      console.error(`[Migrations] ${errorContext}`, error);
+
+      let failedStatePath: string | null = null;
+      let restored = false;
+      let restoreError: Error | null = null;
+
+      if (backupPath) {
+        try {
+          const result = this.restoreFromBackup(backupPath);
+          failedStatePath = result.failedStatePath;
+          restored = true;
+        } catch (err) {
+          restoreError = err instanceof Error ? err : new Error(String(err));
+          console.error("[Migrations] Restore from backup FAILED:", err);
+        }
+      }
+
+      const suffix = !backupPath
+        ? " (no backup was available to restore)"
+        : restoreError
+          ? ` (auto-restore failed: ${restoreError.message})`
+          : "";
+
+      throw new StoreMigrationError(`${errorContext}${suffix}`, {
+        backupPath,
+        failedStatePath,
+        restored,
+        restoreError,
+        cause: error,
+      });
+    }
   }
 }
