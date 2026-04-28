@@ -83,28 +83,6 @@ export function HelpPanel() {
         const folderPath = await window.electron.help.getFolderPath();
         if (!folderPath) return;
 
-<<<<<<< HEAD
-      const model = resolveAssistantModel(preferredAgentId);
-      const result = await actionService.dispatch<{ terminalId: string | null }>(
-        "agent.launch",
-        {
-          agentId: preferredAgentId,
-          location: "dock",
-          cwd: folderPath,
-          prompt: HELP_PROMPT,
-          ...(model && { model }),
-        },
-        { source: "user" }
-      );
-      if (result.ok && result.result?.terminalId) {
-        if (document.hidden) return;
-        useHelpPanelStore.getState().setTerminal(result.result.terminalId, preferredAgentId);
-        window.electron.help.markTerminal(result.result.terminalId).catch((err) => {
-          logError("Failed to mark help terminal", err);
-        });
-      }
-    })();
-=======
         const model = resolveAssistantModel(preferredAgentId);
         const result = await actionService.dispatch<{ terminalId: string | null }>(
           "agent.launch",
@@ -120,12 +98,13 @@ export function HelpPanel() {
         if (result.ok && result.result?.terminalId) {
           if (document.hidden) return;
           useHelpPanelStore.getState().setTerminal(result.result.terminalId, preferredAgentId);
-          window.electron.help.markTerminal(result.result.terminalId).catch(() => {});
+          window.electron.help.markTerminal(result.result.terminalId).catch((err) => {
+            logError("Failed to mark help terminal", err);
+          });
         }
       })(),
       { context: "Auto-launching preferred help agent" }
     );
->>>>>>> 207a8ec2a (review(ipc): fix selector depth, drop misleading wrapping, guard stack mutation)
   }, [isOpen, terminalId, preferredAgentId]);
 
   // Reset auto-launch guard when panel closes

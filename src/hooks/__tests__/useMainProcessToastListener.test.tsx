@@ -71,7 +71,7 @@ describe("useMainProcessToastListener", () => {
   });
 
   it("calls notify with an action that triggers checkForUpdates", () => {
-    const checkForUpdatesMock = vi.fn();
+    const checkForUpdatesMock = vi.fn(() => Promise.resolve());
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (window.electron as any).update = {
       checkForUpdates: checkForUpdatesMock,
