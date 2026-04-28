@@ -8,9 +8,13 @@ const QUARANTINE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 
 const QUARANTINE_PREFIXES = [
   "state.json.corrupted.",
+  "state.json.corrupted",
   "settings.json.corrupted.",
+  "settings.json.corrupted",
   "recipes.json.corrupted.",
+  "recipes.json.corrupted",
   "workflows.json.corrupted.",
+  "workflows.json.corrupted",
 ];
 
 export async function cleanupQuarantinedProjectFiles(
