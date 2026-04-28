@@ -16,6 +16,19 @@ import { DEFAULT_AGENT_SETTINGS, DEFAULT_APP_AGENT_CONFIG } from "../shared/type
 import type { AppThemeConfig } from "../shared/types/appTheme.js";
 import type { SettingsRecovery, ActionFrecencyEntry } from "../shared/types/ipc/app.js";
 
+interface WindowStateEntry {
+  x?: number;
+  y?: number;
+  width: number;
+  height: number;
+  isMaximized: boolean;
+  isFullScreen?: boolean;
+}
+
+interface WindowStatesStoreSchema {
+  windowStates: Record<string, WindowStateEntry>;
+}
+
 export interface StoreSchema {
   _schemaVersion: number;
   windowState: {
@@ -216,13 +229,6 @@ export interface StoreSchema {
 const storeOptions = {
   defaults: {
     _schemaVersion: 0,
-    windowState: {
-      x: undefined,
-      y: undefined,
-      width: 1200,
-      height: 800,
-      isMaximized: false,
-    },
     terminalConfig: {
       scrollbackLines: 1000,
       performanceMode: false,
@@ -282,7 +288,6 @@ const storeOptions = {
     projectEnv: {},
     globalEnvironmentVariables: {},
     appAgentConfig: DEFAULT_APP_AGENT_CONFIG,
-    windowStates: {},
     worktreeIssueMap: {},
     appTheme: {},
     privacy: {
@@ -467,6 +472,36 @@ export function initializeStore(options: typeof storeOptions = storeOptions): St
 }
 
 export const store = initializeStore();
+
+function initializeWindowStatesStore(): Store<WindowStatesStoreSchema> {
+  try {
+    return new Store<WindowStatesStoreSchema>({
+      name: "window-states",
+      cwd: storeOptions.cwd,
+      defaults: { windowStates: {} },
+      clearInvalidConfig: true,
+    });
+  } catch (error) {
+    console.warn(
+      "[Store] Failed to initialize window-states store, using in-memory fallback:",
+      error
+    );
+    const memoryStore = new Map();
+    return {
+      get: (key: string) => memoryStore.get(key),
+      set: (key: string, value: unknown) => memoryStore.set(key, value),
+      delete: (key: string) => memoryStore.delete(key),
+      has: (key: string) => memoryStore.has(key),
+      clear: () => memoryStore.clear(),
+      store: {},
+      path: "",
+    } as unknown as Store<WindowStatesStoreSchema>;
+  }
+}
+
+export const windowStatesStore = initializeWindowStatesStore();
+
+export type { WindowStateEntry };
 
 export {
   resolveConfigPath,

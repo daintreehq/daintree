@@ -16,6 +16,7 @@ import { migration016 } from "./016-rename-flavor-to-preset.js";
 import { migration017 } from "./017-add-notification-quiet-hours.js";
 import { migration018 } from "./018-archive-notes.js";
 import { migration019 } from "./019-remove-fleet-deck-open.js";
+import { migration020 } from "./020-window-states-store.js";
 
 export const migrations: Migration[] = [
   migration002,
@@ -35,4 +36,5 @@ export const migrations: Migration[] = [
   migration017,
   migration018,
   migration019,
+  migration020,
 ];

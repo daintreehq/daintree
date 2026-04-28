@@ -1,16 +1,39 @@
 import { BrowserWindow, screen } from "electron";
-import { store } from "./store.js";
+import type { WindowStateEntry } from "./store.js";
+import { windowStatesStore } from "./store.js";
 
 const LEGACY_KEY = "__legacy__";
 const MRU_OFFSET_PX = 30;
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any -- generic constraint requires any for assignability
-function debounce<T extends (...args: any[]) => void>(func: T, wait: number): T {
-  let timeout: NodeJS.Timeout | null = null;
-  return ((...args: Parameters<T>) => {
+interface DebouncedFunction<T extends (...args: unknown[]) => void> {
+  (...args: Parameters<T>): void;
+  cancel: () => void;
+  flush: () => void;
+}
+
+function debounce<T extends (...args: unknown[]) => void>(
+  func: T,
+  wait: number
+): DebouncedFunction<T> {
+  let timeout: ReturnType<typeof setTimeout> | null = null;
+  const debounced = (...args: Parameters<T>) => {
     if (timeout) clearTimeout(timeout);
     timeout = setTimeout(() => func(...args), wait);
-  }) as T;
+  };
+  debounced.cancel = () => {
+    if (timeout) {
+      clearTimeout(timeout);
+      timeout = null;
+    }
+  };
+  debounced.flush = () => {
+    if (timeout) {
+      clearTimeout(timeout);
+      timeout = null;
+      func();
+    }
+  };
+  return debounced as DebouncedFunction<T>;
 }
 
 type WindowStateBounds = {
@@ -24,32 +47,51 @@ type WindowStateBounds = {
 
 let lastSavedProjectPath: string | null = null;
 
+// Cached on first use — lazy-require of ProjectStore is a one-shot, not a hot-path reload.
+let cachedProjectStore: {
+  getCurrentProjectId?: () => string | null;
+  getProjectById?: (id: string) => { path?: string } | null;
+} | null = undefined as unknown as typeof cachedProjectStore;
+
 function getCurrentProjectPath(): string | null {
   try {
-    // Lazy import to avoid circular dependency — projectStore may not be ready at module load
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const { projectStore } = require("./services/ProjectStore.js");
-    const projectId = projectStore.getCurrentProjectId?.();
+    if (cachedProjectStore === undefined) {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { projectStore } = require("./services/ProjectStore.js");
+      cachedProjectStore = projectStore ?? null;
+    }
+    if (!cachedProjectStore) return null;
+    const projectId = cachedProjectStore.getCurrentProjectId?.();
     if (!projectId) return null;
-    const project = projectStore.getProjectById?.(projectId);
+    const project = cachedProjectStore.getProjectById?.(projectId);
     return project?.path ?? null;
-  } catch {
+  } catch (err) {
+    if (cachedProjectStore === undefined) {
+      console.warn(
+        "[WindowState] ProjectStore failed to load, per-project window state disabled:",
+        err
+      );
+      cachedProjectStore = null;
+    }
     return null;
   }
 }
 
 function getMruBounds(): WindowStateBounds | null {
-  const windowStates = store.get("windowStates") ?? {};
+  const windowStates = windowStatesStore.get("windowStates") ?? {};
 
-  // If we have a last-saved project, use that as MRU
   if (lastSavedProjectPath && windowStates[lastSavedProjectPath]) {
     return { isFullScreen: false, ...windowStates[lastSavedProjectPath] };
   }
 
-  // Otherwise, pick the last entry (any existing state is better than defaults)
+  if (windowStates[LEGACY_KEY]) {
+    return { isFullScreen: false, ...windowStates[LEGACY_KEY] };
+  }
+
+  // Last resort: pick any entry (any saved state gives better defaults than none)
   const keys = Object.keys(windowStates);
   if (keys.length > 0) {
-    return { isFullScreen: false, ...windowStates[keys[keys.length - 1]] };
+    return { isFullScreen: false, ...windowStates[keys[0]] };
   }
 
   return null;
@@ -77,12 +119,12 @@ function clampToDisplay(bounds: { x: number; y: number; width: number; height: n
 function resolveWindowBounds(projectPath: string | null | undefined): WindowStateBounds {
   // 1. Try per-project state
   if (projectPath) {
-    const windowStates = store.get("windowStates") ?? {};
+    const windowStates = windowStatesStore.get("windowStates") ?? {};
     if (windowStates[projectPath]) {
       return { isFullScreen: false, ...windowStates[projectPath] };
     }
 
-    // 2. MRU cascade for new project windows — offset position, suppress maximize/fullscreen
+    // 2. MRU cascade for new project windows
     const mru = getMruBounds();
     if (mru && mru.x !== undefined && mru.y !== undefined) {
       const offset = clampToDisplay({
@@ -93,26 +135,20 @@ function resolveWindowBounds(projectPath: string | null | undefined): WindowStat
       });
       return {
         ...offset,
-        isMaximized: false, // Don't cascade into maximized
-        isFullScreen: false, // Don't cascade into fullscreen
+        isMaximized: false,
+        isFullScreen: false,
       };
     }
   }
 
-  // 3. Fall back to legacy windowState (cold-start restores full previous state)
-  const legacy = store.get("windowState");
-  if (legacy && (legacy.x !== undefined || legacy.width !== 1200)) {
-    return { isFullScreen: false, ...legacy };
-  }
-
-  // 4. Defaults
+  // 3. Defaults
   return { width: 1200, height: 800, isMaximized: false, isFullScreen: false };
 }
 
 function saveWindowStateForProject(projectPath: string, bounds: WindowStateBounds): void {
-  const windowStates = store.get("windowStates") ?? {};
+  const windowStates = windowStatesStore.get("windowStates") ?? {};
   windowStates[projectPath] = bounds;
-  store.set("windowStates", windowStates);
+  windowStatesStore.set("windowStates", windowStates);
   lastSavedProjectPath = projectPath;
 }
 
@@ -130,11 +166,6 @@ export function createWindowWithState(
     height: windowState.height,
   });
 
-  // Run the off-screen / oversized recovery check against the initial normal-state bounds,
-  // before calling maximize() or setFullScreen(). On Windows, getBounds() on a maximized
-  // window returns overflow bounds (e.g. width:1928 on a 1920px display) that would falsely
-  // trigger the workArea size check. On macOS, native fullscreen bounds exceed workArea.height.
-  // Checking here ensures we only ever clamp truly invalid saved states.
   const bounds = win.getBounds();
   const display = screen.getDisplayMatching(bounds);
 
@@ -169,14 +200,6 @@ export function createWindowWithState(
     }
   }
 
-  // Maximize is applied immediately on the hidden window. Electron updates the
-  // internal frame geometry so the OS presents the window already maximized when
-  // win.show() is called later — no flash of a normal-sized window.
-  //
-  // Fullscreen is deferred until after 'show' because macOS native fullscreen
-  // requires the window to be visible for the Space transition animation.
-  // Fullscreen takes priority over maximize since they are mutually exclusive
-  // on macOS (green button = fullscreen, Option+green = maximize).
   if (windowState.isFullScreen) {
     win.once("show", () => {
       if (!win.isDestroyed()) {
@@ -193,9 +216,6 @@ export function createWindowWithState(
     const isMaximized = win.isMaximized();
     const isFullScreen = win.isFullScreen();
 
-    // getNormalBounds() returns the pre-maximize/pre-fullscreen frame cached by the OS,
-    // avoiding the macOS race condition where resize events fire mid-animation and
-    // isMaximized() transiently returns false before the transition completes.
     const normalBounds = win.getNormalBounds();
 
     const entry: WindowStateBounds = {
@@ -207,23 +227,22 @@ export function createWindowWithState(
       isFullScreen,
     };
 
-    // Save to per-project state
     const resolvedPath = projectPath ?? getCurrentProjectPath();
     if (resolvedPath) {
       saveWindowStateForProject(resolvedPath, entry);
     } else {
       saveWindowStateForProject(LEGACY_KEY, entry);
     }
-
-    // Also save to legacy key for backward compatibility
-    store.set("windowState", entry);
   };
 
   const debouncedSaveState = debounce(saveState, 500);
 
   win.on("resize", debouncedSaveState);
   win.on("move", debouncedSaveState);
-  win.on("close", saveState);
+  win.on("close", () => {
+    debouncedSaveState.cancel();
+    saveState();
+  });
 
   return win;
 }
