@@ -341,8 +341,6 @@ export function AgentButton({
                   onPointerEnter={clearFocusRestoreSuppression}
                   className={cn(
                     "toolbar-agent-button text-daintree-text transition-colors relative",
-                    isReady &&
-                      "hover:text-[var(--toolbar-control-hover-fg,var(--theme-accent-primary))] focus-visible:text-[var(--toolbar-control-hover-fg,var(--theme-accent-primary))]",
                     needsSetup && "opacity-70"
                   )}
                   aria-label={ariaLabel}
@@ -435,8 +433,6 @@ export function AgentButton({
                 onPointerEnter={clearFocusRestoreSuppression}
                 className={cn(
                   "toolbar-agent-button text-daintree-text transition-colors rounded-r-none border-r border-transparent relative",
-                  isReady &&
-                    "hover:text-[var(--toolbar-control-hover-fg,var(--theme-accent-primary))] focus-visible:text-[var(--toolbar-control-hover-fg,var(--theme-accent-primary))]",
                   needsSetup && "opacity-70"
                 )}
                 aria-label={ariaLabel}
@@ -466,7 +462,6 @@ export function AgentButton({
                     className={cn(
                       "toolbar-agent-button text-daintree-text transition-colors rounded-l-none",
                       "h-8 w-6 p-0 flex items-center justify-center",
-                      "hover:text-[var(--toolbar-control-hover-fg,var(--theme-accent-primary))] focus-visible:text-[var(--toolbar-control-hover-fg,var(--theme-accent-primary))]",
                       !isReady && !isLoading && "opacity-60"
                     )}
                     aria-label={chevronTooltip}

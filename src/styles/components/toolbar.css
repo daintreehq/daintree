@@ -26,14 +26,17 @@
   box-shadow: var(--_hover-shadow);
 }
 
-.toolbar-agent-button:hover,
-.toolbar-agent-button:focus-visible {
+.toolbar-agent-button:hover {
   background: var(
     --toolbar-agent-hover-bg,
     var(--toolbar-control-hover-bg, var(--theme-overlay-elevated))
   );
-  color: var(--_hover-fg);
   box-shadow: var(--_hover-shadow);
+}
+
+.toolbar-agent-button:focus-visible {
+  outline: 2px solid var(--theme-accent-primary);
+  outline-offset: 2px;
 }
 
 .toolbar-icon-button:active,

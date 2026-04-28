@@ -570,7 +570,7 @@ export function AgentTrayButton({
               variant="ghost"
               size="icon"
               data-toolbar-item={dataToolbarItem}
-              className="toolbar-agent-button text-daintree-text hover:text-[var(--toolbar-control-hover-fg,var(--theme-accent-primary))] focus-visible:text-[var(--toolbar-control-hover-fg,var(--theme-accent-primary))] transition-colors"
+              className="toolbar-agent-button text-daintree-text transition-colors"
               aria-label={showDiscoveryBadge ? "Agent tray — new agents detected" : "Agent tray"}
               onPointerEnter={clearFocusRestoreSuppression}
             >
