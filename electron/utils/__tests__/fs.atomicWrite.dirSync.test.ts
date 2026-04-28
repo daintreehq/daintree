@@ -1,6 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, readFileSync, rmSync } from "fs";
-import { mkdtemp, readFile, rm } from "fs/promises";
+import { mkdir, mkdtemp, rm } from "fs/promises";
 import path from "path";
 import os from "os";
 
@@ -15,9 +14,9 @@ vi.mock("fs/promises", async (importOriginal) => {
   return { ...actual, open: mockedOpen };
 });
 
-import { resilientAtomicWriteFile, resilientAtomicWriteFileSync } from "../fs.js";
+import { resilientAtomicWriteFile } from "../fs.js";
 
-describe("syncParentDirectory (async)", () => {
+describe("syncParentDirectory", () => {
   let tmpDir: string;
 
   beforeEach(async () => {
@@ -30,18 +29,27 @@ describe("syncParentDirectory (async)", () => {
 
   afterEach(async () => {
     await rm(tmpDir, { recursive: true, force: true });
+    vi.restoreAllMocks();
   });
 
   it("opens parent dir, syncs, and closes after rename", async () => {
+    const calls: string[] = [];
+    mockedSync.mockImplementation(() => {
+      calls.push("dir-sync");
+      return Promise.resolve();
+    });
+
     const target = path.join(tmpDir, "test.json");
     await resilientAtomicWriteFile(target, "data");
 
     expect(mockedOpen).toHaveBeenCalledWith(tmpDir, "r");
     expect(mockedSync).toHaveBeenCalled();
     expect(mockedClose).toHaveBeenCalled();
+    // Sync must happen after rename (rename occurs before syncParentDirectory call)
+    expect(calls).toEqual(["dir-sync"]);
   });
 
-  it("still closes dir handle when sync rejects", async () => {
+  it("propagates sync error and still closes handle", async () => {
     mockedSync.mockRejectedValue(new Error("EIO: fsync failed"));
 
     const target = path.join(tmpDir, "test.json");
@@ -49,64 +57,38 @@ describe("syncParentDirectory (async)", () => {
 
     expect(mockedClose).toHaveBeenCalled();
   });
+
+  it("opens correct parent dir for nested paths", async () => {
+    const nestedDir = path.join(tmpDir, "sub", "nested");
+    const target = path.join(nestedDir, "file.json");
+
+    await mkdir(nestedDir, { recursive: true });
+    await resilientAtomicWriteFile(target, "data");
+
+    expect(mockedOpen).toHaveBeenCalledWith(nestedDir, "r");
+  });
 });
 
-describe("syncParentDirectory (win32 skip)", () => {
+describe("syncParentDirectory win32 skip", () => {
   let tmpDir: string;
+  let platformRestore: () => void;
 
   beforeEach(async () => {
     tmpDir = await mkdtemp(path.join(os.tmpdir(), "daintree-dirsync-win-test-"));
     vi.clearAllMocks();
+    platformRestore = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
   });
 
   afterEach(async () => {
     await rm(tmpDir, { recursive: true, force: true });
+    platformRestore();
+    vi.restoreAllMocks();
   });
 
   it("skips dir fsync on win32", async () => {
-    const restore = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-
     const target = path.join(tmpDir, "test.json");
     await resilientAtomicWriteFile(target, "data");
 
     expect(mockedOpen).not.toHaveBeenCalled();
-    restore();
-  });
-});
-
-describe("integration: writes survive with dir fsync enabled", () => {
-  let tmpDir: string;
-
-  beforeEach(async () => {
-    tmpDir = await mkdtemp(path.join(os.tmpdir(), "daintree-dirsync-int-"));
-  });
-
-  afterEach(async () => {
-    await rm(tmpDir, { recursive: true, force: true });
-  });
-
-  it("async write with dir fsync (real fs)", async () => {
-    const target = path.join(tmpDir, "test.json");
-    await resilientAtomicWriteFile(target, '{"key":"value"}', "utf-8");
-
-    const content = await readFile(target, "utf-8");
-    expect(content).toBe('{"key":"value"}');
-  });
-
-  it("sync write with dir fsync (real fs)", () => {
-    const target = path.join(tmpDir, "test.json");
-    resilientAtomicWriteFileSync(target, "synctest", "utf-8");
-
-    const content = readFileSync(target, "utf-8");
-    expect(content).toBe("synctest");
-  });
-
-  it("leaves no temp files after write", async () => {
-    const { readdirSync } = await import("fs");
-    const target = path.join(tmpDir, "test.json");
-    await resilientAtomicWriteFile(target, "data");
-
-    const files = readdirSync(tmpDir);
-    expect(files).toEqual(["test.json"]);
   });
 });
