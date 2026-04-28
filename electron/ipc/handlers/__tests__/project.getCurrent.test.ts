@@ -113,6 +113,7 @@ describe("project:get-current — unbound new window (#6015)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     projectStoreMock.getCurrentProject.mockReturnValue(null);
+    projectStoreMock.getProjectById.mockReturnValue(null);
   });
 
   it("returns null when PVM exists but the sender WebContents has no binding", async () => {
