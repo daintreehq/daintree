@@ -12,7 +12,7 @@ import { getMergedPresets } from "@/config/agents";
 import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
 import { useProjectPresetsStore } from "@/store/projectPresetsStore";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
-import { useNotificationStore } from "@/store/notificationStore";
+import { notify } from "@/lib/notify";
 
 /**
  * Per-terminal reentrancy guard for fallback activations. A single slow exit
@@ -63,7 +63,7 @@ async function handleFallbackTriggered(data: {
   if (!nextPresetId) {
     // Chain exhausted: surface a single error notification. No respawn.
     const isExhausted = chain.length > 0;
-    useNotificationStore.getState().addNotification({
+    notify({
       type: "error",
       priority: "high",
       title: isExhausted ? "Fallback chain exhausted" : `${fromName} unavailable`,
@@ -77,7 +77,7 @@ async function handleFallbackTriggered(data: {
 
   const nextPreset = mergedPresets.find((p) => p.id === nextPresetId);
   if (!nextPreset) {
-    useNotificationStore.getState().addNotification({
+    notify({
       type: "error",
       priority: "high",
       title: "Fallback preset missing",
@@ -102,9 +102,11 @@ async function handleFallbackTriggered(data: {
       .activateFallbackPreset(terminalId, nextPresetId, originalPresetId);
 
     if (result.success) {
-      useNotificationStore.getState().addNotification({
+      notify({
         type: "info",
-        priority: "low",
+        // "high" so the user sees the toast — direct addNotification with
+        // priority:"low" used to show one; notify() routes "low" to inbox-only.
+        priority: "high",
         title: "Switched to fallback preset",
         message:
           reason === "auth"
@@ -113,7 +115,7 @@ async function handleFallbackTriggered(data: {
         duration: 4000,
       });
     } else {
-      useNotificationStore.getState().addNotification({
+      notify({
         type: "error",
         priority: "high",
         title: "Fallback activation failed",

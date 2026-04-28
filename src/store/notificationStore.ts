@@ -99,6 +99,17 @@ function messagesEqual(a: Notification["message"], b: Notification["message"]): 
 export const useNotificationStore = create<NotificationStore>((set) => ({
   notifications: [],
   addNotification: (notification) => {
+    if (
+      import.meta.env.DEV &&
+      typeof notification.message !== "string" &&
+      !notification.inboxMessage
+    ) {
+      // Mirrors the guard in notify(); without it, direct callers silently drop
+      // their persistent inbox history (WCAG 2.2.1).
+      console.error(
+        "[notificationStore.addNotification] ReactNode message without inboxMessage — persistent inbox history will be dropped. Use notify() or provide inboxMessage."
+      );
+    }
     const id = uuidv4();
     let collapsedOntoId: string | null = null;
     set((state) => {

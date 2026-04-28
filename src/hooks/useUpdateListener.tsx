@@ -47,12 +47,15 @@ export function useUpdateListener(suppressToasts = false): void {
     pendingUpdateRef.current = null;
 
     if (downloaded) {
-      useNotificationStore.getState().addNotification({
+      // urgent: the user already chose to lift suppression — surface this even
+      // if the scheduled quiet window is still active.
+      notify({
         type: "success",
         title: "Update Ready",
         message: `Version ${version} is ready to install.`,
         inboxMessage: `Version ${version} ready to install`,
         priority: "high",
+        urgent: true,
         duration: 0,
         correlationId: UPDATE_CORRELATION_ID,
         action: {
@@ -173,12 +176,13 @@ export function useUpdateListener(suppressToasts = false): void {
         // the user dismissed the "Available" toast. Either way, the
         // "Downloaded" stage is a distinct notification and must not be
         // swallowed by the Available-stage cooldown — create a fresh toast.
-        useNotificationStore.getState().addNotification({
+        notify({
           type: "success",
           title: "Update Ready",
           message: `Version ${info.version} is ready to install.`,
           inboxMessage: `Version ${info.version} ready to install`,
           priority: "high",
+          urgent: true,
           duration: 0,
           correlationId: UPDATE_CORRELATION_ID,
           action: {

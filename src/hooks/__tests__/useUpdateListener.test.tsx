@@ -237,7 +237,19 @@ describe("useUpdateListener", () => {
   });
 
   it("skips progress when toast was not created (quiet period)", () => {
-    notifyMock.mockImplementation(() => "");
+    // Simulate quiet hours — non-urgent notify() calls are suppressed.
+    notifyMock.mockImplementation((payload) => {
+      if (payload.urgent) {
+        const id = `toast-${++toastCounter}`;
+        addMockNotification({
+          id,
+          onDismiss: payload.onDismiss,
+          correlationId: payload.correlationId,
+        });
+        return id;
+      }
+      return "";
+    });
     renderHook(() => useUpdateListener());
 
     act(() => {
@@ -252,7 +264,19 @@ describe("useUpdateListener", () => {
   });
 
   it("creates fresh notification on downloaded when quiet period was active", () => {
-    notifyMock.mockImplementation(() => "");
+    // Simulate quiet hours — non-urgent notify() calls are suppressed.
+    notifyMock.mockImplementation((payload) => {
+      if (payload.urgent) {
+        const id = `toast-${++toastCounter}`;
+        addMockNotification({
+          id,
+          onDismiss: payload.onDismiss,
+          correlationId: payload.correlationId,
+        });
+        return id;
+      }
+      return "";
+    });
     renderHook(() => useUpdateListener());
 
     act(() => {
@@ -263,12 +287,15 @@ describe("useUpdateListener", () => {
       capturedDownloaded!({ version: "2.5.0" });
     });
 
-    expect(addNotificationMock).toHaveBeenCalledWith(
+    // The "no live toast" fallback path uses notify({ urgent: true }) so the
+    // Update Ready stage surfaces even while non-urgent toasts stay suppressed.
+    expect(notifyMock).toHaveBeenCalledWith(
       expect.objectContaining({
         type: "success",
         title: "Update Ready",
         message: "Version 2.5.0 is ready to install.",
         priority: "high",
+        urgent: true,
         duration: 0,
         action: expect.objectContaining({ label: "Restart to Update" }),
       })
@@ -288,11 +315,12 @@ describe("useUpdateListener", () => {
       capturedDownloaded!({ version: "3.0.0" });
     });
 
-    expect(addNotificationMock).toHaveBeenCalledWith(
+    expect(notifyMock).toHaveBeenCalledWith(
       expect.objectContaining({
         type: "success",
         title: "Update Ready",
         priority: "high",
+        urgent: true,
       })
     );
   });
@@ -444,13 +472,16 @@ describe("useUpdateListener", () => {
 
     rerender({ suppress: false });
 
-    expect(addNotificationMock).toHaveBeenCalledWith(
+    // The suppress-lifted path emits notify({ urgent: true }) for the stored
+    // "downloaded" pending update so quiet hours don't keep it hidden.
+    expect(notifyMock).toHaveBeenCalledWith(
       expect.objectContaining({
         type: "success",
         title: "Update Ready",
+        urgent: true,
       })
     );
-    expect(notifyMock).not.toHaveBeenCalled();
+    expect(addNotificationMock).not.toHaveBeenCalled();
   });
 
   it("still creates the Update Ready toast after the Available toast was dismissed", () => {
@@ -470,10 +501,11 @@ describe("useUpdateListener", () => {
       capturedDownloaded!({ version: "2.5.0" });
     });
 
-    expect(addNotificationMock).toHaveBeenCalledWith(
+    expect(notifyMock).toHaveBeenCalledWith(
       expect.objectContaining({
         type: "success",
         title: "Update Ready",
+        urgent: true,
       })
     );
   });

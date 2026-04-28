@@ -154,6 +154,7 @@ export function ThemePalette({ isOpen, onClose }: ThemePaletteProps) {
         logError("Failed to persist theme selection", error);
         notify({
           type: "error",
+          priority: "high",
           message: `Failed to save theme: ${scheme.name}`,
           duration: 3000,
         });

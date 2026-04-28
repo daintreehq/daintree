@@ -8,7 +8,6 @@ import { useUserAgentRegistryStore } from "@/store/userAgentRegistryStore";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { useAppThemeStore } from "@/store/appThemeStore";
 import { notify } from "@/lib/notify";
-import { useNotificationStore } from "@/store/notificationStore";
 import { keybindingService } from "@/services/KeybindingService";
 import { actionService } from "@/services/ActionService";
 import { getBuiltInAppSchemeForType, resolveAppTheme } from "@shared/theme";
@@ -193,16 +192,20 @@ export function registerAppActions(actions: ActionRegistry, callbacks: ActionCal
         logError("Failed to persist theme toggle", error);
         notify({
           type: "error",
+          priority: "high",
           message: `Failed to save theme: ${target.name}`,
           duration: 3000,
         });
         return;
       }
-      useNotificationStore.getState().addNotification({
+      notify({
         type: "info",
-        priority: "low",
+        priority: "high",
         message: `Theme: ${target.name}`,
         duration: 2000,
+        // Confirmation of a user-triggered toggle — the user already knows; no
+        // need to bump the unread badge in the notification center.
+        countable: false,
       });
     },
   }));

@@ -27,6 +27,11 @@ export async function copyContextWithFeedback(
   worktreeId: string,
   options?: { modified?: boolean }
 ): Promise<void> {
+  // Direct store call: this is a spinner-then-update pattern that depends on
+  // an unconditional toast id. notify() returns "" when notifications are
+  // disabled (or quiet hours apply), which would silently break the
+  // updateNotification handoff below. The user just clicked "copy context",
+  // so feedback is required regardless of quiet-hour preferences.
   const store = useNotificationStore.getState();
   const toastId = store.addNotification({
     type: "info",

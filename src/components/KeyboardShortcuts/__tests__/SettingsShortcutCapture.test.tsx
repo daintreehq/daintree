@@ -25,6 +25,12 @@ vi.mock("@/services/ActionService", () => ({
   },
 }));
 
+const notifyMock = vi.fn();
+
+vi.mock("@/lib/notify", () => ({
+  notify: (...args: unknown[]) => notifyMock(...args),
+}));
+
 vi.mock("@/store/notificationStore", () => ({
   useNotificationStore: {
     getState: vi.fn(() => ({
@@ -530,7 +536,6 @@ describe("SettingsShortcutCapture", () => {
 
     it("shows toast with undo action after successful unbind", async () => {
       const { keybindingService } = await import("@/services/KeybindingService");
-      const { useNotificationStore } = await import("@/store/notificationStore");
 
       vi.mocked(keybindingService.findConflicts).mockReturnValue([
         {
@@ -545,16 +550,7 @@ describe("SettingsShortcutCapture", () => {
       vi.mocked(keybindingService.getOverride).mockReturnValue(["Cmd+K"]);
       vi.mocked(keybindingService.getDefaultCombo).mockReturnValue("Cmd+A");
 
-      const addNotificationSpy = vi.fn();
-      vi.mocked(useNotificationStore.getState).mockReturnValue({
-        addNotification: addNotificationSpy,
-        notifications: [],
-        updateNotification: vi.fn(),
-        dismissNotification: vi.fn(),
-        removeNotification: vi.fn(),
-        clearNotifications: vi.fn(),
-        reset: vi.fn(),
-      });
+      notifyMock.mockClear();
 
       render(
         <SettingsShortcutCapture
@@ -583,11 +579,11 @@ describe("SettingsShortcutCapture", () => {
         await vi.advanceTimersByTimeAsync(0);
       });
 
-      expect(addNotificationSpy).toHaveBeenCalledWith({
+      expect(notifyMock).toHaveBeenCalledWith({
         type: "success",
         message: "Unbound Conflicting Action",
         duration: 5000,
-        priority: "low",
+        priority: "high",
         action: expect.objectContaining({
           label: "Undo",
           onClick: expect.any(Function),
@@ -598,7 +594,6 @@ describe("SettingsShortcutCapture", () => {
     it("handles multiple conflicts separately", async () => {
       const { keybindingService } = await import("@/services/KeybindingService");
       const { actionService } = await import("@/services/ActionService");
-      const { useNotificationStore } = await import("@/store/notificationStore");
 
       vi.mocked(keybindingService.findConflicts).mockReturnValue([
         {
@@ -620,16 +615,7 @@ describe("SettingsShortcutCapture", () => {
       vi.mocked(keybindingService.getOverride).mockReturnValue(["Cmd+K"]);
       vi.mocked(keybindingService.getDefaultCombo).mockReturnValue("Cmd+A");
 
-      const addNotificationSpy = vi.fn();
-      vi.mocked(useNotificationStore.getState).mockReturnValue({
-        addNotification: addNotificationSpy,
-        notifications: [],
-        updateNotification: vi.fn(),
-        dismissNotification: vi.fn(),
-        removeNotification: vi.fn(),
-        clearNotifications: vi.fn(),
-        reset: vi.fn(),
-      });
+      notifyMock.mockClear();
 
       render(
         <SettingsShortcutCapture
@@ -678,7 +664,7 @@ describe("SettingsShortcutCapture", () => {
         { source: "user" }
       );
 
-      expect(addNotificationSpy).toHaveBeenCalledTimes(2);
+      expect(notifyMock).toHaveBeenCalledTimes(2);
     });
   });
 });

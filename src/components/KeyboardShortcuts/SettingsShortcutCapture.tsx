@@ -4,7 +4,6 @@ import { isMac } from "@/lib/platform";
 import { keybindingService, normalizeKeyForBinding } from "@/services/KeybindingService";
 import { actionService } from "@/services/ActionService";
 import { notify } from "@/lib/notify";
-import { useNotificationStore } from "@/store/notificationStore";
 import { logError, logWarn } from "@/utils/logger";
 
 const CHORD_TIMEOUT_MS = 1000;
@@ -206,11 +205,11 @@ export function SettingsShortcutCapture({
 
       const undoCombo = conflictingCombo!;
 
-      useNotificationStore.getState().addNotification({
+      notify({
         type: "success",
         message: `Unbound ${conflict.description || conflict.actionId}`,
         duration: 5000,
-        priority: "low",
+        priority: "high",
         action: {
           label: "Undo",
           onClick: async () => {
@@ -233,6 +232,7 @@ export function SettingsShortcutCapture({
                 type: "error",
                 message: "Failed to undo keybinding change",
                 duration: 3000,
+                priority: "high",
               });
             }
           },
@@ -244,6 +244,7 @@ export function SettingsShortcutCapture({
         type: "error",
         message: "Failed to unbind keybinding",
         duration: 3000,
+        priority: "high",
       });
     } finally {
       setIsUnbinding(false);

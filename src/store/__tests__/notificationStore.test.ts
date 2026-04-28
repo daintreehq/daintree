@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { useNotificationStore, MAX_VISIBLE_TOASTS, type Notification } from "../notificationStore";
 import { useNotificationHistoryStore } from "../slices/notificationHistorySlice";
 
@@ -536,5 +536,56 @@ describe("notificationStore — correlationId collapse", () => {
     const entry = useNotificationHistoryStore.getState().entries.find((e) => e.id === entryId);
     expect(entry?.seenAsToast).toBe(true);
     expect(useNotificationHistoryStore.getState().unreadCount).toBe(0);
+  });
+});
+
+describe("notificationStore — DEV guard for ReactNode without inboxMessage", () => {
+  let consoleErrorSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    useNotificationStore.setState({ notifications: [] });
+    useNotificationHistoryStore.setState({ entries: [], unreadCount: 0 });
+    consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    consoleErrorSpy.mockRestore();
+  });
+
+  it("warns in DEV when message is a ReactNode and inboxMessage is missing", () => {
+    const reactNodeMessage = { type: "div", props: { children: "rich content" } } as unknown as
+      | string
+      | Notification["message"];
+
+    getState().addNotification({
+      type: "info",
+      priority: "high",
+      message: reactNodeMessage as Notification["message"],
+    });
+
+    expect(consoleErrorSpy).toHaveBeenCalledWith(
+      expect.stringContaining("ReactNode message without inboxMessage")
+    );
+  });
+
+  it("does not warn when ReactNode message is paired with inboxMessage", () => {
+    const reactNodeMessage = { type: "div", props: { children: "rich content" } } as unknown as
+      | string
+      | Notification["message"];
+
+    getState().addNotification({
+      type: "info",
+      priority: "high",
+      message: reactNodeMessage as Notification["message"],
+      inboxMessage: "rich content",
+    });
+
+    expect(consoleErrorSpy).not.toHaveBeenCalled();
+  });
+
+  it("does not warn for plain string messages", () => {
+    addToast({ message: "plain string" });
+
+    expect(consoleErrorSpy).not.toHaveBeenCalled();
   });
 });

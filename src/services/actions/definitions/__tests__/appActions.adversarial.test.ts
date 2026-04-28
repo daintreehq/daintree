@@ -26,6 +26,9 @@ vi.mock("@/store/appThemeStore", () => ({
 vi.mock("@/store/notificationStore", () => ({
   useNotificationStore: { getState: () => ({ addNotification: vi.fn() }) },
 }));
+vi.mock("@/lib/notify", () => ({
+  notify: vi.fn(),
+}));
 vi.mock("@/services/KeybindingService", () => ({
   keybindingService: { loadOverrides: loadOverridesMock },
 }));

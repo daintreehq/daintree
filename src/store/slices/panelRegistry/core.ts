@@ -22,7 +22,7 @@ import { deriveTerminalRuntimeIdentity } from "@/utils/terminalChrome";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useLayoutConfigStore } from "@/store/layoutConfigStore";
 import { usePanelLimitStore, evaluatePanelLimit } from "@/store/panelLimitStore";
-import { useNotificationStore } from "@/store/notificationStore";
+import { notify } from "@/lib/notify";
 import { saveNormalized, saveTabGroups } from "./persistence";
 import { optimizeForDock } from "./layout";
 import {
@@ -182,7 +182,7 @@ export const createCorePanelActions = (
       });
 
       if (tier === "hard") {
-        useNotificationStore.getState().addNotification({
+        notify({
           type: "warning",
           priority: "high",
           title: "Panel limit reached",
@@ -207,7 +207,7 @@ export const createCorePanelActions = (
         // Re-check count after confirmation in case panels were closed during the dialog
         const postConfirmCount = countNonTrashTerminals(get());
         if (postConfirmCount >= hardLimit) {
-          useNotificationStore.getState().addNotification({
+          notify({
             type: "warning",
             priority: "high",
             title: "Panel limit reached",

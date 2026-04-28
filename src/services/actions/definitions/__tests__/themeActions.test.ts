@@ -99,7 +99,7 @@ describe("app.theme.toggle", () => {
 
     expect(mockSetSelectedSchemeId).toHaveBeenCalledWith("light-a");
     expect(mockSetColorScheme).toHaveBeenCalledWith("light-a");
-    expect(mockAddNotification).toHaveBeenCalledWith(
+    expect(mockNotify).toHaveBeenCalledWith(
       expect.objectContaining({ type: "info", message: "Theme: Light A" })
     );
   });
@@ -118,7 +118,7 @@ describe("app.theme.toggle", () => {
 
     expect(mockSetSelectedSchemeId).toHaveBeenCalledWith("dark-a");
     expect(mockSetColorScheme).toHaveBeenCalledWith("dark-a");
-    expect(mockAddNotification).toHaveBeenCalledWith(
+    expect(mockNotify).toHaveBeenCalledWith(
       expect.objectContaining({ type: "info", message: "Theme: Dark A" })
     );
   });
@@ -182,7 +182,7 @@ describe("app.theme.toggle", () => {
     // Must NOT be light-a (the wrong-type fallback). Must be some built-in dark scheme.
     expect(selectedId).not.toBe("light-a");
     expect(mockSetColorScheme).toHaveBeenCalledWith(selectedId);
-    expect(mockAddNotification).toHaveBeenCalledWith(expect.objectContaining({ type: "info" }));
+    expect(mockNotify).toHaveBeenCalledWith(expect.objectContaining({ type: "info" }));
   });
 
   it("shows error toast when persistence fails, skips success toast", async () => {
