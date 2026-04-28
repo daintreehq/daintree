@@ -19,6 +19,32 @@ const SHELL_PROMPT_PATTERNS = [
   /^\s*[➜➤➟➔❯›]\s+.*$/,
 ] as const;
 
+// Locale-independent fallback signals for "command not found" detection. POSIX
+// exit code 127 is invisible to node-pty.onExit while the shell is alive
+// (interactive case), so output parsing remains the only viable signal here.
+// Localized phrases cover the major shell locales; PowerShell's
+// `CommandNotFoundException` is locale-independent. Issue #6062.
+const COMMAND_NOT_FOUND_PATTERNS = [
+  "command not found",
+  "not found",
+  "no such file",
+  "permission denied",
+  "commande introuvable",
+  "Befehl nicht gefunden",
+  "no se encontró la orden",
+  "コマンドが見つかりません",
+  "未找到命令",
+  "команда не найдена",
+  "comando não encontrado",
+  "comando non trovato",
+  "명령어를 찾을 수 없습니다",
+  "opdracht niet gevonden",
+  "Unknown command:",
+  "CommandNotFoundException",
+] as const;
+
+const COMMAND_NOT_FOUND_REGEX = new RegExp(COMMAND_NOT_FOUND_PATTERNS.join("|"), "iu");
+
 export interface IdentityWatcherDelegate {
   readonly terminalId: string;
   readonly isExited: boolean;
@@ -233,7 +259,7 @@ export class IdentityWatcher {
 
   private hasRecentCommandFailureOutput(): boolean {
     const recent = this.delegate.getLastNLines(SHELL_IDENTITY_FALLBACK_SCAN_LINES).join("\n");
-    return /(?:command not found|not found|no such file|permission denied)/i.test(recent);
+    return COMMAND_NOT_FOUND_REGEX.test(recent);
   }
 
   private isShellPromptVisible(): boolean {

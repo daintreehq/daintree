@@ -385,6 +385,94 @@ describe("IdentityWatcher", () => {
     });
   });
 
+  describe("hasRecentCommandFailureOutput — locale-independent detection", () => {
+    // The detector is private; behavior is verified through the demotion gate.
+    // Branch at IdentityWatcher.poll() line ~368: when foreground is busy AND
+    // no failure phrase is in recent output, demotion is held. A failure
+    // phrase bypasses the hold and allows demotion. Issue #6062.
+    const localizedFailures = [
+      { locale: "English (command not found)", phrase: "bash: claude: command not found" },
+      { locale: "English (no such file)", phrase: "bash: ./claude: No such file or directory" },
+      { locale: "French", phrase: "bash: claude : commande introuvable" },
+      { locale: "German", phrase: "bash: claude: Befehl nicht gefunden" },
+      { locale: "Spanish", phrase: "bash: claude: no se encontró la orden" },
+      { locale: "Japanese", phrase: "bash: claude: コマンドが見つかりません" },
+      { locale: "Chinese (Simplified)", phrase: "bash: claude: 未找到命令" },
+      { locale: "Russian", phrase: "bash: claude: команда не найдена" },
+      { locale: "Portuguese", phrase: "bash: claude: comando não encontrado" },
+      { locale: "Italian", phrase: "bash: claude: comando non trovato" },
+      { locale: "Korean", phrase: "bash: claude: 명령어를 찾을 수 없습니다" },
+      { locale: "Dutch", phrase: "bash: claude: opdracht niet gevonden" },
+      { locale: "Fish shell", phrase: "fish: Unknown command: claude" },
+      {
+        locale: "PowerShell",
+        phrase:
+          "claude : The term 'claude' is not recognized. + FullyQualifiedErrorId : CommandNotFoundException",
+      },
+    ];
+
+    it.each(localizedFailures)(
+      "bypasses demotion hold when '$locale' failure is in recent output",
+      async ({ phrase }) => {
+        const { delegate, state } = createFakeDelegate({
+          visibleLines: ["claude\r\n", "Starting Claude Code..."],
+          cursorLine: "Starting Claude Code...",
+          ptyDescendantCount: 1,
+          // Foreground is busy (shell pgid != foreground pgid) — would
+          // normally hold demotion until the regex match overrides it.
+          foreground: { shellPgid: 123, foregroundPgid: 456 },
+        });
+        const watcher = new IdentityWatcher(delegate);
+
+        watcher.onShellSubmit("claude");
+        await vi.advanceTimersByTimeAsync(2_000);
+        expect(watcher.isFallbackCommitted).toBe(true);
+        // First call is the commit (isBusy=true).
+        expect(state.detectionCalls).toHaveLength(1);
+
+        // Now show a shell prompt with the localized failure phrase, while
+        // foreground stays busy. Without the regex bypass, branch 1 holds.
+        state.visibleLines = ["user@host canopy % ", phrase, "user@host canopy % "];
+        state.cursorLine = "user@host canopy % ";
+        state.ptyDescendantCount = 0;
+        state.foreground = { shellPgid: 123, foregroundPgid: 456 };
+        await vi.advanceTimersByTimeAsync(600);
+
+        const lastCall = state.detectionCalls[state.detectionCalls.length - 1];
+        expect(lastCall).toMatchObject({
+          agentType: undefined,
+          processIconId: undefined,
+          isBusy: false,
+        });
+      }
+    );
+
+    it("holds demotion when no failure phrase is present and foreground is busy", async () => {
+      const { delegate, state } = createFakeDelegate({
+        visibleLines: ["claude\r\n", "Starting Claude Code..."],
+        cursorLine: "Starting Claude Code...",
+        ptyDescendantCount: 1,
+        foreground: { shellPgid: 123, foregroundPgid: 456 },
+      });
+      const watcher = new IdentityWatcher(delegate);
+
+      watcher.onShellSubmit("claude");
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(watcher.isFallbackCommitted).toBe(true);
+
+      // Prompt visible, no failure phrase, foreground still busy — hold.
+      state.visibleLines = ["user@host canopy % ", "(no failure here)", "user@host canopy % "];
+      state.cursorLine = "user@host canopy % ";
+      state.ptyDescendantCount = 0;
+      state.foreground = { shellPgid: 123, foregroundPgid: 456 };
+      await vi.advanceTimersByTimeAsync(600);
+
+      // Only the commit call should exist; no demotion fired.
+      expect(state.detectionCalls).toHaveLength(1);
+      expect(state.detectionCalls[0].isBusy).toBe(true);
+    });
+  });
+
   describe("hasAgentUiPromptFalsePositive", () => {
     it("returns true for trust-prompt UI text", () => {
       const { delegate } = createFakeDelegate({
