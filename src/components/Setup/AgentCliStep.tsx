@@ -305,7 +305,7 @@ export function AgentCliStep({ availability, selections, onInstallComplete }: Ag
                       disabled={isInstalling || isBatchRunning}
                       onClick={() => handleMethodChange(agentId, idx)}
                       data-selected={idx === currentMethodIdx || undefined}
-                      className="px-1.5 py-0.5 rounded text-[10px] text-daintree-text/50 transition-colors hover:text-daintree-text/80 data-[selected]:bg-daintree-accent/15 data-[selected]:text-daintree-accent disabled:opacity-50"
+                      className="px-1.5 py-0.5 rounded text-[10px] text-daintree-text/50 transition-colors hover:text-daintree-text/80 data-[selected]:bg-tint/[0.12] data-[selected]:text-daintree-text disabled:opacity-50"
                     >
                       {block.label ?? `Method ${idx + 1}`}
                     </button>

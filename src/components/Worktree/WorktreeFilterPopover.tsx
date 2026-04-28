@@ -61,7 +61,7 @@ function FilterChip({ label, isActive, onClick }: FilterChipProps) {
       className={cn(
         "inline-flex items-center px-2 py-0.5 text-[11px] rounded-full border transition-colors",
         isActive
-          ? "bg-daintree-accent/20 border-daintree-accent/40 text-daintree-accent"
+          ? "bg-tint/[0.08] border-daintree-border text-daintree-text"
           : "bg-daintree-bg border-daintree-border text-daintree-text/60 hover:bg-overlay-medium hover:text-daintree-text/80"
       )}
     >

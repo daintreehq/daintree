@@ -1063,7 +1063,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
                 </p>
                 <button
                   onClick={clearAllFilters}
-                  className="text-xs px-3 py-1.5 text-daintree-accent hover:bg-daintree-accent/10 rounded transition-colors"
+                  className="text-xs px-3 py-1.5 text-daintree-text/60 hover:text-daintree-text hover:bg-overlay-soft rounded transition-colors"
                 >
                   Clear filters
                 </button>

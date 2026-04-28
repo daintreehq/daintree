@@ -152,7 +152,7 @@ export function AutomationTab({
                         className={cn(
                           "flex items-center gap-1.5 px-2 py-1 rounded text-xs transition-colors",
                           cmd.preferredLocation === "dock"
-                            ? "bg-daintree-accent/15 text-daintree-accent"
+                            ? "bg-tint/[0.12] text-daintree-text"
                             : "text-daintree-text/60 hover:text-daintree-text hover:bg-daintree-border/30"
                         )}
                       >
@@ -176,7 +176,7 @@ export function AutomationTab({
                         className={cn(
                           "flex items-center gap-1.5 px-2 py-1 rounded text-xs transition-colors",
                           cmd.preferredAutoRestart
-                            ? "bg-daintree-accent/15 text-daintree-accent"
+                            ? "bg-tint/[0.12] text-daintree-text"
                             : "text-daintree-text/60 hover:text-daintree-text hover:bg-daintree-border/30"
                         )}
                       >

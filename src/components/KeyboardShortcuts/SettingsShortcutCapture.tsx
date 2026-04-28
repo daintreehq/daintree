@@ -301,7 +301,7 @@ export function SettingsShortcutCapture({
                 <button
                   onClick={() => handleUnbindConflict(conflict)}
                   disabled={isUnbinding}
-                  className="flex items-center gap-1 px-2 py-0.5 text-xs text-daintree-accent hover:bg-daintree-accent/10 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="flex items-center gap-1 px-2 py-0.5 text-xs text-daintree-text/60 hover:text-daintree-text hover:bg-overlay-soft rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   <X className="w-3 h-3" />
                   <span>Unbind</span>

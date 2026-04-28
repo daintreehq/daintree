@@ -237,7 +237,7 @@ export function AgentSettings({
           <div className="text-status-error text-sm">Settings load timed out</div>
           <button
             onClick={() => void actionService.dispatch("ui.refresh", undefined, { source: "user" })}
-            className="text-xs px-3 py-1.5 bg-daintree-accent/10 hover:bg-daintree-accent/20 text-daintree-accent rounded transition-colors"
+            className="text-xs px-3 py-1.5 border border-daintree-border text-daintree-text/70 hover:text-daintree-text hover:bg-overlay-soft rounded transition-colors"
           >
             Reload Application
           </button>
@@ -257,7 +257,7 @@ export function AgentSettings({
         <div className="text-status-error text-sm">{loadError || "Failed to load settings"}</div>
         <button
           onClick={() => void actionService.dispatch("ui.refresh", undefined, { source: "user" })}
-          className="text-xs px-3 py-1.5 bg-daintree-accent/10 hover:bg-daintree-accent/20 text-daintree-accent rounded transition-colors"
+          className="text-xs px-3 py-1.5 border border-daintree-border text-daintree-text/70 hover:text-daintree-text hover:bg-overlay-soft rounded transition-colors"
         >
           Reload Application
         </button>
