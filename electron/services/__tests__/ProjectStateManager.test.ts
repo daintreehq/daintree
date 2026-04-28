@@ -371,7 +371,7 @@ describe("ProjectStateManager schema version", () => {
     const result = await manager.getProjectState(projectId);
 
     expect(result).not.toBeNull();
-    expect((result as Record<string, unknown>)._schemaVersion).toBeUndefined();
+    expect((result as unknown as Record<string, unknown>)._schemaVersion).toBeUndefined();
   });
 
   it("round-trips: save then invalidate cache then read returns equivalent state", async () => {
