@@ -8,7 +8,7 @@ import { replaceRecipeVariables, type RecipeContext } from "@/utils/recipeVariab
 import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
 import { stableInRepoId, isInRepoRecipeId } from "@shared/utils/recipeFilename";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
-import { logError, logWarn } from "@/utils/logger";
+import { logError } from "@/utils/logger";
 
 export interface RecipeSpawnResult {
   index: number;
@@ -492,7 +492,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
     get()
       .updateRecipe(recipeId, { lastUsedAt: now, usageHistory })
       .catch((error) => {
-        logWarn("Failed to update lastUsedAt for recipe", { error });
+        logError("Failed to update lastUsedAt for recipe", error);
       });
 
     const terminalStore = usePanelStore.getState();
@@ -515,7 +515,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
         agentSettings = settings;
         clipboardDirectory = tmpDir ? `${tmpDir}/daintree-clipboard` : undefined;
       } catch (error) {
-        logWarn("Failed to fetch agent settings for recipe", { error });
+        logError("Failed to fetch agent settings for recipe", error);
       }
     }
 
