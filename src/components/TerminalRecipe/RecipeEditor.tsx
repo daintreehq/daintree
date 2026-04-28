@@ -228,7 +228,7 @@ export function RecipeEditor({
         const savedRecipe: TerminalRecipe = recipe
           ? { ...recipe, name: recipeName, terminals }
           : {
-              id: `recipe-${Date.now()}`,
+              id: `recipe-${crypto.randomUUID()}`,
               name: recipeName,
               projectId: scope === "global" ? undefined : currentProject!.id,
               worktreeId: scope === "global" ? undefined : worktreeId,

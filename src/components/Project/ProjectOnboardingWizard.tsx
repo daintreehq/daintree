@@ -379,7 +379,7 @@ export function ProjectOnboardingWizard({
                       onClick={() =>
                         setRunCommands((prev) => [
                           ...prev,
-                          { id: `cmd-${Date.now()}`, name: "", command: "" },
+                          { id: `cmd-${crypto.randomUUID()}`, name: "", command: "" },
                         ])
                       }
                       className="w-full"

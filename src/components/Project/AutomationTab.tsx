@@ -243,7 +243,7 @@ export function AutomationTab({
               onRunCommandsChange([
                 ...runCommands,
                 {
-                  id: `cmd-${Date.now()}`,
+                  id: `cmd-${crypto.randomUUID()}`,
                   name: "",
                   command: "",
                 },
