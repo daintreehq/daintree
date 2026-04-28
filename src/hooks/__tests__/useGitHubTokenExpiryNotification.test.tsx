@@ -82,7 +82,8 @@ describe("useGitHubTokenExpiryNotification", () => {
     expect(payload.type).toBe("warning");
     expect(payload.priority).toBe("high");
     expect(payload.correlationId).toBe("github:token-expiry");
-    expect(payload.title).toBe("GitHub token expired");
+    expect(payload.title).toBe("GitHub authentication required");
+    expect(payload.coalesce?.key).toBe("github:token-expiry");
 
     expect(payload.action).toBeDefined();
     expect(payload.action?.label).toBe("Open GitHub settings");

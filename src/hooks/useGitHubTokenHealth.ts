@@ -39,12 +39,17 @@ export function useGitHubTokenHealth(): void {
         const id = notify({
           type: "warning",
           priority: "high",
-          title: "GitHub token expired",
+          title: "GitHub authentication required",
           message:
-            "Your GitHub personal access token is no longer valid. Reconnect to restore issue, PR, and project-health data.",
-          inboxMessage: "GitHub token expired — reconnect to restore GitHub features.",
+            "Your GitHub token isn't working. Reconnect in settings to restore issues, PRs, and stats.",
           correlationId: "github:token-expiry",
           duration: 0,
+          coalesce: {
+            key: "github:token-expiry",
+            windowMs: 30000,
+            buildMessage: () =>
+              "Your GitHub token isn't working. Reconnect in settings to restore issues, PRs, and stats.",
+          },
           action: {
             label: "Open GitHub settings",
             actionId: "app.settings.openTab",
