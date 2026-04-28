@@ -93,8 +93,9 @@ describe("broadcastFleetRawInput", () => {
       makeTerminal("t1"),
       makeTerminal("trashed", { location: "trash" }),
       makeTerminal("no-pty", { hasPty: false }),
+      makeTerminal("docked", { location: "dock" }),
     ]);
-    useFleetArmingStore.getState().armIds(["t1", "trashed", "no-pty"]);
+    useFleetArmingStore.getState().armIds(["t1", "trashed", "no-pty", "docked"]);
 
     expect(broadcastFleetRawInput("t1", "still-local")).toBe(false);
 

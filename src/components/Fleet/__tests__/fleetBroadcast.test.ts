@@ -203,14 +203,15 @@ describe("resolveFleetBroadcastTargetIds", () => {
     expect(resolveFleetBroadcastTargetIds()).toEqual([]);
   });
 
-  it("drops trashed/background/non-pty terminals silently", () => {
+  it("drops trashed/background/dock/non-pty terminals silently", () => {
     seedPanels([
       makeAgent("ok"),
       makeAgent("trashed", { location: "trash" }),
       makeAgent("bg", { location: "background" }),
       makeAgent("noPty", { hasPty: false }),
+      makeAgent("docked", { location: "dock" }),
     ]);
-    useFleetArmingStore.getState().armIds(["ok", "trashed", "bg", "noPty"]);
+    useFleetArmingStore.getState().armIds(["ok", "trashed", "bg", "noPty", "docked"]);
     expect(resolveFleetBroadcastTargetIds()).toEqual(["ok"]);
   });
 
