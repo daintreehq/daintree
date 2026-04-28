@@ -245,10 +245,13 @@ export function BrowserPane({
       }
     );
 
-    void (async () => {
-      await window.electron.webview.registerPanel(wcId, id);
-      await window.electron.webview.startConsoleCapture(wcId, id);
-    })();
+    safeFireAndForget(
+      (async () => {
+        await window.electron.webview.registerPanel(wcId, id);
+        await window.electron.webview.startConsoleCapture(wcId, id);
+      })(),
+      { context: "Registering browser webview and starting console capture" }
+    );
 
     return () => {
       safeFireAndForget(window.electron.webview.stopConsoleCapture(wcId, id), {

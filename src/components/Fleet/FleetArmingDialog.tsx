@@ -21,7 +21,6 @@ import { Kbd } from "@/components/ui/Kbd";
 import { isMac } from "@/lib/platform";
 import { cn } from "@/lib/utils";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
-import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import type { SemanticSearchMatch, TerminalInstance } from "@shared/types";
 
 export type FleetArmingDialogChip = "all" | "waiting" | "working";
@@ -169,21 +168,18 @@ export function FleetArmingDialog({
 
     const issueId = ++searchRequestRef.current;
     const timer = window.setTimeout(() => {
-      safeFireAndForget(
-        window.electron.terminal
-          .searchSemanticBuffers(trimmed, isRegexMode)
-          .then((matches) => {
-            if (searchRequestRef.current !== issueId) return;
-            const next = new Map<string, SemanticSearchMatch>();
-            for (const m of matches) next.set(m.terminalId, m);
-            setSnippetMap(next);
-          })
-          .catch(() => {
-            if (searchRequestRef.current !== issueId) return;
-            setSnippetMap(new Map());
-          }),
-        { context: "Searching terminal semantic buffers" }
-      );
+      window.electron.terminal
+        .searchSemanticBuffers(trimmed, isRegexMode)
+        .then((matches) => {
+          if (searchRequestRef.current !== issueId) return;
+          const next = new Map<string, SemanticSearchMatch>();
+          for (const m of matches) next.set(m.terminalId, m);
+          setSnippetMap(next);
+        })
+        .catch(() => {
+          if (searchRequestRef.current !== issueId) return;
+          setSnippetMap(new Map());
+        });
     }, SEMANTIC_SEARCH_DEBOUNCE_MS);
 
     return () => window.clearTimeout(timer);

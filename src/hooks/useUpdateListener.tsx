@@ -80,13 +80,10 @@ export function useUpdateListener(suppressToasts = false): void {
         // still downloading.
         action: undefined,
         onDismiss: () => {
+          // why: stays on the lightweight logError path — analytics-grade
+          // forward to main, not worth surfacing through Sentry/error store.
           const promise = window.electron?.update?.notifyDismiss?.(version);
-          if (promise) {
-            safeFireAndForget(
-              promise.catch((err) => logError("[useUpdateListener] notifyDismiss failed", err)),
-              { context: "Forwarding update dismiss to main" }
-            );
-          }
+          promise?.catch((err) => logError("[useUpdateListener] notifyDismiss failed", err));
         },
       });
     }
@@ -125,13 +122,10 @@ export function useUpdateListener(suppressToasts = false): void {
         // Forwarded to main only when the user explicitly closes the toast —
         // MAX_VISIBLE_TOASTS eviction and programmatic dismissals bypass this.
         onDismiss: () => {
+          // why: stays on the lightweight logError path — analytics-grade
+          // forward to main, not worth surfacing through Sentry/error store.
           const promise = window.electron?.update?.notifyDismiss?.(version);
-          if (promise) {
-            safeFireAndForget(
-              promise.catch((err) => logError("[useUpdateListener] notifyDismiss failed", err)),
-              { context: "Forwarding update dismiss to main" }
-            );
-          }
+          promise?.catch((err) => logError("[useUpdateListener] notifyDismiss failed", err));
         },
       });
     });

@@ -88,6 +88,31 @@ describe("safeFireAndForget", () => {
     expect(stack).toContain("originatingCallSite");
   });
 
+  it("preserves the original rejection message inside the stitched stack", async () => {
+    safeFireAndForget(Promise.reject(new Error("ipc failed")));
+    await flushMicrotasks();
+
+    expect(mockedReport).toHaveBeenCalledTimes(1);
+    const [, error] = mockedReport.mock.calls[0]!;
+    const stack = (error as Error).stack ?? "";
+    expect(stack).toContain("ipc failed");
+    expect(stack).toContain("Caused by:");
+  });
+
+  it("does not re-stitch when the same Error is reported twice", async () => {
+    const shared = new Error("shared rejection");
+    safeFireAndForget(Promise.reject(shared));
+    await flushMicrotasks();
+    safeFireAndForget(Promise.reject(shared));
+    await flushMicrotasks();
+
+    expect(mockedReport).toHaveBeenCalledTimes(2);
+    const [, secondError] = mockedReport.mock.calls[1]!;
+    const stack = (secondError as Error).stack ?? "";
+    const causedByMatches = stack.match(/Caused by:/g) ?? [];
+    expect(causedByMatches.length).toBe(1);
+  });
+
   it("preserves separate call-site anchors for concurrent rejections", async () => {
     function siteA(): void {
       safeFireAndForget(Promise.reject(new Error("a")));

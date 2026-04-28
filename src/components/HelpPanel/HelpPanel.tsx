@@ -16,6 +16,7 @@ import { ASSISTANT_FAST_MODELS } from "@shared/config/agentRegistry";
 import { actionService } from "@/services/ActionService";
 import { TerminalRefreshTier } from "@/types";
 import { logError } from "@/utils/logger";
+import { safeFireAndForget } from "@/utils/safeFireAndForget";
 
 const RESIZE_STEP = 10;
 
@@ -77,10 +78,12 @@ export function HelpPanel() {
     if (!isOpen || terminalId || !preferredAgentId || hasAutoLaunched.current) return;
     hasAutoLaunched.current = true;
 
-    void (async () => {
-      const folderPath = await window.electron.help.getFolderPath();
-      if (!folderPath) return;
+    safeFireAndForget(
+      (async () => {
+        const folderPath = await window.electron.help.getFolderPath();
+        if (!folderPath) return;
 
+<<<<<<< HEAD
       const model = resolveAssistantModel(preferredAgentId);
       const result = await actionService.dispatch<{ terminalId: string | null }>(
         "agent.launch",
@@ -101,6 +104,28 @@ export function HelpPanel() {
         });
       }
     })();
+=======
+        const model = resolveAssistantModel(preferredAgentId);
+        const result = await actionService.dispatch<{ terminalId: string | null }>(
+          "agent.launch",
+          {
+            agentId: preferredAgentId,
+            location: "dock",
+            cwd: folderPath,
+            prompt: HELP_PROMPT,
+            ...(model && { model }),
+          },
+          { source: "user" }
+        );
+        if (result.ok && result.result?.terminalId) {
+          if (document.hidden) return;
+          useHelpPanelStore.getState().setTerminal(result.result.terminalId, preferredAgentId);
+          window.electron.help.markTerminal(result.result.terminalId).catch(() => {});
+        }
+      })(),
+      { context: "Auto-launching preferred help agent" }
+    );
+>>>>>>> 207a8ec2a (review(ipc): fix selector depth, drop misleading wrapping, guard stack mutation)
   }, [isOpen, terminalId, preferredAgentId]);
 
   // Reset auto-launch guard when panel closes

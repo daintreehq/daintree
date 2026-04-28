@@ -106,9 +106,7 @@ export function useActionRegistry(options: ActionCallbacks): void {
     if (validatedRef.current) return;
     validatedRef.current = true;
     safeFireAndForget(
-      window.electron.plugin
-        .validateActionIds(actionService.list().map((entry) => entry.id))
-        .catch(() => {}),
+      window.electron.plugin.validateActionIds(actionService.list().map((entry) => entry.id)),
       { context: "Validating plugin action IDs" }
     );
   }, []);

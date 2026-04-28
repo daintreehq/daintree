@@ -147,8 +147,14 @@ export default tseslint.config(
             "Use formatErrorMessage(err, 'operation-specific fallback') from @shared/utils/errorMessage instead of the inline `instanceof Error ? .message : ...` ternary.",
         },
         {
+          // why: real IPC calls are `void window.electron.namespace.method()`
+          // at any depth. Constraining to `> MemberExpression :has(...)`
+          // restricts the descendant search to the callee chain so this
+          // doesn't false-positive on `void (async () => { await
+          // window.electron.X() })()` IIFE patterns where window.electron
+          // appears in the function body, not the callee.
           selector:
-            "UnaryExpression[operator='void'] > CallExpression[callee.type='MemberExpression'][callee.object.type='MemberExpression'][callee.object.object.name='window'][callee.object.property.name='electron']",
+            "UnaryExpression[operator='void'] > CallExpression > MemberExpression:has(MemberExpression[object.name='window'][property.name='electron'])",
           message:
             "Don't use `void window.electron.X()` for fire-and-forget IPC — wrap the promise in safeFireAndForget(promise, { context }) from @/utils/safeFireAndForget so rejections reach reportRendererGlobalError with call-site context.",
         },
