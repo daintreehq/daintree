@@ -4,12 +4,19 @@
 
 import crypto from "crypto";
 import os from "os";
+import { z } from "zod";
 import { CHANNELS } from "../../channels.js";
-import { waitForRateLimitSlot, consumeRestoreQuota, typedHandle } from "../../utils.js";
+import {
+  waitForRateLimitSlot,
+  consumeRestoreQuota,
+  typedHandle,
+  typedHandleValidated,
+} from "../../utils.js";
 import { projectStore } from "../../../services/ProjectStore.js";
 import type { HandlerDependencies } from "../../types.js";
-import type { TerminalSpawnOptions } from "../../../types/index.js";
 import { TerminalSpawnOptionsSchema } from "../../../schemas/ipc.js";
+
+type ValidatedTerminalSpawnOptions = z.output<typeof TerminalSpawnOptionsSchema>;
 import {
   listAgentSessions,
   clearAgentSessions,
@@ -85,15 +92,9 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
   }
   const handlers: Array<() => void> = [];
 
-  const handleTerminalSpawn = async (options: TerminalSpawnOptions): Promise<string> => {
-    const parseResult = TerminalSpawnOptionsSchema.safeParse(options);
-    if (!parseResult.success) {
-      console.error("[IPC] Invalid terminal spawn options:", parseResult.error.format());
-      throw new Error(`Invalid spawn options: ${parseResult.error.message}`);
-    }
-
-    const validatedOptions = parseResult.data;
-
+  const handleTerminalSpawn = async (
+    validatedOptions: ValidatedTerminalSpawnOptions
+  ): Promise<string> => {
     const bypassedRateLimit = validatedOptions.restore === true && consumeRestoreQuota();
     if (!bypassedRateLimit) {
       await waitForRateLimitSlot("terminalSpawn", 1_000);
@@ -257,7 +258,9 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       throw new Error(`Failed to spawn terminal: ${errorMessage}`);
     }
   };
-  handlers.push(typedHandle(CHANNELS.TERMINAL_SPAWN, handleTerminalSpawn));
+  handlers.push(
+    typedHandleValidated(CHANNELS.TERMINAL_SPAWN, TerminalSpawnOptionsSchema, handleTerminalSpawn)
+  );
 
   const handleTerminalKill = async (id: string) => {
     try {

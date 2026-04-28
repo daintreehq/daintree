@@ -4,6 +4,7 @@ import { ipcMain, BrowserWindow, shell } from "electron";
 import { CHANNELS } from "./channels.js";
 import { getLogFilePath, logError as logErrorUtil } from "../utils/logger.js";
 import { broadcastToRenderer, typedHandle } from "./utils.js";
+import { ValidationError } from "./validationError.js";
 import {
   GitError,
   GitOperationError,
@@ -84,6 +85,7 @@ function parseRetryPayload(payload: unknown): RetryPayload {
 }
 
 function getErrorType(error: unknown): ErrorType {
+  if (error instanceof ValidationError) return "validation";
   if (error instanceof GitError) return "git";
   if (error instanceof ProcessError) return "process";
   if (error instanceof FileSystemError) return "filesystem";

@@ -1,6 +1,13 @@
 import { create, type StateCreator } from "zustand";
 
-export type ErrorType = "git" | "process" | "filesystem" | "network" | "config" | "unknown";
+export type ErrorType =
+  | "git"
+  | "process"
+  | "filesystem"
+  | "network"
+  | "config"
+  | "validation"
+  | "unknown";
 
 export type RetryAction = "terminal" | "git" | "worktree";
 

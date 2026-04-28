@@ -9,19 +9,17 @@ import {
   SystemOpenInEditorPayloadSchema,
 } from "../../schemas/index.js";
 import type { HandlerDependencies } from "../types.js";
-import { typedHandle } from "../utils.js";
+import { typedHandle, typedHandleValidated } from "../utils.js";
+import type {
+  SystemOpenExternalPayload,
+  SystemOpenPathPayload,
+  SystemOpenInEditorPayload,
+} from "../../schemas/ipc.js";
 
 export function registerSystemShellHandlers(_deps: HandlerDependencies): () => void {
   const handlers: Array<() => void> = [];
 
-  const handleSystemOpenExternal = async (payload: unknown) => {
-    const parseResult = SystemOpenExternalPayloadSchema.safeParse(payload);
-    if (!parseResult.success) {
-      console.error("[IPC] system:open-external validation failed:", parseResult.error.format());
-      throw new Error(`Invalid payload: ${parseResult.error.message}`);
-    }
-
-    const { url } = parseResult.data;
+  const handleSystemOpenExternal = async ({ url }: SystemOpenExternalPayload) => {
     console.log("[IPC] system:open-external called with:", url);
     try {
       await openExternalUrl(url);
@@ -31,16 +29,15 @@ export function registerSystemShellHandlers(_deps: HandlerDependencies): () => v
       throw error;
     }
   };
-  handlers.push(typedHandle(CHANNELS.SYSTEM_OPEN_EXTERNAL, handleSystemOpenExternal));
+  handlers.push(
+    typedHandleValidated(
+      CHANNELS.SYSTEM_OPEN_EXTERNAL,
+      SystemOpenExternalPayloadSchema,
+      handleSystemOpenExternal
+    )
+  );
 
-  const handleSystemOpenPath = async (payload: unknown) => {
-    const parseResult = SystemOpenPathPayloadSchema.safeParse(payload);
-    if (!parseResult.success) {
-      console.error("[IPC] system:open-path validation failed:", parseResult.error.format());
-      throw new Error(`Invalid payload: ${parseResult.error.message}`);
-    }
-
-    const { path: targetPath } = parseResult.data;
+  const handleSystemOpenPath = async ({ path: targetPath }: SystemOpenPathPayload) => {
     const fs = await import("fs");
     const pathModule = await import("path");
 
@@ -58,16 +55,20 @@ export function registerSystemShellHandlers(_deps: HandlerDependencies): () => v
       throw error;
     }
   };
-  handlers.push(typedHandle(CHANNELS.SYSTEM_OPEN_PATH, handleSystemOpenPath));
+  handlers.push(
+    typedHandleValidated(
+      CHANNELS.SYSTEM_OPEN_PATH,
+      SystemOpenPathPayloadSchema,
+      handleSystemOpenPath
+    )
+  );
 
-  const handleSystemOpenInEditor = async (payload: unknown) => {
-    const parseResult = SystemOpenInEditorPayloadSchema.safeParse(payload);
-    if (!parseResult.success) {
-      throw new Error(`Invalid payload: ${parseResult.error.message}`);
-    }
-
-    const { path: targetPath, line, col, projectId } = parseResult.data;
-
+  const handleSystemOpenInEditor = async ({
+    path: targetPath,
+    line,
+    col,
+    projectId,
+  }: SystemOpenInEditorPayload) => {
     let editorConfig = null;
     if (projectId) {
       try {
@@ -81,7 +82,13 @@ export function registerSystemShellHandlers(_deps: HandlerDependencies): () => v
     const { openFile } = await import("../../services/EditorService.js");
     await openFile(targetPath, line, col, editorConfig);
   };
-  handlers.push(typedHandle(CHANNELS.SYSTEM_OPEN_IN_EDITOR, handleSystemOpenInEditor));
+  handlers.push(
+    typedHandleValidated(
+      CHANNELS.SYSTEM_OPEN_IN_EDITOR,
+      SystemOpenInEditorPayloadSchema,
+      handleSystemOpenInEditor
+    )
+  );
 
   const handleSystemCheckCommand = async (command: string): Promise<boolean> => {
     if (typeof command !== "string" || !command.trim()) {

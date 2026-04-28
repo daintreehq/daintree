@@ -1,9 +1,14 @@
 import path from "path";
 import fs from "fs/promises";
 import { CHANNELS } from "../channels.js";
-import { checkRateLimit, typedHandle } from "../utils.js";
+import { checkRateLimit, typedHandleValidated } from "../utils.js";
 import { fileSearchService } from "../../services/FileSearchService.js";
-import { FileSearchPayloadSchema, FileReadPayloadSchema } from "../../schemas/ipc.js";
+import {
+  FileSearchPayloadSchema,
+  FileReadPayloadSchema,
+  type FileSearchPayload,
+  type FileReadPayload,
+} from "../../schemas/ipc.js";
 import type { FileReadResult } from "../../../shared/types/ipc/files.js";
 import { AppError } from "../../utils/errorTypes.js";
 
@@ -19,16 +24,12 @@ const LFS_POINTER_HEADER_BYTES = Buffer.from(LFS_POINTER_HEADER, "ascii");
 export function registerFilesHandlers(): () => void {
   const handlers: Array<() => void> = [];
 
-  const handleSearch = async (payload: unknown): Promise<{ files: string[] }> => {
+  const handleSearch = async ({
+    cwd,
+    query,
+    limit,
+  }: FileSearchPayload): Promise<{ files: string[] }> => {
     checkRateLimit(CHANNELS.FILES_SEARCH, 20, 10_000);
-
-    const parsed = FileSearchPayloadSchema.safeParse(payload);
-    if (!parsed.success) {
-      console.error("[IPC] Invalid files:search payload:", parsed.error.format());
-      return { files: [] };
-    }
-
-    const { cwd, query, limit } = parsed.data;
 
     if (!path.isAbsolute(cwd)) {
       return { files: [] };
@@ -43,17 +44,12 @@ export function registerFilesHandlers(): () => void {
     }
   };
 
-  handlers.push(typedHandle(CHANNELS.FILES_SEARCH, handleSearch));
+  handlers.push(typedHandleValidated(CHANNELS.FILES_SEARCH, FileSearchPayloadSchema, handleSearch));
 
-  const handleRead = async (payload: unknown): Promise<FileReadResult> => {
-    const parsed = FileReadPayloadSchema.safeParse(payload);
-    if (!parsed.success) {
-      console.error("[IPC] Invalid files:read payload:", parsed.error.format());
-      throw new AppError({ code: "INVALID_PATH", message: "Invalid files:read payload" });
-    }
-
-    const { path: filePath, rootPath } = parsed.data;
-
+  const handleRead = async ({
+    path: filePath,
+    rootPath,
+  }: FileReadPayload): Promise<FileReadResult> => {
     if (!path.isAbsolute(filePath) || !path.isAbsolute(rootPath)) {
       throw new AppError({
         code: "INVALID_PATH",
@@ -153,7 +149,7 @@ export function registerFilesHandlers(): () => void {
     return { content: buffer.toString("utf-8") };
   };
 
-  handlers.push(typedHandle(CHANNELS.FILES_READ, handleRead));
+  handlers.push(typedHandleValidated(CHANNELS.FILES_READ, FileReadPayloadSchema, handleRead));
 
   return () => handlers.forEach((cleanup) => cleanup());
 }

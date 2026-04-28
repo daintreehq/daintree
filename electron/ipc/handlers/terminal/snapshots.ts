@@ -2,13 +2,16 @@
  * Terminal snapshot handlers - getSerializedState, wake, getInfo.
  */
 
+import { z } from "zod";
 import { CHANNELS } from "../../channels.js";
 import type { HandlerDependencies } from "../../types.js";
 import { TerminalReplayHistoryPayloadSchema } from "../../../schemas/index.js";
-import { logDebug, logInfo, logWarn, logError } from "../../../utils/logger.js";
+import { logDebug, logInfo, logWarn } from "../../../utils/logger.js";
 import { getAgentAvailabilityStore } from "../../../services/AgentAvailabilityStore.js";
-import { typedHandle } from "../../utils.js";
+import { typedHandle, typedHandleValidated } from "../../utils.js";
 import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
+
+type ValidatedReplayHistoryPayload = z.output<typeof TerminalReplayHistoryPayloadSchema>;
 
 export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () => void {
   const { ptyClient } = deps;
@@ -142,17 +145,10 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
     typedHandle(CHANNELS.TERMINAL_GET_ANALYSIS_BUFFER, handleTerminalGetAnalysisBuffer)
   );
 
-  const handleTerminalReplayHistory = async (payload: unknown) => {
-    const parseResult = TerminalReplayHistoryPayloadSchema.safeParse(payload);
-    if (!parseResult.success) {
-      logError("terminal:replayHistory validation failed", undefined, {
-        error: parseResult.error.format(),
-      });
-      throw new Error(`Invalid payload: ${parseResult.error.message}`);
-    }
-
-    const { terminalId, maxLines } = parseResult.data;
-
+  const handleTerminalReplayHistory = async ({
+    terminalId,
+    maxLines,
+  }: ValidatedReplayHistoryPayload) => {
     try {
       const replayed = await ptyClient.replayHistoryAsync(terminalId, maxLines);
 
@@ -163,7 +159,13 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
       throw new Error(`Failed to replay terminal history: ${errorMessage}`);
     }
   };
-  handlers.push(typedHandle(CHANNELS.TERMINAL_REPLAY_HISTORY, handleTerminalReplayHistory));
+  handlers.push(
+    typedHandleValidated(
+      CHANNELS.TERMINAL_REPLAY_HISTORY,
+      TerminalReplayHistoryPayloadSchema,
+      handleTerminalReplayHistory
+    )
+  );
 
   const handleTerminalGetForProject = async (
     projectId: string

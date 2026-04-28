@@ -47,7 +47,14 @@ export function isIpcEnvelope(value: unknown): value is IpcEnvelope {
 }
 
 /** Error type */
-export type ErrorType = "git" | "process" | "filesystem" | "network" | "config" | "unknown";
+export type ErrorType =
+  | "git"
+  | "process"
+  | "filesystem"
+  | "network"
+  | "config"
+  | "validation"
+  | "unknown";
 
 /**
  * Discriminated reason for a failed git operation. The classifier in

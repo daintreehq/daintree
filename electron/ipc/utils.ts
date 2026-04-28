@@ -1,4 +1,5 @@
 import { BrowserWindow, ipcMain } from "electron";
+import { z } from "zod";
 import {
   getWindowForWebContents,
   getAppWebContents,
@@ -7,6 +8,7 @@ import {
 import { getProjectViewManager } from "../window/windowRef.js";
 import type { IpcInvokeMap, IpcEventMap } from "../types/index.js";
 import type { IpcContext } from "./types.js";
+import { ValidationError } from "./validationError.js";
 import { performance } from "node:perf_hooks";
 import { PERF_MARKS } from "../../shared/perf/marks.js";
 import {
@@ -15,6 +17,28 @@ import {
   sampleIpcTiming,
 } from "../utils/performance.js";
 import { AppError } from "../utils/errorTypes.js";
+
+/**
+ * Parse the first argument of an IPC payload against a Zod schema. On
+ * failure: log the full Zod issue list locally (main process only) and throw
+ * a sanitized {@link ValidationError}. The Zod issues, field paths, and
+ * user-supplied values are NEVER included in the thrown message.
+ *
+ * Returns the parsed `z.output<S>` so transform-bearing schemas (e.g. clamps,
+ * defaults) pass their post-parse value into the handler.
+ */
+function parseIpcPayload<S extends z.ZodTypeAny>(
+  channel: string,
+  schema: S,
+  payload: unknown
+): z.output<S> {
+  const parsed = schema.safeParse(payload);
+  if (!parsed.success) {
+    console.error(`[IPC] Validation failed for ${channel}:`, parsed.error.flatten());
+    throw new ValidationError(channel);
+  }
+  return parsed.data;
+}
 
 const rateLimitTimestamps = new Map<string, number[]>();
 
@@ -388,6 +412,30 @@ export function typedHandle<K extends keyof IpcInvokeMap>(
   return () => ipcMain.removeHandler(channel as string);
 }
 
+/**
+ * Same as {@link typedHandle}, but parses the first argument with `schema`
+ * before invoking the handler. On parse failure: log issues locally, throw a
+ * sanitized {@link ValidationError}. The handler receives `z.output<S>`.
+ *
+ * Use for ad-hoc handlers that aren't (yet) wired through `defineIpcNamespace`.
+ * For namespace-bound handlers prefer `opValidated()` from `./define.js`.
+ */
+export function typedHandleValidated<K extends keyof IpcInvokeMap, S extends z.ZodTypeAny>(
+  channel: K,
+  schema: S,
+  handler: (payload: z.output<S>) => Promise<IpcInvokeMap[K]["result"]> | IpcInvokeMap[K]["result"]
+): () => void {
+  // Wrap as async so a synchronous throw from `parseIpcPayload` always
+  // surfaces as a rejected promise. `ipcMain.handle` accepts both forms in
+  // production, but normalising here keeps test mocks consistent and makes
+  // the contract explicit.
+  const wrapped = (async (...args: unknown[]) => {
+    const parsed = parseIpcPayload(channel as string, schema, args[0]);
+    return handler(parsed);
+  }) as unknown as (...args: IpcInvokeMap[K]["args"]) => Promise<IpcInvokeMap[K]["result"]>;
+  return typedHandle(channel, wrapped);
+}
+
 export function typedHandleWithContext<K extends keyof IpcInvokeMap>(
   channel: K,
   handler: (
@@ -449,6 +497,34 @@ export function typedHandleWithContext<K extends keyof IpcInvokeMap>(
     }
   });
   return () => ipcMain.removeHandler(channel as string);
+}
+
+/**
+ * Same as {@link typedHandleWithContext}, but parses the first argument with
+ * `schema` before invoking the handler. On parse failure: log issues locally,
+ * throw a sanitized {@link ValidationError}. The handler receives `ctx` and
+ * `z.output<S>`.
+ */
+export function typedHandleWithContextValidated<
+  K extends keyof IpcInvokeMap,
+  S extends z.ZodTypeAny,
+>(
+  channel: K,
+  schema: S,
+  handler: (
+    ctx: IpcContext,
+    payload: z.output<S>
+  ) => Promise<IpcInvokeMap[K]["result"]> | IpcInvokeMap[K]["result"]
+): () => void {
+  // Wrap as async so synchronous parse throws become rejected promises.
+  const wrapped = (async (ctx: IpcContext, ...args: unknown[]) => {
+    const parsed = parseIpcPayload(channel as string, schema, args[0]);
+    return handler(ctx, parsed);
+  }) as unknown as (
+    ctx: IpcContext,
+    ...args: IpcInvokeMap[K]["args"]
+  ) => Promise<IpcInvokeMap[K]["result"]>;
+  return typedHandleWithContext(channel, wrapped);
 }
 
 export function typedBroadcast<K extends keyof IpcEventMap>(
