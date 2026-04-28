@@ -62,10 +62,10 @@ export const WslGitBanner = React.memo(function WslGitBanner({
         )}
       >
         <div className="flex-1">
-          <div className="font-medium text-daintree-text-primary">
+          <div className="font-medium text-text-primary">
             Speed up git on this WSL worktree
           </div>
-          <div className="mt-0.5 text-daintree-text-secondary">
+          <div className="mt-0.5 text-text-secondary">
             This worktree lives in WSL ({wslDistro ?? "unknown distro"}). Routing git through{" "}
             <code className="rounded bg-overlay-subtle px-1 py-0.5">wsl git</code> avoids the
             Windows–Linux filesystem boundary and can make status polling 5–10× faster.
@@ -78,7 +78,7 @@ export const WslGitBanner = React.memo(function WslGitBanner({
             disabled={busy}
             className={cn(
               "rounded border border-daintree-border bg-overlay-strong px-2 py-1 text-xs",
-              "transition-colors duration-150 hover:bg-overlay-strong-hover",
+              "transition-colors duration-150 hover:bg-overlay-hover",
               "disabled:cursor-not-allowed disabled:opacity-60"
             )}
           >
@@ -89,8 +89,8 @@ export const WslGitBanner = React.memo(function WslGitBanner({
             onClick={handleDismiss}
             disabled={busy}
             className={cn(
-              "rounded px-2 py-1 text-xs text-daintree-text-secondary",
-              "transition-colors duration-150 hover:text-daintree-text-primary",
+              "rounded px-2 py-1 text-xs text-text-secondary",
+              "transition-colors duration-150 hover:text-text-primary",
               "disabled:cursor-not-allowed disabled:opacity-60"
             )}
           >
@@ -110,10 +110,10 @@ export const WslGitBanner = React.memo(function WslGitBanner({
       )}
     >
       <div className="flex-1">
-        <div className="font-medium text-daintree-text-primary">
+        <div className="font-medium text-text-primary">
           WSL worktree (non-default distro)
         </div>
-        <div className="mt-0.5 text-daintree-text-secondary">
+        <div className="mt-0.5 text-text-secondary">
           This worktree is in{" "}
           <code className="rounded bg-overlay-subtle px-1 py-0.5">{wslDistro ?? "WSL"}</code>, which
           isn't the default WSL distro. Daintree can't yet route git through this distro
@@ -125,8 +125,8 @@ export const WslGitBanner = React.memo(function WslGitBanner({
         onClick={handleDismiss}
         disabled={busy}
         className={cn(
-          "shrink-0 rounded px-2 py-1 text-xs text-daintree-text-secondary",
-          "transition-colors duration-150 hover:text-daintree-text-primary",
+          "shrink-0 rounded px-2 py-1 text-xs text-text-secondary",
+          "transition-colors duration-150 hover:text-text-primary",
           "disabled:cursor-not-allowed disabled:opacity-60"
         )}
       >
