@@ -8,7 +8,7 @@ const FD_GROWTH_THRESHOLD = 10;
 let started = false;
 let listenerSweepTimer: NodeJS.Timeout | null = null;
 let fdSweepTimer: NodeJS.Timeout | null = null;
-let fdBaseline = 0;
+let fdBaseline: number | null = null;
 let fdPath: string | null = null;
 
 function handleProcessWarning(warning: Error): void {
@@ -29,20 +29,26 @@ function resolveFdPath(): string | null {
   return null;
 }
 
-function readFdCount(path: string): number {
+function readFdCount(path: string): number | null {
   try {
     return fs.readdirSync(path).length;
   } catch {
-    return 0;
+    return null;
   }
 }
 
 function sweepListeners(): void {
+  // Each emitter wrapped independently so a failure introspecting `app` does
+  // not skip the `ipcMain` check (where listener leaks are most common).
   try {
     checkEmitter("app", app.eventNames(), (name) => app.listenerCount(name));
+  } catch (error) {
+    console.warn("[DEV] Listener sweep failed for app:", error);
+  }
+  try {
     checkEmitter("ipcMain", ipcMain.eventNames(), (name) => ipcMain.listenerCount(name));
   } catch (error) {
-    console.warn("[DEV] Listener sweep failed:", error);
+    console.warn("[DEV] Listener sweep failed for ipcMain:", error);
   }
 }
 
@@ -62,9 +68,9 @@ function checkEmitter(
 }
 
 function sweepFds(): void {
-  if (!fdPath) return;
+  if (!fdPath || fdBaseline === null) return;
   const current = readFdCount(fdPath);
-  if (current === 0) return;
+  if (current === null) return;
   if (current - fdBaseline > FD_GROWTH_THRESHOLD) {
     console.warn(
       `[DEV] fd leak suspected: ${current} open fds vs baseline ${fdBaseline} (growth ${current - fdBaseline}, threshold ${FD_GROWTH_THRESHOLD})`
@@ -96,10 +102,12 @@ export function startDevDiagnostics(): void {
   process.on("warning", handleProcessWarning);
 
   fdPath = resolveFdPath();
-  fdBaseline = fdPath ? readFdCount(fdPath) : 0;
+  fdBaseline = fdPath ? readFdCount(fdPath) : null;
 
   scheduleListenerSweep();
-  if (fdPath) scheduleFdSweep();
+  // Skip fd sweep if the baseline read failed — a sentinel baseline would
+  // produce false positives on the first successful read.
+  if (fdPath && fdBaseline !== null) scheduleFdSweep();
 }
 
 export function stopDevDiagnostics(): void {
@@ -121,6 +129,7 @@ export function stopDevDiagnostics(): void {
 /** @internal Reset module state for testing only. */
 export function _resetDevDiagnosticsForTesting(): void {
   started = false;
+  process.off("warning", handleProcessWarning);
   if (listenerSweepTimer) {
     clearTimeout(listenerSweepTimer);
     listenerSweepTimer = null;
@@ -129,6 +138,6 @@ export function _resetDevDiagnosticsForTesting(): void {
     clearTimeout(fdSweepTimer);
     fdSweepTimer = null;
   }
-  fdBaseline = 0;
+  fdBaseline = null;
   fdPath = null;
 }

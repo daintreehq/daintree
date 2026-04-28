@@ -230,9 +230,43 @@ describe("devDiagnostics", () => {
       startDevDiagnostics();
       expect(() => vi.advanceTimersByTime(SWEEP_INTERVAL_MS)).not.toThrow();
       expect(warnSpy).toHaveBeenCalledWith(
-        expect.stringContaining("Listener sweep failed"),
+        expect.stringContaining("Listener sweep failed for ipcMain"),
         expect.any(Error)
       );
+    });
+
+    it("still checks ipcMain when app introspection throws", () => {
+      appMock.eventNames.mockImplementation(() => {
+        throw new Error("app failed");
+      });
+      ipcMainMock.eventNames.mockReturnValue(["leaky"]);
+      ipcMainMock.listenerCount.mockReturnValue(6);
+
+      startDevDiagnostics();
+      vi.advanceTimersByTime(SWEEP_INTERVAL_MS);
+
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining("Listener sweep failed for app"),
+        expect.any(Error)
+      );
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining("Listener leak suspected on ipcMain")
+      );
+    });
+
+    it("only reports the leaky channel when multiple are present", () => {
+      appMock.eventNames.mockReturnValue(["safe", "leaky"]);
+      appMock.listenerCount.mockImplementation((name) => (name === "leaky" ? 6 : 2));
+
+      startDevDiagnostics();
+      vi.advanceTimersByTime(SWEEP_INTERVAL_MS);
+
+      const leakWarnings = warnSpy.mock.calls.filter((c) =>
+        String(c[0]).includes("Listener leak suspected")
+      );
+      expect(leakWarnings).toHaveLength(1);
+      expect(String(leakWarnings[0][0])).toContain("leaky");
+      expect(String(leakWarnings[0][0])).not.toContain("'safe'");
     });
   });
 
@@ -271,6 +305,23 @@ describe("devDiagnostics", () => {
         throw new Error("EACCES");
       });
       expect(() => vi.advanceTimersByTime(SWEEP_INTERVAL_MS)).not.toThrow();
+      const fdWarnings = warnSpy.mock.calls.filter((c) =>
+        String(c[0]).includes("fd leak suspected")
+      );
+      expect(fdWarnings).toHaveLength(0);
+    });
+
+    it("does not produce false positives when baseline read failed", () => {
+      // Baseline read throws — fd sweep must be disabled, not start with baseline=0
+      fsMock.readdirSync.mockImplementationOnce(() => {
+        throw new Error("EACCES");
+      });
+      startDevDiagnostics();
+
+      // Subsequent successful reads should not trigger spurious warnings
+      fsMock.readdirSync.mockReturnValue(Array.from({ length: 50 }, (_, i) => String(i)));
+      vi.advanceTimersByTime(SWEEP_INTERVAL_MS * 3);
+
       const fdWarnings = warnSpy.mock.calls.filter((c) =>
         String(c[0]).includes("fd leak suspected")
       );
@@ -322,6 +373,38 @@ describe("devDiagnostics", () => {
       stopDevDiagnostics();
       startDevDiagnostics();
       expect(process.listeners("warning")).toHaveLength(1);
+    });
+
+    it("does not call app.exit when warning fires after stop", () => {
+      startDevDiagnostics();
+      stopDevDiagnostics();
+
+      const warning = new Error("too many listeners");
+      warning.name = "MaxListenersExceededWarning";
+      process.emit("warning", warning);
+
+      expect(appMock.exit).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("_resetDevDiagnosticsForTesting", () => {
+    it("removes the warning handler", () => {
+      startDevDiagnostics();
+      expect(process.listeners("warning")).toHaveLength(1);
+
+      _resetDevDiagnosticsForTesting();
+      expect(process.listeners("warning")).toHaveLength(0);
+    });
+
+    it("prevents app.exit on warnings emitted after reset", () => {
+      startDevDiagnostics();
+      _resetDevDiagnosticsForTesting();
+
+      const warning = new Error("too many listeners");
+      warning.name = "MaxListenersExceededWarning";
+      process.emit("warning", warning);
+
+      expect(appMock.exit).not.toHaveBeenCalled();
     });
   });
 });
