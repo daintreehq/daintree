@@ -167,6 +167,7 @@ export function registerGitInitHandlers(): () => void {
     }
   };
   handlers.push(
+    // @ts-expect-error: GitInitResult contains {success} — pending migration to throw AppError. See #6020.
     typedHandleWithContext(CHANNELS.PROJECT_INIT_GIT_GUIDED, handleProjectInitGitGuided)
   );
 

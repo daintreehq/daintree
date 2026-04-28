@@ -67,7 +67,10 @@ export function registerCommandHandlers(): () => void {
 
     return commandService.execute(payload.commandId, context, args);
   };
-  handlers.push(typedHandle(CHANNELS.COMMANDS_EXECUTE, handleCommandsExecute));
+  handlers.push(
+    // @ts-expect-error: result type CommandResult contains {success} — pending migration to throw AppError. See #6020.
+    typedHandle(CHANNELS.COMMANDS_EXECUTE, handleCommandsExecute)
+  );
 
   // Get command builder
   const handleCommandsGetBuilder = async (

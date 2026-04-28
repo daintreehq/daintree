@@ -155,7 +155,10 @@ export function registerGitCloneHandlers(): () => void {
       cloneAbortController = null;
     }
   };
-  handlers.push(typedHandleWithContext(CHANNELS.PROJECT_CLONE_REPO, handleProjectCloneRepo));
+  handlers.push(
+    // @ts-expect-error: CloneRepoResult contains {success} — pending migration to throw AppError. See #6020.
+    typedHandleWithContext(CHANNELS.PROJECT_CLONE_REPO, handleProjectCloneRepo)
+  );
 
   const handleProjectCloneCancel = async (): Promise<void> => {
     if (cloneAbortController) {

@@ -227,7 +227,10 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
       });
     }
   };
-  handlers.push(typedHandle(CHANNELS.TERMINAL_FORCE_RESUME, handleTerminalForceResume));
+  handlers.push(
+    // @ts-expect-error: handler returns {success: false, error} — pending migration to throw AppError. See #6020.
+    typedHandle(CHANNELS.TERMINAL_FORCE_RESUME, handleTerminalForceResume)
+  );
 
   return () => handlers.forEach((cleanup) => cleanup());
 }

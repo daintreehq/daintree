@@ -208,7 +208,10 @@ export function registerProjectCrudCoreHandlers(deps: HandlerDependencies): () =
       });
     }
   };
-  handlers.push(typedHandle(CHANNELS.PROJECT_CLOSE, handleProjectClose));
+  handlers.push(
+    // @ts-expect-error: handler returns {success: false, error, ...} — pending migration to throw AppError. See #6020.
+    typedHandle(CHANNELS.PROJECT_CLOSE, handleProjectClose)
+  );
 
   const handleProjectCheckMissing = async (): Promise<string[]> => {
     return projectStore.checkMissingProjects();

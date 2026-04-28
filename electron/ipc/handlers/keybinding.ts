@@ -103,6 +103,7 @@ export function registerKeybindingHandlers(_deps: HandlerDependencies): () => vo
   handlers.push(
     typedHandleWithContext(
       CHANNELS.KEYBINDING_IMPORT_PROFILE,
+      // @ts-expect-error: ImportResult contains {ok} — pending migration to throw AppError. See #6020.
       async (ctx): Promise<ImportResult> => {
         const parentWindow = ctx.senderWindow;
         const openOpts: Electron.OpenDialogOptions = {

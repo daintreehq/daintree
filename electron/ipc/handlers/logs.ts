@@ -149,7 +149,10 @@ export function registerLogsHandlers(
     fanOut(current, deps);
     logInfo(`Verbose logging ${enabled ? "enabled" : "disabled"} by user`);
   };
-  handlers.push(typedHandle(CHANNELS.LOGS_SET_VERBOSE, handleLogsSetVerbose));
+  handlers.push(
+    // @ts-expect-error: handler returns {success: ...} — pending migration to throw AppError on failure and return void on success. See #6020.
+    typedHandle(CHANNELS.LOGS_SET_VERBOSE, handleLogsSetVerbose)
+  );
 
   const handleLogsGetVerbose = async () => {
     return isVerboseLogging();
@@ -195,7 +198,10 @@ export function registerLogsHandlers(
     logInfo("Log level overrides updated", { count: Object.keys(clean).length });
     return { success: true };
   };
-  handlers.push(typedHandle(CHANNELS.LOGS_SET_LEVEL_OVERRIDES, handleSetLevelOverrides));
+  handlers.push(
+    // @ts-expect-error: handler returns {success: ...} — pending migration to throw AppError on failure and return void on success. See #6020.
+    typedHandle(CHANNELS.LOGS_SET_LEVEL_OVERRIDES, handleSetLevelOverrides)
+  );
 
   const handleClearLevelOverrides = async () => {
     // electron-store v11: `set(..., undefined)` throws. Clear by writing the
@@ -206,7 +212,10 @@ export function registerLogsHandlers(
     logInfo("Log level overrides cleared");
     return { success: true };
   };
-  handlers.push(typedHandle(CHANNELS.LOGS_CLEAR_LEVEL_OVERRIDES, handleClearLevelOverrides));
+  handlers.push(
+    // @ts-expect-error: handler returns {success: ...} — pending migration to throw AppError on failure and return void on success. See #6020.
+    typedHandle(CHANNELS.LOGS_CLEAR_LEVEL_OVERRIDES, handleClearLevelOverrides)
+  );
 
   const handleGetRegistry = async (): Promise<string[]> => {
     // Main-process registry only. Utility-process loggers are represented via

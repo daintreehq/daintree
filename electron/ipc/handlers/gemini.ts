@@ -17,6 +17,7 @@ export function registerGeminiHandlers(): () => void {
     return { success: true };
   };
   handlers.push(
+    // @ts-expect-error: handler returns {success: true} — pending migration to throw AppError on failure and return void on success. See #6020.
     typedHandle(CHANNELS.GEMINI_ENABLE_ALTERNATE_BUFFER, handleGeminiEnableAlternateBuffer)
   );
 

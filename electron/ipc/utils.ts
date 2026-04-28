@@ -9,6 +9,7 @@ import { getProjectViewManager } from "../window/windowRef.js";
 import type { IpcInvokeMap, IpcEventMap } from "../types/index.js";
 import type { IpcContext } from "./types.js";
 import { ValidationError } from "./validationError.js";
+import type { ForbidIpcEnvelopeKeys } from "../../shared/types/ipc/errors.js";
 import { performance } from "node:perf_hooks";
 import { PERF_MARKS } from "../../shared/perf/marks.js";
 import {
@@ -361,7 +362,9 @@ export function typedHandle<K extends keyof IpcInvokeMap>(
   channel: K,
   handler: (
     ...args: IpcInvokeMap[K]["args"]
-  ) => Promise<IpcInvokeMap[K]["result"]> | IpcInvokeMap[K]["result"]
+  ) =>
+    | Promise<ForbidIpcEnvelopeKeys<IpcInvokeMap[K]["result"]>>
+    | ForbidIpcEnvelopeKeys<IpcInvokeMap[K]["result"]>
 ): () => void {
   assertIpcSecurityReady(channel as string);
   const captureEnabled = isPerformanceCaptureEnabled();
@@ -386,7 +389,7 @@ export function typedHandle<K extends keyof IpcInvokeMap>(
       argCount: args.length,
     });
 
-    let responsePayload: IpcInvokeMap[K]["result"] | undefined;
+    let responsePayload: ForbidIpcEnvelopeKeys<IpcInvokeMap[K]["result"]> | undefined;
     let errored = false;
 
     try {
@@ -444,7 +447,9 @@ export function typedHandleWithContext<K extends keyof IpcInvokeMap>(
   handler: (
     ctx: IpcContext,
     ...args: IpcInvokeMap[K]["args"]
-  ) => Promise<IpcInvokeMap[K]["result"]> | IpcInvokeMap[K]["result"]
+  ) =>
+    | Promise<ForbidIpcEnvelopeKeys<IpcInvokeMap[K]["result"]>>
+    | ForbidIpcEnvelopeKeys<IpcInvokeMap[K]["result"]>
 ): () => void {
   assertIpcSecurityReady(channel as string);
   const captureEnabled = isPerformanceCaptureEnabled();
@@ -475,7 +480,7 @@ export function typedHandleWithContext<K extends keyof IpcInvokeMap>(
       argCount: args.length,
     });
 
-    let responsePayload: IpcInvokeMap[K]["result"] | undefined;
+    let responsePayload: ForbidIpcEnvelopeKeys<IpcInvokeMap[K]["result"]> | undefined;
     let errored = false;
 
     try {

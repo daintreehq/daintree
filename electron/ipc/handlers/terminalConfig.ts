@@ -291,6 +291,7 @@ export function registerTerminalConfigHandlers(deps?: HandlerDependencies): () =
   );
 
   handlers.push(
+    // @ts-expect-error: handler returns {ok: true|false, ...} — pending migration to throw AppError. See #6020.
     typedHandleWithContext(CHANNELS.TERMINAL_CONFIG_IMPORT_COLOR_SCHEME, async (ctx) => {
       const win = ctx.senderWindow ?? BrowserWindow.getFocusedWindow();
       const dialogOptions = {

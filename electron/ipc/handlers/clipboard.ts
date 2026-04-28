@@ -163,11 +163,17 @@ async function handleReadSelection(): Promise<{ text: string }> {
 export const clipboardNamespace = defineIpcNamespace({
   name: "clipboard",
   ops: {
+    // @ts-expect-error: handler returns {ok: false, error} — pending migration to throw AppError. See #6020.
     saveImage: op(CLIPBOARD_METHOD_CHANNELS.saveImage, handleSaveImage),
+    // @ts-expect-error: handler returns {ok: false, error} — pending migration to throw AppError. See #6020.
     thumbnailFromPath: op(CLIPBOARD_METHOD_CHANNELS.thumbnailFromPath, handleThumbnailFromPath),
+    // @ts-expect-error: handler returns {ok: false, error} — pending migration to throw AppError. See #6020.
     writeImage: op(CLIPBOARD_METHOD_CHANNELS.writeImage, handleWriteImage),
+    // @ts-expect-error: handler returns {ok: false, error} — pending migration to throw AppError. See #6020.
     writeText: op(CLIPBOARD_METHOD_CHANNELS.writeText, handleWriteText),
+    // @ts-expect-error: handler returns {ok: false, error} — pending migration to throw AppError. See #6020.
     writeSelection: op(CLIPBOARD_METHOD_CHANNELS.writeSelection, handleWriteSelection),
+    // @ts-expect-error: handler returns {ok: false, error} — pending migration to throw AppError. See #6020.
     readSelection: op(CLIPBOARD_METHOD_CHANNELS.readSelection, handleReadSelection),
   },
 });

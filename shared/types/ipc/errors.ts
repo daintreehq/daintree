@@ -46,6 +46,45 @@ export function isIpcEnvelope(value: unknown): value is IpcEnvelope {
   );
 }
 
+/**
+ * Keys that an IPC handler must never include in its return value. These
+ * collide with the envelope discriminator that `security.ts` adds around
+ * every handler return — when a handler returns `{ ok: false, ... }` the
+ * outer wrapper still reports `ok: true` and the renderer's
+ * `_unwrappingInvoke` silently swallows the inner failure.
+ */
+type ForbiddenEnvelopeKey = "ok" | "success";
+
+/**
+ * Branded shape produced when a handler's declared return type contains a
+ * forbidden envelope discriminator key. The property name carries the
+ * remediation hint, so TypeScript surfaces it in the compile error:
+ *
+ *   Property '"IPC handler must throw new AppError(...) instead of returning {ok|success: ...} — see #6020"' is missing
+ */
+export interface IpcHandlerEnvelopeViolation {
+  readonly "IPC handler must throw new AppError(...) instead of returning {ok|success: ...} — see #6020": never;
+}
+
+/**
+ * Distributive conditional: rejects any object type that carries `ok` or
+ * `success` as a key (in any branch of a union). Pass-through for primitive
+ * results, `void`, `null`, and objects without those keys.
+ *
+ * Used to constrain typed-handler return positions in
+ * `electron/ipc/define.ts` (`PlainHandler` / `ContextHandler`) and
+ * `electron/ipc/utils.ts` (`typedHandle` / `typedHandleWithContext`). The
+ * constraint catches the antipattern at the registration site, directing
+ * developers to throw an error instead of returning an inner-envelope shape.
+ */
+export type ForbidIpcEnvelopeKeys<T> = [T] extends [object]
+  ? T extends unknown
+    ? Extract<keyof T, ForbiddenEnvelopeKey> extends never
+      ? T
+      : IpcHandlerEnvelopeViolation
+    : never
+  : T;
+
 /** Error type */
 export type ErrorType =
   | "git"

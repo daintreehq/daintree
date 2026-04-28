@@ -185,7 +185,10 @@ export function registerAgentCliHandlers(deps: HandlerDependencies): () => void 
       }
     });
   };
-  handlers.push(typedHandleWithContext(CHANNELS.SETUP_AGENT_INSTALL, handleSetupAgentInstall));
+  handlers.push(
+    // @ts-expect-error: result type contains forbidden envelope key — pending migration to throw AppError. See #6020.
+    typedHandleWithContext(CHANNELS.SETUP_AGENT_INSTALL, handleSetupAgentInstall)
+  );
 
   return () => handlers.forEach((cleanup) => cleanup());
 }

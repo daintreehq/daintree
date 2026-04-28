@@ -203,7 +203,10 @@ export function registerArtifactHandlers(deps: HandlerDependencies): () => void 
       await fs.unlink(tmpPatchPath).catch(() => {});
     }
   };
-  handlers.push(typedHandleWithContext(CHANNELS.ARTIFACT_APPLY_PATCH, handleArtifactApplyPatch));
+  handlers.push(
+    // @ts-expect-error: handler returns {success: false, error} — pending migration to throw AppError. See #6020.
+    typedHandleWithContext(CHANNELS.ARTIFACT_APPLY_PATCH, handleArtifactApplyPatch)
+  );
 
   return () => handlers.forEach((cleanup) => cleanup());
 }

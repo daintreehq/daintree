@@ -8,20 +8,27 @@ import {
 import { ValidationError } from "./validationError.js";
 import type { IpcContext } from "./types.js";
 import type { IpcInvokeMap } from "../types/index.js";
+import type { ForbidIpcEnvelopeKeys } from "../../shared/types/ipc/errors.js";
 
 export { ValidationError };
 
 type Channel = keyof IpcInvokeMap;
 type Cleanup = () => void;
 
+// Reject handler return types that overlap with the envelope discriminator.
+// security.ts auto-wraps every handler return in {ok: true, data}; a handler
+// returning {ok: false, ...} would be silently nested inside a success
+// envelope. This constraint forces such handlers to throw instead.
+type SafeResult<K extends Channel> = ForbidIpcEnvelopeKeys<IpcInvokeMap[K]["result"]>;
+
 type PlainHandler<K extends Channel> = (
   ...args: IpcInvokeMap[K]["args"]
-) => Promise<IpcInvokeMap[K]["result"]> | IpcInvokeMap[K]["result"];
+) => Promise<SafeResult<K>> | SafeResult<K>;
 
 type ContextHandler<K extends Channel> = (
   ctx: IpcContext,
   ...args: IpcInvokeMap[K]["args"]
-) => Promise<IpcInvokeMap[K]["result"]> | IpcInvokeMap[K]["result"];
+) => Promise<SafeResult<K>> | SafeResult<K>;
 
 type ValidatedPayloadHandler<K extends Channel, S extends z.ZodTypeAny> = (
   payload: z.output<S>

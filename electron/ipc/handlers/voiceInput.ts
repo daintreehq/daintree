@@ -652,6 +652,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
   const cleanups: Array<() => void> = [
     typedHandle(CHANNELS.VOICE_INPUT_GET_SETTINGS, handleGetSettings),
     typedHandle(CHANNELS.VOICE_INPUT_SET_SETTINGS, handleSetSettings),
+    // @ts-expect-error: VoiceStartResult contains forbidden envelope key — pending migration to throw AppError. See #6020.
     typedHandleWithContext(CHANNELS.VOICE_INPUT_START, handleStart),
     typedHandle(CHANNELS.VOICE_INPUT_STOP, handleStop),
     typedHandle(CHANNELS.VOICE_INPUT_CHECK_MIC_PERMISSION, handleCheckMicPermission),

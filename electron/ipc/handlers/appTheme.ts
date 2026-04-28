@@ -116,6 +116,7 @@ export function registerAppThemeHandlers(mainWindow?: BrowserWindow): () => void
   );
 
   handlers.push(
+    // @ts-expect-error: handler returns AppThemeImportResult containing {success} — pending migration to throw AppError. See #6020.
     typedHandleWithContext(CHANNELS.APP_THEME_IMPORT, async (ctx) => {
       const win = ctx.senderWindow ?? BrowserWindow.getFocusedWindow();
       const dialogOptions = {
