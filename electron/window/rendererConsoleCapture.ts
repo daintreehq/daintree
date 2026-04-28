@@ -9,10 +9,13 @@ interface ConsoleMessageDetails {
   sourceId: string;
 }
 
+type ConsoleMessageHandler = (event: unknown, ...args: unknown[]) => void;
+
 const RATE_WINDOW_MS = 5_000;
 const RATE_MAX_PER_WINDOW = 5;
 
 const attached = new WeakSet<WebContents>();
+const handlers = new WeakMap<WebContents, ConsoleMessageHandler>();
 const rateState = new WeakMap<WebContents, Map<string, { count: number; resetAt: number }>>();
 
 function normalizeSourceId(sourceId: string): string {
@@ -48,7 +51,7 @@ function shouldAllow(
 export function attachRendererConsoleCapture(wc: WebContents): void {
   if (attached.has(wc)) return;
 
-  wc.on("console-message", (_event, ...args: unknown[]) => {
+  const handler: ConsoleMessageHandler = (_event, ...args) => {
     if (wc.isDestroyed()) return;
 
     const details = args[0] as ConsoleMessageDetails | undefined;
@@ -74,12 +77,30 @@ export function attachRendererConsoleCapture(wc: WebContents): void {
     } else {
       logWarn(message ?? "", context);
     }
-  });
+  };
+
+  wc.on("console-message", handler);
 
   attached.add(wc);
+  handlers.set(wc, handler);
+}
+
+export function detachRendererConsoleCapture(wc: WebContents): void {
+  const handler = handlers.get(wc);
+  if (handler) {
+    try {
+      wc.removeListener("console-message", handler);
+    } catch {
+      // wc may already be torn down — removeListener is best-effort
+    }
+    handlers.delete(wc);
+  }
+  attached.delete(wc);
+  rateState.delete(wc);
 }
 
 export function __resetRendererConsoleCaptureForTests(wc: WebContents): void {
   attached.delete(wc);
+  handlers.delete(wc);
   rateState.delete(wc);
 }

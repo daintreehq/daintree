@@ -12,6 +12,7 @@ vi.mock("../../utils/logger.js", () => ({
 
 import {
   attachRendererConsoleCapture,
+  detachRendererConsoleCapture,
   __resetRendererConsoleCaptureForTests,
 } from "../rendererConsoleCapture.js";
 
@@ -20,7 +21,8 @@ type ConsoleListener = (event: unknown, details: unknown) => void;
 interface MockWebContents {
   id: number;
   isDestroyed: () => boolean;
-  on: (event: string, listener: ConsoleListener) => void;
+  on: ReturnType<typeof vi.fn>;
+  removeListener: ReturnType<typeof vi.fn>;
   emit: (details: unknown) => void;
 }
 
@@ -29,16 +31,20 @@ let nextId = 1;
 function createMockWebContents(overrides: { destroyed?: boolean } = {}): MockWebContents {
   const id = nextId++;
   let listener: ConsoleListener | null = null;
-  return {
+  const wc: MockWebContents = {
     id,
     isDestroyed: () => overrides.destroyed === true,
     on: vi.fn((event: string, l: ConsoleListener) => {
       if (event === "console-message") listener = l;
     }),
+    removeListener: vi.fn((event: string, l: ConsoleListener) => {
+      if (event === "console-message" && listener === l) listener = null;
+    }),
     emit: (details: unknown) => {
       if (listener) listener({}, details);
     },
   };
+  return wc;
 }
 
 function makeDetails(
@@ -254,5 +260,65 @@ describe("attachRendererConsoleCapture", () => {
     );
 
     __resetRendererConsoleCaptureForTests(wc as unknown as Electron.WebContents);
+  });
+});
+
+describe("detachRendererConsoleCapture", () => {
+  beforeEach(() => {
+    logWarnMock.mockClear();
+    logErrorMock.mockClear();
+  });
+
+  it("removes the console-message listener so post-detach emits are silent", () => {
+    const wc = createMockWebContents();
+    attachRendererConsoleCapture(wc as unknown as Electron.WebContents);
+
+    wc.emit(makeDetails("warning", { message: "before" }));
+    expect(logWarnMock).toHaveBeenCalledTimes(1);
+
+    detachRendererConsoleCapture(wc as unknown as Electron.WebContents);
+
+    const handler = wc.on.mock.calls.find(([event]) => event === "console-message")?.[1];
+    expect(wc.removeListener).toHaveBeenCalledWith("console-message", handler);
+
+    wc.emit(makeDetails("warning", { message: "after" }));
+    expect(logWarnMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("is a no-op when called for a webContents that was never attached", () => {
+    const wc = createMockWebContents();
+
+    expect(() => detachRendererConsoleCapture(wc as unknown as Electron.WebContents)).not.toThrow();
+    expect(wc.removeListener).not.toHaveBeenCalled();
+  });
+
+  it("allows a fresh attach after detach to register a new listener", () => {
+    const wc = createMockWebContents();
+    attachRendererConsoleCapture(wc as unknown as Electron.WebContents);
+    detachRendererConsoleCapture(wc as unknown as Electron.WebContents);
+    attachRendererConsoleCapture(wc as unknown as Electron.WebContents);
+
+    expect(wc.on).toHaveBeenCalledTimes(2);
+
+    wc.emit(makeDetails("error", { message: "fresh" }));
+    expect(logErrorMock).toHaveBeenCalledTimes(1);
+
+    detachRendererConsoleCapture(wc as unknown as Electron.WebContents);
+  });
+
+  it("clears rate-limit state on detach so reattach starts with a fresh quota", () => {
+    const wc = createMockWebContents();
+    attachRendererConsoleCapture(wc as unknown as Electron.WebContents);
+
+    for (let i = 0; i < 6; i++) wc.emit(makeDetails("warning"));
+    expect(logWarnMock).toHaveBeenCalledTimes(5);
+
+    detachRendererConsoleCapture(wc as unknown as Electron.WebContents);
+    attachRendererConsoleCapture(wc as unknown as Electron.WebContents);
+
+    for (let i = 0; i < 6; i++) wc.emit(makeDetails("warning"));
+    expect(logWarnMock).toHaveBeenCalledTimes(10);
+
+    detachRendererConsoleCapture(wc as unknown as Electron.WebContents);
   });
 });

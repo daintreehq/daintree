@@ -25,7 +25,10 @@ import { getPtyManager } from "../services/PtyManager.js";
 import { notifyError } from "../ipc/errorHandlers.js";
 import { logInfo } from "../utils/logger.js";
 import { injectSkeletonCss } from "./skeletonCss.js";
-import { attachRendererConsoleCapture } from "./rendererConsoleCapture.js";
+import {
+  attachRendererConsoleCapture,
+  detachRendererConsoleCapture,
+} from "./rendererConsoleCapture.js";
 import { ACTIVE_AGENT_STATES } from "../../shared/types/agent.js";
 
 const GC_DELAY_MS = 100;
@@ -44,6 +47,7 @@ interface ViewEntry {
   lastUsed: number;
   state: ViewState;
   crashTimestamps: number[];
+  cleanupHandlers: () => void;
 }
 
 export interface ProjectViewManagerOptions {
@@ -113,6 +117,7 @@ export class ProjectViewManager {
       lastUsed: Date.now(),
       state: "active",
       crashTimestamps: [],
+      cleanupHandlers: () => {},
     };
     this.views.set(projectId, entry);
     this.webContentsToProject.set(view.webContents.id, projectId);
@@ -195,13 +200,14 @@ export class ProjectViewManager {
       lastUsed: Date.now(),
       state: "loading",
       crashTimestamps: [],
+      cleanupHandlers: () => {},
     };
     this.views.set(projectId, entry);
     this.webContentsToProject.set(view.webContents.id, projectId);
     registerProjectView(projectId, view.webContents);
 
     // Set up security handlers and attach to window
-    this.setupViewHandlers(view);
+    this.setupViewHandlers(view, entry);
     registerWebContents(view.webContents, this.win);
     registerAppView(this.win, view);
 
@@ -450,7 +456,7 @@ export class ProjectViewManager {
     view.setBounds({ x: 0, y: 0, width, height });
   }
 
-  private setupViewHandlers(view: WebContentsView): void {
+  private setupViewHandlers(view: WebContentsView, entry: ViewEntry): void {
     const wc = view.webContents;
     const win = this.win;
 
@@ -467,21 +473,25 @@ export class ProjectViewManager {
       return { action: "deny" };
     });
 
-    wc.on("will-navigate", (event, navigationUrl) => {
+    const handleWillNavigate = (event: Electron.Event, navigationUrl: string) => {
       if (!isTrustedRendererUrl(navigationUrl)) {
         console.error("[ProjectViewManager] Blocked navigation to untrusted URL:", navigationUrl);
         event.preventDefault();
       }
-    });
+    };
 
-    wc.on("will-redirect", (event, redirectUrl) => {
+    const handleWillRedirect = (event: Electron.Event, redirectUrl: string) => {
       if (!isTrustedRendererUrl(redirectUrl)) {
         console.error("[ProjectViewManager] Blocked redirect to untrusted URL:", redirectUrl);
         event.preventDefault();
       }
-    });
+    };
 
-    wc.on("will-attach-webview", (event, webPreferences, params) => {
+    const handleWillAttachWebview = (
+      event: Electron.Event,
+      webPreferences: Electron.WebPreferences,
+      params: Record<string, string>
+    ) => {
       const allowedPartitions = ["persist:browser", "persist:dev-preview"];
       const isAllowedLocalhostUrl = isLocalhostUrl(params.src);
       const isValidPartition =
@@ -503,9 +513,9 @@ export class ProjectViewManager {
       webPreferences.navigateOnDragDrop = false;
       webPreferences.disableBlinkFeatures = "Auxclick";
       webPreferences.partition = params.partition;
-    });
+    };
 
-    wc.on("before-input-event", (_event, input) => {
+    const handleBeforeInputEvent = (_event: Electron.Event, input: Electron.Input) => {
       const isMac = process.platform === "darwin";
       const isCloseShortcut =
         input.type === "keyDown" &&
@@ -513,20 +523,23 @@ export class ProjectViewManager {
         ((isMac && input.meta && !input.control) || (!isMac && input.control && !input.meta)) &&
         !input.alt;
       wc.setIgnoreMenuShortcuts(isCloseShortcut);
-    });
+    };
 
     // Fire onViewReady on load/reload, but ONLY for the active view.
     // A cached view reloading (e.g. after crash recovery) must not steal
     // the PTY MessagePort from the currently visible view.
-    wc.on("did-finish-load", () => {
+    const handleDidFinishLoad = () => {
       if (wc.isDestroyed()) return;
       const projectId = this.webContentsToProject.get(wc.id);
       if (projectId && projectId === this.activeProjectId) {
         this.onViewReady?.(wc);
       }
-    });
+    };
 
-    wc.on("render-process-gone", (_event, details) => {
+    const handleRenderProcessGone = (
+      _event: Electron.Event,
+      details: Electron.RenderProcessGoneDetails
+    ) => {
       if (details.reason === "clean-exit") return;
 
       const projectId = this.webContentsToProject.get(wc.id);
@@ -541,12 +554,12 @@ export class ProjectViewManager {
 
       if (win.isDestroyed()) return;
 
-      const entry = projectId ? this.views.get(projectId) : null;
+      const crashEntry = projectId ? this.views.get(projectId) : null;
 
       // If the view is still loading, loadView's one-shot handler will handle
       // the failure and trigger rollback — skip crash recovery here.
-      if (entry?.state === "loading") return;
-      const crashTimestamps = entry?.crashTimestamps ?? [];
+      if (crashEntry?.state === "loading") return;
+      const crashTimestamps = crashEntry?.crashTimestamps ?? [];
       const now = Date.now();
       while (crashTimestamps.length > 0 && now - crashTimestamps[0] > CRASH_LOOP_WINDOW_MS) {
         crashTimestamps.shift();
@@ -561,8 +574,8 @@ export class ProjectViewManager {
             reason: details.reason,
             exitCode: String(details.exitCode),
           });
-          if (entry?.projectPath) {
-            params.set("project", path.basename(entry.projectPath));
+          if (crashEntry?.projectPath) {
+            params.set("project", path.basename(crashEntry.projectPath));
           }
           const backupTimestamp = getCrashRecoveryService().getLastBackupTimestamp();
           if (backupTimestamp !== null) {
@@ -594,7 +607,30 @@ export class ProjectViewManager {
           if (!wc.isDestroyed()) wc.reload();
         });
       }
-    });
+    };
+
+    wc.on("will-navigate", handleWillNavigate);
+    wc.on("will-redirect", handleWillRedirect);
+    wc.on("will-attach-webview", handleWillAttachWebview);
+    wc.on("before-input-event", handleBeforeInputEvent);
+    wc.on("did-finish-load", handleDidFinishLoad);
+    wc.on("render-process-gone", handleRenderProcessGone);
+
+    // Capture wc in closure: post-eviction the view's webContents getter may be
+    // undefined (Electron #50249). Removing listeners must happen before close()
+    // so any queued event from Chromium cannot fire against stale view state.
+    let cleaned = false;
+    entry.cleanupHandlers = () => {
+      if (cleaned) return;
+      cleaned = true;
+      wc.removeListener("will-navigate", handleWillNavigate);
+      wc.removeListener("will-redirect", handleWillRedirect);
+      wc.removeListener("will-attach-webview", handleWillAttachWebview);
+      wc.removeListener("before-input-event", handleBeforeInputEvent);
+      wc.removeListener("did-finish-load", handleDidFinishLoad);
+      wc.removeListener("render-process-gone", handleRenderProcessGone);
+      detachRendererConsoleCapture(wc);
+    };
 
     // Fullscreen events are handled by the window-level resize handler
     // and the sendToRenderer in createWindow.ts — no per-view listeners needed.
@@ -603,6 +639,15 @@ export class ProjectViewManager {
   private cleanupEntry(projectId: string): void {
     const entry = this.views.get(projectId);
     if (!entry) return;
+
+    // Detach persistent webContents listeners before close() so any queued
+    // event (did-finish-load, render-process-gone, etc.) cannot fire against
+    // an evicted view and act on stale views/activeProjectId state.
+    try {
+      entry.cleanupHandlers();
+    } catch (error) {
+      console.error("[ProjectViewManager] cleanupHandlers threw during eviction:", error);
+    }
 
     // Remove from window if attached
     if (!this.win.isDestroyed()) {
