@@ -124,6 +124,32 @@ describe("TerminalProcess.kill — agent state event", () => {
     );
     expect(emitAgentKilledSpy).toHaveBeenCalled();
   });
+
+  // The state machine collapses kill / dispose / onExit into a single
+  // idempotent teardown. Calling kill() twice must not double-fire
+  // agent:killed or attempt to flush persistence twice.
+  it("is idempotent — second kill() is a no-op", () => {
+    const updateAgentStateSpy = vi.fn();
+    const emitAgentKilledSpy = vi.fn();
+
+    const terminal = createTerminal(
+      { kind: "terminal", launchAgentId: "claude" },
+      {
+        agentStateService: {
+          handleActivityState: () => {},
+          updateAgentState: updateAgentStateSpy,
+          emitAgentKilled: emitAgentKilledSpy,
+        } as never,
+      }
+    );
+
+    terminal.kill("first");
+    terminal.kill("second");
+
+    // Each agent-state hook fires exactly once even though kill() was called twice.
+    expect(updateAgentStateSpy).toHaveBeenCalledTimes(1);
+    expect(emitAgentKilledSpy).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("TerminalProcess.kill — session persistence", () => {

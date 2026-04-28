@@ -3,6 +3,7 @@ import type { NotificationPayload, AgentState, TaskState, EventCategory } from "
 import type { EventContext } from "../../shared/types/events.js";
 import type { WorktreeSnapshot as WorktreeState } from "../../shared/types/workspace-host.js";
 import type { TerminalReliabilityMetricPayload } from "../../shared/types/pty-host.js";
+import type { ExitReason } from "./pty/types.js";
 
 export type { EventCategory };
 
@@ -288,6 +289,12 @@ export const EVENT_META: Record<keyof DaintreeEventMap, EventMetadata> = {
     requiresContext: true,
     requiresTimestamp: true,
     description: "Terminal agent state changed (idle, working, completed, etc.)",
+  },
+  "terminal:exited": {
+    category: "agent",
+    requiresContext: false,
+    requiresTimestamp: true,
+    description: "Terminal PTY exited (natural, kill, graceful-shutdown, or dispose)",
   },
 
   // Task events
@@ -721,6 +728,40 @@ export type DaintreeEventMap = {
     confidence: number;
   }>;
 
+  /**
+   * Emitted exactly once per `TerminalProcess` lifetime when the PTY
+   * transitions out of `alive`. Subscribers handle forensics logging,
+   * agent completion emission, and fallback classification — work that
+   * previously lived inline inside the PTY exit handler.
+   *
+   * `code` is `null` only when `dispose()` is called without a prior
+   * natural exit (e.g. LRU eviction). `recentOutput` is captured before
+   * the headless buffer is torn down so subscribers can scan exit-time
+   * output without racing teardown.
+   */
+  "terminal:exited": {
+    terminalId: string;
+    /**
+     * Session-scoped token (the spawning timestamp) that distinguishes
+     * different `TerminalProcess` instances which happen to share an `id`
+     * — e.g. when `PtyManager.spawn(id)` kills the prior terminal and
+     * respawns under the same id. Subscribers must filter on both
+     * `terminalId` AND `spawnedAt` to avoid firing the new instance's
+     * handlers on the old PTY's exit.
+     */
+    spawnedAt: number;
+    code: number | null;
+    signal?: number;
+    reason: ExitReason;
+    recentOutput: string;
+    hadAgent: boolean;
+    liveAgentAtExit?: string;
+    launchAgentId?: string;
+    agentPresetId?: string;
+    originalAgentPresetId?: string;
+    timestamp: number;
+  };
+
   // Task Lifecycle Events (Future-proof for task management)
 
   /**
@@ -835,6 +876,7 @@ export const ALL_EVENT_TYPES: Array<keyof DaintreeEventMap> = [
   "terminal:foregrounded",
   "terminal:reliability-metric",
   "terminal:state-changed",
+  "terminal:exited",
   "task:created",
   "task:assigned",
   "task:state-changed",

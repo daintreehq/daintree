@@ -136,6 +136,57 @@ export interface PtyManagerEvents {
   error: (id: string, error: string) => void;
 }
 
+/**
+ * Why a TerminalProcess transitioned out of `alive`. Used by `teardown()` to
+ * route observers (forensics, fallback classifier, agent state machine) and
+ * to derive the IPC-visible `wasKilled` flag.
+ *
+ * - `kill`: explicit `kill()` call (user action, registry cleanup).
+ * - `graceful-shutdown`: `gracefulShutdown()` finished and routed through
+ *   `kill()` to capture the agent session ID before tearing down.
+ * - `dispose`: `dispose()` called without a prior PTY exit — typically LRU
+ *   eviction or app shutdown. SIGKILL is sent immediately.
+ * - `natural`: the underlying PTY emitted `onExit` on its own (clean exit,
+ *   crash, or external signal).
+ */
+export type ExitReason = "kill" | "graceful-shutdown" | "dispose" | "natural";
+
+/**
+ * Explicit lifecycle for a `TerminalProcess`. Replaces the previous trio of
+ * implicit booleans (`wasKilled`, `isExited`, `exitCode`) with a single
+ * discriminated union so every code path that gates on lifecycle state can
+ * narrow on a single field.
+ *
+ * Transition graph:
+ * ```
+ *   alive ──► shutting-down ──► exited
+ *     │           │               │
+ *     │           ▼               ▼
+ *     └───────► disposed ◄────────┘
+ * ```
+ *
+ * `alive` is the initial state — the PTY is passed live to the constructor.
+ * `shutting-down` is set the moment `teardown(reason)` begins (kill, dispose,
+ * or natural exit). `exited` is the preserve-on-exit terminal state for
+ * agents that exited cleanly; the headless buffer is retained so the user
+ * can inspect output. `disposed` is the final state — headless buffer torn
+ * down, PTY descendants killed.
+ *
+ * The `wasKilled` and `isExited` fields on `TerminalPublicState` remain in
+ * the IPC contract for backward compatibility and are derived from this
+ * state in `getPublicState()`.
+ */
+export type PtyState =
+  | { readonly kind: "alive" }
+  | { readonly kind: "shutting-down"; readonly reason: ExitReason }
+  | {
+      readonly kind: "exited";
+      readonly code: number;
+      readonly signal?: number;
+      readonly reason: ExitReason;
+    }
+  | { readonly kind: "disposed"; readonly reason: ExitReason };
+
 export interface TerminalSnapshot {
   id: string;
   lines: string[];
