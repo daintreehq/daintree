@@ -62,9 +62,7 @@ export const WslGitBanner = React.memo(function WslGitBanner({
         )}
       >
         <div className="flex-1">
-          <div className="font-medium text-text-primary">
-            Speed up git on this WSL worktree
-          </div>
+          <div className="font-medium text-text-primary">Speed up git on this WSL worktree</div>
           <div className="mt-0.5 text-text-secondary">
             This worktree lives in WSL ({wslDistro ?? "unknown distro"}). Routing git through{" "}
             <code className="rounded bg-overlay-subtle px-1 py-0.5">wsl git</code> avoids the
@@ -110,9 +108,7 @@ export const WslGitBanner = React.memo(function WslGitBanner({
       )}
     >
       <div className="flex-1">
-        <div className="font-medium text-text-primary">
-          WSL worktree (non-default distro)
-        </div>
+        <div className="font-medium text-text-primary">WSL worktree (non-default distro)</div>
         <div className="mt-0.5 text-text-secondary">
           This worktree is in{" "}
           <code className="rounded bg-overlay-subtle px-1 py-0.5">{wslDistro ?? "WSL"}</code>, which
