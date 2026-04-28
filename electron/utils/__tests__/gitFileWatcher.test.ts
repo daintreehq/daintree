@@ -788,6 +788,186 @@ describe("GitFileWatcher", () => {
     Object.defineProperty(process, "platform", { value: origPlatform, configurable: true });
   });
 
+  it("onEmfileLimitReached fires alongside onWatcherFailed on macOS EMFILE at runtime", () => {
+    const onChange = vi.fn();
+    const onWatcherFailed = vi.fn();
+    const onEmfileLimitReached = vi.fn();
+    let errorHandler: ((error: NodeJS.ErrnoException) => void) | undefined;
+
+    const origPlatform = process.platform;
+    Object.defineProperty(process, "platform", { value: "darwin", configurable: true });
+
+    vi.mocked(watch).mockImplementation(((
+      _path: string,
+      opts: Record<string, unknown>,
+      _cb?: unknown
+    ) => {
+      const w = createMockWatcher();
+      if (opts?.recursive) {
+        vi.mocked(w.on).mockImplementation(((event: string, handler: unknown) => {
+          if (event === "error") {
+            errorHandler = handler as (error: NodeJS.ErrnoException) => void;
+          }
+          return w;
+        }) as unknown as typeof w.on);
+      }
+      return w;
+    }) as unknown as typeof watch);
+
+    const gitWatcher = new GitFileWatcher({
+      worktreePath: "/repo",
+      branch: "main",
+      debounceMs: 300,
+      onChange,
+      watchWorktree: true,
+      onWatcherFailed,
+      onEmfileLimitReached,
+    });
+
+    gitWatcher.start();
+    const emfileError = new Error("EMFILE") as NodeJS.ErrnoException;
+    emfileError.code = "EMFILE";
+    errorHandler?.(emfileError);
+
+    expect(onEmfileLimitReached).toHaveBeenCalledTimes(1);
+    expect(onWatcherFailed).toHaveBeenCalledTimes(1);
+
+    Object.defineProperty(process, "platform", { value: origPlatform, configurable: true });
+  });
+
+  it("does not call onEmfileLimitReached for non-EMFILE runtime errors on macOS", () => {
+    const onChange = vi.fn();
+    const onWatcherFailed = vi.fn();
+    const onEmfileLimitReached = vi.fn();
+    let errorHandler: ((error: NodeJS.ErrnoException) => void) | undefined;
+
+    const origPlatform = process.platform;
+    Object.defineProperty(process, "platform", { value: "darwin", configurable: true });
+
+    vi.mocked(watch).mockImplementation(((
+      _path: string,
+      opts: Record<string, unknown>,
+      _cb?: unknown
+    ) => {
+      const w = createMockWatcher();
+      if (opts?.recursive) {
+        vi.mocked(w.on).mockImplementation(((event: string, handler: unknown) => {
+          if (event === "error") {
+            errorHandler = handler as (error: NodeJS.ErrnoException) => void;
+          }
+          return w;
+        }) as unknown as typeof w.on);
+      }
+      return w;
+    }) as unknown as typeof watch);
+
+    const gitWatcher = new GitFileWatcher({
+      worktreePath: "/repo",
+      branch: "main",
+      debounceMs: 300,
+      onChange,
+      watchWorktree: true,
+      onWatcherFailed,
+      onEmfileLimitReached,
+    });
+
+    gitWatcher.start();
+    const otherError = new Error("permission denied") as NodeJS.ErrnoException;
+    otherError.code = "EACCES";
+    errorHandler?.(otherError);
+
+    expect(onEmfileLimitReached).not.toHaveBeenCalled();
+    expect(onWatcherFailed).not.toHaveBeenCalled();
+
+    Object.defineProperty(process, "platform", { value: origPlatform, configurable: true });
+  });
+
+  it("startup EMFILE on macOS calls both onEmfileLimitReached and onWatcherFailed", () => {
+    const onChange = vi.fn();
+    const onWatcherFailed = vi.fn();
+    const onEmfileLimitReached = vi.fn();
+
+    const origPlatform = process.platform;
+    Object.defineProperty(process, "platform", { value: "darwin", configurable: true });
+
+    // Only the recursive watcher throws on construction; the non-recursive
+    // git-internal watchers constructed earlier in start() succeed.
+    vi.mocked(watch).mockImplementation(((
+      _path: string,
+      opts: Record<string, unknown>,
+      _cb?: unknown
+    ) => {
+      if (opts?.recursive) {
+        const err = new Error("EMFILE") as NodeJS.ErrnoException;
+        err.code = "EMFILE";
+        throw err;
+      }
+      return createMockWatcher();
+    }) as unknown as typeof watch);
+
+    const gitWatcher = new GitFileWatcher({
+      worktreePath: "/repo",
+      branch: "main",
+      debounceMs: 300,
+      onChange,
+      watchWorktree: true,
+      onWatcherFailed,
+      onEmfileLimitReached,
+    });
+
+    expect(gitWatcher.start()).toBe(false);
+    expect(onEmfileLimitReached).toHaveBeenCalledTimes(1);
+    expect(onWatcherFailed).toHaveBeenCalledTimes(1);
+
+    Object.defineProperty(process, "platform", { value: origPlatform, configurable: true });
+  });
+
+  it("does not signal emfile-limit on non-Darwin platforms for EMFILE", () => {
+    const onChange = vi.fn();
+    const onWatcherFailed = vi.fn();
+    const onEmfileLimitReached = vi.fn();
+    let errorHandler: ((error: NodeJS.ErrnoException) => void) | undefined;
+
+    const origPlatform = process.platform;
+    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+
+    vi.mocked(watch).mockImplementation(((
+      _path: string,
+      opts: Record<string, unknown>,
+      _cb?: unknown
+    ) => {
+      const w = createMockWatcher();
+      if (opts?.recursive) {
+        vi.mocked(w.on).mockImplementation(((event: string, handler: unknown) => {
+          if (event === "error") {
+            errorHandler = handler as (error: NodeJS.ErrnoException) => void;
+          }
+          return w;
+        }) as unknown as typeof w.on);
+      }
+      return w;
+    }) as unknown as typeof watch);
+
+    const gitWatcher = new GitFileWatcher({
+      worktreePath: "/repo",
+      branch: "main",
+      debounceMs: 300,
+      onChange,
+      watchWorktree: true,
+      onWatcherFailed,
+      onEmfileLimitReached,
+    });
+
+    gitWatcher.start();
+    const emfileError = new Error("EMFILE") as NodeJS.ErrnoException;
+    emfileError.code = "EMFILE";
+    errorHandler?.(emfileError);
+
+    expect(onEmfileLimitReached).not.toHaveBeenCalled();
+
+    Object.defineProperty(process, "platform", { value: origPlatform, configurable: true });
+  });
+
   it("does not signal inotify-limit on non-Linux platforms for ENOSPC", () => {
     const onChange = vi.fn();
     const onWatcherFailed = vi.fn();

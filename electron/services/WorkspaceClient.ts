@@ -353,6 +353,23 @@ export class WorkspaceClient extends EventEmitter {
         });
         break;
       }
+
+      case "emfile-limit-reached": {
+        // System-wide macOS condition — same broadcasting rationale as the
+        // inotify case above. Fires once per host-process lifetime.
+        broadcastToRenderer(CHANNELS.NOTIFICATION_SHOW_TOAST, {
+          type: "warning",
+          title: "File watching degraded",
+          message:
+            "macOS file descriptor ceiling reached. Some files may not auto-refresh until you raise it.",
+          action: {
+            label: "Copy fix command",
+            ipcChannel: CHANNELS.CLIPBOARD_WRITE_TEXT,
+            data: "sudo sysctl -w kern.maxfilesperproc=64000",
+          },
+        });
+        break;
+      }
     }
   }
 
