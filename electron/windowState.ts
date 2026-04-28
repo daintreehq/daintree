@@ -1,5 +1,4 @@
 import { BrowserWindow, screen } from "electron";
-import type { WindowStateEntry } from "./store.js";
 import { windowStatesStore } from "./store.js";
 
 const LEGACY_KEY = "__legacy__";
