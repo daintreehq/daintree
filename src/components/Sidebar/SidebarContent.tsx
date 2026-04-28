@@ -10,8 +10,7 @@ import React, {
   useState,
   useTransition,
 } from "react";
-import { FolderOpen, FilterX, LayoutGrid, Plus, RefreshCw } from "lucide-react";
-import { BroadcastTerminalIcon } from "@/components/icons";
+import { FolderOpen, FilterX, LayoutGrid, Plus, RefreshCw, Zap } from "lucide-react";
 import { ScrollIndicator } from "@/components/Worktree/ScrollIndicator";
 import {
   useAgentLauncher,
@@ -933,17 +932,15 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
               <TooltipTrigger asChild>
                 <button
                   onClick={() =>
-                    actionService.dispatch("terminal.bulkCommand", undefined, {
-                      source: "user",
-                    })
+                    actionService.dispatch("terminal.armAll", { scope: "all" }, { source: "user" })
                   }
                   className="p-1 text-daintree-text/40 hover:text-daintree-text hover:bg-tint/[0.06] rounded transition-colors"
-                  aria-label="Broadcast to armed agents"
+                  aria-label="Arm all terminals"
                 >
-                  <BroadcastTerminalIcon className="w-3.5 h-3.5" />
+                  <Zap className="w-3.5 h-3.5" />
                 </button>
               </TooltipTrigger>
-              <TooltipContent side="bottom">Broadcast to agents</TooltipContent>
+              <TooltipContent side="bottom">Arm all terminals</TooltipContent>
             </Tooltip>
             <Tooltip>
               <TooltipTrigger asChild>
@@ -998,7 +995,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
                 className="w-full flex items-center justify-center gap-1.5 text-xs px-2 py-1 text-daintree-accent hover:bg-daintree-accent/10 rounded transition-colors"
                 aria-label={`Arm ${filteredWorktrees.length} matching worktrees`}
               >
-                <BroadcastTerminalIcon className="w-3 h-3" />
+                <Zap className="w-3 h-3" />
                 Arm {filteredWorktrees.length} matching
               </button>
             </TooltipTrigger>

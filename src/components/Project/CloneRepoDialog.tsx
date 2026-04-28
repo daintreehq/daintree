@@ -3,7 +3,7 @@ import { Button } from "@/components/ui/button";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { Check, AlertCircle, FolderOpen } from "lucide-react";
 import { Spinner } from "@/components/ui/Spinner";
-import { WorktreeIcon } from "@/components/icons";
+import { FolderGit2 } from "@/components/icons";
 import { projectClient } from "@/clients";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import type { CloneRepoProgressEvent } from "@shared/types/ipc/gitClone";
@@ -162,7 +162,7 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
   return (
     <AppDialog isOpen={isOpen} onClose={handleClose} size="md" dismissible={!isCloning}>
       <AppDialog.Header>
-        <AppDialog.Title icon={<WorktreeIcon className="h-5 w-5 text-daintree-accent" />}>
+        <AppDialog.Title icon={<FolderGit2 className="h-5 w-5 text-daintree-accent" />}>
           Clone Repository
         </AppDialog.Title>
         {!isCloning && <AppDialog.CloseButton />}

@@ -31,11 +31,6 @@ vi.mock("@/components/Settings/SettingsSwitchCard", () => ({
   SettingsSwitchCard: () => null,
 }));
 
-vi.mock("@/components/icons", () => ({
-  DaintreeIcon: () => null,
-  ProjectPulseIcon: () => null,
-}));
-
 vi.mock("@/store", () => ({
   usePreferencesStore: (selector: (state: Record<string, boolean>) => unknown) =>
     selector({

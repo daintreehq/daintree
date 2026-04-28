@@ -1,5 +1,5 @@
 import { CircleDot } from "lucide-react";
-import { WorktreeIcon } from "@/components/icons";
+import { FolderGit2 } from "@/components/icons";
 import type { WorktreeSnapshot } from "@shared/types";
 
 interface WorktreeDragPreviewProps {
@@ -77,7 +77,7 @@ export function WorktreeDragPreview({ worktree }: WorktreeDragPreviewProps) {
             gap: 6,
           }}
         >
-          <WorktreeIcon
+          <FolderGit2
             style={{
               width: 12,
               height: 12,

@@ -3,7 +3,7 @@ import { Button } from "@/components/ui/button";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { Check, AlertCircle } from "lucide-react";
 import { Spinner } from "@/components/ui/Spinner";
-import { WorktreeIcon } from "@/components/icons";
+import { FolderGit2 } from "@/components/icons";
 import { projectClient } from "@/clients";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import type { GitInitProgressEvent } from "@shared/types/ipc/gitInit";
@@ -135,7 +135,7 @@ export function GitInitDialog({ isOpen, directoryPath, onSuccess, onCancel }: Gi
   return (
     <AppDialog isOpen={isOpen} onClose={handleClose} size="md" dismissible={!isInitializing}>
       <AppDialog.Header>
-        <AppDialog.Title icon={<WorktreeIcon className="h-5 w-5 text-daintree-accent" />}>
+        <AppDialog.Title icon={<FolderGit2 className="h-5 w-5 text-daintree-accent" />}>
           Initialize Git Repository
         </AppDialog.Title>
         {!isInitializing && <AppDialog.CloseButton />}

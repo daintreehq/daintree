@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { Plus, Trash2, Edit3, Download, FileDown, Check, Globe } from "lucide-react";
-import { TerminalRecipeIcon } from "@/components/icons";
+import { Workflow } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import { useRecipeStore } from "@/store/recipeStore";
 import { LiveTimeAgo } from "@/components/Worktree/LiveTimeAgo";
@@ -174,7 +174,7 @@ export function RecipesTab({
     <>
       <div className="mb-6">
         <h3 className="text-sm font-semibold text-daintree-text/80 mb-2 flex items-center gap-2">
-          <TerminalRecipeIcon className="h-4 w-4" />
+          <Workflow className="h-4 w-4" />
           Terminal Recipes
         </h3>
         <p className="text-xs text-daintree-text/60 mb-4">

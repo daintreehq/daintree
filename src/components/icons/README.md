@@ -1,42 +1,35 @@
 # Icons
 
-This folder holds Daintree's icon components. Most of the UI uses Lucide line
-icons via `lucide-react` — only icons in this directory are bundled into the
-app as bespoke components.
+Daintree's UI runs on Lucide icons via `lucide-react`. The few files in this
+directory are exceptions to that rule.
 
 ## Layout
 
 - `DaintreeIcon.tsx` — the product logo. Brand mark only; not a UI action icon.
-- `AgentStateCircles.tsx` — the multi-dot agent-state indicator (not a single
-  icon, but a state-indicator component that lives next to the icon set).
-- `custom/` — **Daintree-original icons.** Single-glyph 24×24 line icons drawn
-  for product-specific concepts that Lucide doesn't cover (worktrees, agents,
-  recipes, broadcast, project pulse, copy tree, watch alert, MCP server). All
-  eight non-MCP icons are scheduled for a Lucide-compatible redraw — see
-  [docs/design/custom-icon-spec.pdf](../../../docs/design/custom-icon-spec.pdf).
-  The MCP icon is the official mark from `modelcontextprotocol.io` and stays
-  as-is. Move-to-dock and move-to-grid used to live here too; both are now
-  Lucide's `panel-bottom-close` / `panel-top-close`.
+- `AgentStateCircles.tsx` — the multi-dot agent-state indicator. Not a single
+  glyph; it's a small state-indicator component that lives next to the icon
+  set because it's drawn from the same SVG conventions.
 - `brands/` — third-party brand marks (language runtimes, package managers,
-  AI agents). These follow each brand's official mark and are not redrawn.
+  AI agents, MCP). These follow each brand's official mark and are kept
+  bespoke for recognition.
+- `index.ts` — the barrel. Exports the brand marks plus a curated set of
+  Lucide icons used as Daintree concept aliases (`Plug` for agents, `Sprout`
+  for first-agent setup, `FolderGit2` for worktrees, `Folders` for worktree
+  overview, `Workflow` for terminal recipes, `BellDot` for watch alerts,
+  `Folders` for copy-tree, `Layers` for worktree overview, `Activity` for project pulse). Re-exporting
+  through the barrel keeps callsites short and gives us a single place to
+  swap if a metaphor changes.
 
 ## Conventions
 
-- Custom icons are React components named `<Name>Icon`, exported via the
-  barrel files (`custom/index.ts`, `brands/index.ts`, `index.ts`).
-- 24×24 viewBox, 2px stroke, round caps and joins, `currentColor`.
-- No fills — line only — so themes can recolour them via CSS.
+- Use Lucide's existing icons. Only add a bespoke component to `brands/` if
+  it's a real third-party brand mark with recognition value.
+- For Daintree-specific concepts, pick the closest Lucide icon and add it to
+  the alias list in `index.ts`. We don't draw bespoke icons for app concepts.
 - Always set `aria-hidden="true"` unless the icon is the sole label for an
   interactive control, in which case use `aria-label` instead.
 
-## Adding a new custom icon
-
-1. Drop the SVG component in `custom/<Name>Icon.tsx`.
-2. Re-export it from `custom/index.ts`.
-3. If it represents a panel kind, wire its `iconId` into the `ICON_MAP` in
-   `src/components/PanelPalette/PanelKindIcon.tsx`.
-
 ## Style reference
 
-Lucide's design system documents the construction rules these icons follow:
+Lucide's design system documents the construction rules:
 <https://lucide.dev/contribute/icon-design-guide>

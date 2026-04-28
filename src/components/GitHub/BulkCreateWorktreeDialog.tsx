@@ -10,7 +10,7 @@ import {
   Copy,
 } from "lucide-react";
 import { Spinner } from "@/components/ui/Spinner";
-import { WorktreeIcon } from "@/components/icons";
+import { FolderGit2 } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -1202,7 +1202,7 @@ export function BulkCreateWorktreeDialog({
                 <Check className="w-5 h-5 text-status-success" />
               )
             ) : (
-              <WorktreeIcon className="w-5 h-5 text-daintree-accent" />
+              <FolderGit2 className="w-5 h-5 text-daintree-accent" />
             )
           }
         >
@@ -1422,7 +1422,7 @@ export function BulkCreateWorktreeDialog({
                       </div>
                       {!item.skipped && (
                         <div className="flex items-center gap-1.5 mt-0.5">
-                          <WorktreeIcon className="w-3 h-3 text-daintree-text/40 shrink-0" />
+                          <FolderGit2 className="w-3 h-3 text-daintree-text/40 shrink-0" />
                           <span className="text-xs text-daintree-text/50 font-mono truncate">
                             {item.branchName}
                           </span>

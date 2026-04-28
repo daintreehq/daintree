@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useEffectEvent, useRef, useMemo } from "react";
 import { X, FilterX } from "lucide-react";
-import { WorktreeOverviewIcon, DaintreeAgentIcon } from "@/components/icons";
+import { Layers, Plug } from "@/components/icons";
 import { useKeybindingDisplay } from "@/hooks/useKeybinding";
 import { cn } from "@/lib/utils";
 import { useShallow } from "zustand/react/shallow";
@@ -134,7 +134,7 @@ function EmptyWorktreeState() {
 
   return (
     <div className="flex flex-col items-center justify-center h-full gap-3 text-daintree-text/50">
-      <WorktreeOverviewIcon className="w-8 h-8 text-daintree-text/30" />
+      <Layers className="w-8 h-8 text-daintree-text/30" />
       <p className="text-sm font-medium text-daintree-text/70">No worktrees yet</p>
       <p className="text-xs text-daintree-text/40">
         {createWorktreeShortcut ? (
@@ -414,7 +414,7 @@ export function WorktreeOverviewModal({
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-divider shrink-0">
           <div className="flex items-center gap-3">
-            <WorktreeOverviewIcon className="w-5 h-5 text-daintree-text/60" />
+            <Layers className="w-5 h-5 text-daintree-text/60" />
             <h2
               id="worktree-overview-title"
               className="text-daintree-text font-semibold text-base tracking-wide"
@@ -466,7 +466,7 @@ export function WorktreeOverviewModal({
                         : "bg-tint/[0.10] text-daintree-text/70 hover:text-daintree-text/90"
                     )}
                   >
-                    <DaintreeAgentIcon
+                    <Plug
                       className={cn(
                         "w-3 h-3 transition-colors",
                         hideMainWorktree ? "text-daintree-text/30" : "text-daintree-text/50"

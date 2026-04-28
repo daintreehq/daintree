@@ -20,7 +20,7 @@ import {
   WifiOff,
 } from "lucide-react";
 import { Spinner } from "@/components/ui/Spinner";
-import { ProjectPulseIcon } from "@/components/icons";
+import { Activity } from "@/components/icons";
 import { PulseHeatmap } from "./PulseHeatmap";
 import { PulseSummary } from "./PulseSummary";
 import { useProjectHealth } from "@/hooks/useProjectHealth";
@@ -431,7 +431,7 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
     >
       <div className="pulse-card-header px-4 py-3 border-b border-daintree-border flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <ProjectPulseIcon className="w-4 h-4 text-status-success" />
+          <Activity className="w-4 h-4 text-status-success" />
           <span className="text-sm font-medium text-daintree-text/90">{title}</span>
           {isLoading && <Spinner size="xs" className="text-daintree-text/55" />}
         </div>

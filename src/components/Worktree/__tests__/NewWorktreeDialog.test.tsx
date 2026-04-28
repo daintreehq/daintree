@@ -215,12 +215,6 @@ vi.mock("@/components/ui/Spinner", () => ({
   Spinner: () => <span data-testid="spinner" />,
 }));
 
-vi.mock("@/components/icons", () => ({
-  WorktreeIcon: ({ className }: { className?: string }) => (
-    <span data-testid="worktree-icon" className={className} />
-  ),
-}));
-
 vi.mock("@/components/GitHub/IssueSelector", () => ({
   IssueSelector: () => <div data-testid="issue-selector" />,
 }));

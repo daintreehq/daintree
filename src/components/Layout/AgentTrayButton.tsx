@@ -9,7 +9,6 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import { Plug, Pin, Settings2, ChevronRight } from "lucide-react";
-import { DaintreeAgentIcon } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
@@ -663,7 +662,7 @@ export function AgentTrayButton({
           Customize Toolbar
         </DropdownMenuItem>
         <DropdownMenuItem onSelect={handleOpenAgentSetupWizard} className="h-7">
-          <DaintreeAgentIcon className="mr-2 h-3.5 w-3.5" />
+          <Plug className="mr-2 h-3.5 w-3.5" />
           Set Up Agents
         </DropdownMenuItem>
       </DropdownMenuContent>

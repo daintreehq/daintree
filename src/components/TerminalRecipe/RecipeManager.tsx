@@ -13,7 +13,7 @@ import {
   Lock,
   GitBranch,
 } from "lucide-react";
-import { TerminalRecipeIcon } from "@/components/icons";
+import { Workflow } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
@@ -286,7 +286,7 @@ export function RecipeManager({
         <AppDialog.Header>
           <AppDialog.Title>
             <span className="flex items-center gap-2">
-              <TerminalRecipeIcon className="h-5 w-5" />
+              <Workflow className="h-5 w-5" />
               Recipe Manager
             </span>
           </AppDialog.Title>

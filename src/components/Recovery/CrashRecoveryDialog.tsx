@@ -9,7 +9,7 @@ import {
   Globe,
   MonitorPlay,
 } from "lucide-react";
-import { DaintreeAgentIcon } from "@/components/icons";
+import { Plug } from "@/components/icons";
 import { AppDialog } from "../ui/AppDialog";
 import { Button } from "../ui/button";
 import type {
@@ -31,7 +31,7 @@ interface CrashRecoveryDialogProps {
 function getPanelIcon(kind: string) {
   switch (kind) {
     case "agent":
-      return <DaintreeAgentIcon className="h-3.5 w-3.5" />;
+      return <Plug className="h-3.5 w-3.5" />;
     case "browser":
       return <Globe className="h-3.5 w-3.5" />;
     case "dev-preview":

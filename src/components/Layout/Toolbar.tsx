@@ -20,7 +20,7 @@ import {
   Plug,
 } from "lucide-react";
 import { Spinner } from "@/components/ui/Spinner";
-import { CopyTreeIcon, McpServerIcon } from "@/components/icons";
+import { Folders, McpServerIcon } from "@/components/icons";
 import { cn } from "@/lib/utils";
 import { shortcutHintStore } from "@/store/shortcutHintStore";
 import { isMac, isLinux, createTooltipWithShortcut } from "@/lib/platform";
@@ -125,7 +125,7 @@ export const OVERFLOW_MENU_META: Partial<Record<AnyToolbarButtonId, OverflowMenu
   "dev-server": { label: "Dev Preview", icon: MonitorPlay },
   "github-stats": { label: "GitHub Stats", icon: GitPullRequest },
   "notification-center": { label: "Notifications", icon: Bell },
-  "copy-tree": { label: "Copy Context", icon: CopyTreeIcon },
+  "copy-tree": { label: "Copy Context", icon: Folders },
   settings: { label: "Settings", icon: SlidersHorizontal },
   problems: { label: "Problems", icon: AlertCircle },
 };
@@ -514,7 +514,7 @@ export function Toolbar({
                   isCopyingTree ? "Copying…" : treeCopied ? "Context Copied" : "Copy Context"
                 }
               >
-                {isCopyingTree ? <Spinner /> : treeCopied ? <Check /> : <CopyTreeIcon />}
+                {isCopyingTree ? <Spinner /> : treeCopied ? <Check /> : <Folders />}
                 {!treeCopied && !isCopyingTree && (
                   <ShortcutRevealChip actionId="worktree.copyTree" />
                 )}

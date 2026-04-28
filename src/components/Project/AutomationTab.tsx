@@ -7,7 +7,7 @@ import {
   AlertTriangle,
   Play,
   GitBranch,
-  FolderTree,
+  Folders,
   PanelBottom,
   LayoutGrid,
   RefreshCw,
@@ -419,7 +419,7 @@ export function AutomationTab({
 
       <div className="pt-2">
         <h3 className="text-sm font-semibold text-daintree-text/80 mb-2 flex items-center gap-2">
-          <FolderTree className="h-4 w-4" />
+          <Folders className="h-4 w-4" />
           Worktree Path Pattern
         </h3>
         <p className="text-xs text-daintree-text/60 mb-4">

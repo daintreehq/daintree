@@ -102,31 +102,6 @@ vi.mock("@dnd-kit/utilities", () => ({
   CSS: { Transform: { toString: () => "" } },
 }));
 
-vi.mock("@/components/icons", () => ({
-  CopyTreeIcon: () => null,
-  McpServerIcon: () => null,
-}));
-
-vi.mock("lucide-react", () => {
-  const Icon = () => null;
-  return {
-    GripVertical: Icon,
-    SquareTerminal: Icon,
-    Globe: Icon,
-    Monitor: Icon,
-    AlertTriangle: Icon,
-    Settings: Icon,
-    AlertCircle: Icon,
-    Bell: Icon,
-    Mic: Icon,
-    LayoutGrid: Icon,
-    Rocket: Icon,
-    RotateCcw: Icon,
-    StickyNote: Icon,
-    Puzzle: Icon,
-  };
-});
-
 vi.mock("../SettingsSection", () => ({
   SettingsSection: ({
     children,

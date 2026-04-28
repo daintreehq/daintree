@@ -1,4 +1,4 @@
-import { WorktreeIcon } from "@/components/icons";
+import { FolderGit2 } from "@/components/icons";
 import type { WorktreeSnapshot } from "@/types";
 
 interface WorktreeSelectorProps {
@@ -20,7 +20,7 @@ export function WorktreeSelector({
     <div className="flex flex-col gap-1 min-w-0">
       <span className="text-xs font-medium text-text-muted uppercase tracking-wider">{label}</span>
       <div className="relative">
-        <WorktreeIcon className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-text-muted pointer-events-none" />
+        <FolderGit2 className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-text-muted pointer-events-none" />
         <select
           value={selectedId ?? ""}
           onChange={(e) => onChange(e.target.value)}

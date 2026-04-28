@@ -1,7 +1,7 @@
 import React from "react";
 import { cn } from "@/lib/utils";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
-import { WorktreeIcon } from "@/components/icons";
+import { FolderGit2 } from "@/components/icons";
 import type { QuickSwitcherItem as QuickSwitcherItemData } from "@/hooks/useQuickSwitcher";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
@@ -39,7 +39,7 @@ export const QuickSwitcherItem = React.memo(function QuickSwitcherItem({
         {item.type === "terminal" ? (
           <TerminalIcon kind={item.terminalKind} chrome={item.chrome} />
         ) : (
-          <WorktreeIcon className="w-4 h-4" />
+          <FolderGit2 className="w-4 h-4" />
         )}
       </span>
 

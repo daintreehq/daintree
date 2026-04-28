@@ -148,30 +148,6 @@ vi.mock("@/components/ui/button", () => ({
   ),
 }));
 
-vi.mock("lucide-react", () => {
-  const Icon = () => null;
-  return {
-    Plug: Icon,
-    Pin: Icon,
-    Plus: Icon,
-    Settings2: Icon,
-    GripVertical: Icon,
-    SquareTerminal: Icon,
-    Globe: Icon,
-    Monitor: Icon,
-    AlertTriangle: Icon,
-    Settings: Icon,
-    AlertCircle: Icon,
-    Bell: Icon,
-    Mic: Icon,
-    LayoutGrid: Icon,
-    Rocket: Icon,
-    RotateCcw: Icon,
-    StickyNote: Icon,
-    Puzzle: Icon,
-  };
-});
-
 // Settings-tab mocks.
 let sharedToolbarLayout = {
   leftButtons: ["agent-tray", "claude", "gemini", "codex", "terminal"] as string[],
@@ -233,12 +209,6 @@ vi.mock("@dnd-kit/sortable", () => ({
 }));
 
 vi.mock("@dnd-kit/utilities", () => ({ CSS: { Transform: { toString: () => "" } } }));
-
-vi.mock("@/components/icons", () => ({
-  CopyTreeIcon: () => null,
-  McpServerIcon: () => null,
-  DaintreeAgentIcon: () => null,
-}));
 
 vi.mock("@/components/Settings/SettingsSection", () => ({
   SettingsSection: ({ children }: { children: React.ReactNode }) => <section>{children}</section>,

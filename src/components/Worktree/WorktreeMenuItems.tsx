@@ -43,7 +43,7 @@ import {
   Undo2,
   Zap,
 } from "lucide-react";
-import { CopyTreeIcon, TerminalRecipeIcon } from "@/components/icons";
+import { Folders, Workflow } from "@/components/icons";
 
 type MenuComponent = React.ElementType;
 type LaunchAgentIcon = React.ComponentType<{ className?: string }>;
@@ -411,7 +411,7 @@ export function WorktreeMenuItems({
       {/* Copy Context submenu */}
       <C.Sub>
         <C.SubTrigger>
-          <CopyTreeIcon className="w-3.5 h-3.5 mr-2" />
+          <Folders className="w-3.5 h-3.5 mr-2" />
           Copy Context
         </C.SubTrigger>
         <C.SubContent>
@@ -499,7 +499,7 @@ export function WorktreeMenuItems({
       {hasRecipes && (
         <C.Sub>
           <C.SubTrigger>
-            <TerminalRecipeIcon className="w-3.5 h-3.5 mr-2" />
+            <Workflow className="w-3.5 h-3.5 mr-2" />
             Run Recipe
           </C.SubTrigger>
           <C.SubContent>

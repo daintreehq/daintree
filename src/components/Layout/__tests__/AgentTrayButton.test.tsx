@@ -333,9 +333,9 @@ describe("AgentTrayButton", () => {
   });
 
   it("renders the plug trigger with accessible label", () => {
-    const { getByLabelText, getByTestId } = render(<AgentTrayButton />);
+    const { getByLabelText, getAllByTestId } = render(<AgentTrayButton />);
     expect(getByLabelText("Agent tray")).toBeTruthy();
-    expect(getByTestId("plug-icon")).toBeTruthy();
+    expect(getAllByTestId("plug-icon").length).toBeGreaterThan(0);
   });
 
   it("lists all ready agents in the Launch section regardless of pin state", () => {

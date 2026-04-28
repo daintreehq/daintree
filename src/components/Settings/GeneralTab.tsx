@@ -13,7 +13,7 @@ import {
   Gauge,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { DaintreeIcon, ProjectPulseIcon } from "@/components/icons";
+import { DaintreeIcon, Activity } from "@/components/icons";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
 import { SettingsSwitchCard } from "@/components/Settings/SettingsSwitchCard";
 import { SettingsSubtabBar } from "./SettingsSubtabBar";
@@ -740,13 +740,13 @@ export function GeneralTab({
 
       {effectiveSubtab === "display" && (
         <SettingsSection
-          icon={ProjectPulseIcon}
+          icon={Activity}
           title="Display"
           description="Control which interface elements are visible."
           id="general-project-pulse"
         >
           <SettingsSwitchCard
-            icon={ProjectPulseIcon}
+            icon={Activity}
             title="Project Pulse"
             subtitle="Show activity heatmap on the empty panel grid"
             isEnabled={showProjectPulse}

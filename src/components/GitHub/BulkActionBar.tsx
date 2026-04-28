@@ -1,6 +1,6 @@
 import { useCallback } from "react";
 import { X } from "lucide-react";
-import { WorktreeIcon } from "@/components/icons";
+import { FolderGit2 } from "@/components/icons";
 import { AnimatePresence, motion } from "framer-motion";
 import { Button } from "@/components/ui/button";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
@@ -62,7 +62,7 @@ export function BulkActionBar({
             selected
           </span>
           <Button variant="default" size="xs" onClick={handleOpenDialog}>
-            <WorktreeIcon className="w-3 h-3" />
+            <FolderGit2 className="w-3 h-3" />
             Create Worktrees
           </Button>
           <div className="flex-1" />

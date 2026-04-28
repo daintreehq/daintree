@@ -1,6 +1,6 @@
 import type * as React from "react";
 import { Globe, MonitorPlay, SquareTerminal } from "lucide-react";
-import { TerminalRecipeIcon } from "@/components/icons";
+import { Workflow } from "@/components/icons";
 import { useRecipeStore } from "@/store/recipeStore";
 import type { RecipeContext } from "@/utils/recipeVariables";
 
@@ -101,7 +101,7 @@ export function DockLaunchMenuItems({
                   .runRecipe(recipe.id, cwd, activeWorktreeId ?? undefined, recipeContext)
               }
             >
-              <TerminalRecipeIcon className="w-3.5 h-3.5 mr-2" />
+              <Workflow className="w-3.5 h-3.5 mr-2" />
               {recipe.name}
             </C.Item>
           ))}

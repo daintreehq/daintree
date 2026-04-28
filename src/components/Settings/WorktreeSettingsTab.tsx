@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo } from "react";
 import { AlertCircle, Check, RotateCcw } from "lucide-react";
 import { Spinner } from "@/components/ui/Spinner";
-import { WorktreeIcon } from "@/components/icons";
+import { FolderGit2 } from "@/components/icons";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
@@ -155,7 +155,7 @@ export function WorktreeSettingsTab() {
   return (
     <div className="space-y-6">
       <SettingsSection
-        icon={WorktreeIcon}
+        icon={FolderGit2}
         title="Worktree Path Pattern"
         description="Configure the default path pattern for new worktrees. Use variables to build dynamic paths based on your repository and branch names."
       >

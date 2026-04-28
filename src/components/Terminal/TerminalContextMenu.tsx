@@ -36,7 +36,7 @@ import {
   Trash2,
   Unlock,
 } from "lucide-react";
-import { WorktreeIcon } from "@/components/icons";
+import { FolderGit2 } from "@/components/icons";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -289,7 +289,7 @@ export function TerminalContextMenu({
       {worktrees.length > 1 && (
         <ContextMenuSub>
           <ContextMenuSubTrigger>
-            <WorktreeIcon className={ICON_CLASS} />
+            <FolderGit2 className={ICON_CLASS} />
             Move to Worktree
           </ContextMenuSubTrigger>
           <ContextMenuSubContent>
@@ -303,7 +303,7 @@ export function TerminalContextMenu({
                   disabled={isCurrent}
                   onSelect={() => handleAction(`move-to-worktree:${wt.id}`)}
                 >
-                  <WorktreeIcon className={ICON_CLASS} />
+                  <FolderGit2 className={ICON_CLASS} />
                   {label}
                 </ContextMenuItem>
               );
@@ -321,7 +321,7 @@ export function TerminalContextMenu({
             )
           }
         >
-          <WorktreeIcon className={ICON_CLASS} />
+          <FolderGit2 className={ICON_CLASS} />
           Move to New Worktree…
         </ContextMenuItem>
       )}

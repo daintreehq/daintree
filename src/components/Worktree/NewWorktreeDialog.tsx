@@ -16,7 +16,7 @@ import {
 } from "lucide-react";
 import { Spinner } from "@/components/ui/Spinner";
 import { ScrollShadow } from "@/components/ui/ScrollShadow";
-import { WorktreeIcon } from "@/components/icons";
+import { FolderGit2 } from "@/components/icons";
 import type { BranchInfo, CreateWorktreeOptions } from "@/types/electron";
 import type { GitHubIssue, GitHubPR } from "@shared/types/github";
 import { worktreeClient, githubClient, agentSettingsClient } from "@/clients";
@@ -853,7 +853,7 @@ export function NewWorktreeDialog({
       data-testid="new-worktree-dialog"
     >
       <AppDialog.Header>
-        <AppDialog.Title icon={<WorktreeIcon className="w-5 h-5 text-daintree-accent" />}>
+        <AppDialog.Title icon={<FolderGit2 className="w-5 h-5 text-daintree-accent" />}>
           {initialPR ? "Checkout PR Branch" : "Create New Worktree"}
         </AppDialog.Title>
         <AppDialog.CloseButton />
@@ -869,10 +869,7 @@ export function NewWorktreeDialog({
           <div className="space-y-4">
             {initialPR ? (
               <div className="flex items-center gap-2.5 px-3 py-2.5 rounded-[var(--radius-md)] bg-daintree-accent/5 border border-daintree-accent/20 text-sm min-w-0">
-                <WorktreeIcon
-                  className="w-4 h-4 text-daintree-accent shrink-0"
-                  aria-hidden="true"
-                />
+                <FolderGit2 className="w-4 h-4 text-daintree-accent shrink-0" aria-hidden="true" />
                 <span className="text-daintree-text/80 min-w-0 truncate">
                   PR <span className="font-medium text-daintree-text">#{initialPR.number}</span> —{" "}
                   {initialPR.title}

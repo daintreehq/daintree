@@ -45,7 +45,7 @@ import { formatShortcutForTooltip, createTooltipWithShortcut } from "@/lib/platf
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { AnimatedLabel } from "@/components/ui/AnimatedLabel";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
-import { WatchAlertIcon, WorktreeIcon } from "@/components/icons";
+import { BellDot, FolderGit2 } from "@/components/icons";
 import { useDragHandle } from "@/components/DragDrop/DragHandleContext";
 import {
   useBackgroundPanelStats,
@@ -806,7 +806,7 @@ function PanelHeaderComponent({
               aria-label="Watching — waiting for agent completion"
               className="text-daintree-accent cursor-default"
             >
-              <WatchAlertIcon className="w-3 h-3 animate-pulse motion-reduce:animate-none" />
+              <BellDot className="w-3 h-3 animate-pulse motion-reduce:animate-none" />
             </span>
           )}
 
@@ -932,7 +932,7 @@ function PanelHeaderComponent({
                     )
                   }
                 >
-                  <WorktreeIcon className="w-3 h-3 mr-2" aria-hidden="true" />
+                  <FolderGit2 className="w-3 h-3 mr-2" aria-hidden="true" />
                   Move to New Worktree…
                 </DropdownMenuItem>
               )}

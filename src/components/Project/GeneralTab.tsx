@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { Image, Upload, X, Rocket, Check, FolderOpen, Copy, Palette } from "lucide-react";
-import { WorktreeIcon } from "@/components/icons";
+import { FolderGit2 } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { EmojiPicker } from "@/components/ui/emoji-picker";
@@ -533,7 +533,7 @@ export function GeneralTab({
       {/* In-Repository Settings */}
       <div className="mt-6">
         <h3 className="text-sm font-semibold text-daintree-text/80 mb-2 flex items-center gap-2">
-          <WorktreeIcon className="h-4 w-4" />
+          <FolderGit2 className="h-4 w-4" />
           In-Repository Settings
         </h3>
         <p className="text-xs text-daintree-text/60 mb-4">
@@ -568,7 +568,7 @@ export function GeneralTab({
           )}
         >
           <div className="flex items-center gap-3">
-            <WorktreeIcon
+            <FolderGit2
               className={cn(
                 "w-5 h-5",
                 currentProject?.inRepoSettings ? "text-daintree-accent" : "text-daintree-text/50"

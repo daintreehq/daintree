@@ -30,7 +30,7 @@ import {
   RotateCcw,
   Puzzle,
 } from "lucide-react";
-import { CopyTreeIcon } from "@/components/icons";
+import { Folders } from "@/components/icons";
 import { useToolbarPreferencesStore } from "@/store";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import type { AnyToolbarButtonId } from "@/../../shared/types/toolbar";
@@ -115,7 +115,7 @@ const BUTTON_METADATA: Partial<Record<AnyToolbarButtonId, ButtonMetadata>> = {
   },
   "copy-tree": {
     label: "Copy Context",
-    icon: <CopyTreeIcon className="h-4 w-4" />,
+    icon: <Folders className="h-4 w-4" />,
     description: "Copy project context to clipboard",
   },
   settings: {

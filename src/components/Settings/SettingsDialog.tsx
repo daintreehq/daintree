@@ -44,12 +44,7 @@ import {
   Command,
   AlertTriangle,
 } from "lucide-react";
-import {
-  WorktreeIcon,
-  DaintreeAgentIcon,
-  TerminalRecipeIcon,
-  McpServerIcon,
-} from "@/components/icons";
+import { FolderGit2, Plug, Workflow, McpServerIcon } from "@/components/icons";
 import { cn } from "@/lib/utils";
 import { ScrollShadow } from "@/components/ui/ScrollShadow";
 import {
@@ -647,8 +642,8 @@ function SettingsDialogInner({
     keyboard: <Keyboard className="w-5 h-5 text-text-secondary" />,
     terminal: <LayoutGrid className="w-5 h-5 text-text-secondary" />,
     terminalAppearance: <SquareTerminal className="w-5 h-5 text-text-secondary" />,
-    worktree: <WorktreeIcon className="w-5 h-5 text-text-secondary" />,
-    agents: <DaintreeAgentIcon className="w-5 h-5 text-text-secondary" />,
+    worktree: <FolderGit2 className="w-5 h-5 text-text-secondary" />,
+    agents: <Plug className="w-5 h-5 text-text-secondary" />,
     github: <Github className="w-5 h-5 text-text-secondary" />,
     portal: <PanelRight className="w-5 h-5 text-text-secondary" />,
     toolbar: <SettingsIcon className="w-5 h-5 text-text-secondary" />,
@@ -664,7 +659,7 @@ function SettingsDialogInner({
     "project:context": <FileCode className="w-5 h-5 text-text-secondary" />,
     "project:variables": <KeyRound className="w-5 h-5 text-text-secondary" />,
     "project:automation": <GitBranch className="w-5 h-5 text-text-secondary" />,
-    "project:recipes": <TerminalRecipeIcon className="w-5 h-5 text-text-secondary" />,
+    "project:recipes": <Workflow className="w-5 h-5 text-text-secondary" />,
     "project:commands": <Command className="w-5 h-5 text-text-secondary" />,
     "project:notifications": <Bell className="w-5 h-5 text-text-secondary" />,
     "project:github": <Github className="w-5 h-5 text-text-secondary" />,
@@ -825,7 +820,7 @@ function SettingsDialogInner({
                   />
                   <NavItem
                     tab="worktree"
-                    icon={<WorktreeIcon className="w-4 h-4" />}
+                    icon={<FolderGit2 className="w-4 h-4" />}
                     label="Worktree"
                     activeTab={activeTab}
                     isSearching={isSearching}
@@ -857,7 +852,7 @@ function SettingsDialogInner({
                 <NavGroup label="Integrations">
                   <NavItem
                     tab="agents"
-                    icon={<DaintreeAgentIcon className="w-4 h-4" />}
+                    icon={<Plug className="w-4 h-4" />}
                     label="CLI Agents"
                     activeTab={activeTab}
                     isSearching={isSearching}
@@ -974,7 +969,7 @@ function SettingsDialogInner({
                 />
                 <NavItem
                   tab="project:recipes"
-                  icon={<TerminalRecipeIcon className="w-4 h-4" />}
+                  icon={<Workflow className="w-4 h-4" />}
                   label="Recipes"
                   activeTab={activeTab}
                   isSearching={isSearching}

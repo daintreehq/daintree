@@ -14,7 +14,7 @@ import {
 import { isAgentPinned } from "../../../shared/utils/agentPinned";
 import { RotateCcw, ExternalLink, Plus, Copy, Trash2, Pencil, X as XIcon } from "lucide-react";
 import { FALLBACK_CHAIN_MAX } from "../../../shared/config/agentRegistry";
-import { DaintreeAgentIcon } from "@/components/icons";
+import { Plug } from "@/components/icons";
 import { AgentSelectorDropdown } from "./AgentSelectorDropdown";
 import { SettingsSwitchCard } from "./SettingsSwitchCard";
 import { SettingsSelect } from "./SettingsSelect";
@@ -283,7 +283,7 @@ export function AgentSettings({
             }}
             className="text-daintree-text/60 hover:text-daintree-text shrink-0"
           >
-            <DaintreeAgentIcon className="w-3.5 h-3.5" />
+            <Plug className="w-3.5 h-3.5" />
             Run Setup Wizard
           </Button>
         </div>

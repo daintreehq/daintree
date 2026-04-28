@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { AlertTriangle, Trash2 } from "lucide-react";
-import { WorktreeIcon } from "@/components/icons";
+import { FolderGit2 } from "@/components/icons";
 import { useWorktreeTerminals } from "@/hooks/useWorktreeTerminals";
 import { usePanelStore } from "@/store";
 import { actionService } from "@/services/ActionService";
@@ -221,7 +221,7 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
               />
               <span className="text-sm text-daintree-text">
                 <span className="flex items-center gap-1.5">
-                  <WorktreeIcon className="w-3.5 h-3.5" />
+                  <FolderGit2 className="w-3.5 h-3.5" />
                   Delete branch{" "}
                   <code className="text-xs bg-daintree-bg/50 px-1.5 py-0.5 rounded border border-daintree-border">
                     {worktree.branch}

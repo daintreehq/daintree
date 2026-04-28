@@ -68,10 +68,6 @@ vi.mock("@/components/ui/Spinner", () => ({
   Spinner: () => <span data-testid="spinner">loading</span>,
 }));
 
-vi.mock("@/components/icons", () => ({
-  WorktreeIcon: () => <span>icon</span>,
-}));
-
 import { CloneRepoDialog } from "../CloneRepoDialog";
 
 describe("CloneRepoDialog", () => {
