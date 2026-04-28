@@ -320,7 +320,7 @@ AppPaletteDialog.Empty = function AppPaletteEmpty({
     return (
       <EmptyState
         variant="filtered-empty"
-        title={noMatchMessage || `No items match "${query}"`}
+        title={noMatchMessage || `No items match "${trimmedQuery}"`}
         className="px-3 py-8"
       />
     );

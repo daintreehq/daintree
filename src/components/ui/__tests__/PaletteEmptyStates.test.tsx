@@ -67,10 +67,12 @@ describe("AppPaletteDialog.Empty", () => {
 
   it('exposes role="status" so screen readers announce the empty state', () => {
     render(<AppPaletteDialog.Empty query="" emptyMessage="No items available" />);
-    expect(screen.getByRole("status")).toBeTruthy();
+    const status = screen.getByRole("status");
+    expect(status).toBeTruthy();
+    expect(status.getAttribute("aria-live")).toBe("polite");
   });
 
-  it('also exposes role="status" in the no-match case', () => {
+  it('also exposes role="status" with aria-live polite in the no-match case', () => {
     render(
       <AppPaletteDialog.Empty
         query="zzz"
@@ -78,6 +80,13 @@ describe("AppPaletteDialog.Empty", () => {
         noMatchMessage="Nothing found"
       />
     );
-    expect(screen.getByRole("status")).toBeTruthy();
+    const status = screen.getByRole("status");
+    expect(status).toBeTruthy();
+    expect(status.getAttribute("aria-live")).toBe("polite");
+  });
+
+  it("trims whitespace from query when rendering the default no-match copy", () => {
+    render(<AppPaletteDialog.Empty query="  foo  " emptyMessage="No items available" />);
+    expect(screen.getByText('No items match "foo"')).toBeTruthy();
   });
 });

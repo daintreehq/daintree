@@ -61,6 +61,18 @@ describe("EmptyState", () => {
       );
       expect(screen.getByTestId("clear")).toBeTruthy();
     });
+
+    it("does not render an icon even if one is passed via type cast", () => {
+      // The discriminated union forbids `icon` on filtered-empty at compile time;
+      // this guards against a runtime regression if the gate is removed.
+      const props = {
+        variant: "filtered-empty",
+        title: "No matches",
+        icon: <svg data-testid="icon" />,
+      } as unknown as React.ComponentProps<typeof EmptyState>;
+      render(<EmptyState {...props} />);
+      expect(screen.queryByTestId("icon")).toBeNull();
+    });
   });
 
   describe("user-cleared variant", () => {
@@ -78,6 +90,16 @@ describe("EmptyState", () => {
         />
       );
       expect(screen.getByTestId("icon")).toBeTruthy();
+    });
+
+    it("does not render an action even if one is passed via type cast", () => {
+      const props = {
+        variant: "user-cleared",
+        title: "You're all caught up",
+        action: <button data-testid="cta">Should not appear</button>,
+      } as unknown as React.ComponentProps<typeof EmptyState>;
+      render(<EmptyState {...props} />);
+      expect(screen.queryByTestId("cta")).toBeNull();
     });
   });
 
@@ -101,6 +123,23 @@ describe("EmptyState", () => {
       expect(wrapper).toBeTruthy();
       expect(wrapper?.querySelector('[data-testid="icon"]')).toBeTruthy();
     });
+
+    it("wires aria-describedby to the description when one is present", () => {
+      render(
+        <EmptyState variant="zero-data" title="No items" description="Add one to get started" />
+      );
+      const status = screen.getByRole("status");
+      const describedById = status.getAttribute("aria-describedby");
+      expect(describedById).toBeTruthy();
+      const description = document.getElementById(describedById!);
+      expect(description?.textContent).toBe("Add one to get started");
+    });
+
+    it("does not set aria-describedby when no description is present", () => {
+      render(<EmptyState variant="zero-data" title="No items" />);
+      const status = screen.getByRole("status");
+      expect(status.getAttribute("aria-describedby")).toBeNull();
+    });
   });
 
   describe("animation", () => {
@@ -123,6 +162,25 @@ describe("EmptyState", () => {
       render(<EmptyState variant="zero-data" title="No items" className="my-custom-class" />);
       const status = screen.getByRole("status");
       expect(status.className).toContain("my-custom-class");
+    });
+  });
+
+  describe("falsy description handling", () => {
+    it("does not render an empty paragraph when description is false", () => {
+      const { container } = render(
+        <EmptyState variant="zero-data" title="No items" description={false && "hidden"} />
+      );
+      const paragraphs = container.querySelectorAll("p");
+      // Only the title paragraph should render; no empty description paragraph.
+      expect(paragraphs.length).toBe(1);
+      expect(paragraphs[0]?.textContent).toBe("No items");
+    });
+
+    it("does not render an empty paragraph when description is null", () => {
+      const { container } = render(
+        <EmptyState variant="zero-data" title="No items" description={null} />
+      );
+      expect(container.querySelectorAll("p").length).toBe(1);
     });
   });
 });

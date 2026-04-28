@@ -25,7 +25,11 @@ export type EmptyStateProps =
 export function EmptyState(props: EmptyStateProps) {
   const { variant, title, description, className } = props;
   const descriptionId = useId();
-  const hasDescription = description !== undefined && description !== null && description !== "";
+  const hasDescription =
+    description !== undefined &&
+    description !== null &&
+    description !== false &&
+    description !== "";
 
   const icon = variant === "filtered-empty" ? null : props.icon;
   const action = variant === "user-cleared" ? null : props.action;
@@ -34,6 +38,7 @@ export function EmptyState(props: EmptyStateProps) {
     <div
       role="status"
       aria-live="polite"
+      aria-describedby={hasDescription ? descriptionId : undefined}
       className={cn("flex flex-col items-center justify-center text-center px-4 py-8", className)}
     >
       <div className="motion-safe:animate-in motion-safe:fade-in motion-safe:duration-150 flex flex-col items-center gap-2">
