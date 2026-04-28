@@ -126,8 +126,13 @@ beforeEach(() => {
   mockListPRs.mockReset();
   mockGetIssueByNumber.mockReset();
   mockGetPRByNumber.mockReset();
-  useGitHubFilterStore.getState().setIssueSearchQuery("");
-  useGitHubFilterStore.getState().setPrSearchQuery("");
+  const filterStore = useGitHubFilterStore.getState();
+  filterStore.setIssueSearchQuery("");
+  filterStore.setPrSearchQuery("");
+  filterStore.setIssueFilter("open");
+  filterStore.setPrFilter("open");
+  filterStore.setIssueSortOrder("created");
+  filterStore.setPrSortOrder("created");
 });
 
 afterEach(() => {
@@ -206,11 +211,72 @@ describe("GitHubResourceList SWR behavior", () => {
     // Cached data shown immediately
     expect(screen.getByTestId("item-20")).toBeTruthy();
 
-    // After error, data persists and error banner appears
+    // After error, data persists and error banner appears with stale timestamp
     await waitFor(() => {
       expect(screen.getByText(/Network error/)).toBeTruthy();
     });
     expect(screen.getByTestId("item-20")).toBeTruthy();
+    expect(screen.getByText(/Updated 1m ago/)).toBeTruthy();
+  });
+
+  it("clears error banner and refreshes timestamp after successful retry", async () => {
+    const cacheKey = buildCacheKey("/test/proj", "issue", "open", "created");
+    setCache(cacheKey, {
+      items: [makeIssue(30)],
+      endCursor: null,
+      hasNextPage: false,
+      timestamp: Date.now() - 60_000,
+    });
+
+    mockListIssues
+      .mockRejectedValueOnce(new Error("Network blip"))
+      .mockResolvedValue(makeResponse([makeIssue(30), makeIssue(31)]));
+
+    render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
+
+    // Banner appears after the failed background refresh
+    await waitFor(() => {
+      expect(screen.getByText(/Network blip/)).toBeTruthy();
+    });
+
+    // Click retry — second call succeeds
+    screen.getByRole("button", { name: /retry/i }).click();
+
+    // Error clears, new item appears, no banner
+    await waitFor(() => {
+      expect(screen.getByTestId("item-31")).toBeTruthy();
+    });
+    expect(screen.queryByText(/Network blip/)).toBeNull();
+    expect(screen.queryByText(/Updated/)).toBeNull();
+  });
+
+  it("does not bleed stale timestamp across filter changes", async () => {
+    const cacheKey = buildCacheKey("/test/proj", "issue", "open", "created");
+    setCache(cacheKey, {
+      items: [makeIssue(50)],
+      endCursor: null,
+      hasNextPage: false,
+      timestamp: Date.now(),
+    });
+
+    // Background revalidation for "open" fails — banner with timestamp appears
+    mockListIssues.mockRejectedValueOnce(new Error("Initial fail"));
+    // After filter switches to "closed", fetch never resolves so we can inspect transitional UI
+    mockListIssues.mockImplementation(() => new Promise(() => {}));
+
+    render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/Initial fail/)).toBeTruthy();
+    });
+    expect(screen.getByText(/Updated 1m ago/)).toBeTruthy();
+
+    useGitHubFilterStore.getState().setIssueFilter("closed");
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("item-50")).toBeNull();
+    });
+    expect(screen.queryByText(/Updated/)).toBeNull();
   });
 
   it("renders Load More footer when hasNextPage is true", async () => {
