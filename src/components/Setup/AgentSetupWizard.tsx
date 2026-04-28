@@ -718,18 +718,21 @@ function SelectionStep({
           <p className="text-sm text-daintree-text/60 mb-4">
             Choose your preferred theme. More options available in Settings.
           </p>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-2 gap-4" role="listbox" aria-label="Theme">
             {schemes.map((scheme) => {
               const isSelected = selectedSchemeId === scheme.id;
               const isDark = scheme.type === "dark";
               return (
                 <button
                   key={scheme.id}
+                  type="button"
+                  role="option"
+                  aria-selected={isSelected}
                   onClick={() => onThemeSelect(scheme.id)}
                   className={cn(
-                    "flex flex-col gap-2 p-3 rounded-[var(--radius-md)] border-2 transition-colors text-left",
+                    "flex flex-col gap-2 p-3 rounded-[var(--radius-md)] border transition-colors text-left",
                     isSelected
-                      ? "border-daintree-accent bg-daintree-accent/10"
+                      ? "border-border-strong bg-overlay-selected"
                       : "border-daintree-border bg-daintree-bg hover:border-daintree-text/30"
                   )}
                 >
@@ -746,11 +749,7 @@ function SelectionStep({
                         {isDark ? "Dark" : "Light"}
                       </span>
                     </div>
-                    {isSelected && (
-                      <div className="w-4 h-4 rounded-full bg-daintree-accent flex items-center justify-center">
-                        <Check className="w-2.5 h-2.5 text-accent-primary-foreground" />
-                      </div>
-                    )}
+                    {isSelected && <Check className="w-3.5 h-3.5 text-daintree-text shrink-0" />}
                   </div>
                 </button>
               );
