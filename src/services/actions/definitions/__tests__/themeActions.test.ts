@@ -203,6 +203,7 @@ describe("app.theme.toggle", () => {
     expect(mockNotify).toHaveBeenCalledWith(
       expect.objectContaining({ type: "error", message: "Failed to save theme: Light A" })
     );
+    expect(mockNotify).not.toHaveBeenCalledWith(expect.objectContaining({ priority: "low" }));
     expect(mockAddNotification).not.toHaveBeenCalled();
   });
 });
