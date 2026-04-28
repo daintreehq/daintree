@@ -100,6 +100,19 @@ describe("broadcastFleetLiteralPaste", () => {
     expect(result.total).toBe(0);
     expect(result.successCount).toBe(0);
   });
+
+  it("filters explicit targetIds through fleet eligibility (drops dock/trash)", async () => {
+    seedPanels([
+      makeAgent("ok"),
+      makeAgent("docked", { location: "dock" }),
+      makeAgent("trashed", { location: "trash" }),
+    ]);
+    const result = await broadcastFleetLiteralPaste("x", ["ok", "docked", "trashed"]);
+    expect(submitMock).toHaveBeenCalledTimes(1);
+    expect(submitMock).toHaveBeenCalledWith("ok", "x");
+    expect(result.successCount).toBe(1);
+    expect(result.failureCount).toBe(0);
+  });
 });
 
 describe("executeFleetBroadcast", () => {
