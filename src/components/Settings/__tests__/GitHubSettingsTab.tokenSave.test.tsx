@@ -39,7 +39,7 @@ describe("GitHubSettingsTab handleSaveToken", () => {
   it("dispatches worktree.refresh after a successful token save so the sidebar re-fetches", async () => {
     mockedDispatch.mockImplementation(async (actionId: string) => {
       if (actionId === "github.setToken") {
-        return { ok: true, result: { valid: true } } as never;
+        return { ok: true, result: { valid: true, scopes: [] } } as never;
       }
       if (actionId === "github.getConfig") {
         return {
@@ -80,7 +80,7 @@ describe("GitHubSettingsTab handleSaveToken", () => {
       if (actionId === "github.setToken") {
         return {
           ok: true,
-          result: { valid: false, error: "Invalid token" },
+          result: { valid: false, scopes: [], error: "Invalid token" },
         } as never;
       }
       return { ok: true, result: undefined } as never;

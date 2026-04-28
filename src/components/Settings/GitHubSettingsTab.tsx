@@ -4,6 +4,7 @@ import { Key, Check, AlertCircle, FlaskConical, ExternalLink, Github } from "luc
 import { Spinner } from "@/components/ui/Spinner";
 import { useGitHubConfigStore } from "@/store";
 import { actionService } from "@/services/ActionService";
+import type { GitHubTokenConfig, GitHubTokenValidation } from "@/types";
 import { SettingsSection } from "./SettingsSection";
 
 type ValidationResult = "success" | "error" | "test-success" | "test-error" | null;
@@ -47,7 +48,7 @@ export function GitHubSettingsTab() {
     setErrorMessage(null);
 
     try {
-      const result = await actionService.dispatch(
+      const result = await actionService.dispatch<GitHubTokenValidation>(
         "github.setToken",
         { token: githubToken.trim() },
         { source: "user" }
@@ -55,18 +56,19 @@ export function GitHubSettingsTab() {
       if (!result.ok) {
         throw new Error(result.error.message);
       }
-      const validation = result.result as { valid: boolean; error?: string };
+      const validation = result.result;
       if (validation.valid) {
         setGithubToken("");
         setValidationResult("success");
-        const configResult = await actionService.dispatch("github.getConfig", undefined, {
-          source: "user",
-        });
+        const configResult = await actionService.dispatch<GitHubTokenConfig>(
+          "github.getConfig",
+          undefined,
+          { source: "user" }
+        );
         if (!configResult.ok) {
           throw new Error(configResult.error.message);
         }
-        const config = configResult.result as any;
-        updateConfig(config);
+        updateConfig(configResult.result);
         void actionService.dispatch("worktree.refresh", undefined, {
           source: "user",
         });
@@ -91,13 +93,15 @@ export function GitHubSettingsTab() {
       if (!clearResult.ok) {
         throw new Error(clearResult.error.message);
       }
-      const configResult = await actionService.dispatch("github.getConfig", undefined, {
-        source: "user",
-      });
+      const configResult = await actionService.dispatch<GitHubTokenConfig>(
+        "github.getConfig",
+        undefined,
+        { source: "user" }
+      );
       if (!configResult.ok) {
         throw new Error(configResult.error.message);
       }
-      updateConfig(configResult.result as any);
+      updateConfig(configResult.result);
       setValidationResult(null);
       setErrorMessage(null);
     } catch (error) {
@@ -115,7 +119,7 @@ export function GitHubSettingsTab() {
     setErrorMessage(null);
 
     try {
-      const result = await actionService.dispatch(
+      const result = await actionService.dispatch<GitHubTokenValidation>(
         "github.validateToken",
         { token: githubToken.trim() },
         { source: "user" }
@@ -123,7 +127,7 @@ export function GitHubSettingsTab() {
       if (!result.ok) {
         throw new Error(result.error.message);
       }
-      const validation = result.result as { valid: boolean; error?: string };
+      const validation = result.result;
       setValidationResult(validation.valid ? "test-success" : "test-error");
       if (!validation.valid) {
         setErrorMessage(validation.error || "Invalid token");
