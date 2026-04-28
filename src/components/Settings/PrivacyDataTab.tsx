@@ -114,6 +114,27 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
           type: "error",
           title: "Failed to load settings",
           message: "Privacy settings could not be loaded.",
+          actions: [
+            {
+              label: "Try again",
+              variant: "primary",
+              onClick: async () => {
+                try {
+                  const settings = await window.electron.privacy.getSettings();
+                  setTelemetryLevel(settings.telemetryLevel);
+                  setLogRetentionDays(settings.logRetentionDays);
+                  setDataFolderPath(settings.dataFolderPath);
+                } catch (retryErr) {
+                  notify({
+                    type: "error",
+                    title: "Failed to load settings",
+                    message: "Privacy settings could not be loaded.",
+                  });
+                  logError("Failed to load privacy settings", retryErr);
+                }
+              },
+            },
+          ],
         });
         logError("Failed to load privacy settings", err);
       });
@@ -137,7 +158,27 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
         notify({
           type: "error",
           title: "Failed to save setting",
-          message: "Telemetry level could not be saved. Please try again.",
+          message: "Telemetry level could not be saved.",
+          actions: [
+            {
+              label: "Try again",
+              variant: "primary",
+              onClick: async () => {
+                try {
+                  await window.electron.privacy.setTelemetryLevel(level);
+                  setTelemetryLevel(level);
+                } catch (retryErr) {
+                  setTelemetryLevel(prev);
+                  notify({
+                    type: "error",
+                    title: "Failed to save setting",
+                    message: "Telemetry level could not be saved.",
+                  });
+                  logError("Failed to set telemetry level", retryErr);
+                }
+              },
+            },
+          ],
         });
         logError("Failed to set telemetry level", err);
       }
@@ -156,7 +197,27 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
         notify({
           type: "error",
           title: "Failed to save setting",
-          message: "Log retention could not be saved. Please try again.",
+          message: "Log retention could not be saved.",
+          actions: [
+            {
+              label: "Try again",
+              variant: "primary",
+              onClick: async () => {
+                try {
+                  await window.electron.privacy.setLogRetention(days);
+                  setLogRetentionDays(days);
+                } catch (retryErr) {
+                  setLogRetentionDays(prev);
+                  notify({
+                    type: "error",
+                    title: "Failed to save setting",
+                    message: "Log retention could not be saved.",
+                  });
+                  logError("Failed to set log retention", retryErr);
+                }
+              },
+            },
+          ],
         });
         logError("Failed to set log retention", err);
       }

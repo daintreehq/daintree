@@ -369,7 +369,15 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
         type: "error",
         title: "Failed to add project",
         message,
-        duration: 6000,
+        actions: [
+          {
+            label: "Try again",
+            variant: "primary",
+            onClick: () => {
+              void get().addProjectByPath(path);
+            },
+          },
+        ],
       });
       set({ error: message, isLoading: false });
     }
@@ -453,7 +461,15 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
         type: "error",
         title: "Failed to switch project",
         message,
-        duration: 6000,
+        actions: [
+          {
+            label: "Try again",
+            variant: "primary",
+            onClick: () => {
+              void get().switchProject(projectId);
+            },
+          },
+        ],
       });
       set({ error: message, isLoading: false });
     });
@@ -601,7 +617,15 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
         type: "error",
         title: "Failed to reopen project",
         message,
-        duration: 6000,
+        actions: [
+          {
+            label: "Try again",
+            variant: "primary",
+            onClick: () => {
+              void get().reopenProject(projectId);
+            },
+          },
+        ],
       });
       set({ error: message, isLoading: false });
     });

@@ -83,13 +83,27 @@ export function useProjectMruSwitcher(): UseProjectMruSwitcherReturn {
     const liveTarget = state.projects.find((p) => p.id === snapshotTarget.id);
     if (!liveTarget) return;
     if (state.currentProject?.id === liveTarget.id) return;
+    const targetId = liveTarget.id;
     const switchFn = liveTarget.status === "background" ? state.reopenProject : state.switchProject;
-    Promise.resolve(switchFn(liveTarget.id)).catch((error) => {
+    Promise.resolve(switchFn(targetId)).catch((error) => {
       notify({
         type: "error",
         title: "Failed to switch project",
         message: formatErrorMessage(error, "Failed to switch project"),
-        duration: 5000,
+        actions: [
+          {
+            label: "Try again",
+            variant: "primary",
+            onClick: () => {
+              const fresh = useProjectStore.getState();
+              const freshTarget = fresh.projects.find((p) => p.id === targetId);
+              if (!freshTarget || fresh.currentProject?.id === freshTarget.id) return;
+              const retryFn =
+                freshTarget.status === "background" ? fresh.reopenProject : fresh.switchProject;
+              void retryFn(freshTarget.id);
+            },
+          },
+        ],
       });
     });
   }, []);
