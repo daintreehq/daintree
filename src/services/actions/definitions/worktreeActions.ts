@@ -13,7 +13,7 @@ import { getVisibleWorktreesForCycling } from "@/lib/worktreeCyclingOrder";
 import { logError, logWarn } from "@/utils/logger";
 
 function notifyWorktreeResourceError(err: unknown, title: string, fallbackMessage: string): void {
-  const message = formatErrorMessage(err, fallbackMessage);
+  const message = formatErrorMessage(err, fallbackMessage) || fallbackMessage;
   notify({
     type: "error",
     priority: "high",
