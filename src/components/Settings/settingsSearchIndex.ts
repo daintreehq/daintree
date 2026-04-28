@@ -410,7 +410,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
     subtab: "performance",
     subtabLabel: "Performance",
     section: "Panel Limits",
-    title: "Disable Panel Warnings",
+    title: "Panel Warnings",
     description:
       "Turn off soft warning banner and confirmation dialog while keeping the hard limit",
     keywords: ["disable", "warning", "panel", "nag", "dismiss", "suppress"],
@@ -1141,7 +1141,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
     scope: "global",
     tabLabel: "Troubleshooting",
     section: "Developer Mode",
-    title: "Enable Verbose Logging",
+    title: "Verbose Logging",
     description: "Enable verbose logging for this session only. Resets on app restart.",
     keywords: ["verbose", "logging", "debug", "log level", "session"],
   },

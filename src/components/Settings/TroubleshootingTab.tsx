@@ -186,16 +186,20 @@ function HardwareAccelerationSection() {
     >
       <SettingsSwitchCard
         icon={Monitor}
-        title={disabled ? "Hardware Acceleration Disabled" : "Hardware Acceleration Enabled"}
-        subtitle={
-          disabled
-            ? "GPU was disabled due to repeated crashes. Re-enable to restore full performance. App will restart."
-            : "Disable if you experience blank panels or rendering issues. App will restart."
-        }
+        title="Hardware Acceleration"
+        subtitle="Uses GPU to improve rendering performance. Disable if you experience blank panels or rendering issues. App restarts on change."
         isEnabled={!disabled}
         onChange={handleToggle}
         ariaLabel="Hardware Acceleration Toggle"
       />
+
+      {disabled && (
+        <p className="text-xs text-status-warning/80 flex items-center gap-1.5 select-text">
+          <AlertTriangle className="w-3 h-3" />
+          GPU acceleration was disabled due to repeated crashes. Re-enable to restore full
+          performance.
+        </p>
+      )}
     </SettingsSection>
   );
 }
@@ -426,7 +430,7 @@ export function TroubleshootingTab() {
       >
         <SettingsSwitchCard
           icon={Bug}
-          title={developerMode ? "Developer Mode Enabled" : "Enable Developer Mode"}
+          title="Developer Mode"
           subtitle="Activates all debugging features below"
           isEnabled={developerMode}
           onChange={handleToggleDeveloperMode}
@@ -459,7 +463,7 @@ export function TroubleshootingTab() {
 
         <SettingsSwitchCard
           icon={AlertTriangle}
-          title={verboseLogging ? "Verbose Logging Enabled" : "Enable Verbose Logging"}
+          title="Verbose Logging"
           subtitle="Captures detailed debug output for troubleshooting. Resets on app restart."
           isEnabled={verboseLogging}
           onChange={handleToggleVerboseLogging}

@@ -308,12 +308,8 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
         >
           <SettingsSwitchCard
             icon={Zap}
-            title={performanceMode ? "Performance Mode Enabled" : "Enable Performance Mode"}
-            subtitle={
-              performanceMode
-                ? `${PERFORMANCE_MODE_SCROLLBACK} line scrollback, animations disabled`
-                : "Standard scrollback, animations enabled"
-            }
+            title="Performance Mode"
+            subtitle="Reduce scrollback and disable animations for low-end hardware or high-density workflows"
             isEnabled={performanceMode}
             onChange={handlePerformanceModeToggle}
             ariaLabel="Performance Mode Toggle"
@@ -348,11 +344,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
         >
           <SettingsSwitchCard
             icon={Activity}
-            title={
-              resourceMonitoringEnabled
-                ? "Resource Monitoring Enabled"
-                : "Enable Resource Monitoring"
-            }
+            title="Resource Monitoring"
             subtitle="Display per-terminal CPU% and memory in panel headers"
             isEnabled={resourceMonitoringEnabled}
             onChange={() => {
@@ -379,11 +371,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
         >
           <SettingsSwitchCard
             icon={MemoryStick}
-            title={
-              memoryLeakDetectionEnabled
-                ? "Memory Leak Detection Enabled"
-                : "Enable Memory Leak Detection"
-            }
+            title="Memory Leak Detection"
             subtitle="Show warnings when a terminal's memory grows continuously"
             isEnabled={memoryLeakDetectionEnabled}
             onChange={() => {
@@ -445,14 +433,8 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
         >
           <SettingsSwitchCard
             icon={AlertTriangle}
-            title={
-              panelLimits.warningsDisabled ? "Panel Warnings Disabled" : "Panel Warnings Enabled"
-            }
-            subtitle={
-              panelLimits.warningsDisabled
-                ? "No soft warning banner or confirmation dialog (hard limit still enforced)"
-                : "Show warning banner and confirmation dialog when panel count is high"
-            }
+            title="Panel Warnings"
+            subtitle="Show warning banner and confirmation dialog when panel count is high"
             isEnabled={!panelLimits.warningsDisabled}
             onChange={() => setWarningsDisabled(!panelLimits.warningsDisabled)}
             ariaLabel="Panel Warnings Toggle"
@@ -568,12 +550,8 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
         >
           <SettingsSwitchCard
             icon={MessageSquare}
-            title={hybridInputEnabled ? "Hybrid Input Enabled" : "Enable Hybrid Input"}
-            subtitle={
-              hybridInputEnabled
-                ? "Show the multi-line input bar on agent terminals"
-                : "Hide the input bar and use the terminal directly"
-            }
+            title="Hybrid Input Bar"
+            subtitle="Show the multi-line input bar on agent terminals"
             isEnabled={hybridInputEnabled}
             onChange={handleHybridInputEnabledToggle}
             ariaLabel="Hybrid Input Bar Toggle"
@@ -590,12 +568,8 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
           <div className="ml-4 border-l-2 border-daintree-border pl-4">
             <SettingsSwitchCard
               icon={MousePointerClick}
-              title={hybridInputAutoFocus ? "Auto-Focus Input" : "Auto-Focus Terminal"}
-              subtitle={
-                hybridInputAutoFocus
-                  ? "Selecting a pane focuses the input bar"
-                  : "Selecting a pane focuses the terminal (xterm)"
-              }
+              title="Auto-Focus Input"
+              subtitle="Selecting a pane focuses the input bar instead of the terminal"
               isEnabled={hybridInputAutoFocus}
               onChange={handleHybridInputAutoFocusToggle}
               ariaLabel="Hybrid Input Auto Focus Toggle"
@@ -623,14 +597,8 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
           >
             <SettingsSwitchCard
               icon={SplitSquareHorizontal}
-              title={
-                twoPaneSplitConfig.enabled ? "Two-Pane Split Enabled" : "Enable Two-Pane Split"
-              }
-              subtitle={
-                twoPaneSplitConfig.enabled
-                  ? "Drag divider to resize, double-click to reset"
-                  : "Use equal-width grid for two panels"
-              }
+              title="Two-Pane Split"
+              subtitle="Display two panels with a resizable divider instead of equal columns"
               isEnabled={twoPaneSplitConfig.enabled}
               onChange={() => setTwoPaneSplitEnabled(!twoPaneSplitConfig.enabled)}
               ariaLabel="Two-Pane Split Toggle"
@@ -641,14 +609,8 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
             <div className="ml-4 space-y-3 border-l-2 border-daintree-border pl-4">
               <SettingsSwitchCard
                 icon={MonitorPlay}
-                title={
-                  twoPaneSplitConfig.preferPreview ? "Preview-Focused Layout" : "Balanced Layout"
-                }
-                subtitle={
-                  twoPaneSplitConfig.preferPreview
-                    ? "Give more space to browser/dev-preview panels (65/35)"
-                    : "Start with equal space for both panels (50/50)"
-                }
+                title="Preview-Focused Layout"
+                subtitle="Give more space to browser and dev-preview panels"
                 isEnabled={twoPaneSplitConfig.preferPreview}
                 onChange={() => setPreferPreview(!twoPaneSplitConfig.preferPreview)}
                 ariaLabel="Prefer Preview Toggle"

@@ -633,16 +633,8 @@ export function GeneralTab({
             >
               <SettingsSwitchCard
                 icon={Moon}
-                title={
-                  idleNotifyConfig.enabled
-                    ? "Idle Notifications Enabled"
-                    : "Enable Idle Notifications"
-                }
-                subtitle={
-                  idleNotifyConfig.enabled
-                    ? `After ${idleNotifyConfig.thresholdMinutes} min of terminal inactivity`
-                    : "Notify me about idle terminals in background projects"
-                }
+                title="Idle Terminal Notifications"
+                subtitle="Notify when background project terminals have been idle past a threshold"
                 isEnabled={idleNotifyConfig.enabled}
                 onChange={handleIdleNotifyToggle}
                 ariaLabel="Idle Terminal Notifications Toggle"
@@ -692,14 +684,8 @@ export function GeneralTab({
             >
               <SettingsSwitchCard
                 icon={Moon}
-                title={
-                  hibernationConfig.enabled ? "Auto-Hibernation Enabled" : "Enable Auto-Hibernation"
-                }
-                subtitle={
-                  hibernationConfig.enabled
-                    ? `After ${hibernationConfig.inactiveThresholdHours}h of inactivity`
-                    : "Save resources by hibernating idle projects"
-                }
+                title="Auto-Hibernation"
+                subtitle="Automatically stop terminals and servers for inactive projects"
                 isEnabled={hibernationConfig.enabled}
                 onChange={handleHibernationToggle}
                 ariaLabel="Auto-Hibernation Toggle"
