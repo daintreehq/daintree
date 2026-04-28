@@ -7,14 +7,7 @@ import serialize, { type SerializeAddon as SerializeAddonType } from "@xterm/add
 const { SerializeAddon } = serialize;
 import { AGENT_REGISTRY, getEffectiveAgentConfig } from "../../../shared/config/agentRegistry.js";
 import { isBuiltInAgentId, type BuiltInAgentId } from "../../../shared/config/agentIds.js";
-import {
-  ProcessDetector,
-  detectCommandIdentity,
-  redactArgv,
-  type CommandIdentity,
-  type DetectionResult,
-  type DetectionState,
-} from "../ProcessDetector.js";
+import { ProcessDetector, type DetectionResult, type DetectionState } from "../ProcessDetector.js";
 import type { ProcessTreeCache } from "../ProcessTreeCache.js";
 import { ActivityMonitor } from "../ActivityMonitor.js";
 import { AgentStateService } from "./AgentStateService.js";
@@ -71,7 +64,11 @@ import {
 import { TerminalForensicsBuffer } from "./TerminalForensicsBuffer.js";
 import { SemanticBufferManager } from "./SemanticBufferManager.js";
 import { ProcessTreeKiller } from "./ProcessTreeKiller.js";
-import { detectPrompt } from "./PromptDetector.js";
+import {
+  IdentityWatcher,
+  normalizeShellCommandText,
+  type IdentityWatcherDelegate,
+} from "./IdentityWatcher.js";
 import { stripAnsiCodes } from "../../../shared/utils/artifactParser.js";
 import type { SpawnContext } from "./terminalSpawn.js";
 
@@ -90,16 +87,6 @@ type CursorBuffer = {
   getLine: (index: number) => { translateToString: (trimRight?: boolean) => string } | undefined;
 };
 
-const SHELL_IDENTITY_FALLBACK_COMMIT_MS = 1200;
-const SHELL_IDENTITY_FALLBACK_POLL_MS = 200;
-const SHELL_IDENTITY_FALLBACK_PROMPT_POLLS = 2;
-const SHELL_IDENTITY_FALLBACK_SCAN_LINES = 4;
-const SHELL_INPUT_BUFFER_MAX = 4096;
-const SHELL_PROMPT_PATTERNS = [
-  /^\s*[>›❯⟩$#%]\s*$/,
-  /^\s*[A-Za-z0-9_.-]+@[\w.-]+(?:\s+[^\r\n]*)?\s*[#$%>]\s*$/,
-  /^\s*[➜➤➟➔❯›]\s+.*$/,
-] as const;
 // Backend-side identity for internal decisions (activity monitor pattern
 // lookup, event routing). Detection wins; during the boot window the launch
 // hint is used so cold-launched terminals start monitoring before the
@@ -146,21 +133,12 @@ export class TerminalProcess {
   private suppressedWriteErrorCount = 0;
 
   private semanticBufferManager!: SemanticBufferManager;
+  private identityWatcher!: IdentityWatcher;
 
   private writeQueue!: WriteQueue;
   private readonly processTreeKiller: ProcessTreeKiller;
   private _ptyState: PtyState = { kind: "alive" };
   private _exitEventEmitted = false;
-  private shellIdentityFallbackTimer: NodeJS.Timeout | null = null;
-  private shellIdentityFallbackSubmittedAt: number | null = null;
-  private shellIdentityFallbackCommandText: string | undefined;
-  private shellIdentityFallbackIdentity: CommandIdentity | null = null;
-  private shellIdentityFallbackCommitted = false;
-  private shellIdentityFallbackPromptStreak = 0;
-  private shellIdentityFallbackSawPtyDescendant = false;
-  private suppressNextShellSubmitSignal = false;
-  private shellInputBuffer = "";
-  private seededLaunchCommandText: string | undefined;
 
   private _scrollback: number;
   private headlessResponderDisposable: { dispose: () => void } | null = null;
@@ -387,6 +365,7 @@ export class TerminalProcess {
       onWriteError: (error, context) => this.logWriteError(error, context),
     });
     this.sessionSnapshotter = this.createSessionSnapshotter();
+    this.identityWatcher = new IdentityWatcher(this.createIdentityWatcherDelegate());
     this._subscribeExitObservers();
     this.setupPtyHandlers(ptyProcess);
 
@@ -403,7 +382,7 @@ export class TerminalProcess {
       );
       this.terminalInfo.processDetector = this.processDetector;
       this.processDetector.start();
-      this.seedInitialCommandIdentity(options.command);
+      this.identityWatcher.seed(options.command);
     }
 
     // If we have a launch hint, start the activity monitor immediately so the
@@ -554,7 +533,7 @@ export class TerminalProcess {
 
     this.stopProcessDetector();
     this.stopActivityMonitor();
-    this.stopShellIdentityFallbackWatcher();
+    this.identityWatcher.stop();
     this.semanticBufferManager.flush();
 
     this.writeQueue.dispose();
@@ -848,11 +827,12 @@ export class TerminalProcess {
     }
 
     const bracketedPaste = isBracketedPaste(data);
+    const seededCommandText = this.identityWatcher.seededCommandText;
     const isSeededLaunchCommandSubmit =
       !bracketedPaste &&
-      this.seededLaunchCommandText !== undefined &&
+      seededCommandText !== undefined &&
       /[\r\n]/.test(data) &&
-      this.normalizeShellCommandText(data) === this.seededLaunchCommandText;
+      normalizeShellCommandText(data) === seededCommandText;
     // Shell input capture is only meaningless when a live AGENT owns the PTY
     // (agents have their own input semantics). A plain process badge (npm,
     // pnpm, docker, etc.) does not change the shell semantics — the shell
@@ -862,27 +842,31 @@ export class TerminalProcess {
     const canCaptureShellInput =
       !bracketedPaste &&
       (this.terminalInfo.detectedAgentId === undefined || isSeededLaunchCommandSubmit);
-    const submittedCommandText = canCaptureShellInput ? this.captureShellInput(data) : undefined;
+    const submittedCommandText = canCaptureShellInput
+      ? this.identityWatcher.captureInput(data)
+      : undefined;
+    const pendingFallbackIdentity = this.identityWatcher.pendingFallbackIdentity;
     const isAgentUiPromptResponse =
       !bracketedPaste &&
       submittedCommandText === undefined &&
-      this.shellIdentityFallbackIdentity?.agentType !== undefined &&
-      (!this.shellIdentityFallbackCommitted || this.hasAgentUiPromptFalsePositive());
+      pendingFallbackIdentity?.agentType !== undefined &&
+      (!this.identityWatcher.isFallbackCommitted ||
+        this.identityWatcher.hasAgentUiPromptFalsePositive());
 
     if (!bracketedPaste && /[\r\n]/.test(data)) {
-      if (this.suppressNextShellSubmitSignal) {
-        this.suppressNextShellSubmitSignal = false;
+      if (this.identityWatcher.consumeSuppressSignal()) {
+        // Suppression consumed — performSubmit() armed it for its body+enter sequence.
       } else if (isAgentUiPromptResponse) {
         logIdentityDebug(
           `[IdentityDebug] shell-submit-skip term=${this.id.slice(-8)} reason=agent-ui-prompt`
         );
       } else {
-        this.markShellCommandSubmitted(submittedCommandText, {
+        this.identityWatcher.onShellSubmit(submittedCommandText, {
           allowWhenAgentDetected: isSeededLaunchCommandSubmit,
         });
       }
       if (isSeededLaunchCommandSubmit) {
-        this.seededLaunchCommandText = undefined;
+        this.identityWatcher.clearSeededCommandText();
       }
     }
 
@@ -947,7 +931,7 @@ export class TerminalProcess {
     const enterSuffix = "\r".repeat(enterCount);
 
     if (body.length === 0) {
-      this.suppressNextShellSubmitSignal = true;
+      this.identityWatcher.armSuppressSignal();
       this.write(enterSuffix);
       return;
     }
@@ -984,8 +968,8 @@ export class TerminalProcess {
       return;
     }
 
-    this.suppressNextShellSubmitSignal = true;
-    this.markShellCommandSubmitted(body);
+    this.identityWatcher.armSuppressSignal();
+    this.identityWatcher.onShellSubmit(body);
     this.write(enterSuffix);
   }
 
@@ -1209,133 +1193,41 @@ export class TerminalProcess {
     return line ? line.translateToString(true) : null;
   }
 
-  private normalizeShellCommandText(commandText?: string): string | undefined {
-    if (!commandText) return undefined;
-    const normalized = commandText.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
-    for (const line of normalized.split("\n")) {
-      const trimmed = line.trim();
-      if (trimmed.length > 0) {
-        return trimmed;
-      }
-    }
-    return undefined;
-  }
-
-  private captureShellInput(data: string): string | undefined {
-    let submittedCommandText: string | undefined;
-    let inEscapeSequence = false;
-
-    for (const char of data) {
-      if (inEscapeSequence) {
-        if ((char >= "@" && char <= "~") || char === "\u0007") {
-          inEscapeSequence = false;
-        }
-        continue;
-      }
-
-      if (char === "\x1b") {
-        inEscapeSequence = true;
-        continue;
-      }
-
-      if (char === "\b" || char === "\x7f") {
-        this.shellInputBuffer = this.shellInputBuffer.slice(0, -1);
-        continue;
-      }
-
-      if (char === "\r" || char === "\n") {
-        submittedCommandText = this.normalizeShellCommandText(this.shellInputBuffer);
-        this.shellInputBuffer = "";
-        continue;
-      }
-
-      if (char < " ") {
-        continue;
-      }
-
-      if (this.shellInputBuffer.length < SHELL_INPUT_BUFFER_MAX) {
-        this.shellInputBuffer += char;
-      }
-    }
-
-    return submittedCommandText;
-  }
-
-  private markShellCommandSubmitted(
-    commandText?: string,
-    options: { allowWhenAgentDetected?: boolean } = {}
-  ): void {
-    if (this.terminalInfo.isExited || this.terminalInfo.wasKilled) {
-      return;
-    }
-
-    // Only skip when a live agent is already detected. A stale
-    // `lastDetectedProcessIconId` must not block re-arming the fallback — if
-    // the user ran `npm run dev` then Ctrl+C then typed `pnpm dev`, the new
-    // command must be allowed to restart detection regardless of whether the
-    // previous badge was cleared by the process-tree path yet.
-    if (this.terminalInfo.detectedAgentId && !options.allowWhenAgentDetected) {
-      return;
-    }
-
-    this.shellIdentityFallbackSubmittedAt = Date.now();
-    this.shellIdentityFallbackCommandText = this.normalizeShellCommandText(commandText);
-    this.shellIdentityFallbackIdentity = this.shellIdentityFallbackCommandText
-      ? detectCommandIdentity(this.shellIdentityFallbackCommandText)
-      : null;
-    this.shellIdentityFallbackCommitted = false;
-    this.shellIdentityFallbackPromptStreak = 0;
-    this.shellIdentityFallbackSawPtyDescendant = false;
-
-    // If the new command has no recognizable identity (e.g. `echo hi` after a
-    // prior `npm run dev` that committed `npm`), clear any stale shell
-    // evidence on the detector so it doesn't keep the prior identity sticky
-    // for the full TTL. Identity-carrying commands overwrite via the
-    // watcher's later inject call. #5809
-    if (!this.shellIdentityFallbackIdentity) {
-      this.processDetector?.clearShellCommandEvidence();
-    }
-
-    this.startShellIdentityFallbackWatcher();
-  }
-
-  private seedInitialCommandIdentity(commandText?: string): void {
-    if (!this.processDetector) return;
-    const normalized = this.normalizeShellCommandText(commandText);
-    if (!normalized) return;
-    const identity = detectCommandIdentity(normalized);
-    if (!identity) return;
-    this.seededLaunchCommandText = normalized;
-    logIdentityDebug(
-      `[IdentityDebug] shell-submit term=${this.id.slice(-8)} src=spawn ` +
-        `agent=${identity.agentType ?? "<none>"} icon=${identity.processIconId ?? "<none>"} ` +
-        `argv0=${redactArgv(normalized)}`
-    );
-    this.processDetector.injectShellCommandEvidence(identity, normalized);
-    this.markShellCommandSubmitted(normalized, { allowWhenAgentDetected: true });
-    this.seededLaunchCommandText = undefined;
-  }
-
-  private startShellIdentityFallbackWatcher(): void {
-    if (this.shellIdentityFallbackTimer) {
-      return;
-    }
-    this.shellIdentityFallbackTimer = setInterval(() => {
-      this.pollShellIdentityFallback();
-    }, SHELL_IDENTITY_FALLBACK_POLL_MS);
-  }
-
-  private stopShellIdentityFallbackWatcher(): void {
-    if (this.shellIdentityFallbackTimer) {
-      clearInterval(this.shellIdentityFallbackTimer);
-      this.shellIdentityFallbackTimer = null;
-    }
-    this.shellIdentityFallbackSubmittedAt = null;
-    this.shellIdentityFallbackCommandText = undefined;
-    this.shellIdentityFallbackIdentity = null;
-    this.shellIdentityFallbackCommitted = false;
-    this.shellIdentityFallbackPromptStreak = 0;
-    this.shellIdentityFallbackSawPtyDescendant = false;
+  private createIdentityWatcherDelegate(): IdentityWatcherDelegate {
+    // eslint-disable-next-line @typescript-eslint/no-this-alias
+    const tp = this;
+    return {
+      get terminalId() {
+        return tp.id;
+      },
+      get isExited() {
+        return tp.terminalInfo.isExited ?? false;
+      },
+      get wasKilled() {
+        return tp.terminalInfo.wasKilled ?? false;
+      },
+      get detectedAgentId() {
+        return tp.terminalInfo.detectedAgentId;
+      },
+      get lastOutputTime() {
+        return tp.terminalInfo.lastOutputTime;
+      },
+      get spawnedAt() {
+        return tp.terminalInfo.spawnedAt;
+      },
+      get lastDetectedProcessIconId() {
+        return tp.lastDetectedProcessIconId;
+      },
+      get processDetector() {
+        return tp.processDetector;
+      },
+      getLastNLines: (n) => tp.getLastNLines(n),
+      getCursorLine: () => tp.getCursorLine(),
+      getLastCommand: () => tp.semanticBufferManager.getLastCommand(),
+      getPtyDescendantCount: () => tp.getPtyDescendantCount(),
+      readForegroundProcessGroupSnapshot: () => tp.readForegroundProcessGroupSnapshot(),
+      handleAgentDetection: (result, cbSpawnedAt) => tp.handleAgentDetection(result, cbSpawnedAt),
+    };
   }
 
   private getPtyDescendantCount(): number | undefined {
@@ -1377,215 +1269,6 @@ export class TerminalProcess {
     } catch {
       return null;
     }
-  }
-
-  private isForegroundShellIdleForAgentDemotion(): boolean {
-    const snapshot = this.readForegroundProcessGroupSnapshot();
-    if (!snapshot) {
-      // Non-POSIX and unsupported environments fall back to the legacy prompt
-      // path. On macOS/Linux this snapshot is the authoritative demotion gate.
-      return true;
-    }
-
-    if (snapshot.shellPgid <= 0 || snapshot.foregroundPgid <= 0) {
-      return true;
-    }
-
-    return snapshot.shellPgid === snapshot.foregroundPgid;
-  }
-
-  private hasRecentCommandFailureOutput(): boolean {
-    const recent = this.getLastNLines(SHELL_IDENTITY_FALLBACK_SCAN_LINES).join("\n");
-    return /(?:command not found|not found|no such file|permission denied)/i.test(recent);
-  }
-
-  private hasAgentUiPromptFalsePositive(): boolean {
-    const lines = this.getLastNLines(SHELL_IDENTITY_FALLBACK_SCAN_LINES);
-    const lastVisibleLine = [...lines]
-      .reverse()
-      .find((line) => typeof line === "string" && line.trim().length > 0);
-    const recent = [this.getCursorLine(), lastVisibleLine]
-      .filter((line): line is string => typeof line === "string" && line.trim().length > 0)
-      .join("\n");
-    return (
-      /(?:accessing workspace|yes,\s*i trust this folder|enter to confirm|quick safety check)/i.test(
-        recent
-      ) || /^\s*[❯›]\s+\d+\./m.test(recent)
-    );
-  }
-
-  private isShellPromptVisible(): boolean {
-    const prompt = detectPrompt(
-      this.getLastNLines(SHELL_IDENTITY_FALLBACK_SCAN_LINES),
-      {
-        promptPatterns: [...SHELL_PROMPT_PATTERNS],
-        promptHintPatterns: [],
-        promptScanLineCount: SHELL_IDENTITY_FALLBACK_SCAN_LINES,
-        promptConfidence: 0.85,
-      },
-      this.getCursorLine()
-    );
-    return prompt.isPrompt;
-  }
-
-  private pollShellIdentityFallback(): void {
-    const submittedAt = this.shellIdentityFallbackSubmittedAt;
-    if (submittedAt === null || this.terminalInfo.isExited || this.terminalInfo.wasKilled) {
-      this.stopShellIdentityFallbackWatcher();
-      return;
-    }
-
-    if (!this.shellIdentityFallbackIdentity) {
-      const commandText =
-        this.shellIdentityFallbackCommandText ??
-        (this.terminalInfo.lastOutputTime >= submittedAt
-          ? this.semanticBufferManager.getLastCommand()
-          : undefined);
-      const normalized = this.normalizeShellCommandText(commandText);
-      if (normalized) {
-        this.shellIdentityFallbackCommandText = normalized;
-        this.shellIdentityFallbackIdentity = detectCommandIdentity(normalized);
-      }
-    }
-
-    const ptyDescendantCount = this.getPtyDescendantCount();
-    const hasPtyDescendants = ptyDescendantCount !== undefined && ptyDescendantCount > 0;
-    if (hasPtyDescendants) {
-      this.shellIdentityFallbackSawPtyDescendant = true;
-    }
-
-    const promptVisible = this.isShellPromptVisible();
-    // A live identity only pre-empts the fallback commit when it matches what
-    // the fallback detected — a stale badge (e.g. a prior `npm run dev` whose
-    // icon hasn't been cleared yet) must NOT block the fallback from emitting
-    // a fresh `pnpm`/`docker`/etc. detection for the next command. #5813
-    const fallbackIdentity = this.shellIdentityFallbackIdentity;
-    const liveIdentityMatchesFallback =
-      fallbackIdentity !== null &&
-      ((fallbackIdentity.agentType !== undefined &&
-        this.terminalInfo.detectedAgentId === fallbackIdentity.agentType) ||
-        (fallbackIdentity.processIconId !== undefined &&
-          this.lastDetectedProcessIconId === fallbackIdentity.processIconId));
-
-    if (!this.shellIdentityFallbackIdentity) {
-      if (promptVisible && Date.now() - submittedAt >= SHELL_IDENTITY_FALLBACK_COMMIT_MS) {
-        logIdentityDebug(
-          `[IdentityDebug] shell-fallback-stop term=${this.id.slice(-8)} reason=no-identity-prompt`
-        );
-        this.stopShellIdentityFallbackWatcher();
-      }
-      return;
-    }
-
-    if (!this.shellIdentityFallbackCommitted) {
-      if (liveIdentityMatchesFallback) {
-        this.shellIdentityFallbackCommitted = true;
-        return;
-      }
-
-      if (promptVisible && !this.shellIdentityFallbackIdentity.agentType) {
-        logIdentityDebug(
-          `[IdentityDebug] shell-fallback-stop term=${this.id.slice(-8)} ` +
-            `reason=prompt-before-commit icon=${this.shellIdentityFallbackIdentity.processIconId ?? "<none>"}`
-        );
-        this.stopShellIdentityFallbackWatcher();
-        return;
-      }
-
-      if (Date.now() - submittedAt < SHELL_IDENTITY_FALLBACK_COMMIT_MS) {
-        return;
-      }
-
-      // Route shell-command evidence through ProcessDetector so the merge with
-      // process-tree evidence lives in one place. The detector applies the
-      // sticky TTL (~12 s) which anchors this commit through blind-`ps`
-      // cycles and short-lived subprocess thrash. If no detector exists
-      // (null cache path), fall back to the legacy direct emission so a
-      // degraded terminal still surfaces shell-command identity. #5809
-      if (this.processDetector) {
-        this.processDetector.injectShellCommandEvidence(
-          this.shellIdentityFallbackIdentity,
-          this.shellIdentityFallbackCommandText
-        );
-      } else {
-        this.handleAgentDetection(
-          {
-            detectionState: "agent",
-            detected: true,
-            agentType: this.shellIdentityFallbackIdentity.agentType,
-            processIconId: this.shellIdentityFallbackIdentity.processIconId,
-            processName: this.shellIdentityFallbackIdentity.processName,
-            isBusy: true,
-            currentCommand: this.shellIdentityFallbackCommandText,
-            evidenceSource: "shell_command",
-          },
-          this.terminalInfo.spawnedAt
-        );
-      }
-      this.shellIdentityFallbackCommitted = true;
-      return;
-    }
-
-    if (!promptVisible) {
-      this.shellIdentityFallbackPromptStreak = 0;
-      return;
-    }
-
-    if (
-      this.shellIdentityFallbackIdentity.agentType &&
-      !this.hasRecentCommandFailureOutput() &&
-      !this.isForegroundShellIdleForAgentDemotion()
-    ) {
-      if (this.shellIdentityFallbackPromptStreak > 0) {
-        logIdentityDebug(
-          `[IdentityDebug] shell-fallback-hold term=${this.id.slice(-8)} ` +
-            `reason=foreground-child-active`
-        );
-      }
-      this.shellIdentityFallbackPromptStreak = 0;
-      return;
-    }
-
-    if (
-      this.shellIdentityFallbackIdentity.agentType &&
-      !this.hasRecentCommandFailureOutput() &&
-      this.hasAgentUiPromptFalsePositive()
-    ) {
-      if (this.shellIdentityFallbackPromptStreak > 0) {
-        logIdentityDebug(
-          `[IdentityDebug] shell-fallback-hold term=${this.id.slice(-8)} ` +
-            `reason=agent-ui-prompt count=${ptyDescendantCount ?? "unknown"} ` +
-            `sawDescendant=${this.shellIdentityFallbackSawPtyDescendant}`
-        );
-      }
-      this.shellIdentityFallbackPromptStreak = 0;
-      return;
-    }
-
-    this.shellIdentityFallbackPromptStreak += 1;
-    if (this.shellIdentityFallbackPromptStreak < SHELL_IDENTITY_FALLBACK_PROMPT_POLLS) {
-      return;
-    }
-
-    // Prompt has returned — the command has finished. Clear the injected
-    // shell evidence as an explicit lifecycle demotion. Process-tree absence
-    // is not authoritative for agent exit; shell prompt return is. When no
-    // detector is attached, fall back to the legacy direct emission so the UI
-    // still demotes promptly.
-    if (this.processDetector) {
-      this.processDetector.clearShellCommandEvidence("prompt-return");
-    } else {
-      this.handleAgentDetection(
-        {
-          detectionState: "no_agent",
-          detected: false,
-          isBusy: false,
-          currentCommand: undefined,
-        },
-        this.terminalInfo.spawnedAt
-      );
-    }
-    this.stopShellIdentityFallbackWatcher();
   }
 
   getSerializedState(): string | null {
@@ -1788,6 +1471,7 @@ export class TerminalProcess {
 
   dispose(): void {
     const recentOutput = this.forensicsBuffer.getRecentOutput();
+    this.identityWatcher.dispose();
 
     // Best-effort flush before teardown disposes the writeQueue and tears down
     // the buffer. Only attempted on the alive→dispose path — if we already
@@ -1909,6 +1593,8 @@ export class TerminalProcess {
       if (this._exitEventEmitted) {
         return;
       }
+
+      this.identityWatcher.stop();
 
       // Capture forensic tail before disposeHeadless() clears the buffer.
       // The terminal:exited subscriber reads this via the payload — once
