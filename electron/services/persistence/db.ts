@@ -36,29 +36,72 @@ export function getSharedSqlite(): Database.Database | null {
   return sharedInstance?.sqlite ?? null;
 }
 
+// One-time bootstrap for databases that predate __drizzle_migrations. SQLite has
+// no `ALTER TABLE ADD COLUMN IF NOT EXISTS`, and the baseline migration is a
+// no-op for tables that already exist — so a legacy DB whose `projects` table
+// is missing the columns added in older app versions would never gain them. We
+// detect that case here (no migrations table + projects table present) and
+// patch up any missing columns before drizzle takes over. After the baseline
+// migration is recorded, this function is a fast skip on every subsequent open.
+function adoptLegacyProjectColumns(sqlite: Database.Database): void {
+  const hasMigrationsTable = sqlite
+    .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = '__drizzle_migrations'")
+    .get();
+  if (hasMigrationsTable) return;
+
+  const hasProjectsTable = sqlite
+    .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'projects'")
+    .get();
+  if (!hasProjectsTable) return;
+
+  const cols = new Set(
+    (sqlite.pragma("table_info(projects)") as { name: string }[]).map((c) => c.name)
+  );
+  if (!cols.has("pinned")) {
+    sqlite.exec("ALTER TABLE projects ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0");
+  }
+  if (!cols.has("frecency_score")) {
+    sqlite.exec("ALTER TABLE projects ADD COLUMN frecency_score REAL NOT NULL DEFAULT 3.0");
+  }
+  if (!cols.has("last_accessed_at")) {
+    sqlite.exec("ALTER TABLE projects ADD COLUMN last_accessed_at INTEGER NOT NULL DEFAULT 0");
+  }
+}
+
 export function openDb(
   dbPath: string,
   migrationsFolder?: string
 ): { sqlite: Database.Database; db: AppDb } {
   const sqlite = new Database(dbPath);
-  sqlite.pragma("journal_mode = WAL");
-  sqlite.pragma("busy_timeout = 3000");
-  sqlite.pragma("synchronous = NORMAL");
-  sqlite.pragma("temp_store = MEMORY");
-  sqlite.pragma("mmap_size = 10737418240");
-  sqlite.pragma("cache_size = -65536");
+  try {
+    sqlite.pragma("journal_mode = WAL");
+    sqlite.pragma("busy_timeout = 3000");
+    sqlite.pragma("synchronous = NORMAL");
+    sqlite.pragma("temp_store = MEMORY");
+    sqlite.pragma("mmap_size = 10737418240");
+    sqlite.pragma("cache_size = -65536");
 
-  const db = drizzle(sqlite, { schema });
-  migrate(db, { migrationsFolder: migrationsFolder ?? getMigrationsFolder() });
+    adoptLegacyProjectColumns(sqlite);
 
-  // Backfill: rows whose last_accessed_at is still the column default (0) get
-  // bumped to "now" so the first access doesn't crash the frecency score from
-  // its initial value down to ~0 due to the time-decay term.
-  sqlite
-    .prepare("UPDATE projects SET last_accessed_at = ? WHERE last_accessed_at = 0")
-    .run(Date.now());
+    const db = drizzle(sqlite, { schema });
+    migrate(db, { migrationsFolder: migrationsFolder ?? getMigrationsFolder() });
 
-  return { sqlite, db };
+    // Backfill: rows whose last_accessed_at is still the column default (0) get
+    // bumped to "now" so the first access doesn't crash the frecency score from
+    // its initial value down to ~0 due to the time-decay term.
+    sqlite
+      .prepare("UPDATE projects SET last_accessed_at = ? WHERE last_accessed_at = 0")
+      .run(Date.now());
+
+    return { sqlite, db };
+  } catch (error) {
+    try {
+      sqlite.close();
+    } catch {
+      // ignore close errors during failure unwind
+    }
+    throw error;
+  }
 }
 
 const CORRUPTION_CODES = new Set(["SQLITE_CORRUPT", "SQLITE_NOTADB"]);

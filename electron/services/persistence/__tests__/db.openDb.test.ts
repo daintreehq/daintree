@@ -170,7 +170,7 @@ describe("openDb (integration)", () => {
     }
   });
 
-  it("backfills last_accessed_at = 0 rows to the current timestamp", () => {
+  it("backfills last_accessed_at = 0 rows to the current timestamp without disturbing non-zero rows", () => {
     const dbPath = path.join(tmpDir, "backfill.db");
     // First open creates the schema.
     const setup = openDb(dbPath, migrationsFolder);
@@ -179,17 +179,124 @@ describe("openDb (integration)", () => {
         "INSERT INTO projects (id, path, name, emoji, last_opened, pinned, frecency_score, last_accessed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
       )
       .run("zero", "/tmp/zero", "zero", "🌲", 1, 0, 3.0, 0);
+    setup.sqlite
+      .prepare(
+        "INSERT INTO projects (id, path, name, emoji, last_opened, pinned, frecency_score, last_accessed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+      )
+      .run("nonzero", "/tmp/nonzero", "nonzero", "🌴", 1, 0, 3.0, 9999);
     setup.sqlite.close();
 
     const before = Date.now();
     const { sqlite } = openDb(dbPath, migrationsFolder);
     try {
-      const row = sqlite
+      const zeroRow = sqlite
         .prepare("SELECT last_accessed_at FROM projects WHERE id = ?")
         .get("zero") as { last_accessed_at: number };
-      expect(row.last_accessed_at).toBeGreaterThanOrEqual(before);
+      expect(zeroRow.last_accessed_at).toBeGreaterThanOrEqual(before);
+
+      const nonZeroRow = sqlite
+        .prepare("SELECT last_accessed_at FROM projects WHERE id = ?")
+        .get("nonzero") as { last_accessed_at: number };
+      expect(nonZeroRow.last_accessed_at).toBe(9999);
     } finally {
       sqlite.close();
     }
+  });
+
+  it("upgrades a pre-pinned legacy DB (only the original 9 columns) to the current schema", async () => {
+    const dbPath = path.join(tmpDir, "pre-pinned.db");
+
+    const Database = (await import("better-sqlite3")).default;
+    const legacy = new Database(dbPath);
+    legacy.exec(`
+      CREATE TABLE projects (
+        id TEXT PRIMARY KEY,
+        path TEXT NOT NULL,
+        name TEXT NOT NULL,
+        emoji TEXT NOT NULL,
+        last_opened INTEGER NOT NULL,
+        color TEXT,
+        status TEXT,
+        daintree_config_present INTEGER,
+        in_repo_settings INTEGER
+      );
+    `);
+    legacy
+      .prepare("INSERT INTO projects (id, path, name, emoji, last_opened) VALUES (?, ?, ?, ?, ?)")
+      .run("old", "/tmp/old", "old", "🪵", 1);
+    legacy.close();
+
+    const { sqlite } = openDb(dbPath, migrationsFolder);
+    try {
+      const cols = (sqlite.pragma("table_info(projects)") as ColInfo[]).map((c) => c.name);
+      expect(cols).toEqual(
+        expect.arrayContaining(["pinned", "frecency_score", "last_accessed_at"])
+      );
+
+      const row = sqlite
+        .prepare("SELECT id, pinned, frecency_score, last_accessed_at FROM projects WHERE id = ?")
+        .get("old") as {
+        id: string;
+        pinned: number;
+        frecency_score: number;
+        last_accessed_at: number;
+      };
+      expect(row.id).toBe("old");
+      expect(row.pinned).toBe(0);
+      expect(row.frecency_score).toBeCloseTo(3.0);
+      // Backfill must have replaced the column-default 0 with a real timestamp.
+      expect(row.last_accessed_at).toBeGreaterThan(0);
+
+      const migrations = sqlite.prepare("SELECT id FROM __drizzle_migrations").all() as {
+        id: number;
+      }[];
+      expect(migrations).toHaveLength(1);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("upgrades a partial-legacy DB (pinned present, frecency columns missing)", async () => {
+    const dbPath = path.join(tmpDir, "partial-legacy.db");
+
+    const Database = (await import("better-sqlite3")).default;
+    const legacy = new Database(dbPath);
+    legacy.exec(`
+      CREATE TABLE projects (
+        id TEXT PRIMARY KEY,
+        path TEXT NOT NULL,
+        name TEXT NOT NULL,
+        emoji TEXT NOT NULL,
+        last_opened INTEGER NOT NULL,
+        color TEXT,
+        status TEXT,
+        daintree_config_present INTEGER,
+        in_repo_settings INTEGER,
+        pinned INTEGER NOT NULL DEFAULT 0
+      );
+    `);
+    legacy.close();
+
+    const { sqlite } = openDb(dbPath, migrationsFolder);
+    try {
+      const cols = (sqlite.pragma("table_info(projects)") as ColInfo[]).map((c) => c.name);
+      expect(cols).toEqual(
+        expect.arrayContaining(["pinned", "frecency_score", "last_accessed_at"])
+      );
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("closes the underlying SQLite handle if migrate() throws", () => {
+    const dbPath = path.join(tmpDir, "leak.db");
+    const bogusFolder = path.join(tmpDir, "does-not-exist");
+
+    expect(() => openDb(dbPath, bogusFolder)).toThrow();
+
+    // If the handle were leaked, deleting the file on Windows would EBUSY.
+    // On POSIX, the WAL/SHM files would still exist. Deleting the DB file
+    // and walking the directory verifies no stray handle held it open.
+    expect(() => fs.unlinkSync(dbPath)).not.toThrow();
   });
 });

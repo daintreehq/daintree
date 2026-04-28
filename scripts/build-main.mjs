@@ -71,18 +71,6 @@ function copyBuiltInWorkflows() {
   }
 }
 
-function copyMigrations() {
-  const migrationsSrcDir = path.join(root, "electron/services/persistence/migrations");
-  const migrationsDestDir = path.join(root, "dist-electron/migrations");
-  if (fs.existsSync(migrationsSrcDir)) {
-    fs.mkdirSync(migrationsDestDir, { recursive: true });
-    fs.cpSync(migrationsSrcDir, migrationsDestDir, { recursive: true });
-    console.log("[Build] Copied drizzle migrations");
-  } else {
-    console.warn(`[Build] Drizzle migrations directory not found: ${migrationsSrcDir}`);
-  }
-}
-
 function createReadyMarkerPlugin() {
   return {
     name: "build-ready-marker",
@@ -145,12 +133,10 @@ async function run() {
 
       await Promise.all([ctxEsm.watch(), ctxCjs.watch()]);
       copyBuiltInWorkflows();
-      copyMigrations();
       console.log("[Build] Watching for changes...");
     } else {
       await Promise.all([build(esmConfig), build(cjsConfig)]);
       copyBuiltInWorkflows();
-      copyMigrations();
       writeBuildReadyMarker();
       console.log("[Build] Complete.");
     }
