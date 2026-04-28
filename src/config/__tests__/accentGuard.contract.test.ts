@@ -28,6 +28,19 @@ const FORBIDDEN_PATTERN = new RegExp(
   "g"
 );
 
+type AccentMatch = { index: number; full: string; utility: string };
+
+function assertAccentMatch(m: { 0: string; 1?: string; index?: number } | undefined): AccentMatch {
+  if (m === undefined) throw new Error("unexpected: match is undefined");
+  const utility = m[1];
+  const index = m.index;
+  // matchAll with a regex containing a capturing group always populates these
+  if (utility === undefined || index === undefined) {
+    throw new Error("unexpected: match has no capture group or index");
+  }
+  return { index, full: m[0], utility };
+}
+
 // Focus-ring auto-exclusion: border/ring/outline accent tokens preceded by a focus variant are
 // legitimate structural focus indicators. For example: focus:border-daintree-accent,
 // focus-visible:ring-daintree-accent/50, focus-within:outline-daintree-accent.
@@ -45,7 +58,7 @@ function isFocusRing(context: string, matchIndex: number, utility: string): bool
 
   // Walk back to find where the variant starts (preceding space, quote, paren, bracket, or start)
   let i = before.length - 2; // skip the trailing ':'
-  while (i >= 0 && !/[\s"'({]/.test(before[i])) {
+  while (i >= 0 && !/[\s"'({]/.test(before.charAt(i))) {
     i--;
   }
   const variant = before.substring(i + 1, before.length - 1);
@@ -318,7 +331,8 @@ describe("accent guard", () => {
         const matches = Array.from(input.matchAll(FORBIDDEN_PATTERN));
         expect(matches.length, `should have matched: ${input}`).toBeGreaterThan(0);
         // Verify the match is one of the forbidden utilities
-        expect(FORBIDDEN_UTILITIES).toContain(matches[0][1]);
+        const { utility } = assertAccentMatch(matches[0]);
+        expect(FORBIDDEN_UTILITIES).toContain(utility);
       });
     }
 
@@ -341,7 +355,8 @@ describe("accent guard", () => {
       const matches = Array.from(input.matchAll(FORBIDDEN_PATTERN));
       expect(matches.length, `no match found for: ${input}`).toBeGreaterThan(0);
       return matches.every((m) => {
-        return isFocusRing(input, m.index!, m[1]);
+        const { index, utility } = assertAccentMatch(m);
+        return isFocusRing(input, index, utility);
       });
     }
 
@@ -349,8 +364,9 @@ describe("accent guard", () => {
       const matches = Array.from(input.matchAll(FORBIDDEN_PATTERN));
       expect(matches.length, `no match found for: ${input}`).toBeGreaterThan(0);
       return matches.some((m) => {
-        if (!FOCUS_RING_UTILITIES.includes(m[1])) return true; // non-structural accent is always a violation
-        return !isFocusRing(input, m.index!, m[1]);
+        const { index, utility } = assertAccentMatch(m);
+        if (!FOCUS_RING_UTILITIES.includes(utility)) return true;
+        return !isFocusRing(input, index, utility);
       });
     }
 
@@ -414,39 +430,57 @@ describe("accent guard", () => {
     it("flags bg-daintree-accent alongside an excluded focus ring", () => {
       const input = "focus-visible:outline-daintree-accent bg-daintree-accent";
       const matches = Array.from(input.matchAll(FORBIDDEN_PATTERN));
-      const violations = matches.filter((m) => !isFocusRing(input, m.index!, m[1]));
+      const violations = matches.filter((m) => {
+        const { index, utility } = assertAccentMatch(m);
+        return !isFocusRing(input, index, utility);
+      });
       expect(violations.length).toBe(1);
-      expect(violations[0][1]).toBe("bg-daintree-accent");
+      const { utility } = assertAccentMatch(violations[0]);
+      expect(utility).toBe("bg-daintree-accent");
     });
 
     it("excludes focus ring but flags accent text in the same string", () => {
       const input = "focus:border-daintree-accent text-daintree-accent";
       const matches = Array.from(input.matchAll(FORBIDDEN_PATTERN));
-      const violations = matches.filter((m) => !isFocusRing(input, m.index!, m[1]));
+      const violations = matches.filter((m) => {
+        const { index, utility } = assertAccentMatch(m);
+        return !isFocusRing(input, index, utility);
+      });
       expect(violations.length).toBe(1);
-      expect(violations[0][1]).toBe("text-daintree-accent");
+      const { utility } = assertAccentMatch(violations[0]);
+      expect(utility).toBe("text-daintree-accent");
     });
 
     it("flags data-[state=checked]:border-daintree-accent (checkbox state is not a focus ring)", () => {
       const input =
         "data-[state=checked]:border-daintree-accent data-[state=checked]:bg-daintree-accent";
       const matches = Array.from(input.matchAll(FORBIDDEN_PATTERN));
-      const violations = matches.filter((m) => !isFocusRing(input, m.index!, m[1]));
+      const violations = matches.filter((m) => {
+        const { index, utility } = assertAccentMatch(m);
+        return !isFocusRing(input, index, utility);
+      });
       expect(violations.length).toBe(2);
     });
 
     it("excludes ring focus ring but flags decorative ring in same string", () => {
       const input = "focus:ring-daintree-accent/50 ring-daintree-accent/30";
       const matches = Array.from(input.matchAll(FORBIDDEN_PATTERN));
-      const violations = matches.filter((m) => !isFocusRing(input, m.index!, m[1]));
+      const violations = matches.filter((m) => {
+        const { index, utility } = assertAccentMatch(m);
+        return !isFocusRing(input, index, utility);
+      });
       expect(violations.length).toBe(1);
-      expect(violations[0][0]).toBe("ring-daintree-accent/30");
+      const { full } = assertAccentMatch(violations[0]);
+      expect(full).toBe("ring-daintree-accent/30");
     });
 
     it("flags group-focus:ring-daintree-accent (parent state, not a focus ring)", () => {
       const input = "group-focus:ring-daintree-accent/50";
       const matches = Array.from(input.matchAll(FORBIDDEN_PATTERN));
-      const violations = matches.filter((m) => !isFocusRing(input, m.index!, m[1]));
+      const violations = matches.filter((m) => {
+        const { index, utility } = assertAccentMatch(m);
+        return !isFocusRing(input, index, utility);
+      });
       expect(violations.length).toBe(1);
     });
   });
@@ -470,13 +504,12 @@ describe("accent guard", () => {
       const matches = Array.from(source.matchAll(FORBIDDEN_PATTERN));
 
       for (const match of matches) {
-        const utility = match[1];
+        const { index, utility, full: token } = assertAccentMatch(match);
 
-        if (isFocusRing(source, match.index!, utility)) {
+        if (isFocusRing(source, index, utility)) {
           continue;
         }
 
-        const token = match[0];
         const existing = violations.get(relativePath);
         if (existing) {
           if (!existing.includes(token)) existing.push(token);
