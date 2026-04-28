@@ -43,10 +43,14 @@ function getAppThemeConfig(): AppThemeConfig {
         appCustomSchemesWriteSchema
       );
       if (result.migrated) {
-        store.set("appTheme", {
-          ...cfg,
-          customSchemes: result.schemes.length > 0 ? result.schemes : [],
-        } satisfies AppThemeConfig);
+        try {
+          store.set("appTheme", {
+            ...cfg,
+            customSchemes: result.schemes.length > 0 ? result.schemes : [],
+          } satisfies AppThemeConfig);
+        } catch {
+          // Non-fatal: config parsed but migration write failed
+        }
       }
       if (result.errors.length > 0) {
         console.warn("[appTheme] customSchemes migration warnings:", result.errors.join("; "));

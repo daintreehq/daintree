@@ -34,10 +34,14 @@ export function registerTerminalConfigHandlers(deps?: HandlerDependencies): () =
           terminalCustomSchemesWriteSchema
         );
         if (result.migrated) {
-          store.set("terminalConfig", {
-            ...config,
-            customSchemes: result.schemes.length > 0 ? result.schemes : [],
-          });
+          try {
+            store.set("terminalConfig", {
+              ...config,
+              customSchemes: result.schemes.length > 0 ? result.schemes : [],
+            });
+          } catch {
+            // Non-fatal: config parsed but migration write failed
+          }
         }
         if (result.errors.length > 0) {
           console.warn(

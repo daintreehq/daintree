@@ -17,6 +17,11 @@ import { createWindowWithState } from "../windowState.js";
 import { store } from "../store.js";
 import { resolveAppTheme } from "../../shared/theme/index.js";
 import type { AppColorScheme } from "../../shared/theme/index.js";
+import {
+  appCustomSchemesReadSchema,
+  appCustomSchemesWriteSchema,
+  migrateCustomSchemes,
+} from "../schemas/customSchemes.js";
 
 import { canOpenExternalUrl, openExternalUrl } from "../utils/openExternal.js";
 import { isTrustedRendererUrl } from "../../shared/utils/trustedRenderer.js";
@@ -146,9 +151,30 @@ export function setupBrowserWindow(
     colorSchemeId = nativeTheme.shouldUseDarkColors ? "daintree" : "bondi";
   }
 
-  const customSchemes: AppColorScheme[] = Array.isArray(themeConfig?.customSchemes)
-    ? themeConfig.customSchemes
-    : [];
+  // Apply lazy migration for legacy string-encoded customSchemes
+  let customSchemes: AppColorScheme[] = [];
+  const rawSchemes =
+    themeConfig && typeof themeConfig === "object" && !Array.isArray(themeConfig)
+      ? (themeConfig as Record<string, unknown>).customSchemes
+      : undefined;
+  if (rawSchemes !== undefined) {
+    const result = migrateCustomSchemes(
+      rawSchemes,
+      appCustomSchemesReadSchema,
+      appCustomSchemesWriteSchema
+    );
+    customSchemes = result.schemes;
+    if (result.migrated) {
+      try {
+        store.set("appTheme", {
+          ...(themeConfig as Record<string, unknown>),
+          customSchemes: result.schemes.length > 0 ? result.schemes : [],
+        });
+      } catch {
+        // Non-fatal: config persisted but migration write failed
+      }
+    }
+  }
 
   const scheme = resolveAppTheme(colorSchemeId, customSchemes);
   const windowBg = scheme.tokens["surface-canvas"];

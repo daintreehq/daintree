@@ -759,5 +759,26 @@ describe("appTheme handlers", () => {
       expect(config.customSchemes).toHaveLength(1);
       expect(config.customSchemes[0]).toMatchObject({ id: "good" });
     });
+
+    it("preserves valid entries when a native array has one corrupt entry", async () => {
+      const nativeSchemes = [
+        { id: "good", name: "Good", type: "dark" as const, builtin: false, tokens: {} },
+        { id: "bad", name: "", type: "dark" as const, builtin: false, tokens: {} },
+      ];
+      storeState.data.appTheme = {
+        colorSchemeId: "daintree",
+        customSchemes: nativeSchemes,
+      };
+      registerAppThemeHandlers();
+
+      const handler = getHandler(CHANNELS.APP_THEME_GET);
+      const config = (await handler({}, {})) as {
+        colorSchemeId: string;
+        customSchemes: unknown[];
+      };
+
+      expect(config.customSchemes).toHaveLength(1);
+      expect(config.customSchemes[0]).toMatchObject({ id: "good" });
+    });
   });
 });
