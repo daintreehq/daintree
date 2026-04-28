@@ -13,11 +13,21 @@ vi.mock("@/services/ActionService", () => ({
   },
 }));
 
+vi.mock("@/lib/notify", () => ({ notify: vi.fn() }));
+vi.mock("@/utils/logger", () => ({
+  logError: vi.fn(),
+  logDebug: vi.fn(),
+  logInfo: vi.fn(),
+  logWarn: vi.fn(),
+}));
+
 import { useGitHubConfigStore } from "@/store";
 import { actionService } from "@/services/ActionService";
+import { notify } from "@/lib/notify";
 
 const mockedUseGitHubConfigStore = vi.mocked(useGitHubConfigStore);
 const mockedDispatch = vi.mocked(actionService.dispatch);
+const mockedNotify = vi.mocked(notify);
 
 function setupStore(overrides: Record<string, unknown> = {}) {
   mockedUseGitHubConfigStore.mockReturnValue({
@@ -107,5 +117,33 @@ describe("GitHubSettingsTab handleSaveToken", () => {
       expect.anything(),
       expect.anything()
     );
+  });
+
+  it("routes IPC failure to inbox via low-priority notify alongside inline error", async () => {
+    mockedDispatch.mockImplementation(async (actionId: string) => {
+      if (actionId === "github.setToken") {
+        return { ok: false, error: { message: "IPC down" } } as never;
+      }
+      return { ok: true, result: undefined } as never;
+    });
+
+    render(<GitHubSettingsTab />);
+
+    fireEvent.change(screen.getByLabelText(/github personal access token/i), {
+      target: { value: "ghp_token" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save token" }));
+
+    await waitFor(() => {
+      expect(mockedNotify).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "error",
+          priority: "low",
+          title: "GitHub token save failed",
+        })
+      );
+    });
+
+    expect(screen.getByText(/failed to save token/i)).toBeTruthy();
   });
 });

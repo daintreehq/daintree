@@ -5,6 +5,7 @@ import { cliAvailabilityClient } from "@/clients";
 import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
 import { useProjectPresetsStore } from "@/store/projectPresetsStore";
 import { logError } from "@/utils/logger";
+import { notify } from "@/lib/notify";
 import { Button } from "@/components/ui/button";
 import {
   DEFAULT_AGENT_SETTINGS,
@@ -99,6 +100,12 @@ export function AgentSettings({
       await fetchCliDetails();
     } catch (error) {
       logError("[AgentSettings] Failed to refresh CLI availability", error);
+      notify({
+        type: "error",
+        title: "CLI refresh failed",
+        message: "Couldn't refresh agent availability. Try again.",
+        priority: "low",
+      });
     }
   }, [isRefreshingCli, refreshCliAvailability, fetchCliDetails]);
 
@@ -133,6 +140,12 @@ export function AgentSettings({
       setAddDialogAgentId(null);
     } catch (error) {
       logError("[AgentSettings] Failed to create preset", error);
+      notify({
+        type: "error",
+        title: "Preset creation failed",
+        message: "Couldn't save the new preset. Try again.",
+        priority: "low",
+      });
     }
   };
 
@@ -494,6 +507,12 @@ export function AgentSettings({
                     onSettingsChange?.();
                   } catch (error) {
                     logError("Failed to update preset", error);
+                    notify({
+                      type: "error",
+                      title: "Preset update failed",
+                      message: "Couldn't save the preset changes. Try again.",
+                      priority: "low",
+                    });
                   }
                 })();
               };

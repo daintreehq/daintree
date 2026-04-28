@@ -15,6 +15,7 @@ import { getAgentSettingsEntry } from "@shared/types";
 import { ASSISTANT_FAST_MODELS } from "@shared/config/agentRegistry";
 import { actionService } from "@/services/ActionService";
 import { TerminalRefreshTier } from "@/types";
+import { logError } from "@/utils/logger";
 
 const RESIZE_STEP = 10;
 
@@ -95,7 +96,9 @@ export function HelpPanel() {
       if (result.ok && result.result?.terminalId) {
         if (document.hidden) return;
         useHelpPanelStore.getState().setTerminal(result.result.terminalId, preferredAgentId);
-        window.electron.help.markTerminal(result.result.terminalId).catch(() => {});
+        window.electron.help.markTerminal(result.result.terminalId).catch((err) => {
+          logError("Failed to mark help terminal", err);
+        });
       }
     })();
   }, [isOpen, terminalId, preferredAgentId]);
@@ -188,7 +191,9 @@ export function HelpPanel() {
 
       if (result.ok && result.result?.terminalId) {
         useHelpPanelStore.getState().setTerminal(result.result.terminalId, selectedAgentId);
-        window.electron.help.markTerminal(result.result.terminalId).catch(() => {});
+        window.electron.help.markTerminal(result.result.terminalId).catch((err) => {
+          logError("Failed to mark help terminal", err);
+        });
       }
     },
     [terminalId, removePanel, clearTerminal]

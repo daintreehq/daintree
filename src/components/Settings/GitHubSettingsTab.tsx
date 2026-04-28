@@ -7,6 +7,7 @@ import { actionService } from "@/services/ActionService";
 import type { GitHubTokenConfig, GitHubTokenValidation } from "@/types";
 import { SettingsSection } from "./SettingsSection";
 import { logError } from "@/utils/logger";
+import { notify } from "@/lib/notify";
 
 type ValidationResult = "success" | "error" | "test-success" | "test-error" | null;
 
@@ -79,6 +80,12 @@ export function GitHubSettingsTab() {
       }
     } catch (error) {
       logError("Failed to save GitHub token", error);
+      notify({
+        type: "error",
+        title: "GitHub token save failed",
+        message: "Couldn't save the GitHub token. Check that the token is valid and try again.",
+        priority: "low",
+      });
       setValidationResult("error");
       setErrorMessage("Failed to save token");
     } finally {
@@ -107,6 +114,12 @@ export function GitHubSettingsTab() {
       setErrorMessage(null);
     } catch (error) {
       logError("Failed to clear GitHub token", error);
+      notify({
+        type: "error",
+        title: "GitHub token clear failed",
+        message: "Couldn't remove the GitHub token. Try again.",
+        priority: "low",
+      });
       setValidationResult("error");
       setErrorMessage("Failed to clear token");
     }
@@ -135,6 +148,12 @@ export function GitHubSettingsTab() {
       }
     } catch (error) {
       logError("Failed to test GitHub token", error);
+      notify({
+        type: "error",
+        title: "GitHub token test failed",
+        message: "Couldn't test the token. Check your network connection and try again.",
+        priority: "low",
+      });
       setValidationResult("test-error");
       setErrorMessage("Failed to validate token");
     } finally {

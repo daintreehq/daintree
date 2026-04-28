@@ -2,11 +2,22 @@
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { McpServerSettingsTab } from "../McpServerSettingsTab";
+import { notify } from "@/lib/notify";
+import { logError } from "@/utils/logger";
 
 vi.mock("@/lib/notify", () => ({ notify: vi.fn() }));
+vi.mock("@/utils/logger", () => ({
+  logError: vi.fn(),
+  logDebug: vi.fn(),
+  logInfo: vi.fn(),
+  logWarn: vi.fn(),
+}));
 vi.mock("@/components/icons", () => ({
   McpServerIcon: () => null,
 }));
+
+const mockedNotify = vi.mocked(notify);
+const mockedLogError = vi.mocked(logError);
 
 function createMcpApi(overrides: Partial<typeof window.electron.mcpServer> = {}) {
   return {
@@ -126,5 +137,49 @@ describe("McpServerSettingsTab", () => {
       expect(window.electron.mcpServer.setApiKey).toHaveBeenCalledWith("");
       expect(screen.getByText("Generate API Key")).toBeTruthy();
     });
+  });
+
+  it("routes IPC failure to inbox via low-priority notify and inline error", async () => {
+    window.electron = {
+      mcpServer: createMcpApi({
+        getStatus: vi.fn().mockRejectedValue(new Error("IPC down")),
+      }),
+    } as unknown as typeof window.electron;
+
+    const { container } = render(<McpServerSettingsTab />);
+
+    await waitForContent(container, "IPC down");
+
+    expect(mockedNotify).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "error",
+        priority: "low",
+        title: "MCP status failed",
+      })
+    );
+    expect(mockedLogError).toHaveBeenCalledWith("Failed to load MCP status", expect.any(Error));
+  });
+
+  it("routes toggle IPC failure to inbox while keeping inline error", async () => {
+    window.electron = {
+      mcpServer: createMcpApi({
+        setEnabled: vi.fn().mockRejectedValue(new Error("toggle failed")),
+      }),
+    } as unknown as typeof window.electron;
+
+    const { container } = render(<McpServerSettingsTab />);
+    await waitForContent(container, "MCP Server");
+
+    fireEvent.click(screen.getByLabelText("Enable MCP server"));
+
+    await waitForContent(container, "toggle failed");
+    expect(mockedNotify).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "error",
+        priority: "low",
+        title: "MCP server update failed",
+      })
+    );
+    expect(mockedLogError).toHaveBeenCalledWith("Failed to update MCP server", expect.any(Error));
   });
 });
