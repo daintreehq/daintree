@@ -38,7 +38,7 @@ describe("ProjectStore recipe reconciliation", () => {
     // Override the userData path so ProjectFileStore writes into tmpDir
     // rather than Electron's real userData.
     store = new ProjectStore();
-    (store as any).projectsConfigDir = tmpDir;
+    (store as unknown as { projectsConfigDir: string }).projectsConfigDir = tmpDir;
 
     await store.initialize();
   });
@@ -62,11 +62,11 @@ describe("ProjectStore recipe reconciliation", () => {
   // --- Helper: read both stores ---
 
   async function readFileStore(): Promise<TerminalRecipe[]> {
-    return (store as any).fileStore.getRecipes(projectId);
+    return store.getRecipes(projectId);
   }
 
   async function readInRepo(): Promise<TerminalRecipe[]> {
-    return (store as any).identityFiles.readInRepoRecipes(projectPath);
+    return store.readInRepoRecipes(projectPath);
   }
 
   it("empty stores: reconciliation is a no-op", async () => {
