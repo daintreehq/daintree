@@ -912,7 +912,7 @@ describe("Recipe Validation Schemas", () => {
         { id: "r2", name: "Also valid", terminals: [], createdAt: 2 },
       ];
 
-      const result = filterValidTerminalEntries(recipes as any[], TerminalRecipeSchema, "test");
+      const result = filterValidTerminalEntries(recipes as unknown[], TerminalRecipeSchema, "test");
       expect(result).toHaveLength(2);
       expect(consoleSpy).toHaveBeenCalledTimes(2);
     });
@@ -930,7 +930,7 @@ describe("Recipe Validation Schemas", () => {
       ];
 
       const result = filterValidTerminalEntries(
-        corrupted as any[],
+        corrupted as unknown[],
         TerminalRecipeSchema,
         "corruption"
       );
@@ -948,7 +948,7 @@ describe("Recipe Validation Schemas", () => {
         { id: "third", name: "Third", terminals: [], createdAt: 4 },
       ];
 
-      const result = filterValidTerminalEntries(entries as any[], TerminalRecipeSchema, "test");
+      const result = filterValidTerminalEntries(entries as unknown[], TerminalRecipeSchema, "test");
       expect(result.map((e) => e.id)).toEqual(["first", "second", "third"]);
     });
   });
