@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, session, webContents } from "electron";
+import { app, BrowserWindow, dialog, session, webContents } from "electron";
 import os from "os";
 import type { HandlerDependencies } from "../ipc/types.js";
 import { registerIpcHandlers, sendToRenderer } from "../ipc/handlers.js";
