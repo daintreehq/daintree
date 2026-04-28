@@ -571,7 +571,7 @@ export function WorktreeHeader({
           ) : isMainStandardLayout ? (
             <span
               className={cn(
-                "truncate text-[13px] font-medium transition-colors duration-200",
+                "truncate text-[13px] font-medium transition-colors duration-150",
                 isActive
                   ? "text-text-primary/90"
                   : isMuted
@@ -673,7 +673,7 @@ export function WorktreeHeader({
             >
               <ChevronRight
                 className={cn(
-                  "w-3.5 h-3.5 transition-transform duration-200",
+                  "w-3.5 h-3.5 transition-transform duration-150",
                   isCollapsed ? "rotate-0" : "rotate-90"
                 )}
                 aria-hidden="true"

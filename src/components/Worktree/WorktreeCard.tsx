@@ -673,7 +673,7 @@ export const WorktreeCard = React.memo(function WorktreeCard({
         <div
           ref={droppableRef}
           className={cn(
-            "sidebar-worktree-card group/card relative transition duration-200",
+            "sidebar-worktree-card group/card relative transition duration-150",
             variant === "sidebar" && "border-b border-border-default",
             variant === "grid" && "rounded-lg border border-divider bg-overlay-subtle",
             isActive &&

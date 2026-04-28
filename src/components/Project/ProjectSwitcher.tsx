@@ -16,7 +16,7 @@ import type { SearchableProject } from "@/hooks/useProjectSwitcherPalette";
 const renderIcon = (emoji: string, color?: string, sizeClass = "h-9 w-9 text-lg") => (
   <div
     className={cn(
-      "flex items-center justify-center rounded-[var(--radius-xl)] shadow-[inset_0_1px_2px_rgba(0,0,0,0.18)] shrink-0 transition duration-200",
+      "flex items-center justify-center rounded-[var(--radius-xl)] shadow-[inset_0_1px_2px_rgba(0,0,0,0.18)] shrink-0 transition duration-150",
       sizeClass
     )}
     style={{

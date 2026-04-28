@@ -418,6 +418,7 @@
   --duration-200: 200ms;
   --duration-250: 250ms;
   --duration-300: 300ms;
+  --default-transition-timing-function: ease-out;
   --ease-snappy: cubic-bezier(0.2, 0, 0, 1);
   --ease-spring-critical: linear(
     0,

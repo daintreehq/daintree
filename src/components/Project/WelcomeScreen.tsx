@@ -468,7 +468,7 @@ function InlineChecklist({
             <>
               <div
                 className={cn(
-                  "h-4 w-4 rounded-full border flex items-center justify-center shrink-0 transition-colors duration-200",
+                  "h-4 w-4 rounded-full border flex items-center justify-center shrink-0 transition-colors duration-150",
                   done ? "bg-daintree-accent border-daintree-accent" : "border-daintree-text/30"
                 )}
               >
@@ -505,7 +505,7 @@ function InlineChecklist({
 
           const sharedClasses = cn(
             "flex items-start gap-2.5 rounded-[var(--radius-xs)] px-2 py-1.5",
-            "transition-colors duration-200",
+            "transition-colors duration-150",
             done ? "opacity-60" : "opacity-100"
           );
 

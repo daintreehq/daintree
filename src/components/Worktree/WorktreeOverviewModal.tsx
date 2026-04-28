@@ -579,7 +579,7 @@ export function WorktreeOverviewModal({
                           "rounded-lg overflow-hidden",
                           "border border-divider",
                           "bg-daintree-sidebar/50",
-                          "transition duration-200",
+                          "transition duration-150",
                           "hover:border-daintree-accent/50 hover:shadow-lg hover:shadow-daintree-accent/5",
                           worktree.id === activeWorktreeId &&
                             "border-[var(--color-state-active)]/70 shadow-md"
@@ -626,7 +626,7 @@ export function WorktreeOverviewModal({
                     "rounded-lg overflow-hidden",
                     "border border-divider",
                     "bg-daintree-sidebar/50",
-                    "transition duration-200",
+                    "transition duration-150",
                     "hover:border-daintree-accent/50 hover:shadow-lg hover:shadow-daintree-accent/5",
                     worktree.id === activeWorktreeId &&
                       "border-[var(--color-state-active)]/70 shadow-md"

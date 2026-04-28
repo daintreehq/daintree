@@ -251,7 +251,7 @@ export function VoiceInputButton({
                   : "Start voice input"
         }
         className={cn(
-          "relative flex items-center justify-center rounded-full transition duration-200",
+          "relative flex items-center justify-center rounded-full transition duration-150",
           "h-6 w-6",
           "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-daintree-accent",
           showOrbit

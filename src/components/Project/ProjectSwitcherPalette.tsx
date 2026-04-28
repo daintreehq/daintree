@@ -165,7 +165,7 @@ const ProjectListItem = memo(function ProjectListItem({
 
       <div
         className={cn(
-          "flex items-center justify-center rounded-[var(--radius-lg)] shadow-[inset_0_1px_2px_rgba(0,0,0,0.3)] shrink-0 transition duration-200",
+          "flex items-center justify-center rounded-[var(--radius-lg)] shadow-[inset_0_1px_2px_rgba(0,0,0,0.3)] shrink-0 transition duration-150",
           "h-8 w-8 text-base"
         )}
         style={{
