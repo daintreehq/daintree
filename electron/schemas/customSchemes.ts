@@ -4,7 +4,6 @@
  */
 
 import { z } from "zod";
-
 const appColorSchemeTokenSchema = z.record(z.string(), z.string());
 
 const themeStrategySchema = z.object({

@@ -42,7 +42,7 @@ function getAppThemeConfig(): AppThemeConfig {
         try {
           store.set("appTheme", {
             ...cfg,
-            customSchemes: result.schemes.length > 0 ? result.schemes : [],
+            customSchemes: result.schemes.length > 0 ? (result.schemes as AppColorScheme[]) : [],
           } satisfies AppThemeConfig);
         } catch {
           // Non-fatal: config parsed but migration write failed
@@ -51,7 +51,7 @@ function getAppThemeConfig(): AppThemeConfig {
       if (result.errors.length > 0) {
         console.warn("[appTheme] customSchemes migration warnings:", result.errors.join("; "));
       }
-      return { ...cfg, customSchemes: result.schemes };
+      return { ...cfg, customSchemes: result.schemes as AppColorScheme[] };
     }
     return cfg;
   }
@@ -95,7 +95,7 @@ export function registerAppThemeHandlers(mainWindow?: BrowserWindow): () => void
       const current = getAppThemeConfig();
       store.set("appTheme", {
         ...current,
-        customSchemes: result.data,
+        customSchemes: result.data as AppColorScheme[],
       } satisfies AppThemeConfig);
     })
   );
