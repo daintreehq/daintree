@@ -1,10 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { debounce } from "../debounce";
+import { logError } from "@/utils/logger";
+
+vi.mock("@/utils/logger", () => ({
+  logError: vi.fn(),
+}));
 
 describe("debounce", () => {
   beforeEach(() => {
     vi.useFakeTimers();
-    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.mocked(logError).mockClear();
   });
 
   afterEach(() => {
@@ -79,8 +84,8 @@ describe("debounce", () => {
     await Promise.resolve();
     await Promise.resolve();
 
-    expect(console.error).toHaveBeenCalledWith(
-      "Debounce execution failed:",
+    expect(logError).toHaveBeenCalledWith(
+      "Debounce execution failed",
       expect.objectContaining({ message: "boom" })
     );
   });

@@ -10,6 +10,7 @@ import { getAIAgentInfo } from "@/lib/aiAgentDetection";
 import { useKeybindingScope } from "@/hooks/useKeybinding";
 import { useMacroFocusStore } from "@/store/macroFocusStore";
 import { actionService } from "@/services/ActionService";
+import { logError } from "@/utils/logger";
 import {
   ContextMenu,
   ContextMenuCheckboxItem,
@@ -108,10 +109,10 @@ export function PortalDock() {
           { source: "user" }
         );
         if (!result.ok) {
-          console.error("Failed to activate portal tab:", result.error);
+          logError("Failed to activate portal tab", undefined, { error: result.error });
         }
       } catch (error) {
-        console.error("Failed to activate portal tab:", error);
+        logError("Failed to activate portal tab", error);
       } finally {
         setIsSwitching(false);
       }
@@ -183,7 +184,7 @@ export function PortalDock() {
   const handleGoBack = useCallback(async () => {
     const result = await actionService.dispatch("portal.goBack", undefined, { source: "user" });
     if (!result.ok) {
-      console.error("Failed to go back:", result.error);
+      logError("Failed to go back", undefined, { error: result.error });
     }
   }, [activeTabId]);
 
@@ -192,14 +193,14 @@ export function PortalDock() {
       source: "user",
     });
     if (!result.ok) {
-      console.error("Failed to go forward:", result.error);
+      logError("Failed to go forward", undefined, { error: result.error });
     }
   }, [activeTabId]);
 
   const handleReload = useCallback(async () => {
     const result = await actionService.dispatch("portal.reload", undefined, { source: "user" });
     if (!result.ok) {
-      console.error("Failed to reload:", result.error);
+      logError("Failed to reload", undefined, { error: result.error });
     }
   }, [activeTabId]);
 
@@ -208,14 +209,14 @@ export function PortalDock() {
       source: "user",
     });
     if (!result.ok) {
-      console.error("Failed to open URL externally:", result.error);
+      logError("Failed to open URL externally", undefined, { error: result.error });
     }
   }, []);
 
   const handleCopyUrl = useCallback(async () => {
     const result = await actionService.dispatch("portal.copyUrl", undefined, { source: "user" });
     if (!result.ok) {
-      console.error("Failed to copy URL:", result.error);
+      logError("Failed to copy URL", undefined, { error: result.error });
     }
   }, []);
 
@@ -228,7 +229,7 @@ export function PortalDock() {
         { source: "context-menu" }
       );
       if (!result.ok) {
-        console.error("Failed to duplicate tab:", result.error);
+        logError("Failed to duplicate tab", undefined, { error: result.error });
       }
     },
     [isSwitching]
@@ -243,7 +244,7 @@ export function PortalDock() {
         { source: "context-menu" }
       );
       if (!result.ok) {
-        console.error("Failed to close other tabs:", result.error);
+        logError("Failed to close other tabs", undefined, { error: result.error });
       }
     },
     [isSwitching]
@@ -258,7 +259,7 @@ export function PortalDock() {
         { source: "context-menu" }
       );
       if (!result.ok) {
-        console.error("Failed to close tabs to the right:", result.error);
+        logError("Failed to close tabs to the right", undefined, { error: result.error });
       }
     },
     [isSwitching]
@@ -271,7 +272,7 @@ export function PortalDock() {
       { source: "context-menu" }
     );
     if (!result.ok) {
-      console.error("Failed to copy tab URL:", result.error);
+      logError("Failed to copy tab URL", undefined, { error: result.error });
     }
   }, []);
 
@@ -282,7 +283,7 @@ export function PortalDock() {
       { source: "context-menu" }
     );
     if (!result.ok) {
-      console.error("Failed to open tab externally:", result.error);
+      logError("Failed to open tab externally", undefined, { error: result.error });
     }
   }, []);
 
@@ -293,7 +294,7 @@ export function PortalDock() {
       { source: "context-menu" }
     );
     if (!result.ok) {
-      console.error("Failed to reload tab:", result.error);
+      logError("Failed to reload tab", undefined, { error: result.error });
     }
   }, []);
 

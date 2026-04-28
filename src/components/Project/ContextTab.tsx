@@ -14,6 +14,7 @@ import { cn } from "@/lib/utils";
 import { copyTreeClient } from "@/clients/copyTreeClient";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import type { CopyTreeSettings, CopyTreeTestConfigResult, Worktree } from "@/types";
+import { logError } from "@/utils/logger";
 
 function formatBytes(bytes: number): string {
   if (bytes === 0) return "0 B";
@@ -110,7 +111,7 @@ export function ContextTab({
       const result = await copyTreeClient.testConfig(mainWorktree.id, testOptions);
       setTestConfigResult(result);
     } catch (error) {
-      console.error("Failed to test config:", error);
+      logError("Failed to test config", error);
       setTestConfigResult({
         includedFiles: 0,
         includedSize: 0,

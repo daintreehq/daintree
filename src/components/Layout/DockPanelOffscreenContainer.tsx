@@ -12,6 +12,7 @@ import { useShallow } from "zustand/react/shallow";
 import { usePanelStore, useWorktreeSelectionStore, type TerminalInstance } from "@/store";
 import { DockedPanel } from "@/components/Terminal/DockedPanel";
 import { buildPanelDuplicateOptions } from "@/services/terminal/panelDuplicationService";
+import { logError } from "@/utils/logger";
 
 interface DockPanelContextValue {
   portalTarget: (terminalId: string, target: HTMLElement | null) => void;
@@ -108,7 +109,7 @@ export function DockPanelOffscreenContainer({ children }: DockPanelOffscreenCont
         setActiveTab(groupId, newPanelId);
         openDockTerminal(newPanelId);
       } catch (error) {
-        console.error("Failed to add tab:", error);
+        logError("Failed to add tab", error);
         if (createdNewGroup && groupId!) {
           deleteTabGroup(groupId);
         }

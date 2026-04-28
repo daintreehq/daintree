@@ -5,6 +5,7 @@ import { actionService } from "@/services/ActionService";
 import { dismissSetupBanner as dismissSetupBannerFromHook } from "@/hooks/app/useAgentDiscoveryOnboarding";
 import type { OnboardingState } from "@shared/types";
 import type { CliAvailability } from "@shared/types";
+import { logError } from "@/utils/logger";
 
 const SKIP_FIRST_RUN_DIALOGS = isDaintreeEnvEnabled("DAINTREE_E2E_SKIP_FIRST_RUN_DIALOGS");
 
@@ -48,7 +49,7 @@ export function OnboardingFlow({
     (async () => {
       const onboardingState = await window.electron.onboarding.get();
       setState(onboardingState);
-    })().catch(console.error);
+    })().catch((err) => logError("Onboarding step failed", err));
   }, []);
 
   // Listen for manual wizard open events (from Settings / toolbar / panel palette / welcome banner).

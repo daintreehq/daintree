@@ -6,6 +6,7 @@ import { formatTimeAgo } from "@/utils/timeAgo";
 import type { GitCommit } from "@shared/types/github";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { parseConventionalCommit } from "./commitListUtils";
+import { logError } from "@/utils/logger";
 
 interface CommitListItemProps {
   commit: GitCommit;
@@ -43,7 +44,7 @@ export function CommitListItem({ commit, optionId, isActive }: CommitListItemPro
       setCopied(true);
       timeoutRef.current = window.setTimeout(() => setCopied(false), 2000);
     } catch (error) {
-      console.error("Failed to copy:", error);
+      logError("Failed to copy", error);
     }
   };
 

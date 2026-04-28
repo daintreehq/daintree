@@ -9,6 +9,7 @@ import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { TerminalRecipe, Worktree } from "@/types";
+import { logError } from "@/utils/logger";
 import { isInRepoRecipeId } from "@shared/utils/recipeFilename";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 

@@ -15,6 +15,7 @@ import { restrictToHorizontalAxis, restrictToParentElement } from "@dnd-kit/modi
 import { Plus } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn, getBaseTitle } from "@/lib/utils";
+import { logError } from "@/utils/logger";
 import {
   useTerminalInputStore,
   usePanelStore,
@@ -345,7 +346,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
       setFocused(newPanelId);
       openDockTerminal(newPanelId);
     } catch (error) {
-      console.error("Failed to add tab:", error);
+      logError("Failed to add tab", error);
     }
   }, [
     activePanel,

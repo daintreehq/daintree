@@ -18,6 +18,7 @@ import { useWorktrees } from "@/hooks/useWorktrees";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { RunCommand } from "@/types";
+import { logError } from "@/utils/logger";
 import { RunningTaskList } from "./RunningTaskList";
 
 interface QuickRunProps {

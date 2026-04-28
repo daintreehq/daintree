@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import { projectClient, systemClient } from "@/clients";
 import { useProjectStatsStore } from "@/store/projectStatsStore";
 import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
+import { logError } from "@/utils/logger";
 import type { ProcessMetricEntry, HeapStats, DiagnosticsInfo } from "@shared/types/ipc/system";
 import type { BulkProjectStatsEntry } from "@shared/types/ipc/project";
 import type { Project } from "@shared/types";

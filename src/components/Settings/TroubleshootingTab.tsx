@@ -19,6 +19,7 @@ import type { AppState, SystemHealthCheckResult } from "@shared/types";
 import type { DiagnosticsReviewPayload } from "@shared/types/ipc/system";
 import type { ReplacementRule } from "@shared/utils/diagnosticsTransform";
 import { actionService } from "@/services/ActionService";
+import { logError, logWarn } from "@/utils/logger";
 import { SettingsSection } from "./SettingsSection";
 import { SettingsSwitchCard } from "./SettingsSwitchCard";
 import { DiagnosticsReviewDialog } from "./DiagnosticsReviewDialog";
@@ -236,7 +237,7 @@ export function TroubleshootingTab() {
       await logsClient.clearLevelOverrides();
       setLogOverrides({});
     } catch (error) {
-      console.error("Failed to clear log level overrides:", error);
+      logError("Failed to clear log level overrides", error);
     }
   }, []);
 
@@ -257,7 +258,7 @@ export function TroubleshootingTab() {
         }
       })
       .catch((error) => {
-        console.error("Failed to get verbose logging state:", error);
+        logError("Failed to get verbose logging state", error);
       });
   }, []);
 
@@ -277,7 +278,7 @@ export function TroubleshootingTab() {
           throw new Error(result.error.message);
         }
       } catch (error) {
-        console.error("Failed to save developer mode settings:", error);
+        logError("Failed to save developer mode settings", error);
       }
     },
     []
@@ -358,11 +359,11 @@ export function TroubleshootingTab() {
       );
       const payload = result.ok ? (result.result as { success: boolean }) : null;
       if (!result.ok || !payload?.success) {
-        console.error("Backend rejected verbose logging toggle");
+        logWarn("Backend rejected verbose logging toggle");
         setVerboseLogging(!newState);
       }
     } catch (error) {
-      console.error("Failed to set verbose logging:", error);
+      logError("Failed to set verbose logging", error);
       setVerboseLogging(!newState);
     } finally {
       setVerboseLoggingPending(false);
@@ -378,7 +379,7 @@ export function TroubleshootingTab() {
         throw new Error(result.error.message);
       }
     } catch (error) {
-      console.error("Failed to clear logs:", error);
+      logError("Failed to clear logs", error);
     }
   };
 

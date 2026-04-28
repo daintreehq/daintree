@@ -21,6 +21,7 @@ import {
 } from "./DiagnosticsActions";
 import type { RetryAction } from "@/store";
 import { appClient } from "@/clients";
+import { logError } from "@/utils/logger";
 
 interface TabButtonProps {
   tab: DiagnosticsTab;
@@ -143,7 +144,7 @@ export function DiagnosticsDock({ onRetry, onCancelRetry, className }: Diagnosti
         try {
           await appClient.setState({ diagnosticsHeight: height });
         } catch (error) {
-          console.error("Failed to persist diagnostics height:", error);
+          logError("Failed to persist diagnostics height", error);
         }
       }, 300);
       return () => clearTimeout(timer);
@@ -159,7 +160,7 @@ export function DiagnosticsDock({ onRetry, onCancelRetry, className }: Diagnosti
           setHeight(appState.diagnosticsHeight);
         }
       } catch (error) {
-        console.error("Failed to restore diagnostics height:", error);
+        logError("Failed to restore diagnostics height", error);
       }
     };
     restoreHeight();

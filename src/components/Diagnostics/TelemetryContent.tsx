@@ -7,6 +7,7 @@ import { useTelemetryPreviewStore } from "@/store/telemetryPreviewStore";
 import { telemetryPreviewClient } from "@/clients";
 import { actionService } from "@/services/ActionService";
 import type { SanitizedTelemetryEvent } from "@shared/types";
+import { logError } from "@/utils/logger";
 
 export interface TelemetryContentProps {
   className?: string;
@@ -103,7 +104,7 @@ function TelemetryDetail({ event }: DetailProps) {
       if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
       copyTimerRef.current = setTimeout(() => setCopied(false), 2000);
     } catch (err) {
-      console.error("Failed to copy telemetry payload:", err);
+      logError("Failed to copy telemetry payload", err);
     }
   }, [event, payloadJson]);
 
@@ -210,7 +211,7 @@ export function TelemetryContent({ className }: TelemetryContentProps) {
         if (!disposed) setActive(state.active);
       })
       .catch((err) => {
-        console.error("Failed to read telemetry preview state:", err);
+        logError("Failed to read telemetry preview state", err);
       });
 
     const unsubscribeBatch = telemetryPreviewClient.onEventBatch((incoming) => {

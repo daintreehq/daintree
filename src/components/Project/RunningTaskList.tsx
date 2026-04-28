@@ -4,6 +4,7 @@ import { useShallow } from "zustand/react/shallow";
 import { usePanelStore, type TerminalInstance } from "@/store/panelStore";
 import { terminalClient } from "@/clients";
 import { cn } from "@/lib/utils";
+import { logError } from "@/utils/logger";
 
 const MAX_VISIBLE = 5;
 const AUTO_CLEAR_DELAY = 3000;
@@ -120,7 +121,7 @@ export function RunningTaskList({ worktreeId }: RunningTaskListProps) {
   }, [quickRunTerminals]);
 
   const handleStop = useCallback((id: string) => {
-    terminalClient.kill(id).catch(console.error);
+    terminalClient.kill(id).catch((err) => logError("Failed to kill terminal", err));
   }, []);
 
   const handleFocus = useCallback(

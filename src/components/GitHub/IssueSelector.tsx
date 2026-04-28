@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { GitHubResourceRowsSkeleton } from "./GitHubDropdownSkeletons";
+import { logError } from "@/utils/logger";
 
 interface IssueSelectorProps {
   projectPath: string;
@@ -46,7 +47,7 @@ export function IssueSelector({
       })
       .catch((err) => {
         if (!abortController.signal.aborted) {
-          console.error("Failed to fetch issues:", err);
+          logError("Failed to fetch issues", err);
           setIssues([]);
         }
       })
