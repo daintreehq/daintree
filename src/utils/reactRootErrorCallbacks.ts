@@ -10,6 +10,8 @@ export function onCaughtError(error: unknown, errorInfo: { componentStack?: stri
       componentStack: errorInfo.componentStack,
     });
   } catch {
+    // Last-resort sink: the logger itself failed.
+    // eslint-disable-next-line no-console
     console.error("[React] Failed to log caught error:", error);
   }
 }
@@ -25,6 +27,8 @@ export function onUncaughtError(error: unknown, errorInfo: { componentStack?: st
           : undefined,
       });
     } catch (sentryError) {
+      // Last-resort sink: Sentry capture failed.
+      // eslint-disable-next-line no-console
       console.error("[React] Failed to report uncaught error to Sentry:", sentryError);
     }
 
@@ -37,6 +41,8 @@ export function onUncaughtError(error: unknown, errorInfo: { componentStack?: st
         isTransient: false,
       });
     } catch (storeError) {
+      // Last-resort sink: the error store has already failed.
+      // eslint-disable-next-line no-console
       console.error("[React] Failed to add uncaught error to store:", storeError);
     }
 
@@ -45,9 +51,13 @@ export function onUncaughtError(error: unknown, errorInfo: { componentStack?: st
         componentStack: errorInfo.componentStack,
       });
     } catch {
+      // Last-resort sink: the logger itself failed.
+      // eslint-disable-next-line no-console
       console.error("[React] Failed to log uncaught error:", error);
     }
   } catch {
+    // Last-resort sink: the outer try block itself threw; nothing else can run.
+    // eslint-disable-next-line no-console
     console.error("[React] Critical failure in onUncaughtError:", error);
   }
 }
@@ -59,6 +69,8 @@ export function onRecoverableError(error: unknown, errorInfo: { componentStack?:
       componentStack: errorInfo.componentStack,
     });
   } catch {
+    // Last-resort sink: the logger itself failed.
+    // eslint-disable-next-line no-console
     console.error("[React] Failed to log recoverable error:", error);
   }
 }

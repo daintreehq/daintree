@@ -68,6 +68,9 @@ async function bootstrap() {
 }
 
 bootstrap().catch((error: unknown) => {
+  // Logger may not be initialized at this stage of bootstrap; console is the
+  // last-resort sink before the bootstrap-error UI takes over.
+  // eslint-disable-next-line no-console
   console.error("Bootstrap failed:", error);
 
   void (async () => {

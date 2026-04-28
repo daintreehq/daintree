@@ -76,6 +76,8 @@ export function captureRendererException(error: unknown, options?: CaptureOption
     const err = error instanceof Error ? error : new Error(String(error));
     Sentry.captureException(err, options);
   } catch (sentryError) {
+    // Last-resort sink: Sentry capture failed; logger/IPC may share the fault.
+    // eslint-disable-next-line no-console
     console.error("[Renderer] Failed to report error to Sentry:", sentryError);
   }
 }

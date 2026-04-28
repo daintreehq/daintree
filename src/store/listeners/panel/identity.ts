@@ -125,6 +125,9 @@ export function setupIdentityListeners(): DisposableStore {
 
           if (import.meta.env.DEV) {
             const nextRuntime = result.patch.runtimeIdentity;
+            // DEV-only DevTools diagnostic; mirrors the trail surfaced via
+            // `__daintreeIdentityEvents()` so it stays out of the IPC logger.
+            // eslint-disable-next-line no-console
             console.log(
               `[IdentityDebug] detected APPLY term=${terminalId.slice(-8)} ` +
                 `prev.detectedAgentId=${terminal.detectedAgentId ?? "<none>"} → ${nextDetectedAgentId ?? "<none>"} ` +

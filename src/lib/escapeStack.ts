@@ -1,3 +1,5 @@
+import { logError } from "@/utils/logger";
+
 type EscapeHandler = () => void;
 
 interface EscapeEntry {
@@ -30,7 +32,7 @@ export function dispatchEscape(): boolean {
   try {
     top.handler();
   } catch (err) {
-    console.error("Escape handler threw:", err);
+    logError("Escape handler threw", err);
   }
   return true;
 }

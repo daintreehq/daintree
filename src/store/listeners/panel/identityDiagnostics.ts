@@ -38,6 +38,7 @@ export function recordIdentityEventDev(
   // Every detection/exit event lands in the browser devtools console so a
   // user reporting "chrome didn't update" can dump the live trail without
   // needing to open the main-process log. Prefix stays searchable.
+  // eslint-disable-next-line no-console
   console.log(
     `[IdentityDebug] ${kind} term=${terminalId.slice(-8)} agent=${detail.agentType ?? "<none>"} icon=${detail.processIconId ?? "<none>"}`
   );
@@ -91,5 +92,7 @@ export function recordIdentityEventDev(
 
 export function logIdentityDebugDev(message: string): void {
   if (!import.meta.env.DEV) return;
+  // DEV-only DevTools breadcrumb companion to recordIdentityEventDev.
+  // eslint-disable-next-line no-console
   console.log(message);
 }
