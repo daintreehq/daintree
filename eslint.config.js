@@ -261,13 +261,19 @@ export default tseslint.config(
         },
         {
           selector:
-            "TemplateLiteral > CallExpression[callee.object.name='Math'][callee.property.name='random']",
+            "TemplateLiteral CallExpression[callee.object.name='Math'][callee.property.name='random']",
           message:
             "Don't construct IDs from `Math.random()` inside template literals. Use crypto.randomUUID() (or a deterministic counter in tests) — Math.random() collides and isn't cryptographically random.",
         },
         {
           selector:
-            "CallExpression[callee.name=/^(setTimeout|setInterval)$/][arguments.1.type='Literal'][arguments.1.value>0]",
+            "CallExpression[callee.type='Identifier'][callee.name=/^(setTimeout|setInterval)$/][arguments.1.type='Literal'][arguments.1.value>0]",
+          message:
+            "Avoid magic numeric delays. Hoist the value into a named constant (e.g. `const FLUSH_INTERVAL_MS = 200`) so the intent is documented at the call site.",
+        },
+        {
+          selector:
+            "CallExpression[callee.type='MemberExpression'][callee.property.name=/^(setTimeout|setInterval)$/][arguments.1.type='Literal'][arguments.1.value>0]",
           message:
             "Avoid magic numeric delays. Hoist the value into a named constant (e.g. `const FLUSH_INTERVAL_MS = 200`) so the intent is documented at the call site.",
         },

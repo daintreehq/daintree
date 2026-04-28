@@ -54,9 +54,11 @@ vi.mock("@/config/agents", () => ({
   getAgentIds: () => ["claude", "gemini"],
 }));
 
+let terminalCounter = 0;
+
 function makeTerminal(overrides: Partial<TerminalInstance> = {}): TerminalInstance {
   return {
-    id: `term-${Math.random().toString(36).slice(2, 7)}`,
+    id: `term-${++terminalCounter}`,
     pid: 1234,
     title: "Test Terminal",
     kind: "terminal",

@@ -46,9 +46,11 @@ import { usePanelStore } from "../panelStore";
 import { useLayoutConfigStore } from "../layoutConfigStore";
 import type { TerminalInstance } from "@shared/types";
 
+let terminalCounter = 0;
+
 function makeTerminal(overrides: Partial<TerminalInstance> = {}): TerminalInstance {
   return {
-    id: `t-${Math.random().toString(36).slice(2, 8)}`,
+    id: `t-${++terminalCounter}`,
     title: "test",
     location: "grid",
     ...overrides,
