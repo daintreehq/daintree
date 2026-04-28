@@ -4,12 +4,13 @@ import { events } from "./events.js";
 import { projectStore } from "./ProjectStore.js";
 import type { PtyClient } from "./PtyClient.js";
 import type { ProjectStatusMap } from "../../shared/types/ipc/project.js";
+import { MutableDisposable, toDisposable, type IDisposable } from "../utils/lifecycle.js";
 
 const DEFAULT_POLL_INTERVAL_MS = 5_000;
 const DEBOUNCE_MS = 200;
 
 export class ProjectStatsService {
-  private intervalId: ReturnType<typeof setInterval> | null = null;
+  private intervalSlot = new MutableDisposable<IDisposable>();
   private debounceTimer: ReturnType<typeof setTimeout> | null = null;
   private unsubscribeAgentState: (() => void) | null = null;
   private started = false;
@@ -23,10 +24,7 @@ export class ProjectStatsService {
     this.started = true;
 
     void this.computeAndBroadcast();
-
-    this.intervalId = setInterval(() => {
-      void this.computeAndBroadcast();
-    }, this.pollIntervalMs);
+    this.armPollInterval();
 
     this.unsubscribeAgentState = events.on("agent:state-changed", () => {
       this.debouncedCompute();
@@ -36,11 +34,8 @@ export class ProjectStatsService {
   updatePollInterval(ms: number): void {
     if (this.pollIntervalMs === ms) return;
     this.pollIntervalMs = ms;
-    if (this.started && this.intervalId !== null) {
-      clearInterval(this.intervalId);
-      this.intervalId = setInterval(() => {
-        void this.computeAndBroadcast();
-      }, this.pollIntervalMs);
+    if (this.started) {
+      this.armPollInterval();
     }
   }
 
@@ -52,10 +47,7 @@ export class ProjectStatsService {
     if (!this.started) return;
     this.started = false;
 
-    if (this.intervalId !== null) {
-      clearInterval(this.intervalId);
-      this.intervalId = null;
-    }
+    this.intervalSlot.clear();
 
     if (this.debounceTimer !== null) {
       clearTimeout(this.debounceTimer);
@@ -66,6 +58,13 @@ export class ProjectStatsService {
       this.unsubscribeAgentState();
       this.unsubscribeAgentState = null;
     }
+  }
+
+  private armPollInterval(): void {
+    const id = setInterval(() => {
+      void this.computeAndBroadcast();
+    }, this.pollIntervalMs);
+    this.intervalSlot.value = toDisposable(() => clearInterval(id));
   }
 
   private debouncedCompute(): void {

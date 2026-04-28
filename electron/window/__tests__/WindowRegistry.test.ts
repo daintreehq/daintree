@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { WindowRegistry } from "../WindowRegistry.js";
+import { toDisposable } from "../../utils/lifecycle.js";
 import type { BrowserWindow } from "electron";
 
 function makeMockWindow(id: number, webContentsId: number) {
@@ -193,7 +194,7 @@ describe("WindowRegistry", () => {
     const cleanupSpy = vi.fn();
 
     const ctx = registry.register(win);
-    ctx.cleanup.push(cleanupSpy);
+    ctx.cleanup.add(toDisposable(cleanupSpy));
 
     win._fireClosed();
     win._fireDestroyed();
@@ -209,7 +210,8 @@ describe("WindowRegistry", () => {
     const fn2 = vi.fn();
 
     const ctx = registry.register(win);
-    ctx.cleanup.push(fn1, fn2);
+    ctx.cleanup.add(toDisposable(fn1));
+    ctx.cleanup.add(toDisposable(fn2));
 
     registry.unregister(1);
 
@@ -226,12 +228,30 @@ describe("WindowRegistry", () => {
     const fn2 = vi.fn();
 
     const ctx = registry.register(win);
-    ctx.cleanup.push(fn1, fn2);
+    ctx.cleanup.add(toDisposable(fn1));
+    ctx.cleanup.add(toDisposable(fn2));
 
     registry.unregister(1);
 
     expect(fn1).toHaveBeenCalledOnce();
     expect(fn2).toHaveBeenCalledOnce();
+  });
+
+  it("late add() after unregister disposes the new item immediately and does not retain it", () => {
+    const registry = new WindowRegistry();
+    const win = makeMockWindow(1, 100);
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const ctx = registry.register(win);
+    registry.unregister(1);
+
+    const lateSpy = vi.fn();
+    ctx.cleanup.add(toDisposable(lateSpy));
+
+    expect(lateSpy).toHaveBeenCalledOnce();
+    expect(errSpy).toHaveBeenCalled();
+    expect(ctx.cleanup.size).toBe(0);
+    errSpy.mockRestore();
   });
 
   it("returns same context when registering the same window twice", () => {
@@ -265,7 +285,7 @@ describe("WindowRegistry", () => {
     const fn = vi.fn();
 
     const ctx = registry.register(win1);
-    ctx.cleanup.push(fn);
+    ctx.cleanup.add(toDisposable(fn));
     registry.register(win2);
 
     registry.dispose();
@@ -355,9 +375,11 @@ describe("WindowRegistry", () => {
 
       const ctx = registry.register(win);
       let signalAbortedDuringCleanup = false;
-      ctx.cleanup.push(() => {
-        signalAbortedDuringCleanup = ctx.abortController.signal.aborted;
-      });
+      ctx.cleanup.add(
+        toDisposable(() => {
+          signalAbortedDuringCleanup = ctx.abortController.signal.aborted;
+        })
+      );
 
       registry.unregister(1);
 

@@ -92,6 +92,7 @@ import {
   resetDeferredQueue,
 } from "./deferredInitQueue.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
+import { toDisposable } from "../utils/lifecycle.js";
 
 const DEFAULT_TERMINAL_ID = "default";
 
@@ -624,7 +625,7 @@ export async function setupWindowServices(
 
   if (windowRegistry) {
     notificationService.initialize(windowRegistry);
-    ctx.cleanup.push(() => notificationService.detachWindowListeners(win.id));
+    ctx.cleanup.add(toDisposable(() => notificationService.detachWindowListeners(win.id)));
   }
   console.log("[MAIN] NotificationService initialized");
 
@@ -752,40 +753,42 @@ export async function setupWindowServices(
   } as HandlerDependencies);
 
   // Per-window cleanup: ports, portalManager, eventBuffer
-  ctx.cleanup.push(() => {
-    // Notify PTY host to disconnect this window's port before closing it
-    if (ptyClient) {
-      ptyClient.disconnectMessagePort(ctx.windowId);
-    }
-    if (ctx.services.activeRendererPort) {
-      try {
-        ctx.services.activeRendererPort.close();
-      } catch {
-        /* ignore */
+  ctx.cleanup.add(
+    toDisposable(() => {
+      // Notify PTY host to disconnect this window's port before closing it
+      if (ptyClient) {
+        ptyClient.disconnectMessagePort(ctx.windowId);
       }
-      ctx.services.activeRendererPort = undefined;
-    }
-    if (ctx.services.activePtyHostPort) {
-      try {
-        ctx.services.activePtyHostPort.close();
-      } catch {
-        /* ignore */
+      if (ctx.services.activeRendererPort) {
+        try {
+          ctx.services.activeRendererPort.close();
+        } catch {
+          /* ignore */
+        }
+        ctx.services.activeRendererPort = undefined;
       }
-      ctx.services.activePtyHostPort = undefined;
-    }
-    if (ctx.services.portalManager) {
-      ctx.services.portalManager.destroy();
-      ctx.services.portalManager = undefined;
-    }
-    if (ctx.services.eventBuffer) {
-      ctx.services.eventBuffer.stop();
-      ctx.services.eventBuffer = undefined;
-    }
-    ctx.services.projectSwitchService = undefined;
-    if (workspaceClient) {
-      workspaceClient.unregisterWindow(win.id);
-    }
-  });
+      if (ctx.services.activePtyHostPort) {
+        try {
+          ctx.services.activePtyHostPort.close();
+        } catch {
+          /* ignore */
+        }
+        ctx.services.activePtyHostPort = undefined;
+      }
+      if (ctx.services.portalManager) {
+        ctx.services.portalManager.destroy();
+        ctx.services.portalManager = undefined;
+      }
+      if (ctx.services.eventBuffer) {
+        ctx.services.eventBuffer.stop();
+        ctx.services.eventBuffer = undefined;
+      }
+      ctx.services.projectSwitchService = undefined;
+      if (workspaceClient) {
+        workspaceClient.unregisterWindow(win.id);
+      }
+    })
+  );
 
   console.log("[MAIN] Registering IPC handlers...");
   const handlerDeps: HandlerDependencies = {
@@ -1121,11 +1124,13 @@ export async function setupWindowServices(
     sendToRenderer(win, CHANNELS.EVENT_INSPECTOR_EVENT, record);
   });
 
-  ctx.cleanup.push(() => {
-    unsubscribeFromEventBuffer();
-    ipcMain.removeListener(CHANNELS.EVENT_INSPECTOR_SUBSCRIBE, onEventInspectorSubscribe);
-    ipcMain.removeListener(CHANNELS.EVENT_INSPECTOR_UNSUBSCRIBE, onEventInspectorUnsubscribe);
-  });
+  ctx.cleanup.add(
+    toDisposable(() => {
+      unsubscribeFromEventBuffer();
+      ipcMain.removeListener(CHANNELS.EVENT_INSPECTOR_SUBSCRIBE, onEventInspectorSubscribe);
+      ipcMain.removeListener(CHANNELS.EVENT_INSPECTOR_UNSUBSCRIBE, onEventInspectorUnsubscribe);
+    })
+  );
 
   // Smoke test
   if (isSmokeTest) {

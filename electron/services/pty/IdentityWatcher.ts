@@ -6,6 +6,7 @@ import {
   type ProcessDetector,
 } from "../ProcessDetector.js";
 import { detectPrompt } from "./PromptDetector.js";
+import { MutableDisposable, toDisposable, type IDisposable } from "../../utils/lifecycle.js";
 
 export const SHELL_IDENTITY_FALLBACK_COMMIT_MS = 1200;
 export const SHELL_IDENTITY_FALLBACK_POLL_MS = 200;
@@ -85,7 +86,7 @@ export function normalizeShellCommandText(commandText?: string): string | undefi
  * for a single concern.
  */
 export class IdentityWatcher {
-  private timer: NodeJS.Timeout | null = null;
+  private timer = new MutableDisposable<IDisposable>();
   private submittedAt: number | null = null;
   private commandText: string | undefined;
   private identity: CommandIdentity | null = null;
@@ -233,10 +234,7 @@ export class IdentityWatcher {
   }
 
   stop(): void {
-    if (this.timer) {
-      clearInterval(this.timer);
-      this.timer = null;
-    }
+    this.timer.clear();
     this.submittedAt = null;
     this.commandText = undefined;
     this.identity = null;
@@ -251,12 +249,13 @@ export class IdentityWatcher {
   }
 
   private start(): void {
-    if (this.timer || this.stopped) {
+    if (this.timer.value || this.stopped) {
       return;
     }
-    this.timer = setInterval(() => {
+    const id = setInterval(() => {
       this.poll();
     }, SHELL_IDENTITY_FALLBACK_POLL_MS);
+    this.timer.value = toDisposable(() => clearInterval(id));
   }
 
   private hasRecentCommandFailureOutput(): boolean {

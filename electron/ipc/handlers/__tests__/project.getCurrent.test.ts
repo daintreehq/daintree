@@ -68,6 +68,7 @@ import type {
   WindowContext,
   WindowServices,
 } from "../../../window/WindowRegistry.js";
+import { DisposableStore } from "../../../utils/lifecycle.js";
 
 function makeWindowContext(
   windowId: number,
@@ -81,7 +82,7 @@ function makeWindowContext(
     projectPath: null,
     abortController: new AbortController(),
     services: services as WindowServices,
-    cleanup: [],
+    cleanup: new DisposableStore(),
   };
 }
 

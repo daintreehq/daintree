@@ -30,6 +30,7 @@ import { ProjectViewManager } from "./window/ProjectViewManager.js";
 import { effectiveCachedProjectViews } from "./utils/cachedProjectViews.js";
 import { setupBrowserWindow } from "./window/createWindow.js";
 import { distributePortsToView } from "./window/portDistribution.js";
+import { toDisposable } from "./utils/lifecycle.js";
 import {
   setupWindowServices,
   getPtyClient,
@@ -248,11 +249,15 @@ if (!gotTheLock) {
         nodeV8.writeHeapSnapshot(filePath);
     }
 
-    // Clean up ProjectViewManager when window closes
-    win.once("closed", () => {
-      pvm.dispose();
-      setProjectViewManager(null);
-    });
+    // Clean up ProjectViewManager when the window's cleanup runs.
+    // Registered before setupWindowServices so pvm.dispose() runs first —
+    // views must close before per-window ports/event-buffer disconnect.
+    ctx.cleanup.add(
+      toDisposable(() => {
+        pvm.dispose();
+        setProjectViewManager(null);
+      })
+    );
 
     await setupWindowServices(win, {
       loadRenderer,

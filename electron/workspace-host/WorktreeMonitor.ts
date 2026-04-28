@@ -19,6 +19,7 @@ import { AdaptivePollingStrategy, NoteFileReader } from "../services/worktree/in
 import { ensureSerializable } from "../../shared/utils/serialization.js";
 import { extractIssueNumberSync, extractIssueNumber } from "../services/issueExtractor.js";
 import { GitFileWatcher } from "../utils/gitFileWatcher.js";
+import { MutableDisposable, toDisposable, type IDisposable } from "../utils/lifecycle.js";
 
 const GIT_WATCH_SELF_TRIGGER_COOLDOWN_MS = 1000;
 const WATCHER_FALLBACK_POLL_INTERVAL_MS = 30_000;
@@ -98,8 +99,9 @@ export class WorktreeMonitor {
   private pollingEnabled: boolean = true;
   private _hasInitialStatus: boolean = false;
 
-  // File watcher state
-  private gitWatcher: (() => void) | null = null;
+  // File watcher state — MutableDisposable auto-disposes the previous watcher
+  // on reassignment, eliminating the manual stop-old-start-new dance.
+  private gitWatcher = new MutableDisposable<IDisposable>();
   private gitWatchDebounceTimer: NodeJS.Timeout | null = null;
   private gitWatchRefreshPending: boolean = false;
   private gitWatchEnabled: boolean;
@@ -293,7 +295,7 @@ export class WorktreeMonitor {
   }
 
   get hasWatcher(): boolean {
-    return this.gitWatcher !== null;
+    return this.gitWatcher.value !== undefined;
   }
 
   setIssueNumber(issueNumber: number | undefined): void {
@@ -702,15 +704,15 @@ export class WorktreeMonitor {
   }
 
   ensureWatcherState(): void {
-    if (!this.gitWatchEnabled && this.gitWatcher) {
+    if (!this.gitWatchEnabled && this.gitWatcher.value) {
       this.stopWatcher();
-    } else if (this.gitWatchEnabled && this._isRunning && !this.gitWatcher) {
+    } else if (this.gitWatchEnabled && this._isRunning && !this.gitWatcher.value) {
       this.startWatcher();
     }
   }
 
   restartWatcherIfRunning(): void {
-    if (this.gitWatcher) {
+    if (this.gitWatcher.value) {
       this.updateWatcher();
     }
   }
@@ -718,7 +720,7 @@ export class WorktreeMonitor {
   // --- File watcher management ---
 
   private startWatcher(): void {
-    if (!this._isRunning || !this.gitWatchEnabled || this.gitWatcher) {
+    if (!this._isRunning || !this.gitWatchEnabled || this.gitWatcher.value) {
       return;
     }
 
@@ -738,7 +740,7 @@ export class WorktreeMonitor {
 
     const started = watcher.start();
     if (started) {
-      this.gitWatcher = () => watcher.dispose();
+      this.gitWatcher.value = toDisposable(() => watcher.dispose());
       this.watcherRetryCount = 0;
     } else {
       watcher.dispose();
@@ -747,10 +749,7 @@ export class WorktreeMonitor {
   }
 
   private stopWatcher(): void {
-    if (this.gitWatcher) {
-      this.gitWatcher();
-      this.gitWatcher = null;
-    }
+    this.gitWatcher.clear();
     if (this.gitWatchDebounceTimer) {
       clearTimeout(this.gitWatchDebounceTimer);
       this.gitWatchDebounceTimer = null;
@@ -771,10 +770,7 @@ export class WorktreeMonitor {
   }
 
   private handleWatcherFailed(): void {
-    if (this.gitWatcher) {
-      this.gitWatcher();
-      this.gitWatcher = null;
-    }
+    this.gitWatcher.clear();
     this.scheduleWatcherRetry();
   }
 
@@ -790,7 +786,7 @@ export class WorktreeMonitor {
 
     this.watcherRetryTimer = setTimeout(() => {
       this.watcherRetryTimer = null;
-      if (this._isRunning && this.gitWatchEnabled && !this.gitWatcher) {
+      if (this._isRunning && this.gitWatchEnabled && !this.gitWatcher.value) {
         this.startWatcher();
       }
     }, WATCHER_RETRY_INTERVAL_MS);
@@ -895,7 +891,7 @@ export class WorktreeMonitor {
       return;
     }
 
-    const baseInterval = this.gitWatcher
+    const baseInterval = this.gitWatcher.value
       ? WATCHER_FALLBACK_POLL_INTERVAL_MS
       : this.pollingStrategy.calculateNextInterval();
     const jitterRange = Math.min(2000, Math.floor(baseInterval * 0.2));
@@ -926,7 +922,7 @@ export class WorktreeMonitor {
       const queueDelayMs = Math.max(0, startTime - queuedAt);
 
       try {
-        const forceRefresh = this._isCurrent && !this.gitWatcher;
+        const forceRefresh = this._isCurrent && !this.gitWatcher.value;
         await this.updateGitStatus(forceRefresh);
         this.pollingStrategy.recordSuccess(Date.now() - startTime, queueDelayMs);
       } catch (_error) {

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { WindowRegistry } from "../WindowRegistry.js";
+import { toDisposable } from "../../utils/lifecycle.js";
 import type { BrowserWindow } from "electron";
 
 function makeMockWindow(id: number, webContentsId: number) {
@@ -91,15 +92,19 @@ describe("Per-window service scoping via WindowRegistry", () => {
       close: port4Close,
     } as unknown as import("electron").MessagePortMain;
 
-    // Push cleanup for each window (mimics what setupWindowServices does)
-    ctx1.cleanup.push(() => {
-      ctx1.services.activeRendererPort?.close();
-      ctx1.services.activePtyHostPort?.close();
-    });
-    ctx2.cleanup.push(() => {
-      ctx2.services.activeRendererPort?.close();
-      ctx2.services.activePtyHostPort?.close();
-    });
+    // Register cleanup for each window (mimics what setupWindowServices does)
+    ctx1.cleanup.add(
+      toDisposable(() => {
+        ctx1.services.activeRendererPort?.close();
+        ctx1.services.activePtyHostPort?.close();
+      })
+    );
+    ctx2.cleanup.add(
+      toDisposable(() => {
+        ctx2.services.activeRendererPort?.close();
+        ctx2.services.activePtyHostPort?.close();
+      })
+    );
 
     // Close window 1 only
     registry.unregister(1);
@@ -130,8 +135,8 @@ describe("Per-window service scoping via WindowRegistry", () => {
       destroy: destroy2,
     } as unknown as import("../../../electron/services/PortalManager.js").PortalManager;
 
-    ctx1.cleanup.push(() => ctx1.services.portalManager?.destroy());
-    ctx2.cleanup.push(() => ctx2.services.portalManager?.destroy());
+    ctx1.cleanup.add(toDisposable(() => ctx1.services.portalManager?.destroy()));
+    ctx2.cleanup.add(toDisposable(() => ctx2.services.portalManager?.destroy()));
 
     win1._fireClosed();
 
@@ -157,8 +162,8 @@ describe("Per-window service scoping via WindowRegistry", () => {
       stop: stop2,
     } as unknown as import("../../../electron/services/EventBuffer.js").EventBuffer;
 
-    ctx1.cleanup.push(() => ctx1.services.eventBuffer?.stop());
-    ctx2.cleanup.push(() => ctx2.services.eventBuffer?.stop());
+    ctx1.cleanup.add(toDisposable(() => ctx1.services.eventBuffer?.stop()));
+    ctx2.cleanup.add(toDisposable(() => ctx2.services.eventBuffer?.stop()));
 
     win1._fireClosed();
 
@@ -200,9 +205,11 @@ describe("Per-window service scoping via WindowRegistry", () => {
 
     ctx1.services.projectSwitchService =
       {} as unknown as import("../../../electron/services/ProjectSwitchService.js").ProjectSwitchService;
-    ctx1.cleanup.push(() => {
-      ctx1.services.projectSwitchService = undefined;
-    });
+    ctx1.cleanup.add(
+      toDisposable(() => {
+        ctx1.services.projectSwitchService = undefined;
+      })
+    );
 
     win1._fireClosed();
 
@@ -216,10 +223,12 @@ describe("Per-window service scoping via WindowRegistry", () => {
     const bufferUnsub = vi.fn();
 
     // This mimics the pattern from the refactored windowServices.ts
-    ctx1.cleanup.push(() => {
-      bufferUnsub();
-      // The key assertion: we use removeListener (per-function) not removeAllListeners
-    });
+    ctx1.cleanup.add(
+      toDisposable(() => {
+        bufferUnsub();
+        // The key assertion: we use removeListener (per-function) not removeAllListeners
+      })
+    );
 
     win1._fireClosed();
 
