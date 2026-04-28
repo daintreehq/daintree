@@ -186,7 +186,7 @@ export function useQuickCreatePalette(): UseQuickCreatePaletteReturn {
             notify({
               type: "error",
               title: "Creation Failed",
-              message: result.error.message,
+              message: formatErrorMessage(result.error, "Failed to create worktree"),
             });
           }
         } catch (error) {

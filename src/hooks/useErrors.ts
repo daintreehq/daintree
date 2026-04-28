@@ -27,6 +27,7 @@ function buildCopyDetailsAction(error: ErrorRecord): NotificationAction {
           gitReason: error.gitReason,
           recoveryHint: error.recoveryHint,
           correlationId: error.correlationId,
+          context: error.context,
           details: error.details,
         },
         null,

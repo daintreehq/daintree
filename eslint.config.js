@@ -159,14 +159,22 @@ export default tseslint.config(
             "Don't use `void window.electron.X()` for fire-and-forget IPC — wrap the promise in safeFireAndForget(promise, { context }) from @/utils/safeFireAndForget so rejections reach reportRendererGlobalError with call-site context.",
         },
         {
-          // Block raw `error.message` / `err.message` / `e.message` inside
-          // notify({...}) and addNotification({...}) message properties.
-          // These calls go to user-facing toasts; raw library messages leak
-          // jargon (paths, errno strings, internal source IDs). Use
-          // humanizeAppError() from @shared/utils/errorMessage instead.
+          // Block raw `error.message` / `err.message` / `e.message` /
+          // `result.error.message` inside notify({...}) /
+          // addNotification({...}) message properties. These calls go to
+          // user-facing toasts; raw library messages leak jargon (paths,
+          // errno strings, internal source IDs). Use humanizeAppError()
+          // from @shared/utils/errorMessage instead.
+          //
+          // The selector must match both bare-identifier calls
+          // (`notify({...})`) and member-call patterns
+          // (`useNotificationStore.getState().addNotification({...})`),
+          // hence the `:matches()` over `callee.name` and
+          // `callee.property.name`. The inner MemberExpression matches both
+          // single-hop (`error.message`) and tail-of-chain (`x.error.message`).
           // See issue #6050.
           selector:
-            "CallExpression[callee.name=/^(notify|addNotification)$/] ObjectExpression > Property[key.name='message'] MemberExpression[object.name=/^(error|err|e)$/][property.name='message']",
+            "CallExpression:matches([callee.name=/^(notify|addNotification)$/], [callee.property.name=/^(notify|addNotification)$/]) ObjectExpression > Property[key.name='message'] MemberExpression[property.name='message']:matches([object.name=/^(error|err|e)$/], [object.property.name=/^(error|err|e)$/])",
           message:
             "Don't pipe raw error.message into user-facing notifications. Use humanizeAppError(error) from @shared/utils/errorMessage to produce a friendly title and body, and stash the raw message in a 'Copy details' action. See #6050.",
         },

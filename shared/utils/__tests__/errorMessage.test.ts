@@ -200,6 +200,20 @@ describe("humanizeAppError", () => {
       expect(result.title).toBe("Git operation failed");
     });
 
+    it("falls back to generic git title when gitReason is an out-of-union string (version skew)", () => {
+      // Older renderer + newer main process can deliver a future reason code
+      // not yet known to the renderer. The `satisfies` check is compile-time
+      // only; the runtime lookup must still produce a real title.
+      const result = humanizeAppError(
+        baseError({
+          type: "git",
+          gitReason: "future-reason-2027" as unknown as GitOperationReason,
+        })
+      );
+      expect(result.title).toBe("Git operation failed");
+      expect(result.body.length).toBeGreaterThan(0);
+    });
+
     it("specific git body matches the recovery hint copy", () => {
       const result = humanizeAppError(baseError({ type: "git", gitReason: "auth-failed" }));
       expect(result.title).toBe("Git authentication failed");

@@ -113,9 +113,14 @@ export function humanizeAppError(
   error: Pick<ErrorRecord, "type" | "source" | "message" | "gitReason" | "recoveryHint">
 ): { title: string; body: string } {
   if (error.gitReason && error.gitReason !== "unknown") {
+    // The `satisfies` constraint is compile-time only; an out-of-union string
+    // can still arrive via IPC during version skew (newer main, older
+    // renderer). Fall back to the generic git title so the toast never
+    // renders with `title: undefined`.
+    const reasonTitle = GIT_REASON_TITLES[error.gitReason];
     const hint = getGitRecoveryHint(error.gitReason);
     return {
-      title: GIT_REASON_TITLES[error.gitReason],
+      title: reasonTitle ?? ERROR_TYPE_FALLBACKS.git.title,
       body: hint ?? ERROR_TYPE_FALLBACKS.git.body,
     };
   }

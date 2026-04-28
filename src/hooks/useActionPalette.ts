@@ -7,6 +7,7 @@ import type { ActionManifestEntry } from "@shared/types/actions";
 import { usePaletteStore } from "@/store/paletteStore";
 import { useActionMruStore } from "@/store/actionMruStore";
 import { extractAcronym, rankActionMatches } from "@/lib/actionPaletteSearch";
+import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { useSearchablePalette } from "./useSearchablePalette";
 
 export interface ActionPaletteItem {
@@ -152,7 +153,7 @@ export function useActionPalette(): UseActionPaletteReturn {
             notify({
               type: "error",
               title: "Action Failed",
-              message: result.error.message,
+              message: formatErrorMessage(result.error, "Action failed."),
             });
           }
         })
