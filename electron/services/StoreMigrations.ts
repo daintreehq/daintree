@@ -97,13 +97,20 @@ export class MigrationRunner {
   }
 
   /**
-   * Restore the pre-migration store atomically. Preserves the failed-migration
-   * state at `<storePath>.failed-<ts>` for diagnostics, then atomically renames
-   * the backup over the live store path so the next boot reads pre-migration
-   * data. Returns the failed-state path on success (or `null` if the failed
-   * state could not be preserved).
+   * Two-step rename to restore the pre-migration store: preserve the
+   * failed-migration state at `<storePath>.failed-<ts>` for diagnostics, then
+   * atomically move the backup over the live store path. Never throws — the
+   * outcome (and any diagnostic paths the caller can surface) is reported via
+   * the return value so a partial failure still produces an actionable error.
+   *
+   * On step-2 failure, the preserve file is left in place so the user can
+   * recover manually from `failedStatePath` or the still-existing `backupPath`.
    */
-  private restoreFromBackup(backupPath: string): { failedStatePath: string | null } {
+  private restoreFromBackup(backupPath: string): {
+    restored: boolean;
+    failedStatePath: string | null;
+    error: Error | null;
+  } {
     const storePath = this.store.path;
     const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
     const failedStatePath = `${storePath}.failed-${timestamp}`;
@@ -121,10 +128,23 @@ export class MigrationRunner {
       );
     }
 
-    fs.renameSync(backupPath, storePath);
-    console.log(`[Migrations] Restored store from backup ${backupPath}`);
-
-    return { failedStatePath: preservedFailedState ? failedStatePath : null };
+    try {
+      fs.renameSync(backupPath, storePath);
+      console.log(`[Migrations] Restored store from backup ${backupPath}`);
+      return {
+        restored: true,
+        failedStatePath: preservedFailedState ? failedStatePath : null,
+        error: null,
+      };
+    } catch (restoreErr) {
+      const error = restoreErr instanceof Error ? restoreErr : new Error(String(restoreErr));
+      console.error("[Migrations] Atomic restore (backup -> storePath) failed:", error);
+      return {
+        restored: false,
+        failedStatePath: preservedFailedState ? failedStatePath : null,
+        error,
+      };
+    }
   }
 
   getCurrentVersion(): number {
@@ -217,14 +237,10 @@ export class MigrationRunner {
       let restoreError: Error | null = null;
 
       if (backupPath) {
-        try {
-          const result = this.restoreFromBackup(backupPath);
-          failedStatePath = result.failedStatePath;
-          restored = true;
-        } catch (err) {
-          restoreError = err instanceof Error ? err : new Error(String(err));
-          console.error("[Migrations] Restore from backup FAILED:", err);
-        }
+        const result = this.restoreFromBackup(backupPath);
+        restored = result.restored;
+        failedStatePath = result.failedStatePath;
+        restoreError = result.error;
       }
 
       const suffix = !backupPath

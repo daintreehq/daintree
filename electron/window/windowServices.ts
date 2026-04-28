@@ -270,10 +270,12 @@ export async function setupWindowServices(
       const message = formatErrorMessage(error, "Store migration failed");
       const lines = [`Couldn't migrate application data: ${message}`];
       if (isStoreMigrationError(error)) {
-        if (error.restored && error.backupPath) {
-          lines.push("", `Your data was restored from:\n${error.backupPath}`);
+        if (error.restored) {
+          // After a successful restore, backupPath has been renamed over
+          // storePath and no longer exists on disk — don't print it.
+          lines.push("", "Your pre-migration data has been restored.");
         } else if (error.backupPath) {
-          lines.push("", `Pre-migration backup:\n${error.backupPath}`);
+          lines.push("", `Pre-migration backup is preserved at:\n${error.backupPath}`);
         }
         if (error.failedStatePath) {
           lines.push("", `Failed migration state preserved at:\n${error.failedStatePath}`);

@@ -311,6 +311,56 @@ describe("MigrationRunner", () => {
       expect(migrationError.message).toContain("no backup was available");
     });
 
+    it("reports failedStatePath and restoreError when atomic restore (backup -> storePath) throws", async () => {
+      fs.writeFileSync(storePath, JSON.stringify({ _schemaVersion: 0 }), "utf8");
+      const store = createMockStore(storePath, { _schemaVersion: 0 });
+      const runner = new MigrationRunner(store as never);
+
+      // Allow the first rename (storePath -> failedPath) to succeed; fail the
+      // second (backupPath -> storePath). Mirrors the partial-failure window
+      // described in the #6038 review.
+      const realRenameSync = fs.renameSync.bind(fs);
+      let renameCalls = 0;
+      const renameSpy = vi.spyOn(fs, "renameSync").mockImplementation(((
+        src: fs.PathLike,
+        dest: fs.PathLike
+      ) => {
+        renameCalls += 1;
+        if (renameCalls === 1) {
+          realRenameSync(src, dest);
+          return;
+        }
+        throw new Error("EROFS: read-only filesystem");
+      }) as typeof fs.renameSync);
+
+      let caught: unknown;
+      try {
+        await runner.runMigrations([
+          {
+            version: 1,
+            description: "broken",
+            up: () => {
+              throw new Error("kaboom");
+            },
+          },
+        ]);
+      } catch (err) {
+        caught = err;
+      } finally {
+        renameSpy.mockRestore();
+      }
+
+      expect(isStoreMigrationError(caught)).toBe(true);
+      const migrationError = caught as StoreMigrationError;
+      expect(migrationError.restored).toBe(false);
+      expect(migrationError.restoreError).toBeInstanceOf(Error);
+      expect(migrationError.restoreError?.message).toContain("EROFS");
+      // Critical: failedStatePath must be reported even when step 2 fails so
+      // the user has a path to manual recovery.
+      expect(migrationError.failedStatePath).toMatch(/config\.json\.failed-/);
+      expect(migrationError.message).toContain("auto-restore failed");
+    });
+
     it("triggers restore when post-migration sanity validation rejects state", async () => {
       const originalBytes = JSON.stringify({ _schemaVersion: 0, sentinel: true });
       fs.writeFileSync(storePath, originalBytes, "utf8");
