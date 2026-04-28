@@ -246,7 +246,32 @@ export function FleetArmingRibbon(): ReactElement | null {
       // \x1b for menu/prompt dismissal across the armed set; the second
       // tap is consumed by the ribbon and translated into the action.
       if (!e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey) {
+        // Held Escape auto-repeats at ~30 Hz on macOS / Windows, so the
+        // first OS-generated repeat would satisfy the double-tap window
+        // and misfire fleet.interrupt. Modifier-key chords don't repeat,
+        // which is why the existing ⌘Esc branch can omit this guard.
+        if (e.repeat) return;
         if (bareEscapeBlockedRef.current) {
+          lastBareEscapeMsRef.current = 0;
+          return;
+        }
+        // Bare double-Esc in a non-xterm editable input (composer, settings
+        // textarea, recipe editor) belongs to that input — fleet.interrupt
+        // would surprise the user who pressed Esc to dismiss the input.
+        // The xterm helper textarea is a TEXTAREA but lives under .xterm,
+        // so the closest() guard preserves terminal Esc handling.
+        const rawTarget = e.target;
+        const target =
+          rawTarget && typeof (rawTarget as HTMLElement).closest === "function"
+            ? (rawTarget as HTMLElement)
+            : null;
+        if (
+          target &&
+          (target.tagName === "INPUT" ||
+            target.tagName === "TEXTAREA" ||
+            target.isContentEditable) &&
+          target.closest(".xterm") === null
+        ) {
           lastBareEscapeMsRef.current = 0;
           return;
         }

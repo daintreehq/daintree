@@ -59,6 +59,7 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
 import { FleetArmingRibbon } from "../FleetArmingRibbon";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { useFleetPendingActionStore } from "@/store/fleetPendingActionStore";
+import { useFleetBroadcastConfirmStore } from "@/store/fleetBroadcastConfirmStore";
 import { usePanelStore } from "@/store/panelStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useWorktreeFilterStore } from "@/store/worktreeFilterStore";
@@ -74,6 +75,7 @@ function resetStores() {
     lastArmedId: null,
   });
   useFleetPendingActionStore.setState({ pending: null });
+  useFleetBroadcastConfirmStore.setState({ pending: null });
   usePanelStore.setState({ panelsById: {}, panelIds: [], focusedId: null });
   useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-1", isFleetScopeActive: false });
   useWorktreeFilterStore.setState({ quickStateFilter: "all" });
@@ -443,6 +445,92 @@ describe("FleetArmingRibbon", () => {
     fireEvent.keyDown(window, { key: "Escape" });
     fireEvent.keyDown(window, { key: "Escape" });
     expect(dispatchSpy.mock.calls.some((c) => c[0] === "fleet.interrupt")).toBe(false);
+    dispatchSpy.mockRestore();
+  });
+
+  it("bare Escape Escape while a pending broadcast confirm is open does NOT dispatch fleet.interrupt", async () => {
+    seed([makeAgent("t1", "working"), makeAgent("t2", "working")]);
+    useFleetArmingStore.getState().armIds(["t1", "t2"]);
+    useFleetBroadcastConfirmStore.setState({
+      pending: {
+        text: "rm -rf /",
+        warningReasons: ["destructive"],
+        onConfirm: async () => {},
+      },
+    });
+    const actionServiceModule = await import("@/services/ActionService");
+    const dispatchSpy = vi.spyOn(actionServiceModule.actionService, "dispatch");
+    render(<FleetArmingRibbon />);
+    fireEvent.keyDown(window, { key: "Escape" });
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(dispatchSpy.mock.calls.some((c) => c[0] === "fleet.interrupt")).toBe(false);
+    dispatchSpy.mockRestore();
+  });
+
+  it("bare Escape Escape while the armed-list popover is open does NOT dispatch fleet.interrupt", async () => {
+    seed([makeAgent("t1", "working"), makeAgent("t2", "working")]);
+    useFleetArmingStore.getState().armIds(["t1", "t2"]);
+    const actionServiceModule = await import("@/services/ActionService");
+    const dispatchSpy = vi.spyOn(actionServiceModule.actionService, "dispatch");
+    render(<FleetArmingRibbon />);
+    // Opening the popover sets popoverOpen=true → bareEscapeBlockedRef is true.
+    fireEvent.click(screen.getByTestId("fleet-armed-count-chip"));
+    fireEvent.keyDown(window, { key: "Escape" });
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(dispatchSpy.mock.calls.some((c) => c[0] === "fleet.interrupt")).toBe(false);
+    dispatchSpy.mockRestore();
+  });
+
+  it("held bare Escape (e.repeat=true) does NOT dispatch fleet.interrupt", async () => {
+    // Bare Escape auto-repeats while held; the OS-generated repeat must
+    // not satisfy the double-tap window or the user would interrupt the
+    // fleet just by leaning on the key.
+    seed([makeAgent("t1", "working"), makeAgent("t2", "working")]);
+    useFleetArmingStore.getState().armIds(["t1", "t2"]);
+    const actionServiceModule = await import("@/services/ActionService");
+    const dispatchSpy = vi.spyOn(actionServiceModule.actionService, "dispatch");
+    render(<FleetArmingRibbon />);
+    fireEvent.keyDown(window, { key: "Escape" });
+    fireEvent.keyDown(window, { key: "Escape", repeat: true });
+    fireEvent.keyDown(window, { key: "Escape", repeat: true });
+    expect(dispatchSpy.mock.calls.some((c) => c[0] === "fleet.interrupt")).toBe(false);
+    dispatchSpy.mockRestore();
+  });
+
+  it("window blur between bare Escapes resets the double-tap timer", async () => {
+    // First tap stamps the ref; blur clears it; the next bare Esc must be
+    // treated as a fresh first tap, not the second of a pair.
+    seed([makeAgent("t1", "working"), makeAgent("t2", "working")]);
+    useFleetArmingStore.getState().armIds(["t1", "t2"]);
+    const actionServiceModule = await import("@/services/ActionService");
+    const dispatchSpy = vi.spyOn(actionServiceModule.actionService, "dispatch");
+    render(<FleetArmingRibbon />);
+    fireEvent.keyDown(window, { key: "Escape" });
+    fireEvent.blur(window);
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(dispatchSpy.mock.calls.some((c) => c[0] === "fleet.interrupt")).toBe(false);
+    dispatchSpy.mockRestore();
+  });
+
+  it("bare Escape Escape inside a non-xterm textarea does NOT dispatch fleet.interrupt", async () => {
+    // The composer / settings / recipe-editor surfaces own bare Esc — it
+    // dismisses or clears the input. Firing fleet.interrupt from a text
+    // input would be a hidden side effect of the visible dismiss action.
+    seed([makeAgent("t1", "working"), makeAgent("t2", "working")]);
+    useFleetArmingStore.getState().armIds(["t1", "t2"]);
+    const actionServiceModule = await import("@/services/ActionService");
+    const dispatchSpy = vi.spyOn(actionServiceModule.actionService, "dispatch");
+    render(<FleetArmingRibbon />);
+    const textarea = document.createElement("textarea");
+    document.body.appendChild(textarea);
+    textarea.focus();
+    try {
+      fireEvent.keyDown(textarea, { key: "Escape" });
+      fireEvent.keyDown(textarea, { key: "Escape" });
+      expect(dispatchSpy.mock.calls.some((c) => c[0] === "fleet.interrupt")).toBe(false);
+    } finally {
+      textarea.remove();
+    }
     dispatchSpy.mockRestore();
   });
 
