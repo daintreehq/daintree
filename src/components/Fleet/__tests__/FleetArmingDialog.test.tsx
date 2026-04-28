@@ -639,6 +639,19 @@ describe("FleetArmingDialog", () => {
       expect(screen.getByText("Arm selected")).toBeTruthy();
     });
 
+    it("first shift+click after pre-selection extends range, not plain toggle", () => {
+      useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-1" });
+      seedTerminals([
+        makeTerminal("a", { title: "alpha", worktreeId: "wt-1" }),
+        makeTerminal("b", { title: "beta", worktreeId: "wt-1" }),
+        makeTerminal("c", { title: "gamma", worktreeId: "wt-2" }),
+      ]);
+      renderDialog([makeWorktreeSnap("wt-1", "Main"), makeWorktreeSnap("wt-2", "Other")]);
+      // a and b are pre-selected, anchor = b. Shift+click gamma (c) on wt-2.
+      fireEvent.click(screen.getByText("gamma").closest("label")!, { shiftKey: true });
+      expect(screen.getByText("Arm 3 selected")).toBeTruthy();
+    });
+
     it("opens empty when active worktree has no eligible terminals", () => {
       useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-2" });
       seedTerminals([makeTerminal("a", { title: "alpha", worktreeId: "wt-1" })]);
@@ -731,6 +744,22 @@ describe("FleetArmingDialog", () => {
       // Shift+click without prior anchor in new session — plain toggle.
       fireEvent.click(screen.getByText("alpha").closest("label")!, { shiftKey: true });
       expect(screen.getByText("Arm 1 selected")).toBeTruthy();
+    });
+
+    it("reverse range confirms all 3 terminals selected", () => {
+      seedTerminals([
+        makeTerminal("a", { title: "alpha", worktreeId: "wt-1" }),
+        makeTerminal("b", { title: "beta", worktreeId: "wt-1" }),
+        makeTerminal("c", { title: "gamma", worktreeId: "wt-1" }),
+      ]);
+      renderDialog([makeWorktreeSnap("wt-1", "Main")]);
+      // Click gamma (last), then shift-click alpha (first).
+      fireEvent.click(screen.getByLabelText("Select gamma"));
+      fireEvent.click(screen.getByText("alpha").closest("label")!, { shiftKey: true });
+      fireEvent.click(screen.getByText("Arm 3 selected"));
+      const order = useFleetArmingStore.getState().armOrder;
+      expect(order.length).toBe(3);
+      expect(new Set(order)).toEqual(new Set(["a", "b", "c"]));
     });
   });
 

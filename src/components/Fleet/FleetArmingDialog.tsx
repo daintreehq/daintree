@@ -126,6 +126,12 @@ export function FleetArmingDialog({
           }
         }
         setSelectedIds(preSelected);
+        // Set anchor to the last pre-selected terminal so the first
+        // shift+click after open extends the range rather than
+        // falling through to a plain toggle.
+        if (preSelected.size > 0) {
+          rangeAnchorRef.current = [...preSelected].pop()!;
+        }
       } else {
         setSelectedIds(new Set());
       }
