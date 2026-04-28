@@ -734,7 +734,7 @@ describe("BrowserPane webview lifecycle regression", () => {
       expect(container.textContent).toContain("Open in External Browser");
     });
 
-    it("Retry from timeout clears error and reloads", () => {
+    it("Retry from timeout clears error and loads current URL", () => {
       const { container } = render(<BrowserPane {...baseProps} />);
       const webview = getWebviewElement(container);
 
@@ -758,7 +758,7 @@ describe("BrowserPane webview lifecycle regression", () => {
         retryButton!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
       });
 
-      expect(webview.reload).toHaveBeenCalledTimes(1);
+      expect(webview.loadURL).toHaveBeenCalledWith("http://localhost:5173/");
     });
 
     it("clears slow timer on did-stop-loading", () => {

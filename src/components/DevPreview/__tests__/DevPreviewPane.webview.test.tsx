@@ -983,7 +983,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
       expect(container.textContent).toContain("Page Load Timed Out");
     });
 
-    it("Retry from timeout clears error and reloads", () => {
+    it("Retry from timeout clears error and loads current URL", () => {
       const { container } = render(<DevPreviewPane {...baseProps} />);
       const webview = getWebviewElement(container);
 
@@ -1007,7 +1007,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
         retryButton!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
       });
 
-      expect(webview.reload).toHaveBeenCalledTimes(1);
+      expect(webview.loadURL).toHaveBeenCalledWith("http://localhost:5173/");
     });
 
     it("clears slow timer when did-fail-load fires", () => {

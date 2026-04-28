@@ -368,7 +368,11 @@ export function BrowserPane({
         setLoadError(
           "The saved URL is no longer reachable. The server may have moved to a different port."
         );
-      } else if (event.errorCode === ERR_NAME_NOT_RESOLVED && event.validatedURL) {
+      } else if (
+        event.isMainFrame &&
+        event.errorCode === ERR_NAME_NOT_RESOLVED &&
+        event.validatedURL
+      ) {
         let hostname = event.validatedURL;
         try {
           hostname = new URL(event.validatedURL).hostname;
@@ -376,13 +380,17 @@ export function BrowserPane({
           // Use raw validatedURL if parsing fails
         }
         setLoadError(`Couldn't resolve ${hostname}. Check the URL or your connection.`);
-      } else if (event.errorCode === ERR_INTERNET_DISCONNECTED) {
+      } else if (event.isMainFrame && event.errorCode === ERR_INTERNET_DISCONNECTED) {
         setLoadError("No internet connection. Check your network.");
-      } else if (event.errorCode === ERR_CONNECTION_TIMED_OUT && event.validatedURL) {
+      } else if (
+        event.isMainFrame &&
+        event.errorCode === ERR_CONNECTION_TIMED_OUT &&
+        event.validatedURL
+      ) {
         setLoadError(
           `Connection to ${event.validatedURL} timed out. The server may be unreachable.`
         );
-      } else {
+      } else if (event.isMainFrame) {
         const urlContext = event.validatedURL ? ` at ${event.validatedURL}` : "";
         setLoadError(
           event.errorDescription
@@ -504,6 +512,14 @@ export function BrowserPane({
       if (faviconDebounceTimer) {
         clearTimeout(faviconDebounceTimer);
         faviconDebounceTimer = null;
+      }
+      if (slowLoadTimeoutRef.current) {
+        clearTimeout(slowLoadTimeoutRef.current);
+        slowLoadTimeoutRef.current = null;
+      }
+      if (loadTimeoutRef.current) {
+        clearTimeout(loadTimeoutRef.current);
+        loadTimeoutRef.current = null;
       }
     };
   }, [
@@ -650,8 +666,12 @@ export function BrowserPane({
     setLoadError(null);
     setIsSlowLoad(false);
     setIsLoading(true);
-    webviewRef.current?.reload();
-  }, []);
+    if (currentUrl) {
+      webviewRef.current?.loadURL(currentUrl);
+    } else {
+      webviewRef.current?.reload();
+    }
+  }, [currentUrl]);
 
   const handleHardReload = useCallback(() => {
     setBlockedNav(null);

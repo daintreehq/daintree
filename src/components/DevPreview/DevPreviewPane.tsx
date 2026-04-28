@@ -438,8 +438,12 @@ export function DevPreviewPane({
     setWebviewLoadError(null);
     setIsSlowLoad(false);
     setIsLoading(true);
-    webviewRef.current?.reload();
-  }, []);
+    if (currentUrl) {
+      webviewRef.current?.loadURL(currentUrl);
+    } else {
+      webviewRef.current?.reload();
+    }
+  }, [currentUrl]);
 
   const handleHardReload = useCallback(() => {
     const webview = webviewRef.current;
@@ -618,6 +622,10 @@ export function DevPreviewPane({
     };
 
     const handleDidFailLoad = (e: Electron.DidFailLoadEvent) => {
+      // Ignore aborted loads (e.g., navigation interrupted by another navigation)
+      if (e.errorCode === -3) return;
+      // Ignore cancellations
+      if (e.errorCode === -6) return;
       setIsLoading(false);
       setIsSlowLoad(false);
       if (slowLoadTimeoutRef.current) {
@@ -746,6 +754,14 @@ export function DevPreviewPane({
       if (failLoadRetryRef.current) {
         clearTimeout(failLoadRetryRef.current);
         failLoadRetryRef.current = null;
+      }
+      if (slowLoadTimeoutRef.current) {
+        clearTimeout(slowLoadTimeoutRef.current);
+        slowLoadTimeoutRef.current = null;
+      }
+      if (loadTimeoutRef.current) {
+        clearTimeout(loadTimeoutRef.current);
+        loadTimeoutRef.current = null;
       }
     };
   }, [webviewElement, loadTimeoutMs, evictingRef]);
@@ -1204,7 +1220,8 @@ export function DevPreviewPane({
                     <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-daintree-bg text-daintree-text p-6">
                       <AlertTriangle className="w-6 h-6 text-status-warning mb-3" />
                       <h3 className="text-sm font-medium text-daintree-text/70 mb-1">
-                        {webviewLoadError.startsWith("Load timed out")
+                        {webviewLoadError.startsWith("Load timed out") ||
+                        webviewLoadError.startsWith("Connection to")
                           ? "Page Load Timed Out"
                           : webviewLoadError.startsWith("Load cancelled")
                             ? "Load Cancelled"
@@ -1217,7 +1234,8 @@ export function DevPreviewPane({
                         <Button
                           onClick={
                             webviewLoadError.startsWith("Load cancelled") ||
-                            webviewLoadError.startsWith("Load timed out")
+                            webviewLoadError.startsWith("Load timed out") ||
+                            webviewLoadError.startsWith("Connection to")
                               ? handleRetryWebviewLoad
                               : handleHardRestart
                           }
@@ -1228,7 +1246,8 @@ export function DevPreviewPane({
                           <RotateCw className="h-3.5 w-3.5" />
                           <span className="text-xs">
                             {webviewLoadError.startsWith("Load cancelled") ||
-                            webviewLoadError.startsWith("Load timed out")
+                            webviewLoadError.startsWith("Load timed out") ||
+                            webviewLoadError.startsWith("Connection to")
                               ? "Retry"
                               : "Hard Restart"}
                           </span>
