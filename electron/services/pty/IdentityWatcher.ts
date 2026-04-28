@@ -32,6 +32,7 @@ const COMMAND_NOT_FOUND_PATTERNS = [
   "commande introuvable",
   "Befehl nicht gefunden",
   "no se encontró la orden",
+  "orden no encontrada",
   "コマンドが見つかりません",
   "未找到命令",
   "команда не найдена",
@@ -41,6 +42,7 @@ const COMMAND_NOT_FOUND_PATTERNS = [
   "opdracht niet gevonden",
   "Unknown command:",
   "CommandNotFoundException",
+  "is not recognized as the name of a cmdlet",
 ] as const;
 
 const COMMAND_NOT_FOUND_REGEX = new RegExp(COMMAND_NOT_FOUND_PATTERNS.join("|"), "iu");

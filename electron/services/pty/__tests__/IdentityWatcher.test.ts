@@ -395,7 +395,8 @@ describe("IdentityWatcher", () => {
       { locale: "English (no such file)", phrase: "bash: ./claude: No such file or directory" },
       { locale: "French", phrase: "bash: claude : commande introuvable" },
       { locale: "German", phrase: "bash: claude: Befehl nicht gefunden" },
-      { locale: "Spanish", phrase: "bash: claude: no se encontró la orden" },
+      { locale: "Spanish (es_MX)", phrase: "bash: claude: no se encontró la orden" },
+      { locale: "Spanish (es_ES)", phrase: "bash: claude: orden no encontrada" },
       { locale: "Japanese", phrase: "bash: claude: コマンドが見つかりません" },
       { locale: "Chinese (Simplified)", phrase: "bash: claude: 未找到命令" },
       { locale: "Russian", phrase: "bash: claude: команда не найдена" },
@@ -405,9 +406,13 @@ describe("IdentityWatcher", () => {
       { locale: "Dutch", phrase: "bash: claude: opdracht niet gevonden" },
       { locale: "Fish shell", phrase: "fish: Unknown command: claude" },
       {
-        locale: "PowerShell",
+        locale: "PowerShell (CommandNotFoundException)",
         phrase:
           "claude : The term 'claude' is not recognized. + FullyQualifiedErrorId : CommandNotFoundException",
+      },
+      {
+        locale: "PowerShell (is not recognized — tail-window fallback)",
+        phrase: "claude : The term 'claude' is not recognized as the name of a cmdlet",
       },
     ];
 
