@@ -64,4 +64,20 @@ describe("AppPaletteDialog.Empty", () => {
     expect(screen.getByText("Nothing found")).toBeTruthy();
     expect(screen.queryByTestId("cta")).toBeNull();
   });
+
+  it('exposes role="status" so screen readers announce the empty state', () => {
+    render(<AppPaletteDialog.Empty query="" emptyMessage="No items available" />);
+    expect(screen.getByRole("status")).toBeTruthy();
+  });
+
+  it('also exposes role="status" in the no-match case', () => {
+    render(
+      <AppPaletteDialog.Empty
+        query="zzz"
+        emptyMessage="No items available"
+        noMatchMessage="Nothing found"
+      />
+    );
+    expect(screen.getByRole("status")).toBeTruthy();
+  });
 });

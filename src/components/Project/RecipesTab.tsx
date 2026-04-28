@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { Plus, Trash2, Edit3, Download, FileDown, Check, Globe } from "lucide-react";
 import { Workflow } from "@/components/icons";
 import { Button } from "@/components/ui/button";
+import { EmptyState } from "@/components/ui/EmptyState";
 import { useRecipeStore } from "@/store/recipeStore";
 import { LiveTimeAgo } from "@/components/Worktree/LiveTimeAgo";
 import { RecipeEditor } from "@/components/TerminalRecipe/RecipeEditor";
@@ -189,8 +190,19 @@ export function RecipesTab({
               Loading recipes...
             </div>
           ) : recipes.length === 0 ? (
-            <div className="text-sm text-daintree-text/60 text-center py-8 border border-dashed border-daintree-border rounded-[var(--radius-md)]">
-              No recipes configured yet
+            <div className="border border-dashed border-daintree-border rounded-[var(--radius-md)]">
+              <EmptyState
+                variant="zero-data"
+                icon={<Workflow />}
+                title="No recipes configured yet"
+                description="Create a recipe to spawn multiple terminals with predefined commands and settings."
+                action={
+                  <Button variant="outline" size="sm" onClick={handleAddRecipe}>
+                    <Plus />
+                    Add recipe
+                  </Button>
+                }
+              />
             </div>
           ) : (
             <div className="border border-daintree-border rounded-[var(--radius-md)] divide-y divide-daintree-border">
