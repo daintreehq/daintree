@@ -27,6 +27,8 @@ for (const stream of [process.stdout, process.stderr]) {
 import { MessagePort } from "node:worker_threads";
 import os from "node:os";
 import { PtyManager } from "./services/PtyManager.js";
+import { stripAnsi } from "./services/pty/AgentPatternDetector.js";
+import type { SemanticSearchMatch } from "../shared/types/ipc/terminal.js";
 import { PtyPool, getPtyPool } from "./services/PtyPool.js";
 import { ProcessTreeCache } from "./services/ProcessTreeCache.js";
 import { TerminalResourceMonitor } from "./services/pty/TerminalResourceMonitor.js";
@@ -1586,6 +1588,63 @@ port.on("message", async (rawMsg: any) => {
             detectedAgentId: narrowDetectedAgentId(t.detectedAgentId),
             detectedProcessId: t.detectedProcessIconId,
           })),
+        });
+        break;
+      }
+
+      case "search-semantic-buffers": {
+        const matches: SemanticSearchMatch[] = [];
+        let regex: RegExp | null = null;
+        if (msg.isRegex) {
+          try {
+            regex = new RegExp(msg.query, "i");
+          } catch {
+            sendEvent({
+              type: "semantic-search-result",
+              requestId: msg.requestId,
+              matches: [],
+              error: "invalid-regex",
+            });
+            break;
+          }
+        }
+        const needle = msg.isRegex ? null : msg.query.toLowerCase();
+        for (const t of ptyManager.getAll()) {
+          const buffer = t.semanticBuffer;
+          if (!buffer || buffer.length === 0) continue;
+          for (let i = buffer.length - 1; i >= 0; i--) {
+            const cleaned = stripAnsi(buffer[i] ?? "").trim();
+            if (!cleaned) continue;
+            let start = -1;
+            let end = -1;
+            if (regex) {
+              const m = regex.exec(cleaned);
+              if (m && m[0].length > 0) {
+                start = m.index;
+                end = m.index + m[0].length;
+              }
+            } else if (needle !== null && needle.length > 0) {
+              const idx = cleaned.toLowerCase().indexOf(needle);
+              if (idx !== -1) {
+                start = idx;
+                end = idx + needle.length;
+              }
+            }
+            if (start !== -1 && end !== -1) {
+              matches.push({
+                terminalId: t.id,
+                line: cleaned,
+                matchStart: start,
+                matchEnd: end,
+              });
+              break;
+            }
+          }
+        }
+        sendEvent({
+          type: "semantic-search-result",
+          requestId: msg.requestId,
+          matches,
         });
         break;
       }

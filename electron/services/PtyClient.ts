@@ -770,6 +770,16 @@ export class PtyClient extends EventEmitter {
         break;
       }
 
+      case "semantic-search-result": {
+        const semEvent = event as {
+          type: "semantic-search-result";
+          requestId: string;
+          matches: import("../../shared/types/ipc/terminal.js").SemanticSearchMatch[];
+        };
+        this.broker.resolve(semEvent.requestId, semEvent.matches ?? []);
+        break;
+      }
+
       case "serialized-state":
         this.broker.resolve((event as any).requestId, (event as any).state ?? null);
         break;
@@ -1463,6 +1473,25 @@ export class PtyClient extends EventEmitter {
     const requestId = this.broker.generateId("all-terminals");
     const promise = this.broker.register<TerminalInfoResponse[]>(requestId);
     this.send({ type: "get-all-terminals", requestId });
+    return promise.catch(() => []);
+  }
+
+  /**
+   * Scan every terminal's semantic buffer for `query` and return one
+   * ANSI-stripped snippet per matching terminal. Substring (case-insensitive)
+   * unless `isRegex` is true. Returns an empty array on regex compile error
+   * or IPC failure — UI never throws on bad input.
+   */
+  async searchSemanticBuffersAsync(
+    query: string,
+    isRegex: boolean
+  ): Promise<import("../../shared/types/ipc/terminal.js").SemanticSearchMatch[]> {
+    const requestId = this.broker.generateId("semantic-search");
+    const promise =
+      this.broker.register<import("../../shared/types/ipc/terminal.js").SemanticSearchMatch[]>(
+        requestId
+      );
+    this.send({ type: "search-semantic-buffers", query, isRegex, requestId });
     return promise.catch(() => []);
   }
 

@@ -34,6 +34,7 @@ import type {
   BackendTerminalInfo,
   TerminalInfoPayload,
   TerminalActivityPayload,
+  SemanticSearchMatch,
 } from "./terminal.js";
 import type {
   SaveArtifactOptions,
@@ -2114,6 +2115,10 @@ export interface IpcInvokeMap {
   "terminal:graceful-kill": {
     args: [id: string];
     result: string | null;
+  };
+  "terminal:search-semantic-buffers": {
+    args: [query: string, isRegex: boolean];
+    result: SemanticSearchMatch[];
   };
 
   // Webview lifecycle / dialog / OAuth channels

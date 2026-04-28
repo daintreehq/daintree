@@ -291,3 +291,14 @@ import type { TerminalActivityPayload } from "../terminal.js";
 
 /** Payload for terminal activity events */
 export { TerminalActivityPayload };
+
+/**
+ * Snippet match returned by the semantic-buffer search.
+ * `line` is ANSI-stripped; `matchStart`/`matchEnd` index into `line`.
+ */
+export interface SemanticSearchMatch {
+  terminalId: string;
+  line: string;
+  matchStart: number;
+  matchEnd: number;
+}

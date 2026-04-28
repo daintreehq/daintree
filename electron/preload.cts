@@ -739,6 +739,9 @@ const api: ElectronAPI = {
 
     getAllTerminals: () => _unwrappingInvoke(CHANNELS.TERMINAL_GET_ALL),
 
+    searchSemanticBuffers: (query: string, isRegex: boolean) =>
+      _unwrappingInvoke(CHANNELS.TERMINAL_SEARCH_SEMANTIC_BUFFERS, query, isRegex),
+
     reconnect: (terminalId: string) => _unwrappingInvoke(CHANNELS.TERMINAL_RECONNECT, terminalId),
 
     replayHistory: (terminalId: string, maxLines?: number) =>

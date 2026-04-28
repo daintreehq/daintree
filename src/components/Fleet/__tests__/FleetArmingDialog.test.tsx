@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import React from "react";
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { render, fireEvent, screen, act } from "@testing-library/react";
 
 vi.mock("@/components/ui/ScrollShadow", () => ({
@@ -91,9 +91,25 @@ function resetStores(): void {
   resetEscapeStack();
 }
 
+type SearchFn = (
+  query: string,
+  isRegex: boolean
+) => Promise<Array<{ terminalId: string; line: string; matchStart: number; matchEnd: number }>>;
+
+function installElectronMock(searchFn: SearchFn): void {
+  (window as unknown as { electron: unknown }).electron = {
+    terminal: { searchSemanticBuffers: searchFn },
+  };
+}
+
 describe("FleetArmingDialog", () => {
   beforeEach(() => {
     resetStores();
+    installElectronMock(vi.fn().mockResolvedValue([]));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it("does not render when closed", () => {
@@ -348,6 +364,192 @@ describe("FleetArmingDialog", () => {
     fireEvent.change(search, { target: { value: "unassigned" } });
     expect(screen.getByText("homeless")).toBeTruthy();
     expect(screen.queryByText("alpha")).toBeNull();
+  });
+
+  it("empty query does not invoke the semantic-buffer search", () => {
+    const search = vi.fn().mockResolvedValue([]);
+    installElectronMock(search);
+    seedTerminals([makeTerminal("a", { title: "alpha" })]);
+    renderDialog([makeWorktreeSnap("wt-1", "Main")]);
+    expect(search).not.toHaveBeenCalled();
+  });
+
+  it("content search surfaces a terminal that only matches its recent output", async () => {
+    vi.useFakeTimers();
+    const search = vi.fn(async (query: string) => {
+      if (query.toLowerCase().includes("usage")) {
+        return [
+          {
+            terminalId: "b",
+            line: "Claude Usage Limit reached at 4pm",
+            matchStart: 7,
+            matchEnd: 18,
+          },
+        ];
+      }
+      return [];
+    });
+    installElectronMock(search);
+    seedTerminals([makeTerminal("a", { title: "alpha" }), makeTerminal("b", { title: "beta" })]);
+    renderDialog([makeWorktreeSnap("wt-1", "Main")]);
+    const input = screen.getByTestId("fleet-arming-dialog-search") as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "usage" } });
+    await act(async () => {
+      vi.advanceTimersByTime(350);
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(search).toHaveBeenCalledWith("usage", false);
+    expect(screen.getByText("beta")).toBeTruthy();
+    expect(screen.queryByText("alpha")).toBeNull();
+    expect(screen.getByTestId("fleet-arming-dialog-snippet")).toBeTruthy();
+  });
+
+  it("regex toggle sends isRegex: true to the IPC call", async () => {
+    vi.useFakeTimers();
+    const search = vi.fn().mockResolvedValue([]);
+    installElectronMock(search);
+    seedTerminals([makeTerminal("a", { title: "alpha" })]);
+    renderDialog([makeWorktreeSnap("wt-1", "Main")]);
+    fireEvent.click(screen.getByTestId("fleet-arming-dialog-regex-toggle"));
+    fireEvent.change(screen.getByTestId("fleet-arming-dialog-search"), {
+      target: { value: "fo+" },
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(350);
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(search).toHaveBeenCalledWith("fo+", true);
+  });
+
+  it("invalid regex shows an error and suppresses the IPC call", async () => {
+    vi.useFakeTimers();
+    const search = vi.fn().mockResolvedValue([]);
+    installElectronMock(search);
+    seedTerminals([makeTerminal("a", { title: "alpha" })]);
+    renderDialog([makeWorktreeSnap("wt-1", "Main")]);
+    fireEvent.click(screen.getByTestId("fleet-arming-dialog-regex-toggle"));
+    fireEvent.change(screen.getByTestId("fleet-arming-dialog-search"), {
+      target: { value: "[unterminated" },
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(350);
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(search).not.toHaveBeenCalled();
+    expect(screen.getByTestId("fleet-arming-dialog-regex-error")).toBeTruthy();
+  });
+
+  it("stale IPC response does not overwrite a fresher one", async () => {
+    vi.useFakeTimers();
+    const slowResolvers: Array<(value: unknown) => void> = [];
+    const search = vi.fn(
+      (query: string) =>
+        new Promise((resolve) => {
+          if (query === "old") {
+            slowResolvers.push(resolve as (value: unknown) => void);
+          } else {
+            resolve([]);
+          }
+        })
+    );
+    installElectronMock(search as unknown as SearchFn);
+    seedTerminals([makeTerminal("a", { title: "alpha" }), makeTerminal("b", { title: "beta" })]);
+    renderDialog([makeWorktreeSnap("wt-1", "Main")]);
+    const input = screen.getByTestId("fleet-arming-dialog-search") as HTMLInputElement;
+    // First query — debounce and fire, response stays pending.
+    fireEvent.change(input, { target: { value: "old" } });
+    await act(async () => {
+      vi.advanceTimersByTime(350);
+    });
+    // Second query — debounce and fire, response resolves immediately to [].
+    fireEvent.change(input, { target: { value: "new" } });
+    await act(async () => {
+      vi.advanceTimersByTime(350);
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    // Now resolve the stale "old" promise with a forged match for "a".
+    await act(async () => {
+      slowResolvers.forEach((r) =>
+        r([{ terminalId: "a", line: "old line", matchStart: 0, matchEnd: 3 }])
+      );
+      await Promise.resolve();
+    });
+    // Stale snippet must be ignored — "alpha" does not contain "new" in title,
+    // and the snippet response was discarded, so the row stays hidden.
+    expect(screen.queryByTestId("fleet-arming-dialog-snippet")).toBeNull();
+  });
+
+  it("snippets and regex mode reset on dialog close/reopen", async () => {
+    vi.useFakeTimers();
+    const search = vi
+      .fn()
+      .mockResolvedValue([{ terminalId: "a", line: "match line", matchStart: 0, matchEnd: 5 }]);
+    installElectronMock(search);
+    seedTerminals([makeTerminal("a", { title: "alpha" })]);
+    const store = createWorktreeStore();
+    store.getState().applySnapshot([makeWorktreeSnap("wt-1", "Main")], 1);
+    const { rerender } = render(
+      <WorktreeStoreContext.Provider value={store}>
+        <FleetArmingDialog isOpen={true} onClose={() => {}} />
+      </WorktreeStoreContext.Provider>
+    );
+    fireEvent.click(screen.getByTestId("fleet-arming-dialog-regex-toggle"));
+    fireEvent.change(screen.getByTestId("fleet-arming-dialog-search"), {
+      target: { value: "match" },
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(350);
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(screen.getByTestId("fleet-arming-dialog-snippet")).toBeTruthy();
+    // Close, then reopen — same component instance, isOpen prop transitions
+    // false→true, so the reset effect must re-run.
+    rerender(
+      <WorktreeStoreContext.Provider value={store}>
+        <FleetArmingDialog isOpen={false} onClose={() => {}} />
+      </WorktreeStoreContext.Provider>
+    );
+    rerender(
+      <WorktreeStoreContext.Provider value={store}>
+        <FleetArmingDialog isOpen={true} onClose={() => {}} />
+      </WorktreeStoreContext.Provider>
+    );
+    expect((screen.getByTestId("fleet-arming-dialog-search") as HTMLInputElement).value).toBe("");
+    expect(screen.queryByTestId("fleet-arming-dialog-snippet")).toBeNull();
+    expect(
+      screen.getByTestId("fleet-arming-dialog-regex-toggle").getAttribute("aria-pressed")
+    ).toBe("false");
+  });
+
+  it("buffer-matched terminals are not auto-selected — confirm stays disabled", async () => {
+    vi.useFakeTimers();
+    const search = vi
+      .fn()
+      .mockResolvedValue([{ terminalId: "a", line: "deep match", matchStart: 5, matchEnd: 10 }]);
+    installElectronMock(search);
+    seedTerminals([makeTerminal("a", { title: "alpha" })]);
+    renderDialog([makeWorktreeSnap("wt-1", "Main")]);
+    fireEvent.change(screen.getByTestId("fleet-arming-dialog-search"), {
+      target: { value: "match" },
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(350);
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    const confirm = screen.getByText("Arm selected").closest("button") as HTMLButtonElement;
+    expect(confirm.disabled).toBe(true);
   });
 
   it("group safe-reset clears only that group, not other groups", () => {

@@ -11,6 +11,7 @@ import type { AgentState, AgentId, WaitingReason } from "./agent.js";
 import type { PanelKind, TerminalFlowStatus, PanelTitleMode } from "./panel.js";
 import type { ResourceProfile } from "./resourceProfile.js";
 import type { BuiltInAgentId } from "../config/agentIds.js";
+import type { SemanticSearchMatch } from "./ipc/terminal.js";
 
 export type { TerminalFlowStatus };
 
@@ -125,6 +126,12 @@ export type PtyHostRequest =
   | { type: "get-available-terminals"; requestId: string }
   | { type: "get-terminals-by-state"; state: AgentState; requestId: string }
   | { type: "get-all-terminals"; requestId: string }
+  | {
+      type: "search-semantic-buffers";
+      query: string;
+      isRegex: boolean;
+      requestId: string;
+    }
   | { type: "set-ipc-data-mirror"; id: string; enabled: boolean }
   | { type: "graceful-kill"; id: string; requestId: string }
   | { type: "graceful-kill-by-project"; projectId: string; requestId: string }
@@ -234,6 +241,12 @@ export type PtyHostEvent =
   | { type: "available-terminals"; requestId: string; terminals: PtyHostTerminalInfo[] }
   | { type: "terminals-by-state"; requestId: string; terminals: PtyHostTerminalInfo[] }
   | { type: "all-terminals"; requestId: string; terminals: PtyHostTerminalInfo[] }
+  | {
+      type: "semantic-search-result";
+      requestId: string;
+      matches: SemanticSearchMatch[];
+      error?: "invalid-regex";
+    }
   | {
       type: "terminal-status";
       id: string;

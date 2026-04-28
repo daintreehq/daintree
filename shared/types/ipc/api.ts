@@ -36,6 +36,7 @@ import type {
   BackendTerminalInfo,
   TerminalInfoPayload,
   TerminalActivityPayload,
+  SemanticSearchMatch,
 } from "./terminal.js";
 import type {
   SaveArtifactOptions,
@@ -254,6 +255,7 @@ export interface ElectronAPI {
     getAvailableTerminals(): Promise<BackendTerminalInfo[]>;
     getTerminalsByState(state: import("../agent.js").AgentState): Promise<BackendTerminalInfo[]>;
     getAllTerminals(): Promise<BackendTerminalInfo[]>;
+    searchSemanticBuffers(query: string, isRegex: boolean): Promise<SemanticSearchMatch[]>;
     reconnect(terminalId: string): Promise<TerminalReconnectResult>;
     replayHistory(terminalId: string, maxLines?: number): Promise<{ replayed: number }>;
     getSerializedState(terminalId: string): Promise<string | null>;

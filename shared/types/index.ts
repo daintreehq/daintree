@@ -100,6 +100,7 @@ export type {
   TerminalErrorPayload,
   BackendTerminalInfo,
   TerminalReconnectResult,
+  SemanticSearchMatch,
   // CopyTree IPC types
   CopyTreeOptions,
   CopyTreeGeneratePayload,

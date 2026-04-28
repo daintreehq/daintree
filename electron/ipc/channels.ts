@@ -40,6 +40,7 @@ export const CHANNELS = {
   TERMINAL_GET_AVAILABLE: "terminal:get-available",
   TERMINAL_GET_BY_STATE: "terminal:get-by-state",
   TERMINAL_GET_ALL: "terminal:get-all",
+  TERMINAL_SEARCH_SEMANTIC_BUFFERS: "terminal:search-semantic-buffers",
   TERMINAL_RECONNECT: "terminal:reconnect",
   TERMINAL_REPLAY_HISTORY: "terminal:replay-history",
   TERMINAL_GET_SERIALIZED_STATE: "terminal:get-serialized-state",

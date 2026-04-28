@@ -17,7 +17,7 @@ import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { usePanelStore } from "@/store/panelStore";
 import { useFleetArmingStore, isFleetArmEligible } from "@/store/fleetArmingStore";
 import { cn } from "@/lib/utils";
-import type { TerminalInstance } from "@shared/types";
+import type { SemanticSearchMatch, TerminalInstance } from "@shared/types";
 
 export type FleetArmingDialogChip = "all" | "waiting" | "working";
 
@@ -41,6 +41,7 @@ interface WorktreeGroup {
 
 const FALLBACK_GROUP_ID = "__no_worktree__";
 const FALLBACK_GROUP_NAME = "Unassigned";
+const SEMANTIC_SEARCH_DEBOUNCE_MS = 300;
 
 function isWaiting(t: DialogTerminal): boolean {
   return t.agentState === "waiting";
@@ -86,9 +87,16 @@ export function FleetArmingDialog({
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
   const [searchTerm, setSearchTerm] = useState("");
   const [activeChip, setActiveChip] = useState<FleetArmingDialogChip>("all");
+  const [isRegexMode, setIsRegexMode] = useState(false);
+  const [snippetMap, setSnippetMap] = useState<Map<string, SemanticSearchMatch>>(() => new Map());
+  const [regexError, setRegexError] = useState<string | null>(null);
   const deferredSearchTerm = useDeferredValue(searchTerm);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const listContainerRef = useRef<HTMLDivElement | null>(null);
+  // Monotonic counter — guards against stale IPC responses overwriting fresher
+  // results. Incremented before each call; the response captures its issue
+  // number and is dropped if the counter has since advanced.
+  const searchRequestRef = useRef(0);
 
   // Reset all dialog-local state on each open/close transition. Single
   // useEffect keyed on [isOpen] per lesson #4958.
@@ -97,8 +105,57 @@ export function FleetArmingDialog({
       setSelectedIds(new Set());
       setSearchTerm("");
       setActiveChip("all");
+      setIsRegexMode(false);
+      setSnippetMap(new Map());
+      setRegexError(null);
+      searchRequestRef.current = 0;
     }
   }, [isOpen]);
+
+  // Debounced semantic-buffer search. Fires one IPC round-trip per settled
+  // query; stale responses are discarded via the monotonic counter.
+  useEffect(() => {
+    if (!isOpen) return;
+    const trimmed = deferredSearchTerm.trim();
+    if (trimmed === "") {
+      setSnippetMap(new Map());
+      setRegexError(null);
+      searchRequestRef.current += 1;
+      return;
+    }
+
+    if (isRegexMode) {
+      try {
+        new RegExp(trimmed);
+        setRegexError(null);
+      } catch (err) {
+        setRegexError(err instanceof Error ? err.message : "Invalid regular expression");
+        setSnippetMap(new Map());
+        searchRequestRef.current += 1;
+        return;
+      }
+    } else {
+      setRegexError(null);
+    }
+
+    const issueId = ++searchRequestRef.current;
+    const timer = window.setTimeout(() => {
+      void window.electron.terminal
+        .searchSemanticBuffers(trimmed, isRegexMode)
+        .then((matches) => {
+          if (searchRequestRef.current !== issueId) return;
+          const next = new Map<string, SemanticSearchMatch>();
+          for (const m of matches) next.set(m.terminalId, m);
+          setSnippetMap(next);
+        })
+        .catch(() => {
+          if (searchRequestRef.current !== issueId) return;
+          setSnippetMap(new Map());
+        });
+    }, SEMANTIC_SEARCH_DEBOUNCE_MS);
+
+    return () => window.clearTimeout(timer);
+  }, [deferredSearchTerm, isRegexMode, isOpen]);
 
   const eligibleTerminals = useMemo<DialogTerminal[]>(() => {
     const out: DialogTerminal[] = [];
@@ -122,11 +179,18 @@ export function FleetArmingDialog({
   }, [eligibleTerminals]);
 
   const visibleTerminals = useMemo<DialogTerminal[]>(() => {
-    const needle = deferredSearchTerm.trim().toLowerCase();
+    const trimmed = deferredSearchTerm.trim();
+    const needle = isRegexMode ? "" : trimmed.toLowerCase();
     return eligibleTerminals.filter((t) => {
       if (activeChip === "waiting" && !isWaiting(t)) return false;
       if (activeChip === "working" && !isWorking(t)) return false;
-      if (needle === "") return true;
+      if (trimmed === "") return true;
+      // Buffer match alone is enough to surface the row.
+      if (snippetMap.has(t.id)) return true;
+      // In regex mode, the buffer search is authoritative — title/worktree
+      // are not regex-matched, so a non-matching row stays hidden unless the
+      // backend returned a snippet for it.
+      if (isRegexMode) return false;
       const groupName =
         t.worktreeId === FALLBACK_GROUP_ID
           ? FALLBACK_GROUP_NAME
@@ -134,7 +198,7 @@ export function FleetArmingDialog({
       const haystack = `${t.title.toLowerCase()} ${groupName.toLowerCase()}`;
       return haystack.includes(needle);
     });
-  }, [eligibleTerminals, activeChip, deferredSearchTerm, worktreeNames]);
+  }, [eligibleTerminals, activeChip, deferredSearchTerm, worktreeNames, snippetMap, isRegexMode]);
 
   const visibleIds = useMemo(() => visibleTerminals.map((t) => t.id), [visibleTerminals]);
 
@@ -264,25 +328,61 @@ export function FleetArmingDialog({
 
       <div className="flex flex-1 flex-col min-h-0">
         <div className="px-6 py-3 border-b border-daintree-border shrink-0 flex flex-col gap-3">
-          <div className="relative">
-            <Search
-              className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-daintree-text/40 pointer-events-none"
-              aria-hidden="true"
-            />
-            <input
-              ref={searchInputRef}
-              type="text"
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              placeholder="Search terminals or worktrees"
-              aria-label="Search terminals"
-              className={cn(
-                "w-full rounded border border-daintree-border bg-daintree-bg pl-8 pr-2 py-1.5 text-[13px] text-daintree-text",
-                "placeholder:text-daintree-text/40",
-                "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-1"
-              )}
-              data-testid="fleet-arming-dialog-search"
-            />
+          <div>
+            <div className="relative">
+              <Search
+                className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-daintree-text/40 pointer-events-none"
+                aria-hidden="true"
+              />
+              <input
+                ref={searchInputRef}
+                type="text"
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                placeholder={
+                  isRegexMode
+                    ? "Search terminals (regex)"
+                    : "Search terminals, worktrees, or recent output"
+                }
+                aria-label="Search terminals"
+                aria-invalid={regexError !== null}
+                className={cn(
+                  "w-full rounded border bg-daintree-bg pl-8 pr-12 py-1.5 text-[13px] text-daintree-text",
+                  "placeholder:text-daintree-text/40",
+                  regexError !== null ? "border-status-error" : "border-daintree-border",
+                  "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-1"
+                )}
+                data-testid="fleet-arming-dialog-search"
+              />
+              <button
+                type="button"
+                onClick={() => setIsRegexMode((v) => !v)}
+                aria-pressed={isRegexMode}
+                aria-label={
+                  isRegexMode ? "Switch to substring search" : "Switch to regular expression search"
+                }
+                title={isRegexMode ? "Regex (click for substring)" : "Substring (click for regex)"}
+                data-testid="fleet-arming-dialog-regex-toggle"
+                className={cn(
+                  "absolute right-1.5 top-1/2 -translate-y-1/2 h-6 px-1.5 rounded text-[11px] font-mono tabular-nums",
+                  "transition-colors",
+                  isRegexMode
+                    ? "bg-overlay-subtle text-daintree-text"
+                    : "text-daintree-text/55 hover:text-daintree-text hover:bg-tint/[0.08]",
+                  "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-1"
+                )}
+              >
+                {isRegexMode ? ".*" : "Aa"}
+              </button>
+            </div>
+            {regexError !== null && (
+              <p
+                className="mt-1 text-[11px] text-status-error"
+                data-testid="fleet-arming-dialog-regex-error"
+              >
+                Invalid regular expression
+              </p>
+            )}
           </div>
           <div className="flex items-center gap-1.5" role="tablist" aria-label="Filter by state">
             <ChipButton
@@ -336,6 +436,7 @@ export function FleetArmingDialog({
                 group={group}
                 selectedIds={selectedIds}
                 hideHeader={isSingleWorktree}
+                snippetMap={snippetMap}
                 onToggleId={toggleId}
                 onToggleGroup={handleGroupHeaderToggle}
               />
@@ -410,6 +511,7 @@ interface WorktreeGroupSectionProps {
   group: WorktreeGroup;
   selectedIds: ReadonlySet<string>;
   hideHeader: boolean;
+  snippetMap: ReadonlyMap<string, SemanticSearchMatch>;
   onToggleId: (id: string) => void;
   onToggleGroup: (group: WorktreeGroup) => void;
 }
@@ -418,6 +520,7 @@ function WorktreeGroupSection({
   group,
   selectedIds,
   hideHeader,
+  snippetMap,
   onToggleId,
   onToggleGroup,
 }: WorktreeGroupSectionProps): ReactElement {
@@ -462,6 +565,7 @@ function WorktreeGroupSection({
             key={t.id}
             terminal={t}
             checked={selectedIds.has(t.id)}
+            snippet={snippetMap.get(t.id)}
             onToggle={() => onToggleId(t.id)}
           />
         ))}
@@ -473,16 +577,17 @@ function WorktreeGroupSection({
 interface TerminalRowProps {
   terminal: DialogTerminal;
   checked: boolean;
+  snippet?: SemanticSearchMatch;
   onToggle: () => void;
 }
 
-function TerminalRow({ terminal, checked, onToggle }: TerminalRowProps): ReactElement {
+function TerminalRow({ terminal, checked, snippet, onToggle }: TerminalRowProps): ReactElement {
   const stateBadge = renderStateBadge(terminal.agentState);
   return (
-    <li className="flex items-center">
+    <li className="flex items-stretch">
       <label
         className={cn(
-          "flex flex-1 items-center gap-2 px-2 py-1.5 rounded text-[13px] text-daintree-text cursor-pointer",
+          "flex flex-1 items-start gap-2 px-2 py-1.5 rounded text-[13px] text-daintree-text cursor-pointer",
           "hover:bg-tint/[0.06]"
         )}
       >
@@ -491,10 +596,44 @@ function TerminalRow({ terminal, checked, onToggle }: TerminalRowProps): ReactEl
           onCheckedChange={onToggle}
           ariaLabel={`Select ${terminal.title}`}
         />
-        <span className="truncate flex-1">{terminal.title}</span>
-        {stateBadge}
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2">
+            <span className="truncate flex-1">{terminal.title}</span>
+            {stateBadge}
+          </div>
+          {snippet && <SnippetLine snippet={snippet} />}
+        </div>
       </label>
     </li>
+  );
+}
+
+function SnippetLine({ snippet }: { snippet: SemanticSearchMatch }): ReactElement {
+  // Truncate from the left so the matched range stays in the visible window
+  // for long lines. Right-truncation is handled by `overflow-hidden`.
+  const VIEWPORT = 80;
+  const LEAD = 20;
+  let line = snippet.line;
+  let start = snippet.matchStart;
+  let end = snippet.matchEnd;
+  if (start > LEAD && line.length > VIEWPORT) {
+    const cut = start - LEAD;
+    line = "…" + line.slice(cut);
+    start = start - cut + 1;
+    end = end - cut + 1;
+  }
+  const before = line.slice(0, start);
+  const match = line.slice(start, end);
+  const after = line.slice(end);
+  return (
+    <p
+      className="font-mono text-[11px] text-daintree-text/40 truncate mt-0.5"
+      data-testid="fleet-arming-dialog-snippet"
+    >
+      {before}
+      <mark className="bg-transparent text-daintree-text/85 font-medium">{match}</mark>
+      {after}
+    </p>
   );
 }
 
