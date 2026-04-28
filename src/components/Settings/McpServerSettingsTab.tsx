@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { Copy, Check, AlertCircle, Key, Hash, Shield, Eye, EyeOff, RefreshCw } from "lucide-react";
 import { McpServerIcon } from "@/components/icons";
 import { cn } from "@/lib/utils";
@@ -25,6 +25,8 @@ export function McpServerSettingsTab() {
   const [error, setError] = useState<string | null>(null);
   const [portInput, setPortInput] = useState("");
   const [showApiKey, setShowApiKey] = useState(false);
+  const [copiedKey, setCopiedKey] = useState(false);
+  const copyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     let settled = false;
@@ -112,6 +114,17 @@ export function McpServerSettingsTab() {
       setError(formatErrorMessage(err, "Failed to clear API key"));
     }
   }, []);
+
+  const handleCopyApiKey = useCallback(async () => {
+    try {
+      await navigator.clipboard.writeText(status.apiKey);
+      setCopiedKey(true);
+      if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
+      copyTimeoutRef.current = setTimeout(() => setCopiedKey(false), 2000);
+    } catch {
+      // clipboard write failed — silently ignore
+    }
+  }, [status.apiKey]);
 
   const sseUrl = status.port ? `http://127.0.0.1:${status.port}/sse` : null;
 
@@ -229,17 +242,14 @@ export function McpServerSettingsTab() {
                 </div>
 
                 <div className="flex items-center gap-2">
-                  <div className="flex-1 relative">
-                    <input
-                      type={showApiKey ? "text" : "password"}
-                      value={status.apiKey}
-                      readOnly
-                      className="w-full bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-2 pr-10 font-mono text-xs text-daintree-text/80 focus:outline-none select-all"
-                    />
+                  <div className="flex-1 flex items-center gap-2 rounded-[var(--radius-md)] bg-surface-disabled border border-daintree-border px-3 py-2 font-mono text-xs text-daintree-text/80 select-all">
+                    <span className="flex-1 truncate">
+                      {showApiKey ? status.apiKey : "•".repeat(status.apiKey.length)}
+                    </span>
                     <button
                       type="button"
                       onClick={() => setShowApiKey((v) => !v)}
-                      className="absolute right-2 top-1/2 -translate-y-1/2 text-daintree-text/40 hover:text-daintree-text/70"
+                      className="shrink-0 text-daintree-text/40 hover:text-daintree-text/70"
                       aria-label={showApiKey ? "Hide API key" : "Show API key"}
                     >
                       {showApiKey ? (
@@ -249,6 +259,25 @@ export function McpServerSettingsTab() {
                       )}
                     </button>
                   </div>
+                  <button
+                    type="button"
+                    onClick={handleCopyApiKey}
+                    className={cn(
+                      "flex items-center gap-1.5 px-3 py-2 text-xs font-medium rounded-[var(--radius-md)] transition-colors",
+                      "border border-daintree-border hover:bg-overlay-soft",
+                      copiedKey
+                        ? "text-status-success border-status-success/30"
+                        : "text-daintree-text/70 hover:text-daintree-text"
+                    )}
+                    aria-label="Copy API key"
+                  >
+                    {copiedKey ? (
+                      <Check className="w-3.5 h-3.5" />
+                    ) : (
+                      <Copy className="w-3.5 h-3.5" />
+                    )}
+                    {copiedKey ? "Copied!" : "Copy"}
+                  </button>
                   <button
                     onClick={handleGenerateApiKey}
                     className="flex items-center gap-1.5 px-3 py-2 text-xs font-medium rounded-[var(--radius-md)] border border-daintree-border text-daintree-text/70 hover:text-daintree-text hover:bg-overlay-soft transition-colors"

@@ -191,7 +191,7 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
               value={parentPath}
               readOnly
               placeholder="Select a directory..."
-              className="flex-1 rounded-md border border-daintree-border bg-daintree-bg px-3 py-2 text-sm text-daintree-text placeholder:text-daintree-text/40 disabled:opacity-50"
+              className="flex-1 rounded-md border border-daintree-border bg-muted/50 px-3 py-2 text-sm text-daintree-text placeholder:text-daintree-text/40 disabled:opacity-50 select-all"
             />
             <Button
               variant="outline"
