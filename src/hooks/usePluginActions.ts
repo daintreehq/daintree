@@ -107,8 +107,8 @@ function toSyntheticDefinition(descriptor: PluginActionDescriptor): AnyActionDef
 
   const definition: ActionDefinition = {
     id,
-    title,
-    description,
+    title: title ?? "",
+    description: description ?? "",
     category,
     kind,
     danger,

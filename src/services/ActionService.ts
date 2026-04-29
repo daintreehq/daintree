@@ -292,8 +292,8 @@ export class ActionService {
     return {
       id: definition.id,
       name: definition.id,
-      title: definition.title,
-      description: definition.description,
+      title: definition.title ?? "",
+      description: definition.description ?? "",
       category: definition.category,
       kind: definition.kind,
       danger: definition.danger,

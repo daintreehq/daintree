@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ActionDefinition, ActionContext } from "@shared/types/actions";
+import type { ActionDefinition, ActionContext, ActionManifestEntry } from "@shared/types/actions";
+import { actionService } from "@/services/ActionService";
 
 // Node 25 exposes a broken native `localStorage` stub on `globalThis` (no
 // `clear`/`getItem`/etc) that shadows JSDOM's Storage and leaks the warning
@@ -46,7 +47,7 @@ Object.defineProperty(window, "localStorage", {
 // Stubs for other actions' dependencies (actions.list, actions.getContext). These
 // are not exercised by the persistedStores tests but must load without errors.
 vi.mock("@/services/ActionService", () => ({
-  actionService: { list: () => [] },
+  actionService: { list: vi.fn(() => []) },
 }));
 vi.mock("@/store/panelStore", () => ({ usePanelStore: { getState: () => ({}) } }));
 vi.mock("@/store/portalStore", () => ({ usePortalStore: { getState: () => ({}) } }));
@@ -325,5 +326,56 @@ describe("actions.persistedStores", () => {
     };
     expect(result.storeCount).toBe(0);
     expect(result.stores).toEqual([]);
+  });
+});
+
+describe("actions.list", () => {
+  function makeEntry(overrides: Partial<ActionManifestEntry> = {}): ActionManifestEntry {
+    return {
+      id: "actions.example",
+      name: "actions.example",
+      title: "Example",
+      description: "An example action",
+      category: "test",
+      kind: "command",
+      danger: "safe",
+      enabled: true,
+      requiresArgs: false,
+      ...overrides,
+    } as ActionManifestEntry;
+  }
+
+  it("does not throw when filtering entries with undefined title or description", async () => {
+    // Regression: #6120 — TypeError on toLowerCase when a manifest entry's
+    // title or description arrived as undefined (e.g. from an IPC-sourced
+    // plugin action). The filter must coerce missing strings to "".
+    vi.mocked(actionService.list).mockReturnValueOnce([
+      makeEntry({ id: "actions.alpha", title: undefined as unknown as string }),
+      makeEntry({ id: "actions.beta", description: undefined as unknown as string }),
+      makeEntry({
+        id: "actions.gamma",
+        title: undefined as unknown as string,
+        description: undefined as unknown as string,
+      }),
+    ]);
+
+    const def = registry.get("actions.list")!();
+    await expect(def.run({ search: "alpha" }, stubCtx)).resolves.toBeDefined();
+  });
+
+  it("matches by id when title/description are undefined", async () => {
+    vi.mocked(actionService.list).mockReturnValueOnce([
+      makeEntry({
+        id: "actions.findMe",
+        title: undefined as unknown as string,
+        description: undefined as unknown as string,
+      }),
+      makeEntry({ id: "actions.other", title: "Other", description: "Other action" }),
+    ]);
+
+    const def = registry.get("actions.list")!();
+    const result = (await def.run({ search: "findMe" }, stubCtx)) as ActionManifestEntry[];
+
+    expect(result.map((a) => a.id)).toEqual(["actions.findMe"]);
   });
 });

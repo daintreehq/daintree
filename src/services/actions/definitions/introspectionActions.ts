@@ -62,9 +62,9 @@ export function registerIntrospectionActions(
         const q = search.toLowerCase();
         manifest = manifest.filter(
           (a) =>
-            a.id.toLowerCase().includes(q) ||
-            a.title.toLowerCase().includes(q) ||
-            a.description.toLowerCase().includes(q)
+            (a.id ?? "").toLowerCase().includes(q) ||
+            (a.title ?? "").toLowerCase().includes(q) ||
+            (a.description ?? "").toLowerCase().includes(q)
         );
       }
       if (enabledOnly) {

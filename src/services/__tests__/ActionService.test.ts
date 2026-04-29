@@ -521,6 +521,30 @@ describe("ActionService", () => {
 
       expect(manifest[0]!.keywords).toBeUndefined();
     });
+
+    it("normalizes undefined title/description to empty strings on manifest entries", () => {
+      // Regression: #6120 — IPC-sourced plugin actions could arrive with
+      // undefined title or description even though the type system says
+      // string. toManifestEntry must coerce so downstream consumers
+      // (search filters, palette renderers) cannot crash on .toLowerCase().
+      const malformed = {
+        id: "actions.list" as ActionId,
+        title: undefined,
+        description: undefined,
+        category: "test",
+        kind: "command",
+        danger: "safe",
+        scope: "renderer",
+        run: vi.fn().mockResolvedValue(undefined),
+      };
+
+      service.register(malformed as unknown as ActionDefinition);
+      const entry = service.get("actions.list" as ActionId);
+
+      expect(entry).not.toBeNull();
+      expect(entry!.title).toBe("");
+      expect(entry!.description).toBe("");
+    });
   });
 
   describe("get", () => {
