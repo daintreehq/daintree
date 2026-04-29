@@ -1145,5 +1145,12 @@ describe("goose detection patterns", () => {
         expect(patterns.some((p) => p.test(line))).toBe(true);
       }
     );
+
+    it("does not match unrelated logs that mention 'session closed' mid-sentence", () => {
+      const patterns = compileAgentPatterns("goose", "completionPatterns");
+      expect(
+        patterns.some((p) => p.test("The websocket session closed unexpectedly; retrying..."))
+      ).toBe(false);
+    });
   });
 });

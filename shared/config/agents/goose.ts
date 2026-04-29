@@ -5,10 +5,11 @@ export const config: AgentConfig = {
   name: "Goose",
   command: "goose",
   args: ["session"],
-  // Goose's curl installer (https://block.github.io/goose/install.sh) drops the
-  // binary at ~/.local/bin/goose on POSIX. The native PowerShell installer on
-  // Windows lands it at %USERPROFILE%\goose\goose.exe.
-  nativePaths: ["~/.local/bin/goose", "%USERPROFILE%\\goose\\goose.exe"],
+  // Goose's curl installer drops the binary at ~/.local/bin/goose on POSIX.
+  // The PS1 installer (download_cli.ps1) defaults GOOSE_BIN_DIR to
+  // $env:USERPROFILE\.local\bin so the binary lands at
+  // %USERPROFILE%\.local\bin\goose.exe on Windows.
+  nativePaths: ["~/.local/bin/goose", "%USERPROFILE%\\.local\\bin\\goose.exe"],
   color: "#1c1c1c",
   iconId: "goose",
   supportsContextInjection: true,
@@ -57,7 +58,7 @@ export const config: AgentConfig = {
         {
           label: "PowerShell",
           commands: [
-            "irm https://github.com/block/goose/releases/download/stable/download_cli.ps1 | iex",
+            "irm https://raw.githubusercontent.com/block/goose/main/download_cli.ps1 | iex",
           ],
         },
       ],
@@ -93,8 +94,11 @@ export const config: AgentConfig = {
     promptPatterns: ["^🪿\\s"],
     promptHintPatterns: ["^🪿\\s"],
     // Goose prints "● session closed · <id>" at graceful exit (U+25CF marker);
-    // see crates/goose-cli/src/session/output.rs upstream.
-    completionPatterns: ["●\\s+session closed", "session closed"],
+    // see crates/goose-cli/src/session/output.rs upstream. Anchored to start of
+    // line so unrelated logs that mention "session closed" mid-sentence
+    // (e.g. "The websocket session closed unexpectedly") don't trigger the
+    // brief completion transition.
+    completionPatterns: ["^\\s*●?\\s*session closed"],
     completionConfidence: 0.9,
     scanLineCount: 10,
     primaryConfidence: 0.95,
