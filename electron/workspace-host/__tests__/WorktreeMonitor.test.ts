@@ -53,6 +53,18 @@ vi.mock("../../utils/gitUtils.js", () => ({
   clearGitDirCache: vi.fn(),
 }));
 
+const mockIsRepoOperationInProgress = vi.fn().mockReturnValue(false);
+vi.mock("../../utils/gitRepoOperationState.js", () => ({
+  isRepoOperationInProgress: (...args: unknown[]) => mockIsRepoOperationInProgress(...args),
+  OPERATION_SENTINEL_NAMES: [
+    "MERGE_HEAD",
+    "rebase-merge",
+    "rebase-apply",
+    "CHERRY_PICK_HEAD",
+    "REVERT_HEAD",
+  ],
+}));
+
 let mockWatcherStartResult = false;
 /** When true, the stub's `start()` synchronously invokes `onWatcherFailed`
  *  before returning — mirroring the real startup-ENOSPC catch path. */
@@ -114,6 +126,7 @@ vi.mock("../../services/worktree/index.js", () => ({
 
 import { WorktreeMonitor } from "../WorktreeMonitor.js";
 import type { WorktreeMonitorConfig, WorktreeMonitorCallbacks } from "../WorktreeMonitor.js";
+import { getGitDir } from "../../utils/gitUtils.js";
 
 const TEST_WORKTREE: Worktree = {
   id: "/test/worktree",
@@ -153,6 +166,8 @@ describe("WorktreeMonitor", () => {
     capturedOnInotifyLimitReached = undefined;
     capturedOnEmfileLimitReached = undefined;
     capturedWatcherOptions = undefined;
+    mockIsRepoOperationInProgress.mockReturnValue(false);
+    vi.mocked(getGitDir).mockReturnValue(null);
   });
 
   afterEach(() => {
@@ -1631,6 +1646,83 @@ describe("WorktreeMonitor", () => {
       expect(moods[moods.length - 1]).toBe("dirty");
 
       mockCategorizeWorktree.mockReturnValue("stable");
+      monitor.stop();
+    });
+  });
+
+  describe("git operation skip (rebase / merge / cherry-pick)", () => {
+    it("skips getWorktreeChangesWithStats while a git operation is in progress", async () => {
+      vi.mocked(getGitDir).mockReturnValue("/test/worktree/.git");
+      mockIsRepoOperationInProgress.mockReturnValue(true);
+
+      const callbacks = makeCallbacks();
+      const monitor = new WorktreeMonitor(TEST_WORKTREE, TEST_CONFIG, callbacks, "main");
+
+      await monitor.start();
+
+      expect(mockIsRepoOperationInProgress).toHaveBeenCalledWith("/test/worktree/.git");
+      expect(mockGetWorktreeChangesWithStats).not.toHaveBeenCalled();
+      expect(callbacks.onUpdate).not.toHaveBeenCalled();
+
+      monitor.stop();
+    });
+
+    it("runs git status normally once the operation finishes", async () => {
+      vi.mocked(getGitDir).mockReturnValue("/test/worktree/.git");
+      mockIsRepoOperationInProgress.mockReturnValue(true);
+      mockGetWorktreeChangesWithStats.mockResolvedValue({
+        worktreeId: "/test/worktree",
+        rootPath: "/test",
+        changes: [],
+        changedFileCount: 0,
+        totalInsertions: 0,
+        totalDeletions: 0,
+        insertions: 0,
+        deletions: 0,
+        latestFileMtime: 0,
+        lastUpdated: Date.now(),
+      });
+
+      const callbacks = makeCallbacks();
+      const monitor = new WorktreeMonitor(TEST_WORKTREE, TEST_CONFIG, callbacks, "main");
+
+      await monitor.start();
+      expect(mockGetWorktreeChangesWithStats).not.toHaveBeenCalled();
+
+      // Simulate the rebase/merge finishing — sentinels disappear, then a
+      // subsequent updateGitStatus call exercises the normal flow.
+      mockIsRepoOperationInProgress.mockReturnValue(false);
+      await monitor.updateGitStatus(true);
+
+      expect(mockGetWorktreeChangesWithStats).toHaveBeenCalledTimes(1);
+      expect(callbacks.onUpdate).toHaveBeenCalled();
+
+      monitor.stop();
+    });
+
+    it("does not call isRepoOperationInProgress when getGitDir returns null", async () => {
+      vi.mocked(getGitDir).mockReturnValue(null);
+      mockGetWorktreeChangesWithStats.mockResolvedValue({
+        worktreeId: "/test/worktree",
+        rootPath: "/test",
+        changes: [],
+        changedFileCount: 0,
+        totalInsertions: 0,
+        totalDeletions: 0,
+        insertions: 0,
+        deletions: 0,
+        latestFileMtime: 0,
+        lastUpdated: Date.now(),
+      });
+
+      const callbacks = makeCallbacks();
+      const monitor = new WorktreeMonitor(TEST_WORKTREE, TEST_CONFIG, callbacks, "main");
+
+      await monitor.start();
+
+      expect(mockIsRepoOperationInProgress).not.toHaveBeenCalled();
+      expect(mockGetWorktreeChangesWithStats).toHaveBeenCalled();
+
       monitor.stop();
     });
   });

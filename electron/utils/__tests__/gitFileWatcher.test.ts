@@ -1023,6 +1023,40 @@ describe("GitFileWatcher", () => {
     Object.defineProperty(process, "platform", { value: origPlatform, configurable: true });
   });
 
+  it("fires onChange when an operation sentinel appears or disappears", async () => {
+    const gitDir = pathJoin("/repo", ".git");
+    const onChange = vi.fn();
+    const gitWatcher = new GitFileWatcher({
+      worktreePath: "/repo",
+      branch: "main",
+      debounceMs: 100,
+      onChange,
+    });
+
+    expect(gitWatcher.start()).toBe(true);
+
+    // The .git dir watcher is reused for sentinels — no extra fs.watch is opened.
+    const dotGitCalls = vi.mocked(watch).mock.calls.filter(([path]) => path === gitDir);
+    expect(dotGitCalls).toHaveLength(1);
+    const dotGitCallback = dotGitCalls[0][2] as
+      | ((eventType: string, filename: string | Buffer | null) => void)
+      | undefined;
+    expect(dotGitCallback).toBeDefined();
+
+    for (const sentinel of [
+      "MERGE_HEAD",
+      "rebase-merge",
+      "rebase-apply",
+      "CHERRY_PICK_HEAD",
+      "REVERT_HEAD",
+    ]) {
+      onChange.mockClear();
+      dotGitCallback?.("rename", sentinel);
+      await vi.advanceTimersByTimeAsync(100);
+      expect(onChange).toHaveBeenCalledTimes(1);
+    }
+  });
+
   it("detects commits via branch ref changes", async () => {
     const gitDir = pathJoin("/repo", ".git");
     const onChange = vi.fn();
