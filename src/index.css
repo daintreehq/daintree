@@ -1406,11 +1406,11 @@ body,
     transition: none;
   }
 
-  button:not([data-state]),
-  [role="button"]:not([data-state]),
-  [type="button"]:not([data-state]),
-  [type="submit"]:not([data-state]),
-  [type="reset"]:not([data-state]) {
+  button:not([data-state="open"]):not([data-state="closed"]),
+  [role="button"]:not([data-state="open"]):not([data-state="closed"]),
+  [type="button"]:not([data-state="open"]):not([data-state="closed"]),
+  [type="submit"]:not([data-state="open"]):not([data-state="closed"]),
+  [type="reset"]:not([data-state="open"]):not([data-state="closed"]) {
     transform: none !important;
     transition: none !important;
   }
@@ -1478,11 +1478,11 @@ body[data-reduce-animations="true"]
 
 body[data-reduce-animations="true"]
   :is(
-    button:not([data-state]),
-    [role="button"]:not([data-state]),
-    [type="button"]:not([data-state]),
-    [type="submit"]:not([data-state]),
-    [type="reset"]:not([data-state])
+    button:not([data-state="open"]):not([data-state="closed"]),
+    [role="button"]:not([data-state="open"]):not([data-state="closed"]),
+    [type="button"]:not([data-state="open"]):not([data-state="closed"]),
+    [type="submit"]:not([data-state="open"]):not([data-state="closed"]),
+    [type="reset"]:not([data-state="open"]):not([data-state="closed"])
   ) {
   transform: none !important;
   transition: none !important;
