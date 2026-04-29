@@ -33,6 +33,16 @@ function supportsCommandLaunchShell(shell: string): boolean {
   );
 }
 
+// Trust boundary: `command` is interpolated raw into the shell script below.
+// Shell metacharacters (pipes, redirects, env-var expansion, $()) are
+// intentional — QuickRun and resource-connect commands rely on them. Defenses
+// upstream of this point: (1) TerminalSpawnOptionsSchema rejects control
+// characters at the IPC boundary; (2) the multiline guard in the spawn handler
+// drops embedded \n / \r as defense-in-depth; (3) WorktreeLifecycleService.
+// substituteVariables shell-quotes every templated fragment via
+// shellEscapeValue before it reaches the command field. Anyone adding a new
+// call site that interpolates user-controlled data into `command` MUST quote
+// the substituted fragment, not rely on this layer.
 function buildCommandLaunchShell(
   command: string,
   configuredShell: string | undefined

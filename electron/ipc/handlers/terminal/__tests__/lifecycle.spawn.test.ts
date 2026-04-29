@@ -29,7 +29,7 @@ vi.mock("../../../../services/ProjectStore.js", () => ({
   },
 }));
 
-vi.mock("../../../services/pty/terminalShell.js", () => ({
+vi.mock("../../../../services/pty/terminalShell.js", () => ({
   getDefaultShell: vi.fn(() => "/bin/zsh"),
 }));
 
@@ -284,6 +284,119 @@ describe("terminal spawn handler - cwd fallback (#5139: worktree is now renderer
 
     const spawnArgs = ptyClient.spawn.mock.calls[0][1];
     expect(spawnArgs.worktreeId).toBe("wt-123");
+  });
+});
+
+describe("terminal spawn shell-injection hardening (#6065)", () => {
+  let ptyClient: {
+    spawn: ReturnType<typeof vi.fn>;
+    hasTerminal: ReturnType<typeof vi.fn>;
+    write: ReturnType<typeof vi.fn>;
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    ptyClient = {
+      spawn: vi.fn(),
+      hasTerminal: vi.fn(() => false),
+      write: vi.fn(),
+    };
+    mockGetCurrentProject.mockReturnValue({ id: "p1", path: "/tmp", name: "p" });
+    mockGetProjectById.mockReturnValue(null);
+    mockGetProjectSettings.mockResolvedValue({});
+  });
+
+  it("rejects commands containing control characters before spawning", async () => {
+    const deps = { ptyClient } as unknown as HandlerDependencies;
+    registerTerminalLifecycleHandlers(deps);
+
+    const handler = getSpawnHandler();
+
+    await expect(
+      handler(
+        {} as Electron.IpcMainInvokeEvent,
+        {
+          cols: 80,
+          rows: 24,
+          command: "echo \x1B[31mred",
+        } as unknown as Parameters<typeof handler>[1]
+      )
+    ).rejects.toThrow(/Invalid spawn options/);
+
+    expect(ptyClient.spawn).not.toHaveBeenCalled();
+    expect(ptyClient.write).not.toHaveBeenCalled();
+  });
+
+  it("rejects multi-line commands at the schema boundary", async () => {
+    const deps = { ptyClient } as unknown as HandlerDependencies;
+    registerTerminalLifecycleHandlers(deps);
+
+    const handler = getSpawnHandler();
+
+    await expect(
+      handler(
+        {} as Electron.IpcMainInvokeEvent,
+        {
+          cols: 80,
+          rows: 24,
+          command: "evil\nrm -rf ~",
+        } as unknown as Parameters<typeof handler>[1]
+      )
+    ).rejects.toThrow(/Invalid spawn options/);
+
+    expect(ptyClient.spawn).not.toHaveBeenCalled();
+    expect(ptyClient.write).not.toHaveBeenCalled();
+  });
+
+  it("accepts intentional shell metacharacters (pipes, redirects, env, $())", async () => {
+    const deps = { ptyClient } as unknown as HandlerDependencies;
+    registerTerminalLifecycleHandlers(deps);
+
+    const handler = getSpawnHandler();
+
+    const command = "FOO=bar npm run dev | tee out.log; echo $(pwd)";
+    await handler(
+      {} as Electron.IpcMainInvokeEvent,
+      {
+        cols: 80,
+        rows: 24,
+        cwd: "/tmp",
+        command,
+      } as unknown as Parameters<typeof handler>[1]
+    );
+
+    expect(ptyClient.spawn).toHaveBeenCalledTimes(1);
+    const spawnArgs = ptyClient.spawn.mock.calls[0][1];
+    expect(spawnArgs.command).toBe(command);
+
+    // Lock the security-critical script template against structural regressions.
+    // The shell path must be single-quoted and the user command must appear
+    // verbatim between the trap markers — no further wrapping or rewriting.
+    expect(spawnArgs.args).toEqual([
+      "-lic",
+      `trap : INT\n${command}\ntrap - INT\nexec '/bin/zsh' -l`,
+    ]);
+  });
+
+  it("single-quotes shell paths containing single quotes when building the launch script", async () => {
+    const deps = { ptyClient } as unknown as HandlerDependencies;
+    registerTerminalLifecycleHandlers(deps);
+
+    const handler = getSpawnHandler();
+
+    await handler(
+      {} as Electron.IpcMainInvokeEvent,
+      {
+        cols: 80,
+        rows: 24,
+        cwd: "/tmp",
+        shell: "/tmp/o'hare/zsh",
+        command: "echo hi",
+      } as unknown as Parameters<typeof handler>[1]
+    );
+
+    const spawnArgs = ptyClient.spawn.mock.calls[0][1];
+    expect(spawnArgs.args[1]).toContain("exec '/tmp/o'\\''hare/zsh' -l");
   });
 });
 

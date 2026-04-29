@@ -238,7 +238,21 @@ export const TerminalSpawnOptionsSchema = z.object({
   shell: z.string().optional(),
   cols: z.number().int().positive().max(500),
   rows: z.number().int().positive(),
-  command: z.string().optional(),
+  // `command` is interpolated raw into a shell startup script in
+  // buildCommandLaunchShell — shell metacharacters are intentional (pipes,
+  // redirects, env vars), but control characters are never legitimate and
+  // become injection vectors via newlines or terminal escape sequences.
+  command: z
+    .string()
+    .refine(
+      (cmd) =>
+        // eslint-disable-next-line no-control-regex
+        !/[\x00-\x1F\x7F]/.test(cmd),
+      {
+        message: "command must not contain control characters",
+      }
+    )
+    .optional(),
   env: z.record(z.string(), z.string()).optional(),
   title: z.string().optional(),
   titleMode: TitleModeSchema.optional(),

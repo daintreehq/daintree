@@ -243,26 +243,25 @@ describe("agent command launch", () => {
     expect(ptyClient.listenerCount("exit")).toBe(0);
   });
 
-  it("rejects multi-line commands for agent terminals", async () => {
+  it("rejects multi-line commands for agent terminals at the schema boundary (#6065)", async () => {
     const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     const deps = { ptyClient } as unknown as HandlerDependencies;
     cleanup = registerTerminalLifecycleHandlers(deps);
     const handler = getSpawnHandler();
 
-    await handler({} as Electron.IpcMainInvokeEvent, {
-      cols: 80,
-      rows: 24,
-      kind: "terminal",
-      launchAgentId: "claude",
-      command: "claude\nmalicious",
-    });
+    await expect(
+      handler({} as Electron.IpcMainInvokeEvent, {
+        cols: 80,
+        rows: 24,
+        kind: "terminal",
+        launchAgentId: "claude",
+        command: "claude\nmalicious",
+      })
+    ).rejects.toThrow(/Invalid spawn options/);
 
-    expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining("Multi-line"));
-    expect(ptyClient.spawn).toHaveBeenCalledTimes(1);
-    const spawnArgs = ptyClient.spawn.mock.calls[0][1];
-    expect(spawnArgs.args).toBeUndefined();
+    expect(consoleSpy).toHaveBeenCalled();
+    expect(ptyClient.spawn).not.toHaveBeenCalled();
 
-    // Multi-line commands don't get written to stdin; no listeners registered.
     await flush(1_500);
     expect(ptyClient.write).not.toHaveBeenCalled();
     expect(ptyClient.listenerCount("data")).toBe(0);

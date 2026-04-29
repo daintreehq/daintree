@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   AppStateTerminalEntrySchema,
   TerminalSnapshotSchema,
+  TerminalSpawnOptionsSchema,
   filterValidTerminalEntries,
 } from "../ipc.js";
 
@@ -412,6 +413,77 @@ describe("Terminal Entry Validation Schemas", () => {
       expect(result).toHaveLength(2);
       expect(result[0].id).toBe("s1");
       expect(result[1].id).toBe("s2");
+    });
+  });
+
+  describe("TerminalSpawnOptionsSchema (#6065 — shell-injection hardening)", () => {
+    const baseOptions = { cols: 80, rows: 24 };
+
+    it("accepts spawn options without a command", () => {
+      const result = TerminalSpawnOptionsSchema.safeParse(baseOptions);
+      expect(result.success).toBe(true);
+    });
+
+    it("accepts shell metacharacters that are intentional in user-typed commands", () => {
+      const validCommands = [
+        "echo hi; echo bye",
+        "ls | cat",
+        "false && true",
+        "false || true",
+        "echo $(pwd)",
+        "echo `pwd`",
+        "FOO=bar node x.js",
+        'echo "$HOME" > out.txt',
+        "claude --model sonnet-4",
+        "ssh 'feat-deploy'@host.example.com",
+        "echo 日本語",
+      ];
+
+      for (const command of validCommands) {
+        const result = TerminalSpawnOptionsSchema.safeParse({ ...baseOptions, command });
+        expect(result.success, `expected to accept: ${JSON.stringify(command)}`).toBe(true);
+      }
+    });
+
+    it("rejects ASCII control characters in command", () => {
+      const rejected: Array<[string, string]> = [
+        ["NUL", "\x00"],
+        ["SOH", "\x01"],
+        ["BEL", "\x07"],
+        ["TAB", "\x09"],
+        ["LF", "\x0A"],
+        ["CR", "\x0D"],
+        ["ESC", "\x1B"],
+        ["DEL", "\x7F"],
+      ];
+
+      for (const [name, ch] of rejected) {
+        const command = `echo${ch}injected`;
+        const result = TerminalSpawnOptionsSchema.safeParse({ ...baseOptions, command });
+        expect(
+          result.success,
+          `expected to reject ${name} (\\x${ch.charCodeAt(0).toString(16).padStart(2, "0")})`
+        ).toBe(false);
+        if (!result.success) {
+          expect(result.error.issues[0].message).toContain("control characters");
+        }
+      }
+    });
+
+    it("rejects ANSI escape sequences smuggled through command", () => {
+      const result = TerminalSpawnOptionsSchema.safeParse({
+        ...baseOptions,
+        command: "echo \x1B[31mred\x1B[0m",
+      });
+      expect(result.success).toBe(false);
+    });
+
+    it("rejects multi-line command at the schema boundary", () => {
+      const result = TerminalSpawnOptionsSchema.safeParse({
+        ...baseOptions,
+        command: "evil\nrm -rf ~",
+      });
+      expect(result.success).toBe(false);
     });
   });
 
