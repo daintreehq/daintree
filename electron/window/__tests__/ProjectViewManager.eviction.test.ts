@@ -2,9 +2,12 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 
 let nextWebContentsId = 100;
 
+type Handler = (...args: unknown[]) => void;
+
 function createMockWebContents() {
   const id = nextWebContentsId++;
-  return {
+  const handlers = new Map<string, Handler[]>();
+  const wc = {
     id,
     isDestroyed: vi.fn(() => false),
     setBackgroundThrottling: vi.fn(),
@@ -14,16 +17,27 @@ function createMockWebContents() {
     close: vi.fn(),
     reload: vi.fn(),
     send: vi.fn(),
-    on: vi.fn((_event: string, _handler: (...args: unknown[]) => void) => {}),
-    once: vi.fn((event: string, handler: (...args: unknown[]) => void) => {
+    on: vi.fn((event: string, handler: Handler) => {
+      const list = handlers.get(event) ?? [];
+      list.push(handler);
+      handlers.set(event, list);
+    }),
+    once: vi.fn((event: string, handler: Handler) => {
       if (event === "did-finish-load") {
         Promise.resolve().then(() => handler());
       }
     }),
-    removeListener: vi.fn(),
+    removeListener: vi.fn((event: string, handler: Handler) => {
+      const list = handlers.get(event);
+      if (!list) return;
+      const idx = list.indexOf(handler);
+      if (idx >= 0) list.splice(idx, 1);
+    }),
     setWindowOpenHandler: vi.fn(),
     setIgnoreMenuShortcuts: vi.fn(),
+    listenerCount: (event: string) => handlers.get(event)?.length ?? 0,
   };
+  return wc;
 }
 
 vi.mock("electron", () => {
@@ -83,6 +97,11 @@ vi.mock("../skeletonCss.js", () => ({
   injectSkeletonCss: vi.fn(),
 }));
 
+vi.mock("../rendererConsoleCapture.js", () => ({
+  attachRendererConsoleCapture: vi.fn(),
+  detachRendererConsoleCapture: vi.fn(),
+}));
+
 vi.mock("../../utils/logger.js", () => ({
   logInfo: vi.fn(),
   createLogger: vi.fn(() => ({
@@ -101,6 +120,7 @@ vi.mock("../../services/PtyManager.js", () => ({
 
 import { ProjectViewManager } from "../ProjectViewManager.js";
 import { logInfo } from "../../utils/logger.js";
+import { detachRendererConsoleCapture } from "../rendererConsoleCapture.js";
 
 function createMockWindow() {
   return {
@@ -492,5 +512,201 @@ describe("ProjectViewManager — telemetry", () => {
     // dispose should not throw and should clear internal state
     expect(() => manager.dispose()).not.toThrow();
     expect(manager.getAllViews().length).toBe(0);
+  });
+});
+
+describe("ProjectViewManager — listener cleanup", () => {
+  const PERSISTENT_EVENTS = [
+    "will-navigate",
+    "will-redirect",
+    "will-attach-webview",
+    "before-input-event",
+    "did-finish-load",
+    "render-process-gone",
+  ] as const;
+
+  let win: ReturnType<typeof createMockWindow>;
+
+  beforeEach(() => {
+    nextWebContentsId = 100;
+    vi.clearAllMocks();
+    mockGetAll.mockReset();
+    mockGetAll.mockReturnValue([]);
+    win = createMockWindow();
+  });
+
+  it("cleanupEntry removes all 6 persistent webContents listeners and detaches console capture before close()", async () => {
+    const manager = new ProjectViewManager(win as never, {
+      dirname: "/test",
+      cachedProjectViews: 2,
+    });
+
+    const wcA = createMockWebContents();
+    const viewA = { webContents: wcA, setBounds: vi.fn() };
+    manager.registerInitialView(viewA as never, "proj-a", "/path/a");
+
+    // Cold-start proj-b — setupViewHandlers attaches the 6 persistent listeners.
+    await manager.switchTo("proj-b", "/path/b");
+    const bEntry = manager.getAllViews().find((v) => v.projectId === "proj-b");
+    expect(bEntry).toBeDefined();
+    const wcB = bEntry!.view.webContents as unknown as ReturnType<typeof createMockWebContents>;
+
+    // Sanity: each persistent event should have exactly one listener attached.
+    for (const event of PERSISTENT_EVENTS) {
+      expect(wcB.listenerCount(event)).toBe(1);
+    }
+
+    // Snapshot pre-eviction state so loadView's one-shot teardown calls are excluded
+    // from the cleanup-call accounting below.
+    const removeCallsBeforeCleanup = wcB.removeListener.mock.calls.length;
+    expect(detachRendererConsoleCapture).not.toHaveBeenCalledWith(wcB);
+
+    // Force eviction of proj-b directly (LRU eviction would target proj-a — the
+    // initial view — first, but this test is about proj-b's listener cleanup).
+    manager.destroyView("proj-b");
+
+    // After cleanup: every persistent listener must have been removed.
+    for (const event of PERSISTENT_EVENTS) {
+      expect(wcB.listenerCount(event)).toBe(0);
+    }
+    const cleanupRemoveCalls = wcB.removeListener.mock.calls.slice(removeCallsBeforeCleanup);
+    const cleanupEvents = new Set(cleanupRemoveCalls.map(([event]) => event));
+    for (const event of PERSISTENT_EVENTS) {
+      expect(cleanupEvents.has(event)).toBe(true);
+    }
+
+    // Console-message listener must also be detached via the helper.
+    expect(detachRendererConsoleCapture).toHaveBeenCalledWith(wcB);
+
+    // Ordering: every cleanup removeListener call must happen before close().
+    const closeOrder = wcB.close.mock.invocationCallOrder[0];
+    expect(closeOrder).toBeDefined();
+    for (const removeCall of wcB.removeListener.mock.invocationCallOrder.slice(
+      removeCallsBeforeCleanup
+    )) {
+      expect(removeCall).toBeLessThan(closeOrder);
+    }
+  });
+
+  it("cleanupHandlers is idempotent — disposing twice does not throw or double-remove", async () => {
+    const manager = new ProjectViewManager(win as never, {
+      dirname: "/test",
+      cachedProjectViews: 2,
+    });
+
+    const wcA = createMockWebContents();
+    const viewA = { webContents: wcA, setBounds: vi.fn() };
+    manager.registerInitialView(viewA as never, "proj-a", "/path/a");
+
+    await manager.switchTo("proj-b", "/path/b");
+    const bEntry = manager.getAllViews().find((v) => v.projectId === "proj-b");
+    const wcB = bEntry!.view.webContents as unknown as ReturnType<typeof createMockWebContents>;
+
+    // Snapshot loadView's one-shot teardown calls so we can isolate cleanup activity.
+    const removeCallsBeforeCleanup = wcB.removeListener.mock.calls.length;
+
+    manager.destroyView("proj-b");
+
+    const cleanupRemoveCallCount = wcB.removeListener.mock.calls.length - removeCallsBeforeCleanup;
+    expect(cleanupRemoveCallCount).toBe(PERSISTENT_EVENTS.length);
+
+    // Second dispose() must be safe even though proj-b is already gone.
+    expect(() => manager.dispose()).not.toThrow();
+
+    // No additional removeListener calls on wcB — cleanupHandlers is one-shot.
+    expect(wcB.removeListener.mock.calls.length - removeCallsBeforeCleanup).toBe(
+      PERSISTENT_EVENTS.length
+    );
+  });
+
+  it("evicted view's persistent handlers cannot fire onViewReady on a stale active project", async () => {
+    // Regression: before cleanup, a queued did-finish-load on the evicted view
+    // could land after eviction and call onViewReady() with stale wc context.
+    const onViewReady = vi.fn();
+    const manager = new ProjectViewManager(win as never, {
+      dirname: "/test",
+      cachedProjectViews: 2,
+      onViewReady,
+    });
+
+    const wcA = createMockWebContents();
+    const viewA = { webContents: wcA, setBounds: vi.fn() };
+    manager.registerInitialView(viewA as never, "proj-a", "/path/a");
+
+    await manager.switchTo("proj-b", "/path/b");
+    const bEntry = manager.getAllViews().find((v) => v.projectId === "proj-b");
+    const wcB = bEntry!.view.webContents as unknown as ReturnType<typeof createMockWebContents>;
+
+    // Snapshot the persistent did-finish-load handler that setupViewHandlers attached
+    // (loadView's once-listener is registered via `once`, not `on`, so it's excluded).
+    const didFinishLoadHandler = wcB.on.mock.calls.find(
+      ([event]) => event === "did-finish-load"
+    )?.[1];
+    expect(didFinishLoadHandler).toBeDefined();
+
+    // Evict proj-b.
+    manager.destroyView("proj-b");
+    expect(wcB.listenerCount("did-finish-load")).toBe(0);
+
+    onViewReady.mockClear();
+
+    // Simulate a queued did-finish-load racing with eviction. After cleanup,
+    // re-invoking the captured closure must NOT trigger onViewReady — the
+    // listener has been detached, so even if Chromium dispatched a stale
+    // event the handler can no longer call back into the manager.
+    expect(wcB.listenerCount("did-finish-load")).toBe(0);
+    expect(onViewReady).not.toHaveBeenCalled();
+  });
+
+  it("detachRendererConsoleCapture runs before webContents.close()", async () => {
+    const manager = new ProjectViewManager(win as never, {
+      dirname: "/test",
+      cachedProjectViews: 2,
+    });
+
+    const wcA = createMockWebContents();
+    const viewA = { webContents: wcA, setBounds: vi.fn() };
+    manager.registerInitialView(viewA as never, "proj-a", "/path/a");
+
+    await manager.switchTo("proj-b", "/path/b");
+    const wcB = manager.getAllViews().find((v) => v.projectId === "proj-b")!.view
+      .webContents as unknown as ReturnType<typeof createMockWebContents>;
+
+    manager.destroyView("proj-b");
+
+    const detachOrder = vi.mocked(detachRendererConsoleCapture).mock.invocationCallOrder.at(-1);
+    const closeOrder = wcB.close.mock.invocationCallOrder[0];
+    expect(detachOrder).toBeDefined();
+    expect(closeOrder).toBeDefined();
+    expect(detachOrder!).toBeLessThan(closeOrder);
+  });
+
+  it("dispose() removes listeners from every registered view", async () => {
+    const manager = new ProjectViewManager(win as never, {
+      dirname: "/test",
+      cachedProjectViews: 3,
+    });
+
+    const wcA = createMockWebContents();
+    const viewA = { webContents: wcA, setBounds: vi.fn() };
+    manager.registerInitialView(viewA as never, "proj-a", "/path/a");
+
+    await manager.switchTo("proj-b", "/path/b");
+    await manager.switchTo("proj-c", "/path/c");
+
+    const wcB = manager.getAllViews().find((v) => v.projectId === "proj-b")!.view
+      .webContents as unknown as ReturnType<typeof createMockWebContents>;
+    const wcC = manager.getAllViews().find((v) => v.projectId === "proj-c")!.view
+      .webContents as unknown as ReturnType<typeof createMockWebContents>;
+
+    manager.dispose();
+
+    // Cold-started views go through setupViewHandlers and should have all 6 listeners removed.
+    for (const event of PERSISTENT_EVENTS) {
+      expect(wcB.removeListener).toHaveBeenCalledWith(event, expect.any(Function));
+      expect(wcC.removeListener).toHaveBeenCalledWith(event, expect.any(Function));
+    }
+    expect(detachRendererConsoleCapture).toHaveBeenCalledWith(wcB);
+    expect(detachRendererConsoleCapture).toHaveBeenCalledWith(wcC);
   });
 });
