@@ -741,7 +741,7 @@ describe("buildArgsForRespawn", () => {
     );
     expect(result.agentPresetId).toBe("user-live");
     expect(result.agentPresetColor).toBe("#00ff00");
-    expect(result.title).toContain("LivePreset");
+    expect(result.title).toBe("LivePreset");
   });
 });
 
