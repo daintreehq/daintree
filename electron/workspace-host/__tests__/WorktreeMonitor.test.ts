@@ -1150,4 +1150,179 @@ describe("WorktreeMonitor", () => {
       }
     });
   });
+
+  describe("heartbeat gap detection", () => {
+    const CLEAN_CHANGES = {
+      worktreeId: "/test/worktree",
+      rootPath: "/test",
+      changes: [],
+      changedFileCount: 0,
+      lastUpdated: 0,
+    };
+
+    function getMoodSequence(callbacks: WorktreeMonitorCallbacks): Array<string | undefined> {
+      const fn = callbacks.onUpdate as ReturnType<typeof vi.fn>;
+      return fn.mock.calls.map((call) => (call[0] as { mood?: string }).mood);
+    }
+
+    it("emits stale and force-refreshes when gap exceeds multiplier and floor", async () => {
+      mockGetWorktreeChangesWithStats.mockResolvedValue(CLEAN_CHANGES);
+
+      const callbacks = makeCallbacks();
+      const monitor = new WorktreeMonitor(TEST_WORKTREE, TEST_CONFIG, callbacks, "main");
+      await monitor.start();
+
+      mockGetWorktreeChangesWithStats.mockClear();
+      // Simulate that the last poll completion happened 60s ago in wall time —
+      // the OS effectively suspended the process between then and now.
+      (monitor as unknown as { lastGitStatusCompletedAt: number }).lastGitStatusCompletedAt =
+        Date.now() - 60_000;
+      mockInvalidateGitStatusCache.mockClear();
+
+      // Fire the next pending poll timer (base interval 2000ms).
+      await vi.advanceTimersByTimeAsync(5000);
+
+      const moods = getMoodSequence(callbacks);
+      expect(moods).toContain("stale");
+      // Force refresh ran (forceRefresh=true invalidates the cache before fetching).
+      expect(mockInvalidateGitStatusCache).toHaveBeenCalled();
+      expect(mockGetWorktreeChangesWithStats).toHaveBeenCalled();
+
+      monitor.stop();
+    });
+
+    it("does not mark stale before any git status has completed", async () => {
+      // Set the watcher to start successfully so that start() is a no-op for git
+      // status (startWithoutGitStatus path also leaves lastGitStatusCompletedAt = 0).
+      mockGetWorktreeChangesWithStats.mockResolvedValue(CLEAN_CHANGES);
+
+      const callbacks = makeCallbacks();
+      const monitor = new WorktreeMonitor(TEST_WORKTREE, TEST_CONFIG, callbacks, "main");
+      monitor.startWithoutGitStatus();
+
+      // Advance well past the gap floor without ever completing a poll.
+      await vi.advanceTimersByTimeAsync(120_000);
+
+      const moods = getMoodSequence(callbacks);
+      expect(moods).not.toContain("stale");
+
+      monitor.stop();
+    });
+
+    it("does not mark stale when elapsed exceeds 3x interval but is below 30s floor", async () => {
+      mockGetWorktreeChangesWithStats.mockResolvedValue(CLEAN_CHANGES);
+
+      const callbacks = makeCallbacks();
+      const monitor = new WorktreeMonitor(TEST_WORKTREE, TEST_CONFIG, callbacks, "main");
+      await monitor.start();
+
+      mockGetWorktreeChangesWithStats.mockClear();
+      // 10s gap > 3x base interval (6s) but < 30s floor.
+      (monitor as unknown as { lastGitStatusCompletedAt: number }).lastGitStatusCompletedAt =
+        Date.now() - 10_000;
+
+      await vi.advanceTimersByTimeAsync(5000);
+
+      const moods = getMoodSequence(callbacks);
+      expect(moods).not.toContain("stale");
+
+      monitor.stop();
+    });
+
+    it("does not mark stale when elapsed exceeds 30s floor but is below 3x interval", async () => {
+      mockGetWorktreeChangesWithStats.mockResolvedValue(CLEAN_CHANGES);
+
+      const callbacks = makeCallbacks();
+      // Use the watcher fallback path: base interval = 30s, threshold = 90s.
+      const watcherConfig: WorktreeMonitorConfig = {
+        ...TEST_CONFIG,
+        gitWatchEnabled: true,
+      };
+      mockWatcherStartResult = true;
+      const monitor = new WorktreeMonitor(TEST_WORKTREE, watcherConfig, callbacks, "main");
+      await monitor.start();
+
+      mockGetWorktreeChangesWithStats.mockClear();
+      // 60s gap > 30s floor but < 3 * 30s base = 90s threshold.
+      (monitor as unknown as { lastGitStatusCompletedAt: number }).lastGitStatusCompletedAt =
+        Date.now() - 60_000;
+
+      await vi.advanceTimersByTimeAsync(35_000);
+
+      const moods = getMoodSequence(callbacks);
+      expect(moods).not.toContain("stale");
+
+      monitor.stop();
+    });
+
+    it("stale mood reverts after the forced refresh completes", async () => {
+      mockGetWorktreeChangesWithStats.mockResolvedValue(CLEAN_CHANGES);
+
+      const callbacks = makeCallbacks();
+      const monitor = new WorktreeMonitor(TEST_WORKTREE, TEST_CONFIG, callbacks, "main");
+      await monitor.start();
+
+      (monitor as unknown as { lastGitStatusCompletedAt: number }).lastGitStatusCompletedAt =
+        Date.now() - 60_000;
+
+      await vi.advanceTimersByTimeAsync(5000);
+      // Drain any microtasks the forced refresh kicked off.
+      await vi.advanceTimersByTimeAsync(0);
+
+      const moods = getMoodSequence(callbacks);
+      const staleIndex = moods.indexOf("stale");
+      expect(staleIndex).toBeGreaterThanOrEqual(0);
+      // After the forced refresh, categorizeWorktree() returns "stable" (mocked),
+      // so the final mood should be back to the real value.
+      const finalMood = moods[moods.length - 1];
+      expect(finalMood).not.toBe("stale");
+
+      monitor.stop();
+    });
+
+    it("does not run heartbeat check after stop()", async () => {
+      mockGetWorktreeChangesWithStats.mockResolvedValue(CLEAN_CHANGES);
+
+      const callbacks = makeCallbacks();
+      const monitor = new WorktreeMonitor(TEST_WORKTREE, TEST_CONFIG, callbacks, "main");
+      await monitor.start();
+
+      (monitor as unknown as { lastGitStatusCompletedAt: number }).lastGitStatusCompletedAt =
+        Date.now() - 60_000;
+
+      monitor.stop();
+      mockGetWorktreeChangesWithStats.mockClear();
+
+      await vi.advanceTimersByTimeAsync(120_000);
+
+      const moods = getMoodSequence(callbacks);
+      expect(moods).not.toContain("stale");
+      expect(mockGetWorktreeChangesWithStats).not.toHaveBeenCalled();
+    });
+
+    it("watcher fallback interval (30s) requires 90s+ gap to trigger stale", async () => {
+      mockGetWorktreeChangesWithStats.mockResolvedValue(CLEAN_CHANGES);
+      mockWatcherStartResult = true;
+
+      const watcherConfig: WorktreeMonitorConfig = {
+        ...TEST_CONFIG,
+        gitWatchEnabled: true,
+      };
+
+      const callbacks = makeCallbacks();
+      const monitor = new WorktreeMonitor(TEST_WORKTREE, watcherConfig, callbacks, "main");
+      await monitor.start();
+
+      // 100s gap exceeds the 90s threshold for the 30s watcher fallback interval.
+      (monitor as unknown as { lastGitStatusCompletedAt: number }).lastGitStatusCompletedAt =
+        Date.now() - 100_000;
+
+      await vi.advanceTimersByTimeAsync(35_000);
+
+      const moods = getMoodSequence(callbacks);
+      expect(moods).toContain("stale");
+
+      monitor.stop();
+    });
+  });
 });

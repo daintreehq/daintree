@@ -31,6 +31,8 @@ const WATCHER_WORKTREE_MAX_WAIT_MS = 1500;
 const PLAN_FILE_CANDIDATES = ["TODO.md", "PLAN.md", "plan.md", "TASKS.md"] as const;
 const RESOURCE_POLL_DEFAULT_ACTIVE_MS = 30_000;
 const RESOURCE_POLL_DEFAULT_BACKGROUND_MS = 120_000;
+const HEARTBEAT_GAP_MULTIPLIER = 3;
+const HEARTBEAT_GAP_FLOOR_MS = 30_000;
 
 export interface WorktreeMonitorConfig {
   basePollingInterval: number;
@@ -900,8 +902,37 @@ export class WorktreeMonitor {
 
     this.pollingTimer = setTimeout(() => {
       this.pollingTimer = null;
+      if (!this._isRunning) return;
+
+      // Heartbeat gap: when the OS throttles or suspends the process, the
+      // timer fires far later than scheduled. Detect by measuring elapsed
+      // wall time since the last completed poll. Surface "stale" so the
+      // card dims, then force-refresh — categorizeWorktree() on the
+      // refreshed status will overwrite mood with the real value.
+      if (this.lastGitStatusCompletedAt > 0) {
+        const elapsedMs = Date.now() - this.lastGitStatusCompletedAt;
+        const threshold = Math.max(delayMs * HEARTBEAT_GAP_MULTIPLIER, HEARTBEAT_GAP_FLOOR_MS);
+        if (elapsedMs > threshold) {
+          this.mood = "stale";
+          this.emitUpdate();
+          void this.forceRefreshAfterGap();
+          return;
+        }
+      }
+
       void this.poll();
     }, delayMs);
+  }
+
+  private async forceRefreshAfterGap(): Promise<void> {
+    try {
+      await this.updateGitStatus(true);
+    } catch {
+      // updateGitStatus's own error path emits "error" mood; nothing to do here.
+    }
+    if (this._isRunning && this.pollingEnabled) {
+      this.scheduleNextPoll();
+    }
   }
 
   private async poll(force: boolean = false): Promise<void> {
