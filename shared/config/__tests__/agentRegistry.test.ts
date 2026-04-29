@@ -432,6 +432,58 @@ describe("AgentDomainWeightsSchema", () => {
   });
 });
 
+describe("mistral configuration", () => {
+  it("uses 'vibe' as the binary command", () => {
+    expect(getAgentConfig("mistral")?.command).toBe("vibe");
+  });
+
+  it("passes --trust by default to skip the trust-folder prompt", () => {
+    expect(getAgentConfig("mistral")?.args).toContain("--trust");
+  });
+
+  it("blocks alt-screen and mouse reporting for the Textual TUI", () => {
+    const config = getAgentConfig("mistral");
+    expect(config?.capabilities?.blockAltScreen).toBe(true);
+    expect(config?.capabilities?.blockMouseReporting).toBe(true);
+    expect(config?.capabilities?.resizeStrategy).toBe("settled");
+  });
+
+  it("uses /exit as the quitCommand (Vibe has no /quit alias)", () => {
+    const resume = getAgentConfig("mistral")?.resume;
+    expect(resume?.kind).toBe("session-id");
+    if (resume?.kind === "session-id") {
+      expect(resume.quitCommand).toBe("/exit");
+      expect(resume.args("abc-123-def-456")).toEqual(["--resume", "abc-123-def-456"]);
+    }
+  });
+
+  it("captures session IDs from 'vibe --resume {id}' output", () => {
+    const resume = getAgentConfig("mistral")?.resume;
+    if (resume?.kind === "session-id") {
+      const re = new RegExp(resume.sessionIdPattern);
+      const match = "Or: vibe --resume abc-123-def-456".match(re);
+      expect(match?.[1]).toBe("abc-123-def-456");
+      expect("vibe --continue".match(re)).toBeNull();
+    }
+  });
+
+  it("relies on prompt fast-path with no completion patterns", () => {
+    const detection = getAgentConfig("mistral")?.detection;
+    expect(detection?.completionPatterns).toBeUndefined();
+    expect(detection?.promptFastPathMinQuietMs).toBe(700);
+  });
+
+  it("declares the PyPI package for path synthesis", () => {
+    expect(getAgentConfig("mistral")?.packages?.pypi).toBe("mistral-vibe");
+  });
+
+  it("ships the local-llamacpp preset as a labeled placeholder", () => {
+    const preset = getAgentConfig("mistral")?.presets?.find((p) => p.id === "local-llamacpp");
+    expect(preset).toBeDefined();
+    expect(preset?.name).toBe("Local (llama.cpp)");
+  });
+});
+
 describe("copilot configuration", () => {
   it("has 160k context window", () => {
     expect(getAgentConfig("copilot")?.contextWindow).toBe(160_000);

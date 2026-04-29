@@ -89,8 +89,6 @@ export const config: AgentConfig = {
     fallbackPatterns: [
       // @generated:mistral:fallbackPatterns:start
       "[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\\s+\\w",
-      "Generating",
-      "Thinking",
       // @generated:mistral:fallbackPatterns:end
     ],
     bootCompletePatterns: [
@@ -172,7 +170,7 @@ export const config: AgentConfig = {
     {
       id: "local-llamacpp",
       name: "Local (llama.cpp)",
-      description: "Local Devstral via llama.cpp at http://127.0.0.1:8080/v1",
+      description: "Local Devstral via llama.cpp — configure provider in ~/.vibe/config.toml",
     },
   ],
 };
