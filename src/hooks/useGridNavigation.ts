@@ -1,4 +1,4 @@
-import { useMemo, useCallback, useEffect, useState } from "react";
+import { useMemo, useCallback, useEffect, useRef, useState } from "react";
 import { usePanelStore, useLayoutConfigStore, useWorktreeSelectionStore } from "@/store";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { useFleetScopeFlagStore } from "@/store/fleetScopeFlagStore";
@@ -200,16 +200,22 @@ export function useGridNavigation(options: UseGridNavigationOptions = {}) {
     return buckets;
   }, [gridLayout]);
 
-  // Tied structurally to gridLayout: a fresh Map is allocated synchronously
-  // when the layout changes, so a fleet-scope toggle can never serve a stale
-  // cached result on the next keypress.
-  const directionCache = useMemo(() => {
-    void gridLayout;
-    return new Map<string, string | null>();
-  }, [gridLayout]);
+  // Tied structurally to gridLayout: the cache is reset synchronously when
+  // the layout changes, so a fleet-scope toggle can never serve a stale
+  // cached result on the next keypress. Held in a ref because the React
+  // Compiler treats useMemo results as immutable and rejects in-place .set().
+  const directionCacheRef = useRef<{
+    source: unknown;
+    map: Map<string, string | null>;
+  }>({ source: null, map: new Map() });
 
   const findNearest = useCallback(
     (currentId: string, direction: NavigationDirection): string | null => {
+      if (directionCacheRef.current.source !== gridLayout) {
+        directionCacheRef.current = { source: gridLayout, map: new Map() };
+      }
+      const directionCache = directionCacheRef.current.map;
+
       const cacheKey = `${currentId}:${direction}`;
       if (directionCache.has(cacheKey)) {
         return directionCache.get(cacheKey) ?? null;
@@ -260,7 +266,7 @@ export function useGridNavigation(options: UseGridNavigationOptions = {}) {
       directionCache.set(cacheKey, result);
       return result;
     },
-    [rowMajor, indexById, columnBuckets, positionById, directionCache]
+    [rowMajor, indexById, columnBuckets, positionById, gridLayout]
   );
 
   // Build a group-aware ordered list matching ContentGrid's visual order.

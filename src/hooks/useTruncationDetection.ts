@@ -1,4 +1,4 @@
-import { useCallback, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 
 const TOLERANCE = 1;
 
@@ -44,7 +44,9 @@ export function useTruncationDetection() {
   const [isTruncated, setIsTruncated] = useState(false);
   const elementRef = useRef<HTMLElement | null>(null);
   const stableSetter = useRef(setIsTruncated);
-  stableSetter.current = setIsTruncated;
+  useEffect(() => {
+    stableSetter.current = setIsTruncated;
+  }, [setIsTruncated]);
 
   const ref = useCallback((el: HTMLElement | null) => {
     const s = getSingleton();
