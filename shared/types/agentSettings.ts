@@ -136,6 +136,7 @@ export const DEFAULT_DANGEROUS_ARGS: Record<string, string> = {
   codex: "--dangerously-bypass-approvals-and-sandbox",
   cursor: "--force",
   interpreter: "--auto_run",
+  amp: "--dangerously-allow-all",
 };
 
 export const DEFAULT_AGENT_SETTINGS: AgentSettings = {

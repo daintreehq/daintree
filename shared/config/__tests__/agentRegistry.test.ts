@@ -43,6 +43,7 @@ describe("agentRegistry", () => {
       expect(ids).toContain("interpreter");
       expect(ids).toContain("mistral");
       expect(ids).toContain("kimi");
+      expect(ids).toContain("amp");
     });
 
     it("kiro only has macOS and Linux install blocks (no Windows)", () => {
@@ -595,6 +596,117 @@ describe("kimi detection patterns", () => {
   });
 });
 
+describe("amp configuration", () => {
+  it("has the verified Sourcegraph brand color", () => {
+    expect(getAgentConfig("amp")?.color).toBe("#F34E3F");
+  });
+
+  it("uses the amp command and Amp display name", () => {
+    const config = getAgentConfig("amp");
+    expect(config?.command).toBe("amp");
+    expect(config?.name).toBe("Amp");
+  });
+
+  it("declares the @sourcegraph/amp npm package", () => {
+    expect(getAgentConfig("amp")?.packages?.npm).toBe("@sourcegraph/amp");
+  });
+
+  it("probes ~/.amp/bin/amp as a native install path", () => {
+    expect(getAgentConfig("amp")?.nativePaths).toContain("~/.amp/bin/amp");
+  });
+
+  it("declares supportsWsl for Windows diagnostics", () => {
+    expect(getAgentConfig("amp")?.supportsWsl).toBe(true);
+  });
+
+  it("has install blocks for all three platforms", () => {
+    const config = getAgentConfig("amp");
+    for (const os of ["macos", "linux", "windows"] as const) {
+      expect(config?.install?.byOs?.[os]).toBeDefined();
+      expect(config?.install?.byOs?.[os]!.length).toBeGreaterThan(0);
+    }
+  });
+
+  it("offers both curl and npm install on macOS and Linux", () => {
+    const config = getAgentConfig("amp");
+    for (const os of ["macos", "linux"] as const) {
+      const labels = config?.install?.byOs?.[os]?.map((b) => b.label);
+      expect(labels).toContain("curl");
+      expect(labels).toContain("npm");
+    }
+  });
+
+  it("uses settled resize and blocks mouse reporting for the Ink TUI", () => {
+    const caps = getAgentConfig("amp")?.capabilities;
+    expect(caps?.blockMouseReporting).toBe(true);
+    expect(caps?.resizeStrategy).toBe("settled");
+    expect(caps?.blockAltScreen).toBeUndefined();
+  });
+
+  it("ships empty primary and fallback patterns pending on-device capture", () => {
+    const detection = getAgentConfig("amp")?.detection;
+    expect(detection?.primaryPatterns).toEqual([]);
+    expect(detection?.fallbackPatterns).toEqual([]);
+  });
+
+  it("compiles all detection regex strings without throwing", () => {
+    const detection = getAgentConfig("amp")?.detection;
+    const buckets: Array<string[] | undefined> = [
+      detection?.primaryPatterns,
+      detection?.fallbackPatterns,
+      detection?.bootCompletePatterns,
+      detection?.promptPatterns,
+      detection?.promptHintPatterns,
+      detection?.completionPatterns,
+    ];
+    for (const bucket of buckets) {
+      for (const pattern of bucket ?? []) {
+        expect(() => new RegExp(pattern, "im")).not.toThrow();
+      }
+    }
+  });
+
+  it("omits models — Amp mode-switching is TUI-internal", () => {
+    expect(getAgentConfig("amp")?.models).toBeUndefined();
+  });
+
+  it("omits providerTemplates — Amp uses a single managed backend", () => {
+    expect(getAgentConfig("amp")?.providerTemplates).toBeUndefined();
+  });
+
+  it("omits contextWindow — no published limit", () => {
+    expect(getAgentConfig("amp")?.contextWindow).toBeUndefined();
+  });
+
+  it("resumes via `threads continue <id>` and exits on Ctrl+C", () => {
+    const resume = getAgentConfig("amp")?.resume;
+    expect(resume?.kind).toBe("named-target");
+    if (resume?.kind === "named-target") {
+      expect(resume.argsForTarget("T-abc123")).toEqual(["threads", "continue", "T-abc123"]);
+      expect(resume.shutdownKeySequence).toBe("\x03");
+      expect(resume.quitCommand).toBeUndefined();
+    }
+  });
+
+  it("probes ~/.amp/oauth and AMP_API_KEY for auth discovery", () => {
+    const auth = getAgentConfig("amp")?.authCheck;
+    expect(auth?.configPathsAll).toContain(".amp/oauth");
+    expect(auth?.envVar).toBe("AMP_API_KEY");
+  });
+
+  it("declares amp as a fatal CLI prerequisite with the install URL", () => {
+    const prereq = getAgentConfig("amp")?.prerequisites?.find((p) => p.tool === "amp");
+    expect(prereq?.severity).toBe("fatal");
+    expect(prereq?.installUrl).toBe("https://ampcode.com/manual");
+  });
+
+  it("surfaces AMP_API_KEY and AMP_HOME env suggestions", () => {
+    const keys = getAgentConfig("amp")?.envSuggestions?.map((s) => s.key) ?? [];
+    expect(keys).toContain("AMP_API_KEY");
+    expect(keys).toContain("AMP_HOME");
+  });
+});
+
 describe("copilot detection patterns", () => {
   function compilePatterns(key: string): RegExp[] {
     const config = getAgentConfig("copilot");
@@ -1095,6 +1207,7 @@ describe("all built-in agents have Windows or generic install", () => {
     "interpreter",
     "mistral",
     "kimi",
+    "amp",
   ])(
     "%s has windows or generic install block",
     (agentId) => {

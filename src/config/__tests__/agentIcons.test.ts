@@ -31,6 +31,7 @@ describe("agentIcons", () => {
     expect(AGENT_ICON_MAP["qwen"]).toBeDefined();
     expect(AGENT_ICON_MAP["interpreter"]).toBeDefined();
     expect(AGENT_ICON_MAP["kimi"]).toBeDefined();
+    expect(AGENT_ICON_MAP["amp"]).toBeDefined();
   });
 
   it("normalizes icon filenames to lowercase iconIds", () => {
