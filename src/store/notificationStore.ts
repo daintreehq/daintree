@@ -105,7 +105,9 @@ export const useNotificationStore = create<NotificationStore>((set) => ({
       !notification.inboxMessage
     ) {
       // Mirrors the guard in notify(); without it, direct callers silently drop
-      // their persistent inbox history (WCAG 2.2.1).
+      // their persistent inbox history (WCAG 2.2.1). DEV-only guard for direct
+      // addNotification callers; can't use logger because we'd recurse through notify().
+      // eslint-disable-next-line no-console
       console.error(
         "[notificationStore.addNotification] ReactNode message without inboxMessage — persistent inbox history will be dropped. Use notify() or provide inboxMessage."
       );
