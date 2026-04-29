@@ -1,90 +1,56 @@
 import { useEffect, useRef } from "react";
 import { githubClient } from "@/clients/githubClient";
-import { useNotificationStore } from "@/store/notificationStore";
-import { notify } from "@/lib/notify";
-import { actionService } from "@/services/ActionService";
+import { useGitHubTokenHealthStore } from "@/store/githubTokenHealthStore";
+import { useNotificationHistoryStore } from "@/store/slices/notificationHistorySlice";
 import type { GitHubTokenHealthPayload } from "@shared/types";
 
 /**
- * Subscribes to main-process GitHub token health state pushes and surfaces a
- * non-blocking "Reconnect to GitHub" notification when the background probe
- * detects a 401. Dismisses the notification automatically when the token is
- * restored to a healthy state.
- *
- * The main-process service is the source of truth for state; this hook
- * simply reflects transitions into the shared notification store. On mount
- * it also invokes the main-process state getter so a second window (or a
- * window that mounted after the initial probe completed) can surface the
- * banner without waiting for the next transition.
+ * Subscribes to main-process GitHub token health state pushes and writes the
+ * unhealthy flag to a thin Zustand store. The renderer surfaces the state via
+ * `<GitHubTokenBanner />`, which is a persistent inline banner — toasts were a
+ * poor fit for state that persists until the user reconnects.
  */
 export function useGitHubTokenHealth(): void {
-  const notificationIdRef = useRef<string | null>(null);
+  const hasInboxedRef = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
+    let pushApplied = false;
 
-    const apply = (payload: GitHubTokenHealthPayload) => {
+    const apply = (payload: GitHubTokenHealthPayload, source: "push" | "replay") => {
       if (cancelled) return;
+      // If a live push already updated state, ignore a stale initial-replay
+      // response (the IPC race is rare but real — see review notes).
+      if (source === "replay" && pushApplied) return;
+      if (source === "push") pushApplied = true;
 
-      if (payload.status === "unhealthy") {
-        if (notificationIdRef.current) {
-          const existing = useNotificationStore
-            .getState()
-            .notifications.find((n) => n.id === notificationIdRef.current);
-          if (existing && !existing.dismissed) {
-            return;
-          }
-        }
+      const isUnhealthy = payload.status === "unhealthy";
+      const wasUnhealthy = useGitHubTokenHealthStore.getState().isUnhealthy;
+      useGitHubTokenHealthStore.getState().setUnhealthy(isUnhealthy);
 
-        const id = notify({
+      if (isUnhealthy && !wasUnhealthy && !hasInboxedRef.current) {
+        hasInboxedRef.current = true;
+        useNotificationHistoryStore.getState().addEntry({
           type: "warning",
-          priority: "high",
-          title: "GitHub authentication required",
-          message:
-            "Your GitHub token isn't working. Reconnect in settings to restore issues, PRs, and stats.",
-          correlationId: "github:token-expiry",
-          duration: 0,
-          coalesce: {
-            key: "github:token-expiry",
-            windowMs: 30000,
-            buildMessage: () =>
-              "Your GitHub token isn't working. Reconnect in settings to restore issues, PRs, and stats.",
-          },
-          action: {
-            label: "Open GitHub settings",
-            actionId: "app.settings.openTab",
-            actionArgs: { tab: "github", sectionId: "github-token" },
-            onClick: () => {
-              void actionService.dispatch(
-                "app.settings.openTab",
-                { tab: "github", sectionId: "github-token" },
-                { source: "user" }
-              );
-            },
-          },
+          title: "GitHub token expired",
+          message: "GitHub token expired — reconnect to restore GitHub features.",
+          correlationId: "github-token-health",
+          countable: false,
         });
-        notificationIdRef.current = id || null;
-        return;
       }
 
-      if (payload.status === "healthy" || payload.status === "unknown") {
-        const id = notificationIdRef.current;
-        if (id) {
-          useNotificationStore.getState().dismissNotification(id);
-          notificationIdRef.current = null;
-        }
+      if (!isUnhealthy) {
+        hasInboxedRef.current = false;
       }
     };
 
-    const cleanup = githubClient.onTokenHealthChanged(apply);
+    const cleanup = githubClient.onTokenHealthChanged((payload) => apply(payload, "push"));
 
-    // Replay current state on mount. If the initial probe fired before this
-    // hook subscribed — or this is a secondary window — the `unhealthy`
-    // state would otherwise never surface because the service only emits on
-    // transitions.
+    // Replay current state on mount so secondary windows / late mounts see the
+    // unhealthy flag without waiting for a transition.
     void githubClient
       .getTokenHealth()
-      .then(apply)
+      .then((payload) => apply(payload, "replay"))
       .catch(() => {
         // Initial-state fetch is best-effort; transitions still work.
       });
