@@ -7,6 +7,7 @@ import {
 } from "@/store/slices/notificationHistorySlice";
 import { NotificationCenterEntry } from "./NotificationCenterEntry";
 import { Button } from "@/components/ui/button";
+import { EmptyState } from "@/components/ui/EmptyState";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -338,14 +339,21 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
       </div>
       <div className="flex-1 overflow-y-auto">
         {groups.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-10 text-daintree-text/30">
-            <Bell className="h-6 w-6 mb-2" />
-            <span className="text-xs">
-              {filter === "unread" && entries.length > 0
-                ? "You're all caught up"
-                : "No notifications yet"}
-            </span>
-          </div>
+          filter === "unread" && entries.length > 0 ? (
+            <EmptyState
+              variant="user-cleared"
+              title="You're all caught up"
+              icon={<Bell />}
+              className="py-10"
+            />
+          ) : (
+            <EmptyState
+              variant="zero-data"
+              title="No notifications yet"
+              icon={<Bell />}
+              className="py-10"
+            />
+          )
         ) : (
           <div className="divide-y divide-tint/[0.04]">
             {groups.map((group) =>

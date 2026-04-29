@@ -64,4 +64,29 @@ describe("AppPaletteDialog.Empty", () => {
     expect(screen.getByText("Nothing found")).toBeTruthy();
     expect(screen.queryByTestId("cta")).toBeNull();
   });
+
+  it('exposes role="status" so screen readers announce the empty state', () => {
+    render(<AppPaletteDialog.Empty query="" emptyMessage="No items available" />);
+    const status = screen.getByRole("status");
+    expect(status).toBeTruthy();
+    expect(status.getAttribute("aria-live")).toBe("polite");
+  });
+
+  it('also exposes role="status" with aria-live polite in the no-match case', () => {
+    render(
+      <AppPaletteDialog.Empty
+        query="zzz"
+        emptyMessage="No items available"
+        noMatchMessage="Nothing found"
+      />
+    );
+    const status = screen.getByRole("status");
+    expect(status).toBeTruthy();
+    expect(status.getAttribute("aria-live")).toBe("polite");
+  });
+
+  it("trims whitespace from query when rendering the default no-match copy", () => {
+    render(<AppPaletteDialog.Empty query="  foo  " emptyMessage="No items available" />);
+    expect(screen.getByText('No items match "foo"')).toBeTruthy();
+  });
 });

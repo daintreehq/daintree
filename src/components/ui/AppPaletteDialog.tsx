@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { CircleHelp } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ScrollShadow } from "@/components/ui/ScrollShadow";
+import { EmptyState } from "@/components/ui/EmptyState";
 import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
 import { useOverlayState, useEscapeStack } from "@/hooks";
 import { useAnimatedPresence } from "@/hooks/useAnimatedPresence";
@@ -314,10 +315,17 @@ AppPaletteDialog.Empty = function AppPaletteEmpty({
   noMatchMessage,
   children,
 }: AppPaletteEmptyProps) {
+  const trimmedQuery = query.trim();
+  if (trimmedQuery) {
+    return (
+      <EmptyState
+        variant="filtered-empty"
+        title={noMatchMessage || `No items match "${trimmedQuery}"`}
+        className="px-3 py-8"
+      />
+    );
+  }
   return (
-    <div className="px-3 py-8 text-center text-daintree-text/50 text-sm">
-      {query.trim() ? <>{noMatchMessage || `No items match "${query}"`}</> : <>{emptyMessage}</>}
-      {!query.trim() && children}
-    </div>
+    <EmptyState variant="zero-data" title={emptyMessage} action={children} className="px-3 py-8" />
   );
 };
