@@ -325,6 +325,9 @@ export function notify(payload: NotifyPayload): string {
   const { placement, correlationId, type, title, message, inboxMessage, context } = payload;
 
   if (import.meta.env.DEV && typeof message !== "string" && !inboxMessage) {
+    // DEV-only API misuse warning. Routing this through the logger would loop
+    // back through notify on log failure, so emit straight to the console.
+    // eslint-disable-next-line no-console
     console.error(
       "[notify] ReactNode message without inboxMessage — persistent inbox history will be dropped. Provide inboxMessage for WCAG 2.2.1 compliance."
     );

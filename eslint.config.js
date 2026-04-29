@@ -135,6 +135,9 @@ export default tseslint.config(
   // Also ban `void window.electron.X()` — fire-and-forget IPC must route
   // through safeFireAndForget so rejections reach reportRendererGlobalError
   // with call-site context. See issue #6029.
+  // Note: the renderer block below re-declares no-restricted-syntax at "warn"
+  // level for src/** with additional selectors. That block's array is the
+  // effective set for src/ files, so it must keep these selectors in sync.
   {
     files: ["**/*.{ts,tsx}"],
     rules: {
@@ -207,6 +210,83 @@ export default tseslint.config(
           allowForKnownSafeCalls: [{ from: "file", name: "safeFireAndForget" }],
         },
       ],
+    },
+  },
+
+  // Renderer hygiene ratchets — typed rules require a project-aware parser so
+  // we scope `projectService` to `src/**` (electron/ has its own tsconfig and
+  // would error out under this parser). Issue #5975.
+  {
+    files: ["src/**/*.{ts,tsx}"],
+    languageOptions: {
+      parserOptions: {
+        projectService: true,
+        tsconfigRootDir: import.meta.dirname,
+      },
+    },
+    rules: {
+      // Force structured logger usage in the renderer. console.warn is allowed
+      // for breadcrumbs that don't need IPC; bootstrap/error-fallback paths
+      // suppress with `// eslint-disable-next-line no-console` and a comment.
+      "no-console": ["error", { allow: ["warn"] }],
+
+      // Flag narrowing assertions (`value as Foo` where value is any/unknown).
+      // Broadening assertions (`value as unknown`) are still allowed.
+      "@typescript-eslint/no-unsafe-type-assertion": "warn",
+
+      // Renderer-scoped no-restricted-syntax. Flat-config is last-write-wins per
+      // rule, so this array fully overrides the global block above for src/
+      // files — selectors from the global block are repeated here to preserve
+      // coverage, plus renderer-only selectors for Math.random IDs and magic
+      // numeric setTimeout/setInterval delays.
+      "no-restricted-syntax": [
+        "warn",
+        {
+          selector:
+            "ConditionalExpression[test.type='BinaryExpression'][test.operator='instanceof'][test.right.name='Error'][consequent.type='MemberExpression'][consequent.property.name='message']",
+          message:
+            "Use formatErrorMessage(err, 'operation-specific fallback') from @shared/utils/errorMessage instead of the inline `instanceof Error ? .message : ...` ternary.",
+        },
+        {
+          selector:
+            "UnaryExpression[operator='void'] > CallExpression > MemberExpression:has(MemberExpression[object.name='window'][property.name='electron'])",
+          message:
+            "Don't use `void window.electron.X()` for fire-and-forget IPC — wrap the promise in safeFireAndForget(promise, { context }) from @/utils/safeFireAndForget so rejections reach reportRendererGlobalError with call-site context.",
+        },
+        {
+          selector:
+            "CallExpression:matches([callee.name=/^(notify|addNotification)$/], [callee.property.name=/^(notify|addNotification)$/]) ObjectExpression > Property[key.name='message'] MemberExpression[property.name='message']:matches([object.name=/^(error|err|e)$/], [object.property.name=/^(error|err|e)$/])",
+          message:
+            "Don't pipe raw error.message into user-facing notifications. Use humanizeAppError(error) from @shared/utils/errorMessage to produce a friendly title and body, and stash the raw message in a 'Copy details' action. See #6050.",
+        },
+        {
+          selector:
+            "TemplateLiteral CallExpression[callee.object.name='Math'][callee.property.name='random']",
+          message:
+            "Don't construct IDs from `Math.random()` inside template literals. Use crypto.randomUUID() (or a deterministic counter in tests) — Math.random() collides and isn't cryptographically random.",
+        },
+        {
+          selector:
+            "CallExpression[callee.type='Identifier'][callee.name=/^(setTimeout|setInterval)$/][arguments.1.type='Literal'][arguments.1.value>0]",
+          message:
+            "Avoid magic numeric delays. Hoist the value into a named constant (e.g. `const FLUSH_INTERVAL_MS = 200`) so the intent is documented at the call site.",
+        },
+        {
+          selector:
+            "CallExpression[callee.type='MemberExpression'][callee.property.name=/^(setTimeout|setInterval)$/][arguments.1.type='Literal'][arguments.1.value>0]",
+          message:
+            "Avoid magic numeric delays. Hoist the value into a named constant (e.g. `const FLUSH_INTERVAL_MS = 200`) so the intent is documented at the call site.",
+        },
+      ],
+    },
+  },
+
+  // Logger module is the fallback console sink — its console.* calls are
+  // intentional and must be allowed.
+  {
+    files: ["src/utils/logger.ts"],
+    rules: {
+      "no-console": "off",
     },
   },
 

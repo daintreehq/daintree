@@ -29,6 +29,9 @@ export function TerminalIcon({ kind, chrome, className, brandColor }: TerminalIc
     ) {
       return;
     }
+    // DevTools-only diagnostic gated by the `__DAINTREE_IDENTITY_RENDER_DEBUG__`
+    // runtime flag; bypasses the IPC logger so devs can see the trail in-page.
+    // eslint-disable-next-line no-console
     console.debug(
       `[IdentityDebug] render-icon kind=${kind ?? "<none>"} icon=${iconId} ` +
         `agent=${resolvedChrome.agentId ?? "<none>"} process=${resolvedChrome.processId ?? "<none>"} ` +

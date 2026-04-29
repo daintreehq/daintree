@@ -20,9 +20,11 @@ vi.mock("@/lib/notify", () => ({
   setSessionQuietUntil: vi.fn(),
 }));
 
+let entryCounter = 0;
+
 function makeEntry(overrides: Partial<NotificationHistoryEntry> = {}): NotificationHistoryEntry {
   return {
-    id: `entry-${Math.random()}`,
+    id: `entry-${++entryCounter}`,
     type: "info",
     message: "Notification message",
     timestamp: Date.now(),
