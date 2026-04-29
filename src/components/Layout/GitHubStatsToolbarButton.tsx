@@ -116,7 +116,11 @@ export const GitHubStatsToolbarButton = memo(
     const prevLastUpdatedRef = useRef<number | null>(null);
 
     useEffect(() => {
-      if (rateLimitResetAt === null || rateLimitResetAt <= Date.now()) {
+      if (
+        rateLimitResetAt === null ||
+        !Number.isFinite(rateLimitResetAt) ||
+        rateLimitResetAt <= Date.now()
+      ) {
         setRateLimitCountdown(null);
         return;
       }
