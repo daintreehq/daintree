@@ -75,4 +75,26 @@ describe("Toolbar responsive design — issue #4133", () => {
       expect(source).toContain("overflowActions");
     });
   });
+
+  describe("overflow menu focus ring after pointer dismissal — issue #6119", () => {
+    it("declares the overflowMenuPointerCloseRef", () => {
+      expect(source).toContain("overflowMenuPointerCloseRef");
+      expect(source).toMatch(/overflowMenuPointerCloseRef\s*=\s*useRef\(false\)/);
+    });
+
+    it("sets the ref in onPointerDownOutside on the overflow DropdownMenuContent", () => {
+      expect(source).toMatch(
+        /onPointerDownOutside={\(\)\s*=>\s*{\s*overflowMenuPointerCloseRef\.current\s*=\s*true;?\s*}}/
+      );
+    });
+
+    it("conditionally preventDefault and resets the ref in onCloseAutoFocus", () => {
+      // Guards the reset line: deleting it would inherit suppression into a
+      // later keyboard close and break WAI-ARIA focus return.
+      expect(source).toContain("overflowMenuPointerCloseRef.current = false");
+      expect(source).toMatch(
+        /if\s*\(overflowMenuPointerCloseRef\.current\)\s*{\s*e\.preventDefault\(\);/
+      );
+    });
+  });
 });

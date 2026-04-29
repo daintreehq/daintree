@@ -230,6 +230,12 @@ describe("DockLaunchButton", () => {
     const pointerPreventDefault = vi.fn();
     dropdownCloseAutoFocusSpy!({ preventDefault: pointerPreventDefault });
     expect(pointerPreventDefault).toHaveBeenCalledTimes(1);
+
+    // The pointer flag must reset after one onCloseAutoFocus or a later
+    // keyboard-driven close would inherit suppression and break focus return.
+    const resetPreventDefault = vi.fn();
+    dropdownCloseAutoFocusSpy!({ preventDefault: resetPreventDefault });
+    expect(resetPreventDefault).not.toHaveBeenCalled();
   });
 
   it("invokes runRecipe with cwd, worktreeId, and recipe context when a recipe is selected", () => {
