@@ -33,7 +33,7 @@ vi.mock("drizzle-orm/better-sqlite3", () => ({
   drizzle: vi.fn(() => ({})),
 }));
 
-import { probeDb, attemptRecovery, closeSharedDb, openDb } from "../db.js";
+import { probeDb, attemptRecovery, closeSharedDb } from "../db.js";
 
 describe("probeDb", () => {
   let tmpDir: string;
@@ -184,39 +184,5 @@ describe("attemptRecovery", () => {
 describe("closeSharedDb", () => {
   it("does nothing when no shared instance exists", () => {
     expect(() => closeSharedDb({ checkpoint: true })).not.toThrow();
-  });
-});
-
-describe("openDb", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mockDatabaseConstructor.mockImplementation(() => ({}));
-    mockPragma.mockReturnValue([]);
-  });
-
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
-  it("applies pragmas in the required order, with synchronous after WAL", () => {
-    openDb("/fake/test.db");
-
-    const pragmaCalls = mockPragma.mock.calls.map(([s]) => s as string);
-    // First six pragma calls must be the openDb configuration block.
-    // Migration logic below also calls pragma("table_info(projects)"), which we do not assert order on.
-    expect(pragmaCalls.slice(0, 6)).toEqual([
-      "journal_mode = WAL",
-      "busy_timeout = 3000",
-      "synchronous = NORMAL",
-      "temp_store = MEMORY",
-      "mmap_size = 10737418240",
-      "cache_size = -65536",
-    ]);
-
-    // Schema creation must run after the pragma configuration block, otherwise
-    // CREATE TABLE happens with the wrong journal/cache settings.
-    const sixthPragmaOrder = mockPragma.mock.invocationCallOrder[5];
-    const firstExecOrder = mockExec.mock.invocationCallOrder[0];
-    expect(firstExecOrder).toBeGreaterThan(sixthPragmaOrder);
   });
 });

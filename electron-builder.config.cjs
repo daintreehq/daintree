@@ -108,6 +108,7 @@ module.exports = async function () {
     extraResources: [
       { from: "help", to: "help" },
       { from: "electron/resources/sounds", to: "sounds" },
+      { from: "electron/services/persistence/migrations", to: "migrations" },
     ],
     asarUnpack: [
       "node_modules/node-pty/**/*",
