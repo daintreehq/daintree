@@ -635,26 +635,6 @@ export function WorktreeHeader({
           </Tooltip>
         )}
 
-        {onCleanupWorktree && (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onCleanupWorktree();
-                }}
-                className="sidebar-action-button p-1.5 text-github-merged hover:text-status-error rounded transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent shrink-0"
-                aria-label="Delete worktree"
-                data-testid="worktree-cleanup-button"
-              >
-                <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
-              </button>
-            </TooltipTrigger>
-            <TooltipContent side="top">Delete worktree</TooltipContent>
-          </Tooltip>
-        )}
-
         <div
           data-testid="worktree-actions-wrapper"
           className={cn(
@@ -666,6 +646,25 @@ export function WorktreeHeader({
                 : "opacity-0 pointer-events-none group-hover/card:opacity-100 group-hover/card:pointer-events-auto group-focus-within/card:opacity-100 group-focus-within/card:pointer-events-auto"
           )}
         >
+          {onCleanupWorktree && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onCleanupWorktree();
+                  }}
+                  className="sidebar-action-button p-1.5 text-status-error/70 hover:text-status-error rounded transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
+                  aria-label="Delete worktree"
+                  data-testid="worktree-cleanup-button"
+                >
+                  <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="top">Delete worktree</TooltipContent>
+            </Tooltip>
+          )}
           {canCollapse && (
             <button
               onClick={onToggleCollapse}

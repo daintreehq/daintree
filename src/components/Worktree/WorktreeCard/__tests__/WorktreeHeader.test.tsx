@@ -832,23 +832,32 @@ describe("WorktreeHeader cleanup button", () => {
     expect(screen.queryByTestId("worktree-cleanup-button")).toBeNull();
   });
 
-  it("places the cleanup button outside the hover-gated actions wrapper", () => {
+  it("places the cleanup button inside the hover-gated actions wrapper", () => {
     renderHeader({ onCleanupWorktree: vi.fn() });
     const button = screen.getByTestId("worktree-cleanup-button");
     const wrapper = screen.getByTestId("worktree-actions-wrapper");
-    expect(wrapper.contains(button)).toBe(false);
+    expect(wrapper.contains(button)).toBe(true);
   });
 
-  it("keeps the cleanup button visible on inactive, non-collapsed cards", () => {
+  it("hides the cleanup button alongside other actions on inactive, non-collapsed cards", () => {
     renderHeader({ onCleanupWorktree: vi.fn(), isActive: false, isCollapsed: false });
     const button = screen.getByTestId("worktree-cleanup-button");
     const wrapper = screen.getByTestId("worktree-actions-wrapper");
-    // The hover-gated wrapper should be hidden when inactive…
+    // The hover-gated wrapper hides on inactive cards and reveals on group hover/focus.
     expect(wrapper.className).toContain("opacity-0");
     expect(wrapper.className).toContain("pointer-events-none");
-    // …but the cleanup button is a sibling and must not inherit those classes.
-    expect(button.className).not.toContain("opacity-0");
-    expect(button.className).not.toContain("pointer-events-none");
+    expect(wrapper.className).toContain("group-hover/card:opacity-100");
+    expect(wrapper.className).toContain("group-focus-within/card:opacity-100");
+    // The cleanup button inherits visibility through the wrapper, not its own classes.
+    expect(wrapper.contains(button)).toBe(true);
+  });
+
+  it("uses muted destructive coloring at idle and full red on hover", () => {
+    renderHeader({ onCleanupWorktree: vi.fn() });
+    const button = screen.getByTestId("worktree-cleanup-button");
+    expect(button.className).toContain("text-status-error/70");
+    expect(button.className).toContain("hover:text-status-error");
+    expect(button.className).not.toContain("text-github-merged");
   });
 
   it("calls onCleanupWorktree and stops propagation when clicked", () => {
