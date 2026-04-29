@@ -56,6 +56,7 @@ export const AGENT_DESCRIPTIONS: Record<string, string> = {
   kiro: "Spec-driven development with autonomous execution",
   copilot: "GitHub's AI assistant with broad model choice",
   crush: "Charmbracelet's multi-provider Bubble Tea TUI agent",
+  interpreter: "Local code execution — Python, shell, and JavaScript on your machine",
 };
 
 /**

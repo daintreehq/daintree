@@ -442,6 +442,7 @@ import { config as copilotConfig } from "./agents/copilot.js";
 import { config as gooseConfig } from "./agents/goose.js";
 import { config as crushConfig } from "./agents/crush.js";
 import { config as qwenConfig } from "./agents/qwen.js";
+import { config as interpreterConfig } from "./agents/interpreter.js";
 
 // Built-in agent registry. Per-agent configs live in `./agents/<id>.ts`
 // (mirroring `src/services/actions/definitions/`). When adding a new agent,
@@ -459,6 +460,7 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
   goose: gooseConfig,
   crush: crushConfig,
   qwen: qwenConfig,
+  interpreter: interpreterConfig,
 };
 
 import { BUILT_IN_AGENT_IDS } from "./agentIds.js";

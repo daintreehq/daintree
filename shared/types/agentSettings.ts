@@ -135,6 +135,7 @@ export const DEFAULT_DANGEROUS_ARGS: Record<string, string> = {
   gemini: "--yolo",
   codex: "--dangerously-bypass-approvals-and-sandbox",
   cursor: "--force",
+  interpreter: "--auto_run",
 };
 
 export const DEFAULT_AGENT_SETTINGS: AgentSettings = {

@@ -7,7 +7,7 @@ import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
  * The toggle should only appear for agents that have a DEFAULT_DANGEROUS_ARGS entry.
  */
 describe("Skip permissions toggle gating", () => {
-  it("DEFAULT_DANGEROUS_ARGS has entries for claude, gemini, codex, cursor", () => {
+  it("DEFAULT_DANGEROUS_ARGS has entries for claude, gemini, codex, cursor, interpreter", () => {
     expect(DEFAULT_DANGEROUS_ARGS).toHaveProperty("claude", "--dangerously-skip-permissions");
     expect(DEFAULT_DANGEROUS_ARGS).toHaveProperty("gemini", "--yolo");
     expect(DEFAULT_DANGEROUS_ARGS).toHaveProperty(
@@ -15,6 +15,7 @@ describe("Skip permissions toggle gating", () => {
       "--dangerously-bypass-approvals-and-sandbox"
     );
     expect(DEFAULT_DANGEROUS_ARGS).toHaveProperty("cursor", "--force");
+    expect(DEFAULT_DANGEROUS_ARGS).toHaveProperty("interpreter", "--auto_run");
   });
 
   it("opencode, kiro, goose, crush, and qwen have no DEFAULT_DANGEROUS_ARGS entry", () => {
@@ -35,7 +36,7 @@ describe("Skip permissions toggle gating", () => {
       (id) => (DEFAULT_DANGEROUS_ARGS[id] ?? "") === ""
     );
 
-    expect(agentsWithToggle).toEqual(["claude", "gemini", "codex", "cursor"]);
+    expect(agentsWithToggle).toEqual(["claude", "gemini", "codex", "cursor", "interpreter"]);
     expect(agentsWithoutToggle).toEqual(["opencode", "kiro", "copilot", "goose", "crush", "qwen"]);
   });
 

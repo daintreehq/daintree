@@ -40,6 +40,7 @@ describe("agentRegistry", () => {
       expect(ids).toContain("goose");
       expect(ids).toContain("crush");
       expect(ids).toContain("qwen");
+      expect(ids).toContain("interpreter");
     });
 
     it("kiro only has macOS and Linux install blocks (no Windows)", () => {
@@ -953,7 +954,17 @@ describe("cursor install metadata", () => {
 });
 
 describe("all built-in agents have Windows or generic install", () => {
-  it.each(["claude", "gemini", "codex", "opencode", "cursor", "copilot", "goose", "qwen"])(
+  it.each([
+    "claude",
+    "gemini",
+    "codex",
+    "opencode",
+    "cursor",
+    "copilot",
+    "goose",
+    "qwen",
+    "interpreter",
+  ])(
     "%s has windows or generic install block",
     (agentId) => {
       const config = getAgentConfig(agentId);
