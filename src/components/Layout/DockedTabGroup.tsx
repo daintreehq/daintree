@@ -12,6 +12,7 @@ import {
 } from "@dnd-kit/core";
 import { SortableContext, horizontalListSortingStrategy, arrayMove } from "@dnd-kit/sortable";
 import { restrictToHorizontalAxis, restrictToParentElement } from "@dnd-kit/modifiers";
+import { LayoutGroup, LazyMotion, domMax } from "framer-motion";
 import { Plus } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn, getBaseTitle } from "@/lib/utils";
@@ -530,60 +531,64 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
           modifiers={[restrictToHorizontalAxis, restrictToParentElement]}
         >
           <SortableContext items={tabIds} strategy={horizontalListSortingStrategy}>
-            <div
-              ref={tabListRef}
-              className="flex items-center border-b border-divider bg-daintree-sidebar shrink-0"
-              role="tablist"
-              aria-label="Dock panel tabs"
-              onKeyDown={handleTabListKeyDown}
-            >
-              {panels.map((panel) => {
-                const tabChrome = deriveTerminalChrome({
-                  kind: panel.kind,
-                  launchAgentId: panel.launchAgentId,
-                  runtimeIdentity: panel.runtimeIdentity,
-                  detectedAgentId: panel.detectedAgentId,
-                  detectedProcessId: panel.detectedProcessId,
-                  agentState: panel.agentState,
-                  runtimeStatus: panel.runtimeStatus,
-                  exitCode: panel.exitCode,
-                  presetColor: panelPresetColors.get(panel.id),
-                });
-                return (
-                  <SortableTabButton
-                    key={panel.id}
-                    id={panel.id}
-                    title={getBaseTitle(panel.title)}
-                    chrome={tabChrome}
-                    kind={panel.kind ?? "terminal"}
-                    agentState={tabChrome.isAgent ? getDockDisplayAgentState(panel) : undefined}
-                    isActive={panel.id === activeTabId}
-                    presetColor={panelPresetColors.get(panel.id)}
-                    isUsingFallback={panel.isUsingFallback}
-                    onClick={() => handleTabClick(panel.id)}
-                    onClose={() => handleTabClose(panel.id)}
-                    onRename={(newTitle) => handleTabRename(panel.id, newTitle)}
-                  />
-                );
-              })}
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleAddTab();
-                    }}
-                    onPointerDown={(e) => e.stopPropagation()}
-                    className="shrink-0 p-1.5 hover:bg-daintree-text/10 text-daintree-text/40 hover:text-daintree-text transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-1"
-                    aria-label="Duplicate panel as new tab"
-                    type="button"
-                  >
-                    <Plus className="w-3 h-3" aria-hidden="true" />
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent side="bottom">Duplicate panel as new tab</TooltipContent>
-              </Tooltip>
-            </div>
+            <LazyMotion features={domMax}>
+              <LayoutGroup id={`dock-tabs-${group.id}`}>
+                <div
+                  ref={tabListRef}
+                  className="flex items-center border-b border-divider bg-daintree-sidebar shrink-0"
+                  role="tablist"
+                  aria-label="Dock panel tabs"
+                  onKeyDown={handleTabListKeyDown}
+                >
+                  {panels.map((panel) => {
+                    const tabChrome = deriveTerminalChrome({
+                      kind: panel.kind,
+                      launchAgentId: panel.launchAgentId,
+                      runtimeIdentity: panel.runtimeIdentity,
+                      detectedAgentId: panel.detectedAgentId,
+                      detectedProcessId: panel.detectedProcessId,
+                      agentState: panel.agentState,
+                      runtimeStatus: panel.runtimeStatus,
+                      exitCode: panel.exitCode,
+                      presetColor: panelPresetColors.get(panel.id),
+                    });
+                    return (
+                      <SortableTabButton
+                        key={panel.id}
+                        id={panel.id}
+                        title={getBaseTitle(panel.title)}
+                        chrome={tabChrome}
+                        kind={panel.kind ?? "terminal"}
+                        agentState={tabChrome.isAgent ? getDockDisplayAgentState(panel) : undefined}
+                        isActive={panel.id === activeTabId}
+                        presetColor={panelPresetColors.get(panel.id)}
+                        isUsingFallback={panel.isUsingFallback}
+                        onClick={() => handleTabClick(panel.id)}
+                        onClose={() => handleTabClose(panel.id)}
+                        onRename={(newTitle) => handleTabRename(panel.id, newTitle)}
+                      />
+                    );
+                  })}
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleAddTab();
+                        }}
+                        onPointerDown={(e) => e.stopPropagation()}
+                        className="shrink-0 p-1.5 hover:bg-daintree-text/10 text-daintree-text/40 hover:text-daintree-text transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-1"
+                        aria-label="Duplicate panel as new tab"
+                        type="button"
+                      >
+                        <Plus className="w-3 h-3" aria-hidden="true" />
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom">Duplicate panel as new tab</TooltipContent>
+                  </Tooltip>
+                </div>
+              </LayoutGroup>
+            </LazyMotion>
           </SortableContext>
         </DndContext>
 
