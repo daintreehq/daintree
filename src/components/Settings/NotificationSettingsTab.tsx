@@ -366,7 +366,7 @@ export function NotificationSettingsTab() {
                           className={cn(
                             "px-2.5 py-1 text-xs rounded-[var(--radius-md)] border transition-colors",
                             active
-                              ? "border-daintree-accent bg-daintree-accent/10 text-daintree-text"
+                              ? "border-border-strong bg-overlay-medium text-daintree-text"
                               : "border-daintree-border bg-daintree-bg text-daintree-text/50 hover:text-daintree-text/80"
                           )}
                           aria-pressed={active}

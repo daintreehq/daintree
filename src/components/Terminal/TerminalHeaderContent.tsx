@@ -266,7 +266,7 @@ function TerminalHeaderContentComponent({
         <Tooltip>
           <TooltipTrigger asChild>
             <div
-              className="inline-flex items-center gap-1 text-xs font-sans bg-daintree-accent/15 text-daintree-text px-1.5 py-0.5 rounded ml-1"
+              className="inline-flex items-center gap-1 text-xs font-sans bg-overlay-medium text-daintree-text px-1.5 py-0.5 rounded ml-1"
               role="status"
               aria-live="polite"
             >

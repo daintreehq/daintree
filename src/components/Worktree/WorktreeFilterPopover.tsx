@@ -275,7 +275,7 @@ export function WorktreeFilterPopover({ hideSearchInput = false }: WorktreeFilte
                     className={cn(
                       "flex items-center gap-2 px-2 py-1 text-xs rounded",
                       orderBy === option.value
-                        ? "bg-daintree-accent/10 text-daintree-accent"
+                        ? "bg-overlay-soft text-daintree-text"
                         : "text-daintree-text/70 hover:bg-overlay-medium"
                     )}
                   >
@@ -283,7 +283,7 @@ export function WorktreeFilterPopover({ hideSearchInput = false }: WorktreeFilte
                       className={cn(
                         "w-3 h-3 rounded-full border",
                         orderBy === option.value
-                          ? "border-daintree-accent bg-daintree-accent"
+                          ? "border-daintree-text bg-daintree-text"
                           : "border-daintree-border"
                       )}
                     >

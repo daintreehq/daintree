@@ -219,7 +219,7 @@ export function CommandPicker({
               <div className="flex items-center justify-between">
                 <span className="font-mono text-sm text-daintree-text/90">/{cmd.id}</span>
                 {cmd.hasBuilder && (
-                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-daintree-accent/20 text-daintree-accent">
+                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-overlay-medium text-daintree-text/70">
                     Builder
                   </span>
                 )}

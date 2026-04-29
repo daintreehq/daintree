@@ -160,7 +160,7 @@ export function LogLevelPalette({ isOpen, onClose }: LogLevelPaletteProps) {
                 className={cn(
                   "text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded",
                   isSelected
-                    ? "bg-daintree-accent/20 text-daintree-accent"
+                    ? "bg-overlay-medium text-daintree-text/70"
                     : "bg-daintree-border/60 text-daintree-text/70"
                 )}
               >

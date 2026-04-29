@@ -221,7 +221,7 @@ export function AgentCliStep({ availability, selections, onInstallComplete }: Ag
               <div
                 className={`flex items-center gap-3 w-full px-3 py-2 rounded-[var(--radius-md)] border transition-colors ${
                   isInstalling
-                    ? "bg-daintree-accent/5 border-daintree-accent/30"
+                    ? "bg-overlay-soft border-border-strong"
                     : isInstalled
                       ? "bg-status-success/5 border-status-success/20"
                       : isError

@@ -68,7 +68,7 @@ export const AutocompleteMenu = forwardRef<HTMLDivElement, AutocompleteMenuProps
                     className={cn(
                       "flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left transition-colors",
                       idx === selectedIndex
-                        ? "bg-daintree-accent/20 text-daintree-text"
+                        ? "bg-overlay-soft text-daintree-text"
                         : "text-daintree-text/70 hover:bg-tint/[0.05] hover:text-daintree-text"
                     )}
                     onMouseDown={(e) => e.preventDefault()}

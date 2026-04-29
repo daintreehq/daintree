@@ -59,7 +59,7 @@ function PreferredSchemePicker({
             className={cn(
               "flex items-center gap-1.5 px-2 py-1 rounded-[var(--radius-md)] border text-xs transition-colors",
               selectedId === scheme.id
-                ? "border-daintree-accent/30 bg-daintree-accent/10 text-daintree-text"
+                ? "border-border-strong bg-overlay-medium text-daintree-text"
                 : "border-daintree-border text-daintree-text/70 hover:bg-surface-hover"
             )}
           >

@@ -285,10 +285,10 @@ export function CommandOverridesTab({ projectId, overrides, onChange }: CommandO
               key={mode}
               onClick={() => setFilterMode(mode)}
               className={cn(
-                "px-3 py-1.5 text-xs font-medium rounded transition-colors capitalize",
+                "px-3 py-1.5 text-xs font-medium rounded transition-colors capitalize border",
                 filterMode === mode
-                  ? "bg-daintree-accent text-daintree-bg"
-                  : "bg-daintree-sidebar text-daintree-text/70 hover:bg-daintree-border"
+                  ? "border-border-strong bg-overlay-medium text-daintree-text"
+                  : "border-transparent bg-daintree-sidebar text-daintree-text/70 hover:bg-daintree-border"
               )}
             >
               {mode}
@@ -323,7 +323,7 @@ export function CommandOverridesTab({ projectId, overrides, onChange }: CommandO
               className={cn(
                 "rounded-[var(--radius-md)] border transition-colors",
                 hasOverride(command.id)
-                  ? "border-daintree-accent/30 bg-daintree-accent/5"
+                  ? "border-border-strong bg-overlay-subtle"
                   : "border-daintree-border bg-daintree-bg"
               )}
             >
@@ -356,7 +356,7 @@ export function CommandOverridesTab({ projectId, overrides, onChange }: CommandO
                       {command.id}
                     </span>
                     {hasOverride(command.id) && (
-                      <span className="text-[11px] text-daintree-accent bg-daintree-accent/10 px-1.5 py-0.5 rounded font-medium">
+                      <span className="text-[11px] text-daintree-text/70 bg-overlay-medium px-1.5 py-0.5 rounded font-medium">
                         {override?.prompt ? "Custom Prompt" : "Modified"}
                       </span>
                     )}
@@ -425,10 +425,10 @@ export function CommandOverridesTab({ projectId, overrides, onChange }: CommandO
                         <button
                           onClick={() => setOverrideMode(command.id, "defaults")}
                           className={cn(
-                            "px-3 py-1.5 text-xs font-medium rounded-md transition-colors",
+                            "px-3 py-1.5 text-xs font-medium rounded-md transition-colors border",
                             currentMode === "defaults"
-                              ? "bg-daintree-accent text-daintree-bg"
-                              : "bg-daintree-sidebar text-daintree-text/70 hover:bg-daintree-border"
+                              ? "border-border-strong bg-overlay-medium text-daintree-text"
+                              : "border-transparent bg-daintree-sidebar text-daintree-text/70 hover:bg-daintree-border"
                           )}
                         >
                           Default Values
@@ -437,10 +437,10 @@ export function CommandOverridesTab({ projectId, overrides, onChange }: CommandO
                       <button
                         onClick={() => setOverrideMode(command.id, "prompt")}
                         className={cn(
-                          "px-3 py-1.5 text-xs font-medium rounded-md transition-colors",
+                          "px-3 py-1.5 text-xs font-medium rounded-md transition-colors border",
                           currentMode === "prompt"
-                            ? "bg-daintree-accent text-daintree-bg"
-                            : "bg-daintree-sidebar text-daintree-text/70 hover:bg-daintree-border"
+                            ? "border-border-strong bg-overlay-medium text-daintree-text"
+                            : "border-transparent bg-daintree-sidebar text-daintree-text/70 hover:bg-daintree-border"
                         )}
                       >
                         Custom Prompt
@@ -472,7 +472,7 @@ export function CommandOverridesTab({ projectId, overrides, onChange }: CommandO
                                   )}
                                 </label>
                                 {hasDefaultValue && (
-                                  <span className="text-[10px] text-daintree-accent bg-daintree-accent/10 px-1.5 py-0.5 rounded">
+                                  <span className="text-[10px] text-daintree-text/70 bg-overlay-medium px-1.5 py-0.5 rounded">
                                     Custom
                                   </span>
                                 )}
@@ -564,7 +564,7 @@ function PromptEditor({ commandId, args, value, onChange }: PromptEditorProps) {
                       className={cn(
                         "text-[11px] px-2 py-0.5 rounded font-mono transition-colors",
                         usedVariables.includes(arg.name)
-                          ? "bg-daintree-accent/20 text-daintree-accent border border-daintree-accent/30"
+                          ? "bg-overlay-medium text-daintree-text/70 border border-border-strong"
                           : "bg-daintree-sidebar text-daintree-text/70 hover:bg-daintree-border border border-daintree-border"
                       )}
                     >

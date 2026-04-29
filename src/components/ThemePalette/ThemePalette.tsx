@@ -37,9 +37,10 @@ function ThemeListItem({
       role="option"
       aria-selected={isSelected}
       className={cn(
-        "w-full text-left px-3 py-2 rounded-[var(--radius-md)] border flex items-center gap-3 transition-colors",
+        "relative w-full text-left px-3 py-2 rounded-[var(--radius-md)] border flex items-center gap-3 transition-colors",
         "border-daintree-border/40 hover:border-daintree-border/60 hover:bg-surface",
-        isSelected && "border-daintree-accent/60 bg-daintree-accent/10"
+        isSelected &&
+          "border-overlay bg-overlay-soft text-daintree-text before:absolute before:left-0 before:top-2 before:bottom-2 before:w-[2px] before:rounded-r before:bg-daintree-accent before:content-['']"
       )}
     >
       <PaletteStrip scheme={scheme} />

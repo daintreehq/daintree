@@ -42,7 +42,7 @@ function IssueOptionRow({ issue, isSelected, isCurrentlyAttached, onClick }: Iss
         className={cn(
           "w-full text-left px-3 py-2.5 rounded-[var(--radius-md)] transition-colors flex items-start gap-3",
           isSelected
-            ? "bg-daintree-accent/10 border border-daintree-accent/30"
+            ? "bg-overlay-soft border border-border-strong"
             : "hover:bg-tint/5 border border-transparent",
           isCurrentlyAttached && "ring-1 ring-status-success/30"
         )}
@@ -205,8 +205,8 @@ export function IssuePickerDialog({
               className={cn(
                 "px-3 py-1 text-xs rounded-full transition-colors capitalize",
                 stateFilter === state
-                  ? "bg-daintree-accent/20 text-daintree-accent"
-                  : "text-daintree-text/50 hover:text-daintree-text/80 hover:bg-tint/5"
+                  ? "bg-overlay-medium text-daintree-text border border-border-strong"
+                  : "border border-transparent text-daintree-text/50 hover:text-daintree-text/80 hover:bg-tint/5"
               )}
             >
               {state}

@@ -98,7 +98,7 @@ function collectSourceFiles(dir: string): string[] {
 // Legitimate accent usage that will persist after all cleanup PRs land.
 // Each entry must carry a brief rationale.
 const DURABLE_ALLOWLIST = new Set([
-  // Theme picker swatch data (theme content, not app chrome)
+  // Text-link CTAs (Change theme, Reset, Export, Import, Random theme) — separate cleanup
   "src/components/Settings/AppThemePicker.tsx",
 
   // Theme browser accent display (theme content, not app chrome)
@@ -184,12 +184,10 @@ const ALLOWLIST_BY_ISSUE: Record<string, string[]> = {
     "src/components/Fleet/FleetArmingDialog.tsx",
     "src/components/Fleet/FleetArmingRibbon.tsx",
     "src/components/GitHub/BulkActionBar.tsx",
-    "src/components/GitHub/GitHubDropdownSkeletons.tsx",
     "src/components/GitHub/GitHubListItem.tsx",
     "src/components/GitHub/GitHubResourceList.tsx",
     "src/components/HelpPanel/HelpPanel.tsx",
     "src/components/KeyboardShortcuts/SettingsShortcutCapture.tsx",
-    "src/components/LogLevelPalette/LogLevelPalette.tsx",
     "src/components/Notifications/NotificationCenterEntry.tsx",
     "src/components/PanelPalette/PanelPalette.tsx",
     "src/components/Portal/PortalDock.tsx",
@@ -221,7 +219,6 @@ const ALLOWLIST_BY_ISSUE: Record<string, string[]> = {
     "src/components/Settings/ImportEnvDialog.tsx",
     "src/components/Settings/KeybindingProfileActions.tsx",
     "src/components/Settings/KeyboardShortcutsTab.tsx",
-    "src/components/Settings/NotificationSettingsTab.tsx",
     "src/components/Settings/PortalSettingsTab.tsx",
     "src/components/Settings/PresetSelector.tsx",
     "src/components/Settings/PrivacyDataTab.tsx",
@@ -240,18 +237,15 @@ const ALLOWLIST_BY_ISSUE: Record<string, string[]> = {
     "src/components/Setup/AgentCliStep.tsx",
     "src/components/Setup/SystemToolsStep.tsx",
     "src/components/Sidebar/SidebarContent.tsx",
-    "src/components/Terminal/AutocompleteMenu.tsx",
     "src/components/Terminal/ContentGrid.tsx",
     "src/components/Terminal/GridNotificationBar.tsx",
     "src/components/Terminal/HybridInputBar.tsx",
     "src/components/Terminal/InlineStatusBanner.tsx",
-    "src/components/Terminal/PromptHistoryPalette.tsx",
     "src/components/Terminal/RecipeRunner/RecipeRunnerEmpty.tsx",
     "src/components/Terminal/RecipeRunner/RecipeRunnerGrid.tsx",
     "src/components/Terminal/RecipeRunner/RecipeRunnerItem.tsx",
     "src/components/Terminal/RecipeRunner/RecipeRunnerList.tsx",
     "src/components/Terminal/SendToAgentPalette.tsx",
-    "src/components/Terminal/TerminalHeaderContent.tsx",
     "src/components/Terminal/TerminalPane.tsx",
     "src/components/Terminal/TerminalRestartStatusBanner.tsx",
     "src/components/Terminal/TwoPaneSplitDivider.tsx",
@@ -261,7 +255,6 @@ const ALLOWLIST_BY_ISSUE: Record<string, string[]> = {
     "src/components/TerminalRecipe/RecipeEditor.tsx",
     "src/components/ui/ReEntrySummary.tsx",
     "src/components/ui/toaster.tsx",
-    "src/components/Worktree/IssuePickerDialog.tsx",
     "src/components/Worktree/QuickCreatePalette.tsx",
     "src/components/Worktree/QuickStateFilterBar.tsx",
     "src/components/Worktree/WorktreeCard/GitHubTooltipContent.tsx",

@@ -81,7 +81,7 @@ export function GitHubResourceListSkeleton({
               className={cn(
                 "flex-1 px-3 py-1 text-xs font-medium rounded text-center",
                 tab.id === "open"
-                  ? "bg-daintree-accent/10 text-daintree-accent"
+                  ? "bg-overlay-medium text-daintree-text"
                   : "text-muted-foreground"
               )}
             >

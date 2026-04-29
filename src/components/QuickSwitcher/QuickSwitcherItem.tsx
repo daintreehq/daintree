@@ -50,7 +50,7 @@ export const QuickSwitcherItem = React.memo(function QuickSwitcherItem({
             className={cn(
               "shrink-0 px-1.5 py-0.5 text-xs rounded-[var(--radius-sm)] border",
               item.type === "terminal"
-                ? "bg-daintree-accent/10 text-daintree-accent border-daintree-accent/30"
+                ? "bg-overlay-medium text-daintree-text/70 border-border-strong"
                 : "bg-status-success/10 text-status-success border-status-success/30"
             )}
           >

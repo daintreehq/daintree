@@ -191,7 +191,7 @@ function IconPickerButton({ currentIcon, onChange }: IconPickerButtonProps) {
                 className={cn(
                   "p-2 rounded flex items-center justify-center transition-colors",
                   isSelected
-                    ? "bg-daintree-accent/20 border border-daintree-accent"
+                    ? "bg-overlay-medium border border-border-strong"
                     : "hover:bg-surface-hover border border-transparent"
                 )}
                 title={label}
