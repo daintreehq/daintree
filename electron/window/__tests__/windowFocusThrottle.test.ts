@@ -243,8 +243,10 @@ describe("WindowFocusThrottle", () => {
       pollIntervalActive: 10_000,
       pollIntervalBackground: 50_000,
     });
+    expect(workspaceClient.setPollingEnabled).toHaveBeenCalledWith(false);
 
     vi.mocked(workspaceClient.updateMonitorConfig).mockClear();
+    vi.mocked(workspaceClient.setPollingEnabled).mockClear();
 
     // Restore triggers unthrottle
     windowHandlers.get("restore")!();
@@ -252,6 +254,7 @@ describe("WindowFocusThrottle", () => {
       pollIntervalActive: 2_000,
       pollIntervalBackground: 10_000,
     });
+    expect(workspaceClient.setPollingEnabled).toHaveBeenCalledWith(true);
     expect(statsService.refresh).toHaveBeenCalled();
   });
 });

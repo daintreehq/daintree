@@ -7,6 +7,7 @@ type PowerHandler = (...args: any[]) => void;
 
 const powerHandlers = new Map<string, PowerHandler>();
 let mockGetAllWindows: ReturnType<typeof vi.fn>;
+let mockGetFocusedWindow: ReturnType<typeof vi.fn>;
 let mockGetAppWebContents: ReturnType<typeof vi.fn>;
 
 function createMockWindow(options: { destroyed?: boolean } = {}) {
@@ -54,11 +55,15 @@ describe("setupPowerMonitor", () => {
     vi.resetModules();
 
     mockGetAllWindows = vi.fn(() => []);
+    // Default to a focused window so existing resume tests still see
+    // setPollingEnabled(true) — the blur-during-resume guard is exercised
+    // in dedicated tests below.
+    mockGetFocusedWindow = vi.fn(() => ({}));
 
     vi.doMock("electron", () => ({
       app: { on: vi.fn() },
       BrowserWindow: {
-        getFocusedWindow: vi.fn(() => null),
+        getFocusedWindow: mockGetFocusedWindow,
         getAllWindows: mockGetAllWindows,
       },
       powerMonitor: {
@@ -322,6 +327,28 @@ describe("setupPowerMonitor", () => {
 
     expect(workspaceClient.refreshOnWake).toHaveBeenCalledTimes(1);
     expect(workspaceClient.refresh).not.toHaveBeenCalled();
+  });
+
+  it("does not re-enable polling on resume if the app is still fully blurred", async () => {
+    // Scenario: user blurs app → blur-throttle pauses polling → machine
+    // suspends → wakes while no window is focused. Resume must NOT
+    // re-enable polling, otherwise the blur pause is silently undone.
+    // removeThrottle() will re-enable polling on the next focus event.
+    mockGetFocusedWindow.mockReturnValue(null);
+    const workspaceClient = createMockWorkspaceClient();
+    setupPowerMonitor({
+      getPtyClient: () => createMockPtyClient(),
+      getWorkspaceClient: () => workspaceClient,
+    });
+
+    powerHandlers.get("resume")!();
+    await vi.advanceTimersByTimeAsync(2000);
+
+    expect(workspaceClient.waitForReady).toHaveBeenCalledTimes(1);
+    expect(workspaceClient.setPollingEnabled).not.toHaveBeenCalledWith(true);
+    // The rest of the resume sequence still runs.
+    expect(workspaceClient.resumeHealthCheck).toHaveBeenCalledTimes(1);
+    expect(workspaceClient.refreshOnWake).toHaveBeenCalledTimes(1);
   });
 
   it("skips SYSTEM_WAKE for a window whose webContents is destroyed", async () => {
