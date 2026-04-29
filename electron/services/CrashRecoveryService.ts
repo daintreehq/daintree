@@ -9,7 +9,7 @@ import type {
   PendingCrash,
 } from "../../shared/types/ipc/crashRecovery.js";
 import { coerceAgentState } from "../../shared/types/agent.js";
-import { store } from "../store.js";
+import { store, windowStatesStore } from "../store.js";
 import { isGpuDisabledByFlag } from "./GpuCrashMonitorService.js";
 import { getActionBreadcrumbService } from "./ActionBreadcrumbService.js";
 
@@ -463,8 +463,7 @@ export class CrashRecoveryService {
     return {
       capturedAt: Date.now(),
       appState: store.get("appState"),
-      windowState: store.get("windowState"),
-      windowStates: store.get("windowStates"),
+      windowStates: windowStatesStore.get("windowStates"),
     };
   }
 
@@ -472,11 +471,8 @@ export class CrashRecoveryService {
     if (isValidAppStateSnapshot(snapshot.appState)) {
       store.set("appState", snapshot.appState);
     }
-    if (isPlainObject(snapshot.windowState)) {
-      store.set("windowState", snapshot.windowState);
-    }
     if (isPlainObject(snapshot.windowStates)) {
-      store.set("windowStates", snapshot.windowStates);
+      windowStatesStore.set("windowStates", snapshot.windowStates as Record<string, unknown>);
     }
   }
 
@@ -539,7 +535,6 @@ interface MarkerFile {
 interface SessionSnapshot {
   capturedAt: number;
   appState?: unknown;
-  windowState?: unknown;
   windowStates?: unknown;
 }
 
@@ -570,11 +565,7 @@ function isValidAppStateSnapshot(value: unknown): value is Record<string, unknow
 }
 
 function hasRestorableSnapshotContent(snapshot: SessionSnapshot): boolean {
-  return (
-    isValidAppStateSnapshot(snapshot.appState) ||
-    isPlainObject(snapshot.windowState) ||
-    isPlainObject(snapshot.windowStates)
-  );
+  return isValidAppStateSnapshot(snapshot.appState) || isPlainObject(snapshot.windowStates);
 }
 
 let instance: CrashRecoveryService | null = null;

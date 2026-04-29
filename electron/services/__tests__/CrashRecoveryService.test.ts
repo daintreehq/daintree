@@ -8,6 +8,11 @@ const storeMock = vi.hoisted(() => ({
   set: vi.fn(),
 }));
 
+const windowStatesStoreMock = vi.hoisted(() => ({
+  get: vi.fn(),
+  set: vi.fn(),
+}));
+
 const appMock = vi.hoisted(() => ({
   getPath: vi.fn(() => "/fake/userData"),
   getVersion: vi.fn(() => "1.0.0"),
@@ -16,6 +21,7 @@ const appMock = vi.hoisted(() => ({
 
 vi.mock("../../store.js", () => ({
   store: storeMock,
+  windowStatesStore: windowStatesStoreMock,
 }));
 
 const browserWindowMock = vi.hoisted(() => ({
@@ -458,10 +464,10 @@ describe("CrashRecoveryService", () => {
     it("creates backup on takeBackup", () => {
       storeMock.get.mockImplementation((key: string) => {
         if (key === "appState") return { sidebarWidth: 400, terminals: [] };
-        if (key === "windowState") return { width: 1200, height: 800, isMaximized: false };
-        if (key === "windowStates")
-          return { "/home/user/project-a": { width: 1200, height: 800, isMaximized: false } };
         return { autoRestoreOnCrash: false };
+      });
+      windowStatesStoreMock.get.mockReturnValue({
+        "/home/user/project-a": { width: 1200, height: 800, isMaximized: false },
       });
 
       const svc = makeService();
@@ -473,7 +479,6 @@ describe("CrashRecoveryService", () => {
       const snapshot = JSON.parse(fs.readFileSync(backupPath, "utf8"));
       expect(typeof snapshot.capturedAt).toBe("number");
       expect(snapshot.appState).toBeDefined();
-      expect(snapshot.windowState).toBeDefined();
       expect(snapshot.windowStates).toBeDefined();
       expect(snapshot.projects).toBeUndefined();
     });
@@ -481,10 +486,13 @@ describe("CrashRecoveryService", () => {
     it("restoreBackup applies snapshot to store", () => {
       const backupDir = path.join(userData, "backups");
       fs.mkdirSync(backupDir, { recursive: true });
+      const windowStates = {
+        "/home/user/project-a": { width: 1400, height: 900, isMaximized: false },
+      };
       const snapshot = {
         capturedAt: Date.now(),
         appState: { sidebarWidth: 999, terminals: [] },
-        windowState: { width: 1400, height: 900, isMaximized: false },
+        windowStates,
       };
       fs.writeFileSync(path.join(backupDir, "session-state.json"), JSON.stringify(snapshot));
 
@@ -496,7 +504,7 @@ describe("CrashRecoveryService", () => {
 
       expect(result).toBe(true);
       expect(storeMock.set).toHaveBeenCalledWith("appState", snapshot.appState);
-      expect(storeMock.set).toHaveBeenCalledWith("windowState", snapshot.windowState);
+      expect(windowStatesStoreMock.set).toHaveBeenCalledWith("windowStates", windowStates);
     });
 
     it("restoreBackup filters terminals when panelIds is provided", () => {
@@ -512,7 +520,6 @@ describe("CrashRecoveryService", () => {
             { id: "t3", kind: "browser", title: "T3" },
           ],
         },
-        windowState: { width: 1400, height: 900, isMaximized: false },
       };
       fs.writeFileSync(path.join(backupDir, "session-state.json"), JSON.stringify(snapshot));
 
@@ -541,7 +548,6 @@ describe("CrashRecoveryService", () => {
         capturedAt: Date.now(),
         appState: { sidebarWidth: 999, terminals: [] },
         projects: { list: [{ id: "p1", name: "Old" }], currentProjectId: "p1" },
-        windowState: { width: 1400, height: 900, isMaximized: false },
       };
       fs.writeFileSync(path.join(backupDir, "session-state.json"), JSON.stringify(snapshot));
 
@@ -566,9 +572,9 @@ describe("CrashRecoveryService", () => {
       storeMock.get.mockImplementation((key: string) => {
         if (key === "appState") return { sidebarWidth: 400, terminals: [] };
         if (key === "projects") return { list: [{ id: "p1" }], currentProjectId: "p1" };
-        if (key === "windowState") return { width: 1200, height: 800, isMaximized: false };
         return { autoRestoreOnCrash: false };
       });
+      windowStatesStoreMock.get.mockReturnValue({});
 
       const svc = makeService();
       svc.initialize();
@@ -582,9 +588,9 @@ describe("CrashRecoveryService", () => {
     it("captureSessionSnapshot never reads projects key from store", () => {
       storeMock.get.mockImplementation((key: string) => {
         if (key === "appState") return { sidebarWidth: 400, terminals: [] };
-        if (key === "windowState") return { width: 1200, height: 800, isMaximized: false };
         return { autoRestoreOnCrash: false };
       });
+      windowStatesStoreMock.get.mockReturnValue({});
 
       const svc = makeService();
       svc.initialize();
@@ -783,9 +789,9 @@ describe("CrashRecoveryService", () => {
       vi.useFakeTimers();
       storeMock.get.mockImplementation((key: string) => {
         if (key === "appState") return { sidebarWidth: 400, terminals: [] };
-        if (key === "windowState") return { width: 1200, height: 800, isMaximized: false };
         return { autoRestoreOnCrash: false };
       });
+      windowStatesStoreMock.get.mockReturnValue({});
 
       const svc = makeService();
       svc.initialize();

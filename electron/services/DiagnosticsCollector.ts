@@ -6,7 +6,7 @@ import { sanitizePath } from "./TelemetryService.js";
 import { logBuffer } from "./LogBuffer.js";
 import { getPtyManager } from "./PtyManager.js";
 import { scrubSecrets } from "../utils/secretScrubber.js";
-import { store } from "../store.js";
+import { store, windowStatesStore } from "../store.js";
 import type { HandlerDependencies } from "../ipc/types.js";
 
 const execFileAsync = promisify(execFile);
@@ -322,8 +322,6 @@ const SAFE_STORE_KEYS = [
   "keybindingOverrides",
   "worktreeConfig",
   "notificationSettings",
-  "windowState",
-  "windowStates",
   "onboarding",
   "voiceInput",
   "appTheme",
@@ -339,6 +337,11 @@ async function collectStoreConfig() {
       } catch {
         result[key] = { error: `Failed to read ${key}` };
       }
+    }
+    try {
+      result.windowStates = windowStatesStore.get("windowStates");
+    } catch {
+      result.windowStates = { error: "Failed to read window states" };
     }
     return redactDeep(result);
   } catch {
