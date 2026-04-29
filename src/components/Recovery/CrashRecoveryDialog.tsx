@@ -151,7 +151,7 @@ export function CrashRecoveryDialog({
     >
       <AppDialog.Header>
         <AppDialog.Title icon={<AlertTriangle className="h-5 w-5 text-status-warning" />}>
-          Daintree Crashed
+          Daintree crashed
         </AppDialog.Title>
       </AppDialog.Header>
 
@@ -240,7 +240,7 @@ export function CrashRecoveryDialog({
               </div>
               <div>
                 <div className="text-sm font-medium text-daintree-text">
-                  Restore Previous Session
+                  Restore previous session
                 </div>
                 {backupDate ? (
                   <div className="text-xs text-daintree-text/60 mt-0.5">
@@ -265,7 +265,7 @@ export function CrashRecoveryDialog({
                 <div className="h-2 w-2 rounded-full bg-daintree-text/40" />
               </div>
               <div>
-                <div className="text-sm font-medium text-daintree-text">Start Fresh</div>
+                <div className="text-sm font-medium text-daintree-text">Start fresh</div>
                 <div className="text-xs text-daintree-text/60 mt-0.5">
                   Reset to a clean layout — open panels will be cleared
                 </div>
@@ -281,7 +281,7 @@ export function CrashRecoveryDialog({
             className="cursor-pointer w-full flex items-center justify-between px-3 py-2 text-sm text-daintree-text/70 hover:text-daintree-text hover:bg-overlay-soft transition-colors"
             data-testid="details-toggle"
           >
-            <span className="font-medium">Error Details</span>
+            <span className="font-medium">Error details</span>
             {detailsOpen ? (
               <ChevronDown className="h-4 w-4" />
             ) : (

@@ -46,15 +46,16 @@ describe("CloudSyncBanner", () => {
   it("renders banner with detected service name", () => {
     useCloudSyncBannerStore.setState({ service: "Dropbox", projectId: "p1" });
     render(<CloudSyncBanner />);
+    expect(screen.getByText("Cloud sync detected")).toBeTruthy();
     expect(screen.getByText(/Dropbox-synced folder/i)).toBeTruthy();
-    expect(screen.getByRole("button", { name: /Don.+t show again/i })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Got it" })).toBeTruthy();
   });
 
   it("persists dismiss preference and clears the banner", async () => {
     useCloudSyncBannerStore.setState({ service: "iCloud Drive", projectId: "p1" });
     render(<CloudSyncBanner />);
 
-    fireEvent.click(screen.getByRole("button", { name: /Don.+t show again/i }));
+    fireEvent.click(screen.getByRole("button", { name: "Got it" }));
 
     await waitFor(() => {
       expect(saveSettingsMock).toHaveBeenCalledWith(
@@ -78,7 +79,7 @@ describe("CloudSyncBanner", () => {
     useCloudSyncBannerStore.setState({ service: "OneDrive", projectId: "p1" });
     render(<CloudSyncBanner />);
 
-    fireEvent.click(screen.getByRole("button", { name: /Don.+t show again/i }));
+    fireEvent.click(screen.getByRole("button", { name: "Got it" }));
 
     await waitFor(() => {
       expect(saveSettingsMock).toHaveBeenCalledOnce();
@@ -98,7 +99,7 @@ describe("CloudSyncBanner", () => {
     // Simulate the race: live project flips to p2 before the click handler runs.
     setProject("p2");
 
-    fireEvent.click(screen.getByRole("button", { name: /Don.+t show again/i }));
+    fireEvent.click(screen.getByRole("button", { name: "Got it" }));
 
     await waitFor(() => {
       expect(useCloudSyncBannerStore.getState().service).toBeNull();
@@ -111,7 +112,7 @@ describe("CloudSyncBanner", () => {
     useCloudSyncBannerStore.setState({ service: "OneDrive", projectId: "p1" });
     render(<CloudSyncBanner />);
 
-    fireEvent.click(screen.getByRole("button", { name: /Don.+t show again/i }));
+    fireEvent.click(screen.getByRole("button", { name: "Got it" }));
 
     await waitFor(() => {
       expect(notifyMock).toHaveBeenCalled();
