@@ -1,6 +1,7 @@
 // Environment setup must run first (GC exposure, userData, flags, sandbox)
 import "./setup/environment.js";
 
+import nodeV8 from "node:v8";
 import { app, BrowserWindow, crashReporter, protocol } from "electron";
 import { registerGlobalErrorHandlers } from "./setup/globalErrorHandlers.js";
 import path from "path";
@@ -231,6 +232,16 @@ if (!gotTheLock) {
       },
     });
     setProjectViewManager(pvm);
+
+    // E2E hooks: expose PVM accessor and heap-snapshot writer so the
+    // nightly evicted-view leak spec can read main-process state and
+    // dump a v8 snapshot from app.evaluate(). Mirrors the
+    // __daintreeResetRateLimits / __daintreeFaultRegistry pattern.
+    if (process.env.DAINTREE_E2E_MODE === "1") {
+      (globalThis as Record<string, unknown>).__daintreeGetPvm = getProjectViewManager;
+      (globalThis as Record<string, unknown>).__daintreeWriteHeapSnapshot = (filePath: string) =>
+        nodeV8.writeHeapSnapshot(filePath);
+    }
 
     // Clean up ProjectViewManager when window closes
     win.once("closed", () => {
