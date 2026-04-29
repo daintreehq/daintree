@@ -344,6 +344,138 @@ describe("GitHubResourceList SWR behavior", () => {
   });
 });
 
+describe("GitHubResourceList focus/visibility revalidation", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("revalidates in the background when the window regains focus after the throttle window", async () => {
+    const cacheKey = buildCacheKey("/test/proj", "issue", "open", "created");
+    setCache(cacheKey, {
+      items: [makeIssue(1)],
+      endCursor: null,
+      hasNextPage: false,
+      timestamp: Date.now(),
+    });
+
+    mockListIssues
+      .mockResolvedValueOnce(makeResponse([makeIssue(1)]))
+      .mockResolvedValueOnce(makeResponse([makeIssue(1), makeIssue(2)]));
+
+    render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
+
+    // Initial mount triggers one background revalidation.
+    await waitFor(() => {
+      expect(mockListIssues).toHaveBeenCalledTimes(1);
+    });
+
+    // Advance past the 30s revalidation throttle.
+    await vi.advanceTimersByTimeAsync(31_000);
+
+    window.dispatchEvent(new Event("focus"));
+
+    await waitFor(() => {
+      expect(mockListIssues).toHaveBeenCalledTimes(2);
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId("item-2")).toBeTruthy();
+    });
+  });
+
+  it("does not revalidate on focus inside the throttle window", async () => {
+    const cacheKey = buildCacheKey("/test/proj", "issue", "open", "created");
+    setCache(cacheKey, {
+      items: [makeIssue(1)],
+      endCursor: null,
+      hasNextPage: false,
+      timestamp: Date.now(),
+    });
+
+    mockListIssues.mockResolvedValue(makeResponse([makeIssue(1)]));
+
+    render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
+
+    await waitFor(() => {
+      expect(mockListIssues).toHaveBeenCalledTimes(1);
+    });
+
+    // Within the 30s throttle window — focus must not trigger another fetch.
+    await vi.advanceTimersByTimeAsync(5_000);
+    window.dispatchEvent(new Event("focus"));
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(mockListIssues).toHaveBeenCalledTimes(1);
+  });
+
+  it("revalidates on visibilitychange when the document becomes visible", async () => {
+    const cacheKey = buildCacheKey("/test/proj", "issue", "open", "created");
+    setCache(cacheKey, {
+      items: [makeIssue(1)],
+      endCursor: null,
+      hasNextPage: false,
+      timestamp: Date.now(),
+    });
+
+    mockListIssues
+      .mockResolvedValueOnce(makeResponse([makeIssue(1)]))
+      .mockResolvedValueOnce(makeResponse([makeIssue(1), makeIssue(3)]));
+
+    render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
+
+    await waitFor(() => {
+      expect(mockListIssues).toHaveBeenCalledTimes(1);
+    });
+
+    await vi.advanceTimersByTimeAsync(31_000);
+
+    Object.defineProperty(document, "visibilityState", {
+      configurable: true,
+      get: () => "visible",
+    });
+    document.dispatchEvent(new Event("visibilitychange"));
+
+    await waitFor(() => {
+      expect(mockListIssues).toHaveBeenCalledTimes(2);
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId("item-3")).toBeTruthy();
+    });
+  });
+
+  it("does not revalidate on visibilitychange when the document is hidden", async () => {
+    const cacheKey = buildCacheKey("/test/proj", "issue", "open", "created");
+    setCache(cacheKey, {
+      items: [makeIssue(1)],
+      endCursor: null,
+      hasNextPage: false,
+      timestamp: Date.now(),
+    });
+
+    mockListIssues.mockResolvedValue(makeResponse([makeIssue(1)]));
+
+    render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
+
+    await waitFor(() => {
+      expect(mockListIssues).toHaveBeenCalledTimes(1);
+    });
+
+    await vi.advanceTimersByTimeAsync(31_000);
+
+    Object.defineProperty(document, "visibilityState", {
+      configurable: true,
+      get: () => "hidden",
+    });
+    document.dispatchEvent(new Event("visibilitychange"));
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(mockListIssues).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("GitHubResourceList retry behavior", () => {
   beforeEach(() => {
     vi.useFakeTimers({ shouldAdvanceTime: true });

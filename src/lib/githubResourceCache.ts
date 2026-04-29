@@ -9,7 +9,9 @@ export interface GitHubResourceCacheEntry {
 }
 
 const CACHE_MAX_SIZE = 20;
-const CACHE_TTL_MS = 5 * 60 * 1000;
+// Held strictly below the backend list-cache TTL (60s) so the renderer
+// cache cannot stack on top of the backend cache and serve doubly-stale data.
+const CACHE_TTL_MS = 45 * 1000;
 
 const cache = new TtlCache<string, GitHubResourceCacheEntry>(CACHE_MAX_SIZE, CACHE_TTL_MS);
 const generationMap = new Map<string, number>();

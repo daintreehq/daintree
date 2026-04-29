@@ -1391,11 +1391,7 @@ async function enrichPRsWithRequiredStatus(
   bypassCache = false
 ): Promise<GitHubPR[]> {
   const candidates = prs.filter(
-    (pr) =>
-      pr.state === "OPEN" &&
-      pr.ciStatus !== undefined &&
-      pr.ciStatus !== "SUCCESS" &&
-      pr.ciSummary === undefined
+    (pr) => pr.state === "OPEN" && pr.ciStatus !== undefined && pr.ciSummary === undefined
   );
   if (candidates.length === 0) return prs;
 
