@@ -147,7 +147,7 @@ export function ImportEnvDialog({ isOpen, onClose, env, onImport }: ImportEnvDia
             />
             {hasErrors && (
               <div
-                className="rounded-[var(--radius-md)] border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-[12px] text-amber-500"
+                className="rounded-[var(--radius-md)] border border-status-warning/40 bg-status-warning/10 px-3 py-2 text-[12px] text-status-warning"
                 data-testid="import-env-errors"
               >
                 <div className="flex items-center gap-1.5 font-medium mb-1">
@@ -160,7 +160,7 @@ export function ImportEnvDialog({ isOpen, onClose, env, onImport }: ImportEnvDia
                 <ul className="space-y-0.5 font-mono text-[11px]">
                   {parsed.errors.map((e) => (
                     <li key={`${e.line}-${e.raw}`}>
-                      <span className="text-amber-500/70">Line {e.line}:</span> {e.reason}
+                      <span className="text-status-warning/70">Line {e.line}:</span> {e.reason}
                       {e.raw.trim() !== "" && (
                         <span className="text-daintree-text/50"> — {e.raw}</span>
                       )}

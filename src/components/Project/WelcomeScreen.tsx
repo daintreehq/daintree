@@ -416,7 +416,7 @@ function AgentWelcomeCard() {
               <p
                 role="alert"
                 data-testid="welcome-card-pin-error"
-                className="mt-2 text-xs text-red-400"
+                className="mt-2 text-xs text-status-error"
               >
                 Couldn&apos;t pin all agents. Please try again.
               </p>

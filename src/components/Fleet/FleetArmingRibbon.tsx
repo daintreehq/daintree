@@ -702,7 +702,7 @@ export function FleetArmingRibbon(): ReactElement | null {
                 disabled={isSendingBroadcast}
                 onClick={() => void confirmPendingBroadcast()}
                 data-testid="fleet-paste-confirm-send"
-                className="rounded bg-amber-500/20 px-2 py-0.5 text-amber-100 transition-colors hover:bg-amber-500/30 disabled:cursor-not-allowed disabled:opacity-40 disabled:pointer-events-none"
+                className="rounded bg-category-amber-subtle border border-category-amber-border px-2 py-0.5 text-category-amber-text transition-colors hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-40 disabled:pointer-events-none"
               >
                 Send anyway
               </button>
@@ -720,7 +720,7 @@ export function FleetArmingRibbon(): ReactElement | null {
                 )}
               >
                 <span>Exit</span>
-                <kbd className="rounded border border-category-amber-border bg-amber-500/5 px-1 font-mono text-[10px] leading-tight text-category-amber-text">
+                <kbd className="rounded border border-category-amber-border bg-category-amber-subtle px-1 font-mono text-[10px] leading-tight text-category-amber-text">
                   {exitChordLabel}
                 </kbd>
               </button>

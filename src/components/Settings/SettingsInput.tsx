@@ -46,7 +46,7 @@ export function SettingsInput({
         scope === "project"
           ? "bg-daintree-accent/10 text-daintree-accent dark:bg-daintree-accent/20"
           : scope === "global"
-            ? "bg-blue-500/10 text-blue-500 dark:bg-blue-500/20"
+            ? "bg-status-info/10 text-status-info"
             : "bg-text-secondary/10 text-text-secondary dark:bg-text-secondary/20"
       }`}
     >

@@ -252,7 +252,7 @@ function EnvVarKeyCell({
                 : isEmptyKey
                   ? "text-status-error"
                   : isDuplicate
-                    ? "text-amber-500"
+                    ? "text-status-warning"
                     : "text-daintree-text/80"
             )}
             value={value}
@@ -367,7 +367,7 @@ function EnvVarKeyCell({
         <p
           className={cn(
             "absolute left-2.5 bottom-0.5 text-[9px] leading-none pointer-events-none",
-            isEmptyKey ? "text-status-error" : "text-amber-500"
+            isEmptyKey ? "text-status-error" : "text-status-warning"
           )}
           data-testid={isEmptyKey ? "env-editor-error-empty" : "env-editor-error-duplicate"}
         >
@@ -692,7 +692,7 @@ export function EnvVarEditor({
             const stripeClass = isEmptyKey
               ? "before:bg-status-error"
               : isDuplicate || hasSecretWarning
-                ? "before:bg-amber-500/70"
+                ? "before:bg-status-warning/70"
                 : isOverride
                   ? "before:bg-daintree-accent"
                   : "before:bg-transparent";
@@ -743,7 +743,7 @@ export function EnvVarEditor({
                       row.isInherited
                         ? "text-daintree-text/40"
                         : hasSecretWarning
-                          ? "text-amber-500"
+                          ? "text-status-warning"
                           : "text-daintree-accent/90"
                     )}
                     value={row.value}
@@ -789,7 +789,7 @@ export function EnvVarEditor({
                   )}
                   {hasSecretWarning && (
                     <p
-                      className="absolute left-2.5 bottom-0.5 text-[9px] leading-none text-amber-500 pointer-events-none"
+                      className="absolute left-2.5 bottom-0.5 text-[9px] leading-none text-status-warning pointer-events-none"
                       data-testid="env-editor-warning-secret"
                       title="Looks like a secret. Prefer a ${ENV_VAR} reference to your shell environment."
                     >
