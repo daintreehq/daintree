@@ -767,6 +767,8 @@ class TerminalInstanceService {
 
     const terminalOptions = {
       ...options,
+      rescaleOverlappingGlyphs: true,
+      reflowCursorLine: true,
       linkHandler: {
         activate: (event: MouseEvent, text: string) => openLink(text, event),
         hover: (_event: MouseEvent, text: string, range: IBufferRange) => {
