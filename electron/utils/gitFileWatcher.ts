@@ -28,6 +28,10 @@ export interface GitFileWatcherOptions {
   /** Called when the recursive worktree watcher fails specifically because of
    *  the Linux inotify watch limit (ENOSPC). Fires in addition to `onWatcherFailed`. */
   onInotifyLimitReached?: () => void;
+  /** Called when the recursive worktree watcher fails specifically because of
+   *  the macOS FSEvents file descriptor ceiling (EMFILE). Fires in addition to
+   *  `onWatcherFailed`. */
+  onEmfileLimitReached?: () => void;
 }
 
 export class GitFileWatcher {
@@ -48,6 +52,7 @@ export class GitFileWatcher {
   private readonly onChange: () => void;
   private readonly onWatcherFailed: (() => void) | undefined;
   private readonly onInotifyLimitReached: (() => void) | undefined;
+  private readonly onEmfileLimitReached: (() => void) | undefined;
   private readonly watchWorktree: boolean;
   private currentBranch?: string;
 
@@ -60,6 +65,7 @@ export class GitFileWatcher {
     this.onChange = options.onChange;
     this.onWatcherFailed = options.onWatcherFailed;
     this.onInotifyLimitReached = options.onInotifyLimitReached;
+    this.onEmfileLimitReached = options.onEmfileLimitReached;
     this.currentBranch = options.branch;
     this.watchWorktree = options.watchWorktree ?? false;
   }
@@ -216,6 +222,24 @@ export class GitFileWatcher {
           }
           this.onInotifyLimitReached?.();
           this.onWatcherFailed?.();
+        } else if (process.platform === "darwin" && errno.code === "EMFILE") {
+          logWarn(
+            "FSEvents file descriptor ceiling reached — recursive file watching may be incomplete. " +
+              "Temporary fix: sudo sysctl -w kern.maxfilesperproc=64000. " +
+              "Permanent fix: add kern.maxfilesperproc=64000 to /etc/sysctl.conf",
+            { path: this.worktreePath }
+          );
+          const idx = this.watchers.indexOf(watcher);
+          if (idx !== -1) {
+            this.watchers.splice(idx, 1);
+          }
+          try {
+            watcher.close();
+          } catch {
+            // Ignore close errors on already-broken watcher
+          }
+          this.onEmfileLimitReached?.();
+          this.onWatcherFailed?.();
         } else {
           logWarn("Worktree recursive watcher error", {
             path: this.worktreePath,
@@ -236,6 +260,15 @@ export class GitFileWatcher {
           { path: this.worktreePath }
         );
         this.onInotifyLimitReached?.();
+        this.onWatcherFailed?.();
+      } else if (process.platform === "darwin" && errno.code === "EMFILE") {
+        logWarn(
+          "FSEvents file descriptor ceiling reached — recursive file watching may be incomplete. " +
+            "Temporary fix: sudo sysctl -w kern.maxfilesperproc=64000. " +
+            "Permanent fix: add kern.maxfilesperproc=64000 to /etc/sysctl.conf",
+          { path: this.worktreePath }
+        );
+        this.onEmfileLimitReached?.();
         this.onWatcherFailed?.();
       } else {
         logWarn("Failed to start recursive worktree watcher", {

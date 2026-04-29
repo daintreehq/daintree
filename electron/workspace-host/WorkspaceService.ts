@@ -138,6 +138,9 @@ export class WorkspaceService {
   /** Session-scoped guard so we notify the user about Linux inotify limits
    *  only once, even if many worktrees hit ENOSPC concurrently. */
   private inotifyLimitNotified = false;
+  /** Session-scoped guard so we notify the user about the macOS FSEvents file
+   *  descriptor ceiling only once, even if many worktrees hit EMFILE concurrently. */
+  private emfileLimitNotified = false;
 
   constructor(private readonly sendEvent: (event: WorkspaceHostEvent) => void) {
     this.prService = new PRIntegrationService(pullRequestService, events, {
@@ -443,6 +446,7 @@ export class WorkspaceService {
           );
         },
         onInotifyLimitReached: () => this.handleInotifyLimitReached(),
+        onEmfileLimitReached: () => this.handleEmfileLimitReached(),
       },
       this.mainBranch,
       this.pollQueue
@@ -589,6 +593,13 @@ export class WorkspaceService {
     if (this.inotifyLimitNotified) return;
     this.inotifyLimitNotified = true;
     this.sendEvent({ type: "inotify-limit-reached" });
+  }
+
+  private handleEmfileLimitReached(): void {
+    if (process.platform !== "darwin") return;
+    if (this.emfileLimitNotified) return;
+    this.emfileLimitNotified = true;
+    this.sendEvent({ type: "emfile-limit-reached" });
   }
 
   private handleExternalWorktreeRemoval(worktreeId: string): void {

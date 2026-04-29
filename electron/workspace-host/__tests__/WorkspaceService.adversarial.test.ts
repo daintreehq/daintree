@@ -337,4 +337,40 @@ describe("WorkspaceService adversarial", () => {
       }
     });
   });
+
+  describe("handleEmfileLimitReached", () => {
+    const setPlatform = (value: NodeJS.Platform) => {
+      Object.defineProperty(process, "platform", { value, configurable: true });
+    };
+
+    it("sends a single emfile-limit-reached event on macOS even when called many times", () => {
+      const origPlatform = process.platform;
+      setPlatform("darwin");
+      try {
+        const privateService = service as unknown as { handleEmfileLimitReached: () => void };
+        privateService.handleEmfileLimitReached();
+        privateService.handleEmfileLimitReached();
+        privateService.handleEmfileLimitReached();
+
+        const emfileEvents = sentEvents.filter((e) => e.type === "emfile-limit-reached");
+        expect(emfileEvents).toHaveLength(1);
+      } finally {
+        setPlatform(origPlatform);
+      }
+    });
+
+    it("does not emit on non-Darwin platforms", () => {
+      const origPlatform = process.platform;
+      setPlatform("linux");
+      try {
+        const privateService = service as unknown as { handleEmfileLimitReached: () => void };
+        privateService.handleEmfileLimitReached();
+
+        const emfileEvents = sentEvents.filter((e) => e.type === "emfile-limit-reached");
+        expect(emfileEvents).toHaveLength(0);
+      } finally {
+        setPlatform(origPlatform);
+      }
+    });
+  });
 });

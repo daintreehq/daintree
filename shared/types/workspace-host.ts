@@ -347,6 +347,9 @@ export type WorkspaceHostEvent =
   // Linux-only: fired once per host-process lifetime when the recursive file
   // watcher hits the inotify watch limit (ENOSPC).
   | { type: "inotify-limit-reached" }
+  // macOS-only: fired once per host-process lifetime when the recursive file
+  // watcher hits the FSEvents file descriptor ceiling (EMFILE).
+  | { type: "emfile-limit-reached" }
   // PR events
   | {
       type: "pr-detected";
