@@ -812,7 +812,7 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
     if (navigationError) {
       throw new AppError({
         code: "INTERNAL",
-        message: `OAuth callback navigation failed: ${navigationError.message}`,
+        message: `OAuth callback navigation failed: ${(navigationError as Error).message}`,
         context: { panelId },
         cause: navigationError,
       });
