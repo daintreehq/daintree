@@ -42,6 +42,8 @@ export async function handleFallbackTriggered(data: {
   // and advancing the chain again would skip a preset.
   if (panel.agentPresetId !== fromPresetId) return;
 
+  fallbackInFlight.add(terminalId);
+
   const originalPresetId = panel.originalPresetId ?? data.originalPresetId ?? fromPresetId;
 
   // Resolve the original preset's fallbacks[] chain from the agent settings store
@@ -57,7 +59,6 @@ export async function handleFallbackTriggered(data: {
   const currentIndex = panel.fallbackChainIndex ?? 0;
   const nextPresetId = chain[currentIndex];
 
-  // Always lookup a fresh preset name, using the panel title as last resort.
   const fromPreset = mergedPresets.find((p) => p.id === fromPresetId);
   const fromName = fromPreset?.name ?? fromPresetId;
 
@@ -85,6 +86,7 @@ export async function handleFallbackTriggered(data: {
         },
       },
     });
+    fallbackInFlight.delete(terminalId);
     return;
   }
 
@@ -109,10 +111,10 @@ export async function handleFallbackTriggered(data: {
         },
       },
     });
+    fallbackInFlight.delete(terminalId);
     return;
   }
 
-  fallbackInFlight.add(terminalId);
   try {
     logInfo("[TerminalStore] Activating fallback preset", {
       terminalId,
