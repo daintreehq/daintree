@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi } from "vitest";
+import { TerminalRefreshTier } from "../../../../shared/types/panel";
 
 vi.mock("@xterm/addon-canvas", () => ({
   CanvasAddon: class {
@@ -66,6 +67,7 @@ const mockDocument = {
   },
 };
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-type-assertion
 (global as any).document = mockDocument;
 
 describe("TerminalInstanceService - options", () => {
@@ -85,7 +87,7 @@ describe("TerminalInstanceService - options", () => {
       "test-options",
       "terminal",
       {},
-      () => 3 as any,
+      () => TerminalRefreshTier.FOCUSED,
       undefined
     );
 
