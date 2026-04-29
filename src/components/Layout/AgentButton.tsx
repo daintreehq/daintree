@@ -14,6 +14,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 import { getBrandColorHex } from "@/lib/colorUtils";
+import { BrandMark } from "@/components/icons";
 import { getAgentConfig, getMergedPresets } from "@/config/agents";
 import { useKeybindingDisplay } from "@/hooks";
 import { useWorktrees } from "@/hooks/useWorktrees";
@@ -318,9 +319,12 @@ export function AgentButton({
   };
 
   const dotColor = dominantState ? agentStateDotColor(dominantState) : null;
+  const toolbarBrandColor = getBrandColorHex(type);
   const iconElement = (
     <div className="relative">
-      <config.icon brandColor={getBrandColorHex(type)} />
+      <BrandMark brandColor={toolbarBrandColor}>
+        <config.icon brandColor={toolbarBrandColor} />
+      </BrandMark>
       {isSessionActive && dotColor && (
         <span
           className={cn(
@@ -505,7 +509,9 @@ export function AgentButton({
                   }}
                 >
                   <span className="inline-flex h-4 w-4 items-center justify-center shrink-0 mr-1.5">
-                    <config.icon brandColor={getBrandColorHex(type)} />
+                    <BrandMark brandColor={getBrandColorHex(type)}>
+                      <config.icon brandColor={getBrandColorHex(type)} />
+                    </BrandMark>
                   </span>
                   Agent default
                 </DropdownMenuRadioItem>
@@ -522,7 +528,9 @@ export function AgentButton({
                         }}
                       >
                         <span className="inline-flex h-4 w-4 items-center justify-center shrink-0 mr-1.5">
-                          <config.icon brandColor={preset.color ?? getBrandColorHex(type)} />
+                          <BrandMark brandColor={preset.color ?? getBrandColorHex(type)}>
+                            <config.icon brandColor={preset.color ?? getBrandColorHex(type)} />
+                          </BrandMark>
                         </span>
                         {preset.name.replace(/^CCR:\s*/, "")}
                       </DropdownMenuRadioItem>
@@ -544,7 +552,9 @@ export function AgentButton({
                         }}
                       >
                         <span className="inline-flex h-4 w-4 items-center justify-center shrink-0 mr-1.5">
-                          <config.icon brandColor={preset.color ?? getBrandColorHex(type)} />
+                          <BrandMark brandColor={preset.color ?? getBrandColorHex(type)}>
+                            <config.icon brandColor={preset.color ?? getBrandColorHex(type)} />
+                          </BrandMark>
                         </span>
                         {preset.name}
                       </DropdownMenuRadioItem>
@@ -564,7 +574,9 @@ export function AgentButton({
                         }}
                       >
                         <span className="inline-flex h-4 w-4 items-center justify-center shrink-0 mr-1.5">
-                          <config.icon brandColor={preset.color ?? getBrandColorHex(type)} />
+                          <BrandMark brandColor={preset.color ?? getBrandColorHex(type)}>
+                            <config.icon brandColor={preset.color ?? getBrandColorHex(type)} />
+                          </BrandMark>
                         </span>
                         {preset.name}
                       </DropdownMenuRadioItem>

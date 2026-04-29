@@ -43,13 +43,15 @@ function relativeLuminance(hex: string): number {
   return 0.2126 * red + 0.7152 * green + 0.0722 * blue;
 }
 
-function contrastRatio(foreground: string, background: string): number {
+export function contrastRatio(foreground: string, background: string): number {
   const l1 = relativeLuminance(foreground);
   const l2 = relativeLuminance(background);
   const lighter = Math.max(l1, l2);
   const darker = Math.min(l1, l2);
   return (lighter + 0.05) / (darker + 0.05);
 }
+
+export { isHexColor };
 
 export function getThemeContrastWarnings(scheme: AppColorScheme): AppThemeValidationWarning[] {
   const warnings: AppThemeValidationWarning[] = [];

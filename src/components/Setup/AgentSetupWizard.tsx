@@ -5,6 +5,7 @@ import { Spinner } from "@/components/ui/Spinner";
 import { AgentCliStep } from "./AgentCliStep";
 import { SystemRequirementsSection } from "./SystemRequirementsSection";
 import { AGENT_REGISTRY } from "@/config/agents";
+import { BrandMark } from "@/components/icons";
 import { AgentCard } from "@/components/agents/AgentCard";
 import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
 import { useAgentSettingsStore } from "@/store";
@@ -905,7 +906,9 @@ function CompleteStep({ installedAgents }: { installedAgents: string[] }) {
                 data-testid={`agent-card-${id}`}
                 className="flex items-center gap-3 px-3 py-2.5 rounded-[var(--radius-md)] border border-status-success/20 bg-status-success/5"
               >
-                <Icon size={18} brandColor={agent.color} />
+                <BrandMark brandColor={agent.color} size={18}>
+                  <Icon size={18} brandColor={agent.color} />
+                </BrandMark>
                 <span className="text-sm text-daintree-text font-medium">{agent.name}</span>
                 {presetCount > 1 && (
                   <span

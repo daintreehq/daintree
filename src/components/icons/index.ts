@@ -1,5 +1,6 @@
 export { DaintreeIcon } from "./DaintreeIcon";
 export { McpServerIcon } from "./McpServerIcon";
+export { BrandMark } from "./BrandMark";
 export * from "./brands";
 
 // Daintree's product-concept icons resolve to Lucide icons. Re-exported

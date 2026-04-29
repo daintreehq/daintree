@@ -8,7 +8,7 @@ import {
   LucideIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { DaintreeIcon, FolderGit2 } from "@/components/icons";
+import { BrandMark, DaintreeIcon, FolderGit2 } from "@/components/icons";
 import { getAgentConfig } from "@/config/agents";
 import type { ComponentType } from "react";
 
@@ -34,13 +34,11 @@ export function PanelKindIcon({ iconId, color, size = 16, className }: PanelKind
   const agentConfig = getAgentConfig(iconId);
   if (agentConfig) {
     const AgentIcon = agentConfig.icon;
+    const brandColor = color ?? agentConfig.color;
     return (
-      <AgentIcon
-        brandColor={color}
-        className={cn("shrink-0", className)}
-        size={size}
-        aria-hidden="true"
-      />
+      <BrandMark brandColor={brandColor} size={size} className={cn("shrink-0", className)}>
+        <AgentIcon brandColor={brandColor} size={size} aria-hidden="true" />
+      </BrandMark>
     );
   }
 

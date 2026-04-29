@@ -3,6 +3,7 @@ import { Sparkles } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { AGENT_REGISTRY } from "@/config/agents";
+import { BrandMark } from "@/components/icons";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
 import { isAgentInstalled } from "../../../shared/utils/agentAvailability";
@@ -84,10 +85,13 @@ export function HelpAgentPicker({ onSelectAgent }: HelpAgentPickerProps) {
               )}
             >
               <div className="shrink-0 w-8 h-8 flex items-center justify-center">
-                <Icon
-                  className="w-6 h-6 opacity-70 group-hover:opacity-100 transition-opacity"
+                <BrandMark
                   brandColor={config.color}
-                />
+                  size={24}
+                  className="opacity-70 group-hover:opacity-100 transition-opacity"
+                >
+                  <Icon className="w-6 h-6" brandColor={config.color} />
+                </BrandMark>
               </div>
               <div className="flex flex-col min-w-0">
                 <span className="text-sm font-medium text-daintree-text/80 group-hover:text-daintree-text transition-colors">

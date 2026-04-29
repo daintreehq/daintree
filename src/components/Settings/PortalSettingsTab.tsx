@@ -4,6 +4,7 @@ import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { usePortalStore } from "@/store/portalStore";
 import { getAgentConfig, isRegisteredAgent } from "@/config/agents";
+import { BrandMark } from "@/components/icons";
 import { actionService } from "@/services/ActionService";
 import { SettingsSection } from "./SettingsSection";
 import { SettingsSelect } from "./SettingsSelect";
@@ -23,7 +24,11 @@ function ServiceIcon({ name, size = 16 }: { name: string; size?: number }) {
     const config = getAgentConfig(name);
     if (config) {
       const Icon = config.icon;
-      return <Icon className={className} brandColor={config.color} />;
+      return (
+        <BrandMark brandColor={config.color} size={size} className={className}>
+          <Icon className={className} brandColor={config.color} />
+        </BrandMark>
+      );
     }
   }
 

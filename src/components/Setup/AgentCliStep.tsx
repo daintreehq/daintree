@@ -10,6 +10,8 @@ import {
   AlertCircle,
 } from "lucide-react";
 import { AGENT_REGISTRY, getAgentConfig } from "@/config/agents";
+import { resolveBrandChip } from "@/lib/brandIcon";
+import { useActiveAppScheme } from "@/hooks/useActiveAppScheme";
 import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
 import { getInstallBlocksForCurrentOS, isBlockExecutable } from "@/lib/agentInstall";
 import { systemClient } from "@/clients";
@@ -45,6 +47,7 @@ export function AgentCliStep({ availability, selections, onInstallComplete }: Ag
   }, [cardStatuses]);
 
   const selectedAgentIds = useMemo(() => AGENT_ORDER.filter((id) => selections[id]), [selections]);
+  const activeScheme = useActiveAppScheme();
 
   useEffect(() => {
     mountedRef.current = true;
@@ -231,7 +234,11 @@ export function AgentCliStep({ availability, selections, onInstallComplete }: Ag
               >
                 <div
                   className="w-8 h-8 rounded-[var(--radius-sm)] flex items-center justify-center shrink-0"
-                  style={{ backgroundColor: `${config.color}15` }}
+                  style={{
+                    backgroundColor:
+                      resolveBrandChip(config.color, activeScheme)?.background ??
+                      `${config.color}15`,
+                  }}
                 >
                   <Icon size={18} brandColor={config.color} />
                 </div>

@@ -1,6 +1,6 @@
 import type * as React from "react";
 import { Globe, MonitorPlay, SquareTerminal } from "lucide-react";
-import { Workflow } from "@/components/icons";
+import { BrandMark, Workflow } from "@/components/icons";
 import { useRecipeStore } from "@/store/recipeStore";
 import type { RecipeContext } from "@/utils/recipeVariables";
 
@@ -60,7 +60,9 @@ export function DockLaunchMenuItems({
                 onSelect={() => onLaunchAgent(agent.id)}
               >
                 {Icon ? (
-                  <Icon className="w-3.5 h-3.5 mr-2" brandColor={agent.brandColor} />
+                  <BrandMark brandColor={agent.brandColor} className="w-3.5 h-3.5 mr-2">
+                    <Icon className="w-3.5 h-3.5" brandColor={agent.brandColor} />
+                  </BrandMark>
                 ) : (
                   <SquareTerminal className="w-3.5 h-3.5 mr-2" />
                 )}

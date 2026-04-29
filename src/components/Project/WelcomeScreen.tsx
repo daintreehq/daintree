@@ -14,7 +14,7 @@ import {
   Sparkles,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { DaintreeIcon } from "@/components/icons";
+import { BrandMark, DaintreeIcon } from "@/components/icons";
 import { useProjectStore } from "@/store/projectStore";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
@@ -387,7 +387,9 @@ function AgentWelcomeCard() {
                     className="inline-flex items-center gap-1.5 rounded-[var(--radius-xs)] border border-daintree-border/60 bg-daintree-bg/40 px-2 py-1 text-xs text-daintree-text/80"
                   >
                     <span className="inline-flex h-3.5 w-3.5 items-center justify-center">
-                      <Icon brandColor={getBrandColorHex(id)} />
+                      <BrandMark brandColor={getBrandColorHex(id)} className="h-3.5 w-3.5">
+                        <Icon brandColor={getBrandColorHex(id)} />
+                      </BrandMark>
                     </span>
                     {config.name}
                   </li>

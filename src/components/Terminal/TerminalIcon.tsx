@@ -1,6 +1,7 @@
 import { SquareTerminal, Globe, MonitorPlay } from "lucide-react";
 import { useEffect } from "react";
 import { cn } from "@/lib/utils";
+import { BrandMark } from "@/components/icons";
 import type { PanelKind } from "@/types";
 import { deriveTerminalChrome, type TerminalChromeDescriptor } from "@/utils/terminalChrome";
 import { resolveTerminalRunIcon } from "./terminalRunIconRegistry";
@@ -70,8 +71,11 @@ export function TerminalIcon({ kind, chrome, className, brandColor }: TerminalIc
 
   const RunIcon = resolveTerminalRunIcon(resolvedChrome.iconId);
   if (RunIcon) {
+    const runBrandColor = brandColor ?? resolvedChrome.color;
     return withIconMarker(
-      <RunIcon {...finalProps} brandColor={brandColor ?? resolvedChrome.color} />
+      <BrandMark brandColor={runBrandColor} className={finalProps.className}>
+        <RunIcon {...finalProps} brandColor={runBrandColor} />
+      </BrandMark>
     );
   }
 
