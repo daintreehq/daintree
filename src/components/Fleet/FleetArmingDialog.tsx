@@ -588,7 +588,7 @@ function TerminalRow({ terminal, checked, snippet, onToggle }: TerminalRowProps)
     <li className="flex items-stretch">
       <label
         className={cn(
-          "flex flex-1 items-start gap-2 px-2 py-1.5 rounded text-[13px] text-daintree-text cursor-pointer",
+          "flex flex-1 items-start gap-2 pl-5 pr-2 py-1.5 rounded text-[13px] text-daintree-text cursor-pointer",
           "hover:bg-tint/[0.06]"
         )}
       >
