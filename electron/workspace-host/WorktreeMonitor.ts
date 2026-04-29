@@ -13,6 +13,7 @@ import type {
 import type { WorktreeSnapshot } from "../../shared/types/workspace-host.js";
 import { invalidateGitStatusCache, getWorktreeChangesWithStats } from "../utils/git.js";
 import { getGitDir } from "../utils/gitUtils.js";
+import { isRepoOperationInProgress } from "../utils/gitRepoOperationState.js";
 import { WorktreeRemovedError } from "../utils/errorTypes.js";
 import { categorizeWorktree } from "../services/worktree/mood.js";
 import { AdaptivePollingStrategy, NoteFileReader } from "../services/worktree/index.js";
@@ -1023,6 +1024,24 @@ export class WorktreeMonitor {
 
   async updateGitStatus(forceRefresh: boolean = false): Promise<void> {
     if (this._isUpdating) {
+      return;
+    }
+
+    // Skip the git status invocation while a rebase/merge/cherry-pick/revert
+    // is in progress — running it would compete with the user's git client
+    // for .git/index.lock. The watcher tracks the same sentinel files, so
+    // it fires when the operation finishes and triggers a fresh refresh.
+    // Polling continues uninterrupted, so the next scheduled poll after
+    // sentinels clear also picks up the change.
+    const gitDir = getGitDir(this.path, { cache: true, logErrors: false });
+    if (gitDir && isRepoOperationInProgress(gitDir)) {
+      // If we're skipping the very first poll (e.g. app started mid-rebase),
+      // emit a default snapshot so the renderer can still display the worktree.
+      // Mirrors startWithoutGitStatus()'s contract.
+      if (!this._hasInitialStatus) {
+        this._hasInitialStatus = true;
+        this.emitUpdate();
+      }
       return;
     }
 

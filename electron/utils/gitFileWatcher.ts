@@ -8,6 +8,7 @@ import {
   normalize as pathNormalize,
 } from "path";
 import { getGitDir } from "./gitUtils.js";
+import { OPERATION_SENTINEL_NAMES } from "./gitRepoOperationState.js";
 import { logWarn } from "./logger.js";
 
 export interface GitFileWatcherOptions {
@@ -99,6 +100,13 @@ export class GitFileWatcher {
       if (this.currentBranch) {
         const branchRefPath = pathJoin(commonDir, "refs", "heads", this.currentBranch);
         this.watchFile(branchRefPath);
+      }
+
+      // Track rebase/merge/cherry-pick/revert sentinel files so the watcher
+      // wakes immediately when an operation starts or finishes. The sentinels
+      // live in gitDir alongside HEAD, so this reuses the existing dir watcher.
+      for (const sentinelName of OPERATION_SENTINEL_NAMES) {
+        this.watchFile(pathJoin(gitDir, sentinelName));
       }
 
       if (this.watchWorktree) {
