@@ -121,16 +121,16 @@ describe("githubResourceCache", () => {
       vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
       setCache("key1", { items: [], endCursor: null, hasNextPage: false, timestamp: 1 });
 
-      vi.advanceTimersByTime(4 * 60 * 1000);
+      vi.advanceTimersByTime(44 * 1000);
       expect(getCache("key1")).toBeDefined();
     });
 
-    it("evicts entries after 5 minute TTL", () => {
+    it("evicts entries after 45-second TTL", () => {
       vi.useFakeTimers();
       vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
       setCache("key1", { items: [], endCursor: null, hasNextPage: false, timestamp: 1 });
 
-      vi.advanceTimersByTime(5 * 60 * 1000 + 1);
+      vi.advanceTimersByTime(45 * 1000 + 1);
       expect(getCache("key1")).toBeUndefined();
     });
   });

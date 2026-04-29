@@ -33,49 +33,54 @@ vi.mock("../ProjectStore.js", () => ({
   },
 }));
 
-vi.mock("../github/index.js", () => ({
-  GitHubAuth: {
-    createClient: shared.createClient,
-    getToken: () => shared.tokenState.token,
-    hasToken: () => !!shared.tokenState.token,
-    setToken: (token: string) => {
-      shared.tokenState.token = token;
+vi.mock("../github/index.js", async () => {
+  const actual = await vi.importActual<typeof import("../github/index.js")>("../github/index.js");
+  return {
+    GitHubAuth: {
+      createClient: shared.createClient,
+      getToken: () => shared.tokenState.token,
+      hasToken: () => !!shared.tokenState.token,
+      setToken: (token: string) => {
+        shared.tokenState.token = token;
+      },
+      clearToken: () => {
+        shared.tokenState.token = undefined;
+      },
+      getConfig: () => ({ token: shared.tokenState.token }),
+      getConfigAsync: () => Promise.resolve({ token: shared.tokenState.token }),
+      validate: vi.fn(),
     },
-    clearToken: () => {
-      shared.tokenState.token = undefined;
+    GITHUB_API_TIMEOUT_MS: 15_000,
+    REPO_STATS_QUERY: "REPO_STATS_QUERY",
+    PROJECT_HEALTH_QUERY: "PROJECT_HEALTH_QUERY",
+    LIST_ISSUES_QUERY: "LIST_ISSUES_QUERY",
+    LIST_PRS_QUERY: "LIST_PRS_QUERY",
+    SEARCH_QUERY: "SEARCH_QUERY",
+    GET_ISSUE_QUERY: "GET_ISSUE_QUERY",
+    GET_PR_QUERY: "GET_PR_QUERY",
+    buildBatchPRQuery: vi.fn(),
+    buildBatchRequiredChecksQuery: vi.fn(() => null),
+    deriveRequiredCIStatus: actual.deriveRequiredCIStatus,
+    gitHubRateLimitService: {
+      onStateChange: vi.fn().mockReturnValue(() => {}),
+      shouldBlockRequest: vi.fn().mockReturnValue({ blocked: false, reason: null }),
+      getState: vi.fn().mockReturnValue({ blocked: false, kind: null }),
+      clear: vi.fn(),
+      applyRemoteState: vi.fn(),
+      update: vi.fn(),
     },
-    getConfig: () => ({ token: shared.tokenState.token }),
-    getConfigAsync: () => Promise.resolve({ token: shared.tokenState.token }),
-    validate: vi.fn(),
-  },
-  GITHUB_API_TIMEOUT_MS: 15_000,
-  REPO_STATS_QUERY: "REPO_STATS_QUERY",
-  PROJECT_HEALTH_QUERY: "PROJECT_HEALTH_QUERY",
-  LIST_ISSUES_QUERY: "LIST_ISSUES_QUERY",
-  LIST_PRS_QUERY: "LIST_PRS_QUERY",
-  SEARCH_QUERY: "SEARCH_QUERY",
-  GET_ISSUE_QUERY: "GET_ISSUE_QUERY",
-  GET_PR_QUERY: "GET_PR_QUERY",
-  buildBatchPRQuery: vi.fn(),
-  gitHubRateLimitService: {
-    onStateChange: vi.fn().mockReturnValue(() => {}),
-    shouldBlockRequest: vi.fn().mockReturnValue({ blocked: false, reason: null }),
-    getState: vi.fn().mockReturnValue({ blocked: false, kind: null }),
-    clear: vi.fn(),
-    applyRemoteState: vi.fn(),
-    update: vi.fn(),
-  },
-  GitHubRateLimitError: class GitHubRateLimitError extends Error {
-    kind: "primary" | "secondary";
-    resumeAt: number;
-    constructor(kind: "primary" | "secondary", resumeAt: number) {
-      super("rate limited");
-      this.kind = kind;
-      this.resumeAt = resumeAt;
-      this.name = "GitHubRateLimitError";
-    }
-  },
-}));
+    GitHubRateLimitError: class GitHubRateLimitError extends Error {
+      kind: "primary" | "secondary";
+      resumeAt: number;
+      constructor(kind: "primary" | "secondary", resumeAt: number) {
+        super("rate limited");
+        this.kind = kind;
+        this.resumeAt = resumeAt;
+        this.name = "GitHubRateLimitError";
+      }
+    },
+  };
+});
 
 vi.mock("../GitHubStatsCache.js", () => ({
   GitHubStatsCache: {
@@ -614,5 +619,87 @@ describe("GitHubService adversarial", () => {
     ]);
 
     expect(capturedHeaders?.["If-None-Match"]).toBeUndefined();
+  });
+
+  // Regression: a PR whose raw rollup state flipped from SUCCESS back to
+  // PENDING/FAILURE on a re-push must be passed through the per-PR
+  // required-checks enrichment. Previously the enrichment filter excluded
+  // any PR whose ciStatus was "SUCCESS", which permanently froze the
+  // green tick once a PR had ever been green.
+  it("LISTPRS_ENRICHES_PRS_EVEN_WHEN_RAW_ROLLUP_IS_SUCCESS", async () => {
+    const githubIndex = await import("../github/index.js");
+    const buildBatch = vi.mocked(githubIndex.buildBatchRequiredChecksQuery);
+    buildBatch.mockReturnValueOnce("BATCH_REQ_QUERY");
+
+    shared.graphqlClient
+      .mockResolvedValueOnce({
+        repository: {
+          pullRequests: {
+            nodes: [
+              {
+                number: 42,
+                title: "PR 42",
+                url: "https://github.com/owner/repo/pull/42",
+                state: "OPEN",
+                isDraft: false,
+                updatedAt: "2026-01-01T00:00:00Z",
+                merged: false,
+                author: { login: "alice", avatarUrl: "" },
+                commits: {
+                  nodes: [
+                    {
+                      commit: {
+                        statusCheckRollup: {
+                          state: "SUCCESS",
+                        },
+                      },
+                    },
+                  ],
+                },
+              },
+            ],
+            totalCount: 1,
+            pageInfo: { hasNextPage: false, endCursor: null },
+          },
+        },
+      })
+      .mockResolvedValueOnce({
+        pr_42: {
+          pullRequest: {
+            commits: {
+              nodes: [
+                {
+                  commit: {
+                    statusCheckRollup: {
+                      state: "PENDING",
+                      contexts: {
+                        nodes: [
+                          {
+                            __typename: "CheckRun",
+                            conclusion: null,
+                            status: "IN_PROGRESS",
+                            isRequired: true,
+                          },
+                        ],
+                        pageInfo: { hasNextPage: false },
+                      },
+                    },
+                  },
+                },
+              ],
+            },
+          },
+        },
+      });
+
+    const result = await github.listPullRequests({ cwd: "/repo" });
+
+    expect(buildBatch).toHaveBeenCalledWith("owner", "repo", [42]);
+    expect(result.items[0]?.ciStatus).toBe("PENDING");
+    expect(result.items[0]?.ciSummary).toEqual({
+      requiredTotal: 1,
+      requiredFailing: 0,
+      requiredPending: 1,
+    });
   });
 });

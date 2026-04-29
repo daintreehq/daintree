@@ -218,6 +218,9 @@ export function GitHubResourceList({
   // Note: currentCursor is passed as a parameter (not read from state) to avoid
   // dependency cycle where updating cursor would recreate this callback
   const loadMoreAbortRef = useRef<AbortController | null>(null);
+  // Tracks the last time fetchData started a non-append fetch — used by the
+  // visibility/focus revalidation effect to throttle repeat refreshes.
+  const lastFetchAttemptRef = useRef<number>(0);
 
   const fetchData = useCallback(
     async (
@@ -242,6 +245,10 @@ export function GitHubResourceList({
         setLoading(true);
         setError(null);
         setLoadMoreError(null);
+      }
+
+      if (!append) {
+        lastFetchAttemptRef.current = Date.now();
       }
 
       // Retry only the primary fetch path. Load-more has its own Retry button,
@@ -383,6 +390,43 @@ export function GitHubResourceList({
 
     return () => abortController.abort();
   }, [debouncedSearch, filterState, projectPath, type, fetchData, numberQuery, cacheKey]);
+
+  // Background revalidation when the window regains focus or the tab becomes
+  // visible. CI status flips on every push, so a user returning from another
+  // app expects the list to refresh — without this, stale green ticks can
+  // linger for the full backend cache window.
+  useEffect(() => {
+    if (numberQuery !== null) {
+      return;
+    }
+
+    const REVALIDATE_THROTTLE_MS = 30_000;
+    const abortController = new AbortController();
+
+    const maybeRevalidate = () => {
+      if (typeof document !== "undefined" && document.visibilityState !== "visible") {
+        return;
+      }
+      if (Date.now() - lastFetchAttemptRef.current < REVALIDATE_THROTTLE_MS) {
+        return;
+      }
+      const gen = nextGeneration(cacheKey);
+      void fetchData(null, false, abortController.signal, {
+        revalidating: true,
+        generation: gen,
+        cacheKey,
+      });
+    };
+
+    document.addEventListener("visibilitychange", maybeRevalidate);
+    window.addEventListener("focus", maybeRevalidate);
+
+    return () => {
+      document.removeEventListener("visibilitychange", maybeRevalidate);
+      window.removeEventListener("focus", maybeRevalidate);
+      abortController.abort();
+    };
+  }, [fetchData, cacheKey, numberQuery]);
 
   useEffect(() => {
     if (numberQuery === null) {

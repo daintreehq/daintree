@@ -1380,9 +1380,11 @@ export async function listIssues(
 }
 
 /**
- * For PRs whose raw statusCheckRollup state is non-success, fetch per-PR contexts with
- * `isRequired` and derive an effective CI status based on required checks only.
- * Best-effort: on any error, returns the input PRs unchanged.
+ * For each open PR with a raw statusCheckRollup state and no cached ciSummary,
+ * fetch per-PR contexts with `isRequired` and derive an effective CI status
+ * based on required checks only. Re-runs on every list query so a SUCCESS PR
+ * that flips back to PENDING/FAILURE on a re-push refreshes within the
+ * `prRequiredStatusCache` TTL. Best-effort: on any error, returns input unchanged.
  */
 async function enrichPRsWithRequiredStatus(
   context: RepoContext,
@@ -1391,11 +1393,7 @@ async function enrichPRsWithRequiredStatus(
   bypassCache = false
 ): Promise<GitHubPR[]> {
   const candidates = prs.filter(
-    (pr) =>
-      pr.state === "OPEN" &&
-      pr.ciStatus !== undefined &&
-      pr.ciStatus !== "SUCCESS" &&
-      pr.ciSummary === undefined
+    (pr) => pr.state === "OPEN" && pr.ciStatus !== undefined && pr.ciSummary === undefined
   );
   if (candidates.length === 0) return prs;
 
