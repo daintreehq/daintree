@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { launchApp, closeApp, getActiveAppWindow, type AppContext } from "../helpers/launch";
+import { launchApp, closeApp, refreshActiveWindow, type AppContext } from "../helpers/launch";
 import { createFixtureRepo } from "../helpers/fixtures";
 import { openProject, dismissTelemetryConsent } from "../helpers/project";
 import { waitForTerminalText, runTerminalCommand } from "../helpers/terminal";
@@ -46,7 +46,7 @@ test.describe.serial("Core: Terminal Search & Scrollback", () => {
 
       // After onboarding, the ProjectViewManager creates a new WebContentsView.
       // Re-acquire the active page so subsequent tests use the correct view.
-      ctx.window = await getActiveAppWindow(ctx.app);
+      ctx.window = await refreshActiveWindow(ctx.app, ctx.window);
     });
 
     test("worktree dashboard appears", async () => {

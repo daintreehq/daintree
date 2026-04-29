@@ -312,9 +312,12 @@ export async function refreshActiveWindow(app: ElectronApplication, oldPage?: Pa
   // WebContents differs from oldPage's URL — otherwise we may snapshot the
   // attached view *before* the main process has finished swapping it out and
   // return the still-active outgoing view.
+  const isWindowsCI = process.env.CI && process.platform === "win32";
+  const refreshTimeout = isWindowsCI ? 60_000 : process.env.CI ? 30_000 : 20_000;
+
   const oldUrl = oldPage?.url() ?? null;
   if (oldUrl && oldUrl.includes("projectId=")) {
-    const deadline = Date.now() + 10_000;
+    const deadline = Date.now() + refreshTimeout;
     while (Date.now() < deadline) {
       try {
         const attached = await app.evaluate(({ BrowserWindow }) => {
@@ -341,7 +344,7 @@ export async function refreshActiveWindow(app: ElectronApplication, oldPage?: Pa
     }
   }
 
-  const newWindow = await getActiveAppWindow(app, 10_000, { requireProject: true });
+  const newWindow = await getActiveAppWindow(app, refreshTimeout, { requireProject: true });
 
   if (!registeredPages.has(newWindow)) {
     registeredPages.add(newWindow);
@@ -353,7 +356,7 @@ export async function refreshActiveWindow(app: ElectronApplication, oldPage?: Pa
 
   await newWindow
     .locator('[aria-label="Toggle Sidebar"]')
-    .waitFor({ state: "visible", timeout: 10_000 });
+    .waitFor({ state: "visible", timeout: refreshTimeout });
 
   // Wait for the project's active worktree to finish loading. Without this,
   // shortcuts like Cmd+Alt+T fire with `activeWorktreeId=undefined`, which
@@ -364,12 +367,12 @@ export async function refreshActiveWindow(app: ElectronApplication, oldPage?: Pa
   await newWindow
     .locator('[aria-label="Worktrees"] a, [aria-label="Worktrees"] [role="button"], .worktree-item')
     .first()
-    .waitFor({ state: "attached", timeout: 10_000 })
+    .waitFor({ state: "attached", timeout: refreshTimeout })
     .catch(async () => {
       // Fallback: just wait for the loading text to disappear.
       await newWindow
         .locator("text=Loading worktrees...")
-        .waitFor({ state: "hidden", timeout: 5_000 })
+        .waitFor({ state: "hidden", timeout: refreshTimeout })
         .catch(() => {});
     });
 

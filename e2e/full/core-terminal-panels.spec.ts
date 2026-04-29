@@ -112,7 +112,7 @@ test.describe.serial("Core: Terminal & Panels", () => {
       const dock = window.locator(SEL.dock.container);
       await expect(dock).toBeVisible({ timeout: T_SHORT });
 
-      const dockItem = dock.locator("button").first();
+      const dockItem = dock.locator('button[aria-label*="move to grid"]').first();
       await dockItem.dblclick();
 
       await expect(getFirstGridPanel(window)).toBeVisible({ timeout: T_MEDIUM });
@@ -282,7 +282,7 @@ test.describe.serial("Core: Terminal & Panels", () => {
       const { window } = ctx;
 
       const dock = window.locator(SEL.dock.container);
-      const dockItem = dock.locator("button").first();
+      const dockItem = dock.locator('button[aria-label*="move to grid"]').first();
       await dockItem.dblclick();
 
       await expect.poll(() => getGridPanelCount(window), { timeout: T_MEDIUM }).toBe(2);
@@ -310,7 +310,7 @@ test.describe.serial("Core: Terminal & Panels", () => {
         const dock = window.locator(SEL.dock.container);
         let dockCount = await getDockPanelCount(window);
         while (dockCount > 0) {
-          const dockItem = dock.locator("button").first();
+          const dockItem = dock.locator('button[aria-label*="move to grid"]').first();
           await dockItem.dblclick();
           await expect
             .poll(() => getDockPanelCount(window), { timeout: T_MEDIUM })
