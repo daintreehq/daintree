@@ -17,6 +17,7 @@ export interface PtyEventsBridgeConfig {
     status: TerminalFlowStatus;
     bufferUtilization?: number;
     pauseDuration?: number;
+    reason?: string;
     timestamp: number;
   }) => void;
 
