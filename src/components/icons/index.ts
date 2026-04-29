@@ -12,6 +12,6 @@ export {
   Folders, // copy tree / file hierarchy capture (two overlapping folders)
   Layers, // worktree overview (multiple worktrees, stacked)
   Plug, // agent (integration that plugs into the host system)
-  Sprout, // agent setup / first-time agent (planting a seed)
+  Sprout, // origin / first step (main worktree, first agent launch)
   Workflow, // terminal recipe / scripted command sequence
 } from "lucide-react";

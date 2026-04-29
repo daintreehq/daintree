@@ -15,7 +15,7 @@ import type { CliAvailability } from "@shared/types";
 import { isAgentInstalled, isAgentLaunchable } from "../../../shared/utils/agentAvailability";
 import { Sparkles, ChevronLeft, ChevronRight, ArrowRight, Check, Sun, Moon } from "lucide-react";
 import { AnimatePresence, motion, useReducedMotion, type Variants } from "framer-motion";
-import { Sprout } from "@/components/icons";
+import { Plug } from "@/components/icons";
 import { UI_ENTER_DURATION, UI_EXIT_DURATION } from "@/lib/animationUtils";
 import { cn } from "@/lib/utils";
 import { BUILT_IN_APP_SCHEMES } from "@/config/appColorSchemes";
@@ -535,7 +535,7 @@ export function AgentSetupWizard({
       dismissible={!isSaving}
     >
       <AppDialog.Header>
-        <AppDialog.Title icon={<Sprout className="w-5 h-5 text-daintree-accent" />}>
+        <AppDialog.Title icon={<Plug className="w-5 h-5 text-daintree-accent" />}>
           Agent Setup
         </AppDialog.Title>
         <div className="flex items-center gap-3">
