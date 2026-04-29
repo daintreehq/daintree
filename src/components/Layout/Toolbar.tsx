@@ -207,6 +207,11 @@ export function Toolbar({
   const rightGroupRef = useRef<HTMLDivElement>(null);
   const activeToolbarIndexRef = useRef<number>(0);
   const githubStatsRef = useRef<GitHubStatsHandle>(null);
+  // Set in onPointerDownOutside, read in onCloseAutoFocus on the overflow
+  // dropdown. Suppresses focus restoration for pointer dismissals so the
+  // ellipsis button doesn't keep its accent focus-visible ring; keyboard
+  // close (Escape/Enter) still gets default focus return for WAI-ARIA.
+  const overflowMenuPointerCloseRef = useRef(false);
 
   const { handleCopyTree } = useWorktreeActions();
   const sidebarShortcut = useKeybindingDisplay("nav.toggleSidebar");
@@ -794,7 +799,19 @@ export function Toolbar({
           </TooltipTrigger>
           <TooltipContent side="bottom">More items</TooltipContent>
         </Tooltip>
-        <DropdownMenuContent align={side === "left" ? "start" : "end"} sideOffset={4}>
+        <DropdownMenuContent
+          align={side === "left" ? "start" : "end"}
+          sideOffset={4}
+          onPointerDownOutside={() => {
+            overflowMenuPointerCloseRef.current = true;
+          }}
+          onCloseAutoFocus={(e) => {
+            if (overflowMenuPointerCloseRef.current) {
+              e.preventDefault();
+              overflowMenuPointerCloseRef.current = false;
+            }
+          }}
+        >
           {overflowIds.flatMap((id, idx) => {
             if (id === "github-stats") {
               const ghStats = githubStatsRef.current?.stats;

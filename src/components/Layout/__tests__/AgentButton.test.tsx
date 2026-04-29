@@ -22,6 +22,8 @@ import type { AgentSettings, CliAvailability } from "@shared/types";
 
 const dispatchMock = vi.fn();
 const updateWorktreePresetMock = vi.fn();
+let dropdownCloseAutoFocusSpy: ((e: { preventDefault: () => void }) => void) | null = null;
+let dropdownPointerDownOutsideSpy: (() => void) | null = null;
 
 let mockSettings: AgentSettings | null = null;
 let mockActiveWorktreeId: string | null = null;
@@ -145,9 +147,19 @@ vi.mock("@/components/ui/tooltip", () => ({
 vi.mock("@/components/ui/dropdown-menu", () => ({
   DropdownMenu: ({ children }: { children: React.ReactNode }) => <>{children}</>,
   DropdownMenuTrigger: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-  DropdownMenuContent: ({ children }: { children: React.ReactNode }) => (
-    <div data-testid="preset-dropdown">{children}</div>
-  ),
+  DropdownMenuContent: ({
+    children,
+    onCloseAutoFocus,
+    onPointerDownOutside,
+  }: {
+    children: React.ReactNode;
+    onCloseAutoFocus?: (e: { preventDefault: () => void }) => void;
+    onPointerDownOutside?: () => void;
+  }) => {
+    dropdownCloseAutoFocusSpy = onCloseAutoFocus ?? null;
+    dropdownPointerDownOutsideSpy = onPointerDownOutside ?? null;
+    return <div data-testid="preset-dropdown">{children}</div>;
+  },
   DropdownMenuItem: ({
     children,
     onSelect,
@@ -299,6 +311,8 @@ describe("AgentButton preset UX", () => {
     mockPanelsById = {};
     mockPanelIds = [];
     mockWorktrees = [];
+    dropdownCloseAutoFocusSpy = null;
+    dropdownPointerDownOutsideSpy = null;
   });
 
   describe("split threshold", () => {
@@ -947,6 +961,54 @@ describe("AgentButton preset UX", () => {
         <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
       );
       expect(queryByText("Launch in Worktree")).toBeNull();
+    });
+  });
+
+  describe("chevron focus ring after dropdown dismissal (issue #6119)", () => {
+    function renderSplitButton() {
+      mockSettings = settingsWith({ claude: {} });
+      mockMergedPresetsFn = () => [{ id: "user-blue", name: "Blue" }];
+      return render(
+        <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
+      );
+    }
+
+    it("does not call preventDefault on keyboard close (preserves a11y focus return)", () => {
+      // No preceding onPointerDownOutside means the close source is keyboard
+      // (Escape/Enter); WAI-ARIA requires focus to return to the trigger.
+      renderSplitButton();
+      expect(dropdownCloseAutoFocusSpy).toBeTruthy();
+
+      const preventDefault = vi.fn();
+      dropdownCloseAutoFocusSpy!({ preventDefault });
+      expect(preventDefault).not.toHaveBeenCalled();
+    });
+
+    it("calls preventDefault on pointer close so the chevron does not keep its focus ring", () => {
+      // Pointer-driven dismissal must suppress focus restoration to the chevron;
+      // otherwise Radix re-focuses it and :focus-visible repaints the accent
+      // ring even though the user clicked elsewhere.
+      renderSplitButton();
+      expect(dropdownCloseAutoFocusSpy).toBeTruthy();
+      expect(dropdownPointerDownOutsideSpy).toBeTruthy();
+
+      dropdownPointerDownOutsideSpy!();
+      const preventDefault = vi.fn();
+      dropdownCloseAutoFocusSpy!({ preventDefault });
+      expect(preventDefault).toHaveBeenCalledTimes(1);
+    });
+
+    it("resets the pointer flag so a later keyboard close still returns focus", () => {
+      renderSplitButton();
+      expect(dropdownCloseAutoFocusSpy).toBeTruthy();
+      expect(dropdownPointerDownOutsideSpy).toBeTruthy();
+
+      dropdownPointerDownOutsideSpy!();
+      dropdownCloseAutoFocusSpy!({ preventDefault: vi.fn() });
+
+      const preventDefault = vi.fn();
+      dropdownCloseAutoFocusSpy!({ preventDefault });
+      expect(preventDefault).not.toHaveBeenCalled();
     });
   });
 });
