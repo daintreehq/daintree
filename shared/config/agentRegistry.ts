@@ -446,6 +446,7 @@ import { config as interpreterConfig } from "./agents/interpreter.js";
 import { config as mistralConfig } from "./agents/mistral.js";
 import { config as kimiConfig } from "./agents/kimi.js";
 import { config as ampConfig } from "./agents/amp.js";
+import { config as aiderConfig } from "./agents/aider.js";
 
 // Built-in agent registry. Per-agent configs live in `./agents/<id>.ts`
 // (mirroring `src/services/actions/definitions/`). When adding a new agent,
@@ -467,6 +468,7 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
   mistral: mistralConfig,
   kimi: kimiConfig,
   amp: ampConfig,
+  aider: aiderConfig,
 };
 
 import { BUILT_IN_AGENT_IDS } from "./agentIds.js";

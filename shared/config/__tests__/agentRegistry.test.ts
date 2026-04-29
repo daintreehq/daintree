@@ -44,6 +44,7 @@ describe("agentRegistry", () => {
       expect(ids).toContain("mistral");
       expect(ids).toContain("kimi");
       expect(ids).toContain("amp");
+      expect(ids).toContain("aider");
     });
 
     it("kiro only has macOS and Linux install blocks (no Windows)", () => {
@@ -1219,6 +1220,7 @@ describe("all built-in agents have Windows or generic install", () => {
     "mistral",
     "kimi",
     "amp",
+    "aider",
   ])("%s has windows or generic install block", (agentId) => {
     const config = getAgentConfig(agentId);
     const hasWindows = (config?.install?.byOs?.windows?.length ?? 0) > 0;
@@ -1355,6 +1357,56 @@ describe("opencode detection patterns", () => {
   });
 });
 
+describe("aider configuration", () => {
+  it("uses pypi packaging with aider-chat", () => {
+    const config = getAgentConfig("aider");
+    expect(config?.packages?.pypi).toBe("aider-chat");
+    expect(config?.packages?.brew).toBe("aider");
+  });
+
+  it("looks up version from PyPI", () => {
+    const config = getAgentConfig("aider");
+    expect(config?.version?.pypiPackage).toBe("aider-chat");
+    expect(config?.version?.githubRepo).toBe("Aider-AI/aider");
+  });
+
+  it("defaults --no-auto-commits to keep worktree commits clean", () => {
+    const config = getAgentConfig("aider");
+    expect(config?.args).toContain("--no-auto-commits");
+  });
+
+  it("does not duplicate ~/.local/bin paths covered by pypi synthesis", () => {
+    const config = getAgentConfig("aider");
+    const paths = config?.nativePaths ?? [];
+    expect(paths.some((p) => p.includes(".local/bin/aider"))).toBe(false);
+    expect(paths).toContain("/opt/homebrew/bin/aider");
+    expect(paths).toContain("/usr/local/bin/aider");
+    expect(paths.some((p) => p.toLowerCase().includes("%userprofile%"))).toBe(true);
+  });
+
+  it("uses rolling-history resume with --restore-chat-history", () => {
+    const resume = getAgentConfig("aider")?.resume;
+    expect(resume?.kind).toBe("rolling-history");
+    if (resume?.kind === "rolling-history") {
+      expect(resume.args()).toEqual(["--restore-chat-history"]);
+      expect(resume.quitCommand).toBe("/exit");
+    }
+  });
+
+  it("streams to scrollback (no alt-screen block)", () => {
+    const config = getAgentConfig("aider");
+    expect(config?.capabilities?.blockAltScreen).toBe(false);
+  });
+
+  it("accepts any of the major provider env vars for auth", () => {
+    const auth = getAgentConfig("aider")?.authCheck;
+    expect(auth?.configPathsAll).toContain(".aider.conf.yml");
+    const envVars = Array.isArray(auth?.envVar) ? auth?.envVar : [auth?.envVar];
+    expect(envVars).toContain("OPENAI_API_KEY");
+    expect(envVars).toContain("ANTHROPIC_API_KEY");
+  });
+});
+
 describe("goose detection patterns", () => {
   function compileAgentPatterns(agentId: string, key: string): RegExp[] {
     const config = getAgentConfig(agentId);
@@ -1441,5 +1493,57 @@ describe("goose detection patterns", () => {
         patterns.some((p) => p.test("The websocket session closed unexpectedly; retrying..."))
       ).toBe(false);
     });
+  });
+});
+
+describe("aider detection patterns", () => {
+  function compileAgentPatterns(agentId: string, key: string): RegExp[] {
+    const config = getAgentConfig(agentId);
+    const patterns = config?.detection?.[key as keyof typeof config.detection] as
+      | string[]
+      | undefined;
+    return (patterns ?? []).map((p: string) => new RegExp(p, "im"));
+  }
+
+  it("matches Knight-Rider unicode scanner with Waiting for", () => {
+    const patterns = compileAgentPatterns("aider", "primaryPatterns");
+    expect(patterns.some((p) => p.test("░░░░░░░░░█ Waiting for claude-3-5-sonnet"))).toBe(true);
+    expect(patterns.some((p) => p.test("░░██░░░░░░ Waiting for gpt-4o"))).toBe(true);
+  });
+
+  it("does not match braille spinners (those belong to other agents)", () => {
+    const patterns = compileAgentPatterns("aider", "primaryPatterns");
+    expect(patterns.some((p) => p.test("⣾ Waiting for claude"))).toBe(false);
+  });
+
+  it("matches ASCII fallback scanner", () => {
+    const patterns = compileAgentPatterns("aider", "fallbackPatterns");
+    expect(patterns.some((p) => p.test("=====#==== Waiting for gpt-4o"))).toBe(true);
+  });
+
+  it("matches token summary completion", () => {
+    const patterns = compileAgentPatterns("aider", "completionPatterns");
+    expect(
+      patterns.some((p) => p.test("Tokens: 1.5k sent, 432 received. Cost: $0.02 message"))
+    ).toBe(true);
+  });
+
+  it("matches Applied edit and Commit completions", () => {
+    const patterns = compileAgentPatterns("aider", "completionPatterns");
+    expect(patterns.some((p) => p.test("Applied edit to src/foo.ts"))).toBe(true);
+    expect(patterns.some((p) => p.test("Commit a1b2c3d feat: add foo"))).toBe(true);
+  });
+
+  it("matches the version banner as boot complete", () => {
+    const patterns = compileAgentPatterns("aider", "bootCompletePatterns");
+    expect(patterns.some((p) => p.test("Aider v0.86.0"))).toBe(true);
+    expect(patterns.some((p) => p.test("Use /help for help"))).toBe(true);
+  });
+
+  it("matches default and architect prompt forms", () => {
+    const patterns = compileAgentPatterns("aider", "promptPatterns");
+    expect(patterns.some((p) => p.test("> "))).toBe(true);
+    expect(patterns.some((p) => p.test("architect> "))).toBe(true);
+    expect(patterns.some((p) => p.test("ask> "))).toBe(true);
   });
 });
