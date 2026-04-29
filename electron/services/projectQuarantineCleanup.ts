@@ -6,10 +6,14 @@ import { logInfo, logError } from "../utils/logger.js";
 
 const QUARANTINE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 
-const QUARANTINE_FILENAMES = [
+const QUARANTINE_PREFIXES = [
+  "state.json.corrupted.",
   "state.json.corrupted",
+  "settings.json.corrupted.",
   "settings.json.corrupted",
+  "recipes.json.corrupted.",
   "recipes.json.corrupted",
+  "workflows.json.corrupted.",
   "workflows.json.corrupted",
 ];
 
@@ -33,9 +37,19 @@ export async function cleanupQuarantinedProjectFiles(
 
     const projectDir = path.join(projectsConfigDir, entry.name);
 
-    for (const filename of QUARANTINE_FILENAMES) {
-      const filePath = path.join(projectDir, filename);
+    let dirEntries: import("fs").Dirent[];
+    try {
+      dirEntries = await fs.readdir(projectDir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
 
+    for (const dirent of dirEntries) {
+      if (!dirent.isFile()) continue;
+      const matches = QUARANTINE_PREFIXES.some((prefix) => dirent.name.startsWith(prefix));
+      if (!matches) continue;
+
+      const filePath = path.join(projectDir, dirent.name);
       try {
         const stats = await fs.stat(filePath);
         if (stats.mtimeMs < threshold) {

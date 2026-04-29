@@ -35,7 +35,7 @@ export class ProjectFileStore {
     } catch (error) {
       console.error(`[ProjectFileStore] Failed to load recipes for ${projectId}:`, error);
       try {
-        const quarantinePath = `${filePath}.corrupted`;
+        const quarantinePath = `${filePath}.corrupted.${Date.now()}`;
         await resilientRename(filePath, quarantinePath);
         console.warn(`[ProjectFileStore] Corrupted recipes file moved to ${quarantinePath}`);
       } catch {

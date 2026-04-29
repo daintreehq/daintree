@@ -216,7 +216,7 @@ export class ProjectStateManager {
     } catch (error) {
       console.error(`[ProjectStateManager] Failed to load state for project ${projectId}:`, error);
       try {
-        const quarantinePath = `${filePath}.corrupted`;
+        const quarantinePath = `${filePath}.corrupted.${Date.now()}`;
         markPerformance(PERF_MARKS.PROJECT_STATE_QUARANTINE, { projectId });
         await resilientRename(filePath, quarantinePath);
         this.pendingQuarantines.set(projectId, quarantinePath);

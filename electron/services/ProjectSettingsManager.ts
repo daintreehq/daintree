@@ -231,7 +231,7 @@ export class ProjectSettingsManager {
       console.error(`[ProjectSettingsManager] Failed to load settings for ${projectId}:`, error);
       this.notificationOverridesCache.delete(projectId);
       try {
-        const quarantinePath = `${filePath}.corrupted`;
+        const quarantinePath = `${filePath}.corrupted.${Date.now()}`;
         await resilientRename(filePath, quarantinePath);
         console.warn(`[ProjectSettingsManager] Corrupted settings file moved to ${quarantinePath}`);
       } catch {

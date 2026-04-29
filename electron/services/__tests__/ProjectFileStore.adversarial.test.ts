@@ -65,7 +65,7 @@ describe("ProjectFileStore adversarial", () => {
     expect(result).toEqual([]);
     expect(utilsMock.resilientRename).toHaveBeenCalledWith(
       EXPECTED_RECIPES_FILE,
-      `${EXPECTED_RECIPES_FILE}.corrupted`
+      expect.stringMatching(/^\/tmp\/daintree-projects\/a{64}\/recipes\.json\.corrupted\.\d+$/)
     );
   });
 

@@ -206,8 +206,8 @@ describe("ProjectStateManager quarantine recovery", () => {
     const result = await manager.getProjectStateWithRecovery(projectId);
 
     expect(result.state).toBeNull();
-    expect(result.quarantinedPath).toBe(`${filePath}.corrupted`);
-    await expect(fs.access(`${filePath}.corrupted`)).resolves.toBeUndefined();
+    expect(result.quarantinedPath).toMatch(/\.corrupted\.\d+$/);
+    await expect(fs.access(result.quarantinedPath!)).resolves.toBeUndefined();
   });
 
   it("drains the quarantine signal after one read — subsequent reads return no path", async () => {
@@ -215,7 +215,7 @@ describe("ProjectStateManager quarantine recovery", () => {
     await fs.writeFile(filePath, "{ not valid json", "utf-8");
 
     const first = await manager.getProjectStateWithRecovery(projectId);
-    expect(first.quarantinedPath).toBe(`${filePath}.corrupted`);
+    expect(first.quarantinedPath).toMatch(/\.corrupted\.\d+$/);
 
     const second = await manager.getProjectStateWithRecovery(projectId);
     expect(second.state).toBeNull();
@@ -244,7 +244,7 @@ describe("ProjectStateManager quarantine recovery", () => {
     // still receive the quarantined path.
     const result = await manager.getProjectStateWithRecovery(projectId);
     expect(result.state).toBeNull();
-    expect(result.quarantinedPath).toBe(`${filePath}.corrupted`);
+    expect(result.quarantinedPath).toMatch(/\.corrupted\.\d+$/);
   });
 });
 

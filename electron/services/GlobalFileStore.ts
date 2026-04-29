@@ -38,7 +38,7 @@ export class GlobalFileStore {
     } catch (error) {
       console.error("[GlobalFileStore] Failed to load recipes:", error);
       try {
-        const quarantinePath = `${this.recipesPath}.corrupted`;
+        const quarantinePath = `${this.recipesPath}.corrupted.${Date.now()}`;
         await resilientRename(this.recipesPath, quarantinePath);
         console.warn(`[GlobalFileStore] Corrupted recipes file moved to ${quarantinePath}`);
       } catch {
