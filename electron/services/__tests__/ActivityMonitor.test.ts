@@ -3896,4 +3896,205 @@ describe("ActivityMonitor", () => {
       expect(onStateChange).not.toHaveBeenCalled();
     });
   });
+
+  describe("Waiting watchdog", () => {
+    it("should fire onWaitingTimeout after MAX_WAITING_SILENCE_MS when idle with dead children", () => {
+      const onStateChange = vi.fn();
+      const onWaitingTimeout = vi.fn();
+      const processStateValidator = {
+        hasActiveChildren: vi.fn().mockReturnValue(false),
+        getDescendantsCpuUsage: vi.fn().mockReturnValue(0),
+      };
+      const monitor = new ActivityMonitor("test-wd-1", 100, onStateChange, {
+        processStateValidator,
+        onWaitingTimeout,
+        maxWaitingSilenceMs: 1000,
+      });
+
+      // Advance past the 5s watchdog interval + 1s silence threshold
+      vi.advanceTimersByTime(5100);
+
+      expect(onWaitingTimeout).toHaveBeenCalledWith("test-wd-1", 100);
+
+      monitor.dispose();
+    });
+
+    it("should not fire before MAX_WAITING_SILENCE_MS elapses", () => {
+      const onStateChange = vi.fn();
+      const onWaitingTimeout = vi.fn();
+      const processStateValidator = {
+        hasActiveChildren: vi.fn().mockReturnValue(false),
+        getDescendantsCpuUsage: vi.fn().mockReturnValue(0),
+      };
+      const monitor = new ActivityMonitor("test-wd-2", 100, onStateChange, {
+        processStateValidator,
+        onWaitingTimeout,
+        maxWaitingSilenceMs: 60000,
+      });
+
+      // Advance past watchdog interval but not past silence threshold
+      vi.advanceTimersByTime(10000);
+
+      expect(onWaitingTimeout).not.toHaveBeenCalled();
+
+      monitor.dispose();
+    });
+
+    it("should not fire when hasActiveChildren returns true", () => {
+      const onStateChange = vi.fn();
+      const onWaitingTimeout = vi.fn();
+      const processStateValidator = {
+        hasActiveChildren: vi.fn().mockReturnValue(true),
+        getDescendantsCpuUsage: vi.fn().mockReturnValue(0),
+      };
+      const monitor = new ActivityMonitor("test-wd-3", 100, onStateChange, {
+        processStateValidator,
+        onWaitingTimeout,
+        maxWaitingSilenceMs: 1000,
+      });
+
+      vi.advanceTimersByTime(5100);
+
+      expect(onWaitingTimeout).not.toHaveBeenCalled();
+
+      monitor.dispose();
+    });
+
+    it("should not fire when hasActiveChildren returns null (no validator)", () => {
+      const onStateChange = vi.fn();
+      const onWaitingTimeout = vi.fn();
+      // No processStateValidator at all
+      const monitor = new ActivityMonitor("test-wd-4", 100, onStateChange, {
+        onWaitingTimeout,
+        maxWaitingSilenceMs: 1000,
+      });
+
+      vi.advanceTimersByTime(5100);
+
+      expect(onWaitingTimeout).not.toHaveBeenCalled();
+
+      monitor.dispose();
+    });
+
+    it("should not fire when state is busy", () => {
+      const onStateChange = vi.fn();
+      const onWaitingTimeout = vi.fn();
+      const processStateValidator = {
+        hasActiveChildren: vi.fn().mockReturnValue(false),
+        getDescendantsCpuUsage: vi.fn().mockReturnValue(0),
+      };
+      const monitor = new ActivityMonitor("test-wd-5", 100, onStateChange, {
+        processStateValidator,
+        onWaitingTimeout,
+        maxWaitingSilenceMs: 1000,
+        idleDebounceMs: 30000, // Keep busy long enough to test watchdog gate
+      });
+
+      // Enter busy state
+      monitor.onInput("\r");
+      expect(onStateChange).toHaveBeenCalledWith("test-wd-5", 100, "busy", { trigger: "input" });
+
+      // Advance past watchdog interval but not past idle debounce — still busy
+      vi.advanceTimersByTime(5100);
+      expect(monitor.getState()).toBe("busy");
+      expect(onWaitingTimeout).not.toHaveBeenCalled();
+
+      monitor.dispose();
+    });
+
+    it("should fire only once per idle episode", () => {
+      const onStateChange = vi.fn();
+      const onWaitingTimeout = vi.fn();
+      const processStateValidator = {
+        hasActiveChildren: vi.fn().mockReturnValue(false),
+        getDescendantsCpuUsage: vi.fn().mockReturnValue(0),
+      };
+      const monitor = new ActivityMonitor("test-wd-6", 100, onStateChange, {
+        processStateValidator,
+        onWaitingTimeout,
+        maxWaitingSilenceMs: 1000,
+      });
+
+      // Advance well past multiple watchdog intervals
+      vi.advanceTimersByTime(15000);
+
+      expect(onWaitingTimeout).toHaveBeenCalledTimes(1);
+
+      monitor.dispose();
+    });
+
+    it("should reset after becomeBusy and fire again next idle cycle", () => {
+      const onStateChange = vi.fn();
+      const onWaitingTimeout = vi.fn();
+      const processStateValidator = {
+        hasActiveChildren: vi.fn().mockReturnValue(false),
+        getDescendantsCpuUsage: vi.fn().mockReturnValue(0),
+      };
+      const monitor = new ActivityMonitor("test-wd-7", 100, onStateChange, {
+        processStateValidator,
+        onWaitingTimeout,
+        maxWaitingSilenceMs: 1000,
+      });
+
+      // Fire first watchdog
+      vi.advanceTimersByTime(5100);
+      expect(onWaitingTimeout).toHaveBeenCalledTimes(1);
+
+      // Transition to busy
+      monitor.onInput("\r");
+      onWaitingTimeout.mockClear();
+
+      // Still busy, watchdog shouldn't fire
+      vi.advanceTimersByTime(5100);
+      expect(onWaitingTimeout).not.toHaveBeenCalled();
+
+      monitor.dispose();
+    });
+
+    it("should not fire after dispose", () => {
+      const onStateChange = vi.fn();
+      const onWaitingTimeout = vi.fn();
+      const processStateValidator = {
+        hasActiveChildren: vi.fn().mockReturnValue(false),
+        getDescendantsCpuUsage: vi.fn().mockReturnValue(0),
+      };
+      const monitor = new ActivityMonitor("test-wd-8", 100, onStateChange, {
+        processStateValidator,
+        onWaitingTimeout,
+        maxWaitingSilenceMs: 1000,
+      });
+
+      monitor.dispose();
+
+      vi.advanceTimersByTime(1100);
+      expect(onWaitingTimeout).not.toHaveBeenCalled();
+    });
+
+    it("should fire for polling monitors after becoming idle", () => {
+      const onStateChange = vi.fn();
+      const onWaitingTimeout = vi.fn();
+      const processStateValidator = {
+        hasActiveChildren: vi.fn().mockReturnValue(false),
+        getDescendantsCpuUsage: vi.fn().mockReturnValue(0),
+      };
+      const getVisibleLines = vi.fn(() => ["$ "]);
+      // Stub detectPrompt to avoid importing the full module
+      const monitor = new ActivityMonitor("test-wd-9", 100, onStateChange, {
+        processStateValidator,
+        onWaitingTimeout,
+        maxWaitingSilenceMs: 100,
+        getVisibleLines,
+        pollingIntervalMs: 20,
+        idleDebounceMs: 50,
+      });
+
+      monitor.startPolling();
+
+      // Polling starts in busy boot phase — watchdog won't fire yet
+      vi.advanceTimersByTime(200);
+      expect(onWaitingTimeout).not.toHaveBeenCalled();
+
+      monitor.dispose();
+    });
+  });
 });

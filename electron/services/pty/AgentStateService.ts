@@ -57,6 +57,8 @@ export class AgentStateService {
         return "activity";
       case "respawn":
         return "activity";
+      case "watchdog-timeout":
+        return "timeout";
       default:
         return "output";
     }

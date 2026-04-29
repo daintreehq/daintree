@@ -410,6 +410,14 @@ export class TerminalProcess {
             getCursorLine: () => this.getCursorLine(),
           }),
           processStateValidator,
+          onWaitingTimeout: (_id, _spawnedAt) => {
+            deps.agentStateService.updateAgentState(
+              this.terminalInfo,
+              { type: "watchdog-timeout" },
+              "timeout",
+              0.6
+            );
+          },
         }
       );
       this.activityMonitor.startPolling();
@@ -1447,6 +1455,14 @@ export class TerminalProcess {
           processStateValidator,
           initialState,
           skipInitialStateEmit: preserveState,
+          onWaitingTimeout: (_id, _spawnedAt) => {
+            this.deps.agentStateService.updateAgentState(
+              this.terminalInfo,
+              { type: "watchdog-timeout" },
+              "timeout",
+              0.6
+            );
+          },
         }
       );
       this.activityMonitor.startPolling();

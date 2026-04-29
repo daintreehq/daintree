@@ -75,6 +75,8 @@ export interface ActivityMonitorOptions {
   pollingMaxBootMs?: number;
   maxWorkingSilenceMs?: number;
   maxCpuHighEscapeMs?: number;
+  maxWaitingSilenceMs?: number;
+  onWaitingTimeout?: (id: string, spawnedAt: number) => void;
 }
 
 export interface ActivityStateMetadata {
@@ -99,11 +101,14 @@ export class ActivityMonitor {
   private readonly COMPLETION_HOLD_MS = 500;
   private readonly WORKING_INDICATOR_TTL_MS = 5000;
   private readonly MAX_WORKING_SILENCE_MS: number;
+  private readonly MAX_WAITING_SILENCE_MS: number;
   private readonly MAX_CPU_HIGH_ESCAPE_MS: number;
   private readonly CPU_HIGH_THRESHOLD = 10;
   private readonly CPU_LOW_THRESHOLD = 3;
   private isCpuHigh = false;
   private cpuHighSince = 0;
+  private idleSince = 0;
+  private waitingWatchdogFired = false;
   private lastPatternResultAt = 0;
   private workingHoldUntil = 0;
 
@@ -120,6 +125,7 @@ export class ActivityMonitor {
   // Resize suppression
   private resizeSuppressUntil = 0;
 
+  private readonly onWaitingTimeout?: (id: string, spawnedAt: number) => void;
   private readonly processStateValidator?: ProcessStateValidator;
   private lastActivityTimestamp = Date.now();
   private lastDataTimestamp = Date.now();
@@ -135,6 +141,7 @@ export class ActivityMonitor {
   private readonly getVisibleLines?: (n: number) => string[];
   private readonly getCursorLine?: () => string | null;
   private pollingInterval?: ReturnType<typeof setInterval>;
+  private watchdogInterval?: ReturnType<typeof setInterval>;
 
   // Polling config
   private readonly POLLING_MAX_BOOT_MS: number;
@@ -166,8 +173,12 @@ export class ActivityMonitor {
     this.POLLING_MAX_BOOT_MS = options?.pollingMaxBootMs ?? 15000;
     this.MAX_WORKING_SILENCE_MS = options?.maxWorkingSilenceMs ?? 180000;
     this.MAX_CPU_HIGH_ESCAPE_MS = options?.maxCpuHighEscapeMs ?? 60000;
+    this.MAX_WAITING_SILENCE_MS = options?.maxWaitingSilenceMs ?? 600000;
+
+    this.idleSince = Date.now();
 
     this.processStateValidator = options?.processStateValidator;
+    this.onWaitingTimeout = options?.onWaitingTimeout;
 
     // Initialize subsystems
     this.inputTracker = new InputTracker({
@@ -220,6 +231,11 @@ export class ActivityMonitor {
 
     // Polling interval
     this.POLLING_INTERVAL_MS = options?.pollingIntervalMs ?? 50;
+
+    // Lightweight watchdog interval: runs the waiting watchdog check periodically
+    // even when there's no output/activity. 5s keeps overhead negligible while
+    // ensuring hung waiting states are caught within a reasonable window.
+    this.watchdogInterval = setInterval(() => this.checkWaitingWatchdog(Date.now()), 5000);
   }
 
   onInput(data: string): void {
@@ -395,6 +411,12 @@ export class ActivityMonitor {
         // Callback failure must not prevent cleanup
       }
     }
+    this.waitingWatchdogFired = false;
+    this.idleSince = 0;
+    if (this.watchdogInterval) {
+      clearInterval(this.watchdogInterval);
+      this.watchdogInterval = undefined;
+    }
     this.stopPolling();
     if (this.debounceTimer) {
       clearTimeout(this.debounceTimer);
@@ -551,10 +573,14 @@ export class ActivityMonitor {
     // Safety timeout: if no PTY output for MAX_WORKING_SILENCE_MS, force idle
     if (this.isWorkingSilenceTimeout(now)) {
       this.state = "idle";
+      this.idleSince = now;
       this.patternBuf.clear();
       this.onStateChange(this.terminalId, this.spawnedAt, "idle", { trigger: "timeout" });
       return;
     }
+
+    // Waiting watchdog: if idle (waiting) > MAX_WAITING_SILENCE_MS and agent process is dead
+    this.checkWaitingWatchdog(now);
 
     const hasRecentOutputActivity =
       this.lastOutputActivityAt > 0 &&
@@ -691,6 +717,7 @@ export class ActivityMonitor {
       !(this.inputTracker.pendingInputUntil > 0 && now < this.inputTracker.pendingInputUntil)
     ) {
       this.state = "idle";
+      this.idleSince = now;
       this.patternBuf.clear();
       const waitingReason = classifyWaitingReason(lines, true);
       this.onStateChange(this.terminalId, this.spawnedAt, "idle", {
@@ -727,6 +754,7 @@ export class ActivityMonitor {
       const lexemeResult = detectPromptLexeme(candidateLine);
       if (lexemeResult.isPrompt) {
         this.state = "idle";
+        this.idleSince = now;
         this.patternBuf.clear();
         this.onStateChange(this.terminalId, this.spawnedAt, "idle", {
           trigger: "pattern",
@@ -746,6 +774,7 @@ export class ActivityMonitor {
       !(this.inputTracker.pendingInputUntil > 0 && now < this.inputTracker.pendingInputUntil)
     ) {
       this.state = "idle";
+      this.idleSince = now;
       this.patternBuf.clear();
       const waitingReason = classifyWaitingReason(lines, isPrompt);
       this.onStateChange(this.terminalId, this.spawnedAt, "idle", {
@@ -795,6 +824,7 @@ export class ActivityMonitor {
       }
       this.completionTimer.emitted = false;
       this.state = "idle";
+      this.idleSince = Date.now();
       this.patternBuf.clear();
       this.onStateChange(this.terminalId, this.spawnedAt, "idle", {
         trigger: "pattern",
@@ -839,6 +869,7 @@ export class ActivityMonitor {
         this.debounceTimer = null;
       }
       this.state = "idle";
+      this.idleSince = Date.now();
       this.patternBuf.clear();
       this.onStateChange(this.terminalId, this.spawnedAt, "idle", {
         trigger: "timeout",
@@ -856,12 +887,14 @@ export class ActivityMonitor {
     this.lastDataTimestamp = now;
     this.recordWorkingSignal(now);
     this.resetDebounceTimer();
+    this.waitingWatchdogFired = false;
 
     // Reset completion state for the new work cycle
     this.completionTimer.reset();
 
     if (this.state !== "busy") {
       this.state = "busy";
+      this.idleSince = now;
       this.onStateChange(this.terminalId, this.spawnedAt, "busy", metadata);
     }
   }
@@ -905,6 +938,7 @@ export class ActivityMonitor {
       // Safety timeout: if no PTY output for MAX_WORKING_SILENCE_MS, force idle
       if (this.isWorkingSilenceTimeout(Date.now())) {
         this.state = "idle";
+        this.idleSince = Date.now();
         this.patternBuf.clear();
         this.onStateChange(this.terminalId, this.spawnedAt, "idle", { trigger: "timeout" });
         this.debounceTimer = null;
@@ -916,6 +950,7 @@ export class ActivityMonitor {
       const actuallyBusy = this.hasActiveChildrenSafe();
       if (actuallyBusy === false) {
         this.state = "idle";
+        this.idleSince = Date.now();
         this.patternBuf.clear();
         this.onStateChange(this.terminalId, this.spawnedAt, "idle");
         this.debounceTimer = null;
@@ -958,6 +993,7 @@ export class ActivityMonitor {
       }
 
       this.state = "idle";
+      this.idleSince = Date.now();
       this.patternBuf.clear();
       this.onStateChange(this.terminalId, this.spawnedAt, "idle");
       this.debounceTimer = null;
@@ -972,6 +1008,19 @@ export class ActivityMonitor {
     // High CPU prevents premature silence timeout — but only up to the escape deadline
     if (this.isCpuHighAndNotDeadlined(now)) return false;
     return true;
+  }
+
+  private checkWaitingWatchdog(now: number): void {
+    if (this.state !== "idle") return;
+    if (this.waitingWatchdogFired) return;
+    if (now - this.idleSince < this.MAX_WAITING_SILENCE_MS) return;
+    if (!this.onWaitingTimeout) return;
+
+    const hasChildren = this.hasActiveChildrenSafe();
+    if (hasChildren !== false) return;
+
+    this.waitingWatchdogFired = true;
+    this.onWaitingTimeout(this.terminalId, this.spawnedAt);
   }
 
   private hasActiveChildrenSafe(): boolean | null {

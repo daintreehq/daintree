@@ -41,6 +41,10 @@ describe("AgentStateMachine", () => {
       expect(isValidTransition("completed", "working")).toBe(true);
     });
 
+    it("should allow waiting → idle (watchdog timeout)", () => {
+      expect(isValidTransition("waiting", "idle")).toBe(true);
+    });
+
     it("should allow completed → exited (exit from completed)", () => {
       expect(isValidTransition("completed", "exited")).toBe(true);
     });
@@ -262,6 +266,44 @@ describe("AgentStateMachine", () => {
         for (const state of states) {
           expect(nextAgentState(state, event)).toBe("idle");
         }
+      });
+    });
+
+    describe("watchdog-timeout event", () => {
+      it("should transition waiting → idle on watchdog-timeout", () => {
+        const event: AgentEvent = { type: "watchdog-timeout" };
+        expect(nextAgentState("waiting", event)).toBe("idle");
+      });
+
+      it("should not transition from completed on watchdog-timeout", () => {
+        const event: AgentEvent = { type: "watchdog-timeout" };
+        expect(nextAgentState("completed", event)).toBe("completed");
+      });
+
+      it("should not transition from working on watchdog-timeout", () => {
+        const event: AgentEvent = { type: "watchdog-timeout" };
+        expect(nextAgentState("working", event)).toBe("working");
+      });
+
+      it("should not transition from idle on watchdog-timeout", () => {
+        const event: AgentEvent = { type: "watchdog-timeout" };
+        expect(nextAgentState("idle", event)).toBe("idle");
+      });
+
+      it("should not transition from exited on watchdog-timeout", () => {
+        const event: AgentEvent = { type: "watchdog-timeout" };
+        expect(nextAgentState("exited", event)).toBe("exited");
+      });
+
+      it("should allow late exit: waiting→idle (watchdog) then idle→exited (exit)", () => {
+        const watchdogEvent: AgentEvent = { type: "watchdog-timeout" };
+        const exitEvent: AgentEvent = { type: "exit", code: 0 };
+
+        const afterWatchdog = nextAgentState("waiting", watchdogEvent);
+        expect(afterWatchdog).toBe("idle");
+
+        const afterExit = nextAgentState(afterWatchdog, exitEvent);
+        expect(afterExit).toBe("exited");
       });
     });
 

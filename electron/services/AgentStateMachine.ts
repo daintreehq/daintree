@@ -10,12 +10,13 @@ export type AgentEvent =
   | { type: "exit"; code: number; signal?: number }
   | { type: "error"; error: string }
   | { type: "kill" } // Intentional kill by user
-  | { type: "respawn" }; // New agent session detected in same PTY after a prior exit
+  | { type: "respawn" } // New agent session detected in same PTY after a prior exit
+  | { type: "watchdog-timeout" }; // Watchdog: waiting state timed out with dead children
 
 const VALID_TRANSITIONS: Record<AgentState, AgentState[]> = {
   idle: ["working", "exited"],
   working: ["waiting", "completed", "exited"],
-  waiting: ["working", "completed", "exited"],
+  waiting: ["working", "completed", "exited", "idle"],
   directing: [], // Renderer-only state, never produced by main process
   completed: ["working", "waiting", "exited"],
   exited: ["idle"], // Terminal per agent lifecycle; `respawn` allows a fresh agent session in the same PTY
@@ -88,6 +89,12 @@ export function nextAgentState(current: AgentState, event: AgentEvent): AgentSta
 
     case "respawn":
       if (current === "exited") {
+        return "idle";
+      }
+      break;
+
+    case "watchdog-timeout":
+      if (current === "waiting") {
         return "idle";
       }
       break;
