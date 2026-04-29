@@ -400,7 +400,7 @@ describe("BulkCreateWorktreeDialog", () => {
     await advanceTimersGradually(5000);
 
     expect(screen.getByTestId("bulk-create-retry-button")).toBeTruthy();
-    expect(screen.getByText("Retry Failed")).toBeTruthy();
+    expect(screen.getByText("Retry failed")).toBeTruthy();
   });
 
   it("does not show Retry Failed button when all succeed", async () => {

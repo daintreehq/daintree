@@ -97,7 +97,7 @@ export function useContextFilesOffer() {
         inboxMessage: `Agent context files detected: ${foundFiles.join(", ")}`,
         actions: [
           {
-            label: "Yes, use them",
+            label: "Use context files",
             variant: "primary",
             onClick: async () => {
               try {

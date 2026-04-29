@@ -25,7 +25,7 @@ export function PanelLimitConfirmDialog() {
       onClose={() => resolveConfirmation(false)}
       title="Many panels open"
       description={`You currently have ${panelCount} panels open. Adding more may slow down the application.`}
-      confirmLabel="Add Panel Anyway"
+      confirmLabel="Add panel anyway"
       cancelLabel="Cancel"
       onConfirm={() => resolveConfirmation(true)}
       variant="info"

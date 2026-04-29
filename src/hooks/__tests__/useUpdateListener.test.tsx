@@ -167,7 +167,7 @@ describe("useUpdateListener", () => {
     expect(notifyMock).toHaveBeenCalledWith(
       expect.objectContaining({
         type: "info",
-        title: "Update Available",
+        title: "Update available",
         message: "Version 2.5.0 is downloading...",
         duration: 0,
         priority: "high",
@@ -200,7 +200,7 @@ describe("useUpdateListener", () => {
     expect(updateNotificationMock).toHaveBeenCalledWith(
       expect.any(String),
       expect.objectContaining({
-        title: "Downloading Update",
+        title: "Downloading update",
         inboxMessage: "Downloading update: 43%",
       })
     );
@@ -223,11 +223,11 @@ describe("useUpdateListener", () => {
       expect.any(String),
       expect.objectContaining({
         type: "success",
-        title: "Update Ready",
+        title: "Update ready",
         message: "Version 2.5.0 is ready to install.",
         duration: 0,
         dismissed: false,
-        action: expect.objectContaining({ label: "Restart to Update" }),
+        action: expect.objectContaining({ label: "Restart to update" }),
       })
     );
 
@@ -292,12 +292,12 @@ describe("useUpdateListener", () => {
     expect(notifyMock).toHaveBeenCalledWith(
       expect.objectContaining({
         type: "success",
-        title: "Update Ready",
+        title: "Update ready",
         message: "Version 2.5.0 is ready to install.",
         priority: "high",
         urgent: true,
         duration: 0,
-        action: expect.objectContaining({ label: "Restart to Update" }),
+        action: expect.objectContaining({ label: "Restart to update" }),
       })
     );
   });
@@ -318,7 +318,7 @@ describe("useUpdateListener", () => {
     expect(notifyMock).toHaveBeenCalledWith(
       expect.objectContaining({
         type: "success",
-        title: "Update Ready",
+        title: "Update ready",
         priority: "high",
         urgent: true,
       })
@@ -430,7 +430,7 @@ describe("useUpdateListener", () => {
 
     // Confirm the hook explicitly cleared the onDismiss in the update patch.
     const downloadedPatch = updateNotificationMock.mock.calls.find(
-      (call) => call[1]?.title === "Update Ready"
+      (call) => call[1]?.title === "Update ready"
     )?.[1];
     expect(downloadedPatch).toMatchObject({ onDismiss: undefined });
 
@@ -477,7 +477,7 @@ describe("useUpdateListener", () => {
     expect(notifyMock).toHaveBeenCalledWith(
       expect.objectContaining({
         type: "success",
-        title: "Update Ready",
+        title: "Update ready",
         urgent: true,
       })
     );
@@ -504,7 +504,7 @@ describe("useUpdateListener", () => {
     expect(notifyMock).toHaveBeenCalledWith(
       expect.objectContaining({
         type: "success",
-        title: "Update Ready",
+        title: "Update ready",
         urgent: true,
       })
     );

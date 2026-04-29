@@ -267,7 +267,7 @@ export async function hydrateAppState(
       if (recovery.kind === "restored-from-backup") {
         notify({
           type: "warning",
-          title: "Settings Restored from Backup",
+          title: "Settings restored from backup",
           message: `Your settings file was corrupted and has been restored from a backup. Some recent changes may have been lost.${pathNote}`,
           priority: "high",
           duration: 8000,
@@ -275,7 +275,7 @@ export async function hydrateAppState(
       } else {
         notify({
           type: "warning",
-          title: "Settings Reset to Defaults",
+          title: "Settings reset to defaults",
           message: `Your settings file was corrupted and no backup was available. Settings have been reset to defaults.${pathNote}`,
           priority: "high",
           duration: 0,
@@ -287,7 +287,7 @@ export async function hydrateAppState(
       const { quarantinedPath } = hydrateResult.projectStateRecovery;
       notify({
         type: "warning",
-        title: "Project State Corrupted",
+        title: "Project state corrupted",
         message: `Your project state was corrupted and has been reset. The corrupt file is preserved at: ${quarantinedPath}`,
         priority: "high",
         duration: 0,

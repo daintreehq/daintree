@@ -167,7 +167,7 @@ export function useQuickCreatePalette(): UseQuickCreatePaletteReturn {
             const worktreeMsg = `${branch}${assignMsg}`;
             notify({
               type: "success",
-              title: "Worktree Created",
+              title: "Worktree created",
               message: worktreeMsg,
               priority: "high",
               countable: false,
@@ -185,14 +185,14 @@ export function useQuickCreatePalette(): UseQuickCreatePaletteReturn {
           } else {
             notify({
               type: "error",
-              title: "Creation Failed",
+              title: "Couldn't create worktree",
               message: formatErrorMessage(result.error, "Failed to create worktree"),
             });
           }
         } catch (error) {
           notify({
             type: "error",
-            title: "Creation Failed",
+            title: "Couldn't create worktree",
             message: formatErrorMessage(error, "Failed to create worktree"),
           });
         } finally {

@@ -22,7 +22,7 @@ export function useAgentWaitingNudge(isStateLoaded: boolean): void {
     const id = notify({
       type: "info",
       placement: "grid-bar",
-      title: "Agent Waiting for Input",
+      title: "Agent waiting for input",
       message:
         "Your agent is waiting for input. Enable notifications to get alerted when this happens.",
       inboxMessage:
@@ -30,7 +30,7 @@ export function useAgentWaitingNudge(isStateLoaded: boolean): void {
       duration: 0,
       actions: [
         {
-          label: "Enable Notifications",
+          label: "Enable notifications",
           variant: "primary",
           onClick: () => {
             safeFireAndForget(
@@ -46,7 +46,7 @@ export function useAgentWaitingNudge(isStateLoaded: boolean): void {
           },
         },
         {
-          label: "No Thanks",
+          label: "No thanks",
           variant: "secondary",
           onClick: () => {
             if (notificationIdRef.current) {

@@ -237,7 +237,7 @@ describe("useAgentWaitingNudge", () => {
     const payload = notifyMock.mock.calls[0]![0] as {
       actions: Array<{ label: string; onClick: () => void }>;
     };
-    const enableAction = payload.actions.find((a) => a.label === "Enable Notifications")!;
+    const enableAction = payload.actions.find((a) => a.label === "Enable notifications")!;
 
     act(() => {
       enableAction.onClick();
@@ -247,7 +247,7 @@ describe("useAgentWaitingNudge", () => {
     expect(removeNotificationMock).toHaveBeenCalledWith("notif-123");
   });
 
-  it("No Thanks action removes notification without enabling", async () => {
+  it("No thanks action removes notification without enabling", async () => {
     renderHook(() => useAgentWaitingNudge(true));
     await act(async () => {});
 
@@ -258,7 +258,7 @@ describe("useAgentWaitingNudge", () => {
     const payload = notifyMock.mock.calls[0]![0] as {
       actions: Array<{ label: string; onClick: () => void }>;
     };
-    const noThanks = payload.actions.find((a) => a.label === "No Thanks")!;
+    const noThanks = payload.actions.find((a) => a.label === "No thanks")!;
 
     act(() => {
       noThanks.onClick();

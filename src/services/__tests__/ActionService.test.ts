@@ -290,7 +290,7 @@ describe("ActionService", () => {
       expect(notifyMock).toHaveBeenCalledTimes(1);
       expect(notifyMock).toHaveBeenCalledWith({
         type: "warning",
-        title: "Action Disabled",
+        title: "Action disabled",
         message: "No focused terminal",
       });
     });
@@ -337,7 +337,7 @@ describe("ActionService", () => {
         expect(result.ok).toBe(false);
         expect(notifyMock).toHaveBeenCalledWith({
           type: "warning",
-          title: "Action Disabled",
+          title: "Action disabled",
           message: "Disabled for test",
         });
       }

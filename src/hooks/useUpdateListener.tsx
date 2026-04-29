@@ -51,7 +51,7 @@ export function useUpdateListener(suppressToasts = false): void {
       // if the scheduled quiet window is still active.
       notify({
         type: "success",
-        title: "Update Ready",
+        title: "Update ready",
         message: `Version ${version} is ready to install.`,
         inboxMessage: `Version ${version} ready to install`,
         priority: "high",
@@ -59,7 +59,7 @@ export function useUpdateListener(suppressToasts = false): void {
         duration: 0,
         correlationId: UPDATE_CORRELATION_ID,
         action: {
-          label: "Restart to Update",
+          label: "Restart to update",
           onClick: () => {
             const promise = window.electron?.update?.quitAndInstall();
             if (promise) {
@@ -71,7 +71,7 @@ export function useUpdateListener(suppressToasts = false): void {
     } else {
       notify({
         type: "info",
-        title: "Update Available",
+        title: "Update available",
         message: `Version ${version} is downloading...`,
         inboxMessage: `Version ${version} is downloading. ${AVAILABLE_HINT}`,
         priority: "high",
@@ -112,7 +112,7 @@ export function useUpdateListener(suppressToasts = false): void {
       const version = info.version;
       notify({
         type: "info",
-        title: "Update Available",
+        title: "Update available",
         message: `Version ${version} is downloading...`,
         inboxMessage: `Version ${version} is downloading. ${AVAILABLE_HINT}`,
         priority: "high",
@@ -137,7 +137,7 @@ export function useUpdateListener(suppressToasts = false): void {
       const liveId = findLiveUpdateToastId();
       if (!liveId) return;
       useNotificationStore.getState().updateNotification(liveId, {
-        title: "Downloading Update",
+        title: "Downloading update",
         message: <DownloadProgress percent={info.percent} />,
         inboxMessage: `Downloading update: ${Math.round(info.percent)}%`,
       });
@@ -155,14 +155,14 @@ export function useUpdateListener(suppressToasts = false): void {
         // The user still needs to be re-reminded about the pending install.
         useNotificationStore.getState().updateNotification(liveId, {
           type: "success",
-          title: "Update Ready",
+          title: "Update ready",
           message: `Version ${info.version} is ready to install.`,
           inboxMessage: `Version ${info.version} ready to install`,
           duration: 0,
           dismissed: false,
           onDismiss: undefined,
           action: {
-            label: "Restart to Update",
+            label: "Restart to update",
             onClick: () => {
               const promise = window.electron?.update?.quitAndInstall();
               if (promise) {
@@ -178,7 +178,7 @@ export function useUpdateListener(suppressToasts = false): void {
         // swallowed by the Available-stage cooldown — create a fresh toast.
         notify({
           type: "success",
-          title: "Update Ready",
+          title: "Update ready",
           message: `Version ${info.version} is ready to install.`,
           inboxMessage: `Version ${info.version} ready to install`,
           priority: "high",
@@ -186,7 +186,7 @@ export function useUpdateListener(suppressToasts = false): void {
           duration: 0,
           correlationId: UPDATE_CORRELATION_ID,
           action: {
-            label: "Restart to Update",
+            label: "Restart to update",
             onClick: () => {
               const promise = window.electron?.update?.quitAndInstall();
               if (promise) {

@@ -2022,7 +2022,7 @@ describe("hydrateAppState", () => {
       expect(notifyMock).toHaveBeenCalledWith(
         expect.objectContaining({
           type: "warning",
-          title: "Settings Restored from Backup",
+          title: "Settings restored from backup",
           priority: "high",
           duration: 8000,
         })
@@ -2054,7 +2054,7 @@ describe("hydrateAppState", () => {
       expect(notifyMock).toHaveBeenCalledWith(
         expect.objectContaining({
           type: "warning",
-          title: "Settings Reset to Defaults",
+          title: "Settings reset to defaults",
           priority: "high",
           duration: 0,
         })
@@ -2125,7 +2125,7 @@ describe("hydrateAppState", () => {
       expect(notifyMock).toHaveBeenCalledWith(
         expect.objectContaining({
           type: "warning",
-          title: "Project State Corrupted",
+          title: "Project state corrupted",
           priority: "high",
           duration: 0,
         })
@@ -2195,8 +2195,8 @@ describe("hydrateAppState", () => {
 
       expect(notifyMock).toHaveBeenCalledTimes(2);
       const titles = notifyMock.mock.calls.map((call) => call[0].title);
-      expect(titles).toContain("Settings Reset to Defaults");
-      expect(titles).toContain("Project State Corrupted");
+      expect(titles).toContain("Settings reset to defaults");
+      expect(titles).toContain("Project state corrupted");
     });
   });
 

@@ -314,7 +314,7 @@ export function RecipeManager({
             <div className="flex gap-2 mt-2">
               <Button variant="outline" size="sm" onClick={() => onCreateRecipe("global")}>
                 <Plus className="h-3 w-3" />
-                New Global Recipe
+                New global recipe
               </Button>
             </div>
           </div>
@@ -359,11 +359,11 @@ export function RecipeManager({
             <div className="flex gap-2 mt-2">
               <Button variant="outline" size="sm" onClick={() => onCreateRecipe("project")}>
                 <Plus className="h-3 w-3" />
-                New Project Recipe
+                New project recipe
               </Button>
               <Button variant="outline" size="sm" onClick={() => setShowImportDialog(true)}>
                 <FileDown className="h-3 w-3" />
-                Import from Clipboard
+                Import from clipboard
               </Button>
               <Button
                 variant="outline"
@@ -371,7 +371,7 @@ export function RecipeManager({
                 onClick={() => void importRecipeFromFile(currentProject?.id)}
               >
                 <FileUp className="h-3 w-3" />
-                Import from File
+                Import from file
               </Button>
             </div>
           </div>
@@ -386,7 +386,7 @@ export function RecipeManager({
             ? `Error: ${deleteError}`
             : "The recipe will be permanently removed. This cannot be undone."
         }
-        confirmLabel={deleteError ? "Retry" : "Delete recipe"}
+        confirmLabel={deleteError ? "Retry delete" : "Delete recipe"}
         variant="destructive"
         onConfirm={() => {
           if (recipeToDelete) void handleDeleteRecipe(recipeToDelete);
@@ -405,7 +405,7 @@ export function RecipeManager({
             ? `Error: ${saveError}`
             : "This recipe will be written to .daintree/recipes/ in the repository where it can be committed and shared with the team."
         }
-        confirmLabel={saveError ? "Retry" : "Save to repo"}
+        confirmLabel={saveError ? "Retry save" : "Save to repo"}
         variant="default"
         isConfirmLoading={isSaving}
         onConfirm={() => void handleSaveToRepo()}
@@ -420,7 +420,7 @@ export function RecipeManager({
         title="Delete original?"
         description="The recipe has been saved to the repository. The original copy on this machine will be permanently removed."
         confirmLabel="Delete original"
-        cancelLabel="Keep Both"
+        cancelLabel="Keep both"
         variant="destructive"
         onConfirm={() => void handleDeleteAfterSave()}
         onClose={() => setRecipeToDeleteAfterSave(null)}
@@ -436,7 +436,7 @@ export function RecipeManager({
         size="md"
       >
         <AppDialog.Header>
-          <AppDialog.Title>Import Recipe</AppDialog.Title>
+          <AppDialog.Title>Import recipe</AppDialog.Title>
           <AppDialog.CloseButton />
         </AppDialog.Header>
 

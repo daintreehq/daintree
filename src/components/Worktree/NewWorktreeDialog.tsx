@@ -635,7 +635,7 @@ export function NewWorktreeDialog({
                 message: `${message} — worktree was created successfully`,
                 actions: [
                   {
-                    label: "Retry Recipe",
+                    label: "Retry recipe",
                     onClick: () => {
                       runRecipe(recipeId, recipePath, worktreeId, {
                         worktreePath: recipePath,
@@ -820,7 +820,7 @@ export function NewWorktreeDialog({
               message: `${message} — worktree was created successfully`,
               actions: [
                 {
-                  label: "Retry Recipe",
+                  label: "Retry recipe",
                   onClick: () => {
                     runRecipe(recipeId, recipePath, recipeWorktreeId, recipeContext).catch((err) =>
                       logError("Failed to run recipe", err)
@@ -1791,7 +1791,7 @@ export function NewWorktreeDialog({
               variant="ghost"
               onClick={() => setIsDismissing(false)}
             >
-              Keep Editing
+              Keep editing
             </Button>
             <Button variant="destructive" onClick={onClose}>
               Discard
@@ -1823,7 +1823,7 @@ export function NewWorktreeDialog({
               ) : creationError ? (
                 <>
                   <Check />
-                  Retry
+                  Retry create
                 </>
               ) : (
                 <>
