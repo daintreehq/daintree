@@ -72,7 +72,12 @@ vi.mock("../../../shared/utils/trustedRenderer.js", () => ({
   isTrustedRendererUrl: vi.fn(() => true),
 }));
 
-import { setupPermissionLockdown, _resetPermissionLockdownForTesting } from "../security.js";
+import {
+  setupPermissionLockdown,
+  enforceIpcSenderValidation,
+  _resetPermissionLockdownForTesting,
+} from "../security.js";
+import { assertIpcSecurityReady, _resetIpcGuardForTesting } from "../../ipc/ipcGuard.js";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const mockWebContents = {} as any;
@@ -438,5 +443,22 @@ describe("setupPermissionLockdown", () => {
       expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("url=unknown"));
       warnSpy.mockRestore();
     });
+  });
+});
+
+describe("enforceIpcSenderValidation", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    _resetIpcGuardForTesting();
+  });
+
+  it("marks the IPC guard ready so subsequent registrations pass", () => {
+    expect(() => assertIpcSecurityReady("any:channel")).toThrow(/Fix bootstrap order/);
+
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    enforceIpcSenderValidation();
+    logSpy.mockRestore();
+
+    expect(() => assertIpcSecurityReady("any:channel")).not.toThrow();
   });
 });

@@ -17,6 +17,7 @@ import {
   sampleIpcTiming,
 } from "../utils/performance.js";
 import { AppError } from "../utils/errorTypes.js";
+import { assertIpcSecurityReady } from "./ipcGuard.js";
 
 /**
  * Parse the first argument of an IPC payload against a Zod schema. On
@@ -362,6 +363,7 @@ export function typedHandle<K extends keyof IpcInvokeMap>(
     ...args: IpcInvokeMap[K]["args"]
   ) => Promise<IpcInvokeMap[K]["result"]> | IpcInvokeMap[K]["result"]
 ): () => void {
+  assertIpcSecurityReady(channel as string);
   const captureEnabled = isPerformanceCaptureEnabled();
   let requestCounter = 0;
 
@@ -425,6 +427,7 @@ export function typedHandleValidated<K extends keyof IpcInvokeMap, S extends z.Z
   schema: S,
   handler: (payload: z.output<S>) => Promise<IpcInvokeMap[K]["result"]> | IpcInvokeMap[K]["result"]
 ): () => void {
+  assertIpcSecurityReady(channel as string);
   // Wrap as async so a synchronous throw from `parseIpcPayload` always
   // surfaces as a rejected promise. `ipcMain.handle` accepts both forms in
   // production, but normalising here keeps test mocks consistent and makes
@@ -443,6 +446,7 @@ export function typedHandleWithContext<K extends keyof IpcInvokeMap>(
     ...args: IpcInvokeMap[K]["args"]
   ) => Promise<IpcInvokeMap[K]["result"]> | IpcInvokeMap[K]["result"]
 ): () => void {
+  assertIpcSecurityReady(channel as string);
   const captureEnabled = isPerformanceCaptureEnabled();
   let requestCounter = 0;
 
@@ -516,6 +520,7 @@ export function typedHandleWithContextValidated<
     payload: z.output<S>
   ) => Promise<IpcInvokeMap[K]["result"]> | IpcInvokeMap[K]["result"]
 ): () => void {
+  assertIpcSecurityReady(channel as string);
   // Wrap as async so synchronous parse throws become rejected promises.
   const wrapped = (async (ctx: IpcContext, ...args: unknown[]) => {
     const parsed = parseIpcPayload(channel as string, schema, args[0]);

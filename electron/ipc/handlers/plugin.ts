@@ -16,6 +16,7 @@ import type {
 } from "../../../shared/types/plugin.js";
 import type { ToolbarButtonConfig } from "../../../shared/config/toolbarButtonRegistry.js";
 import { typedHandle } from "../utils.js";
+import { assertIpcSecurityReady } from "../ipcGuard.js";
 
 export function registerPluginHandlers(): () => void {
   const handlers: Array<() => void> = [];
@@ -95,6 +96,7 @@ export function registerPluginHandlers(): () => void {
   // `...args: unknown[]` signature and senderFrame.url trust check can't be
   // expressed through IpcInvokeMap without widening types to `unknown[]`,
   // which would silently defeat the compile-time safety the migration is for.
+  assertIpcSecurityReady(CHANNELS.PLUGIN_INVOKE);
   ipcMain.handle(
     CHANNELS.PLUGIN_INVOKE,
     async (event, pluginId: string, channel: string, ...args: unknown[]) => {

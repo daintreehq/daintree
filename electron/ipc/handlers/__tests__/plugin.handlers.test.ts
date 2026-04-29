@@ -42,6 +42,7 @@ vi.mock("electron", () => ({
 }));
 
 import { registerPluginHandlers, registerPluginHandler, removePluginHandlers } from "../plugin.js";
+import { _resetIpcGuardForTesting, markIpcSecurityReady } from "../../ipcGuard.js";
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -49,6 +50,8 @@ beforeEach(() => {
   mockGetToolbarButtonConfig.mockReturnValue(undefined);
   mockGetPluginMenuItems.mockReturnValue([]);
   mockListPluginActions.mockReturnValue([]);
+  _resetIpcGuardForTesting();
+  markIpcSecurityReady();
 });
 
 describe("registerPluginHandlers", () => {
@@ -69,6 +72,14 @@ describe("registerPluginHandlers", () => {
       "plugin:actions-unregister",
       expect.any(Function)
     );
+  });
+
+  it("throws before registering any handler when invoked before enforceIpcSenderValidation", () => {
+    _resetIpcGuardForTesting();
+    expect(() => registerPluginHandlers()).toThrow(
+      /registered before enforceIpcSenderValidation\(\) was called/
+    );
+    expect(mockIpcMainHandle).not.toHaveBeenCalledWith("plugin:invoke", expect.any(Function));
   });
 
   it("cleanup removes all handlers", () => {

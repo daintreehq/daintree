@@ -8,6 +8,7 @@ import {
   serializeError,
 } from "../../shared/utils/ipcErrorSerialization.js";
 import { FAULT_MODE_ENABLED, applyInvokeFault, initFaultRegistry } from "../ipc/faultRegistry.js";
+import { markIpcSecurityReady } from "../ipc/ipcGuard.js";
 
 function sanitizePaths(msg: string): string {
   return msg
@@ -145,6 +146,7 @@ export function enforceIpcSenderValidation(): void {
   } as typeof ipcMain.removeAllListeners;
 
   console.log("[MAIN] IPC sender validation enforced globally (handle + on)");
+  markIpcSecurityReady();
 }
 
 /**
