@@ -1406,11 +1406,11 @@ body,
     transition: none;
   }
 
-  button,
-  [role="button"],
-  [type="button"],
-  [type="submit"],
-  [type="reset"] {
+  button:not([data-state]),
+  [role="button"]:not([data-state]),
+  [type="button"]:not([data-state]),
+  [type="submit"]:not([data-state]),
+  [type="reset"]:not([data-state]) {
     transform: none !important;
     transition: none !important;
   }
@@ -1477,7 +1477,13 @@ body[data-reduce-animations="true"]
 }
 
 body[data-reduce-animations="true"]
-  :is(button, [role="button"], [type="button"], [type="submit"], [type="reset"]) {
+  :is(
+    button:not([data-state]),
+    [role="button"]:not([data-state]),
+    [type="button"]:not([data-state]),
+    [type="submit"]:not([data-state]),
+    [type="reset"]:not([data-state])
+  ) {
   transform: none !important;
   transition: none !important;
 }
