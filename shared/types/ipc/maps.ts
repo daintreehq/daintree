@@ -2471,6 +2471,9 @@ export type IpcEventBusMap = Pick<
   | "terminal:backend-crashed"
   | "terminal:backend-ready"
   | "terminal:spawn-result"
+  // Terminal observability
+  | "terminal:reliability-metric"
+  | "terminal:status"
 >;
 
 /**

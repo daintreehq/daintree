@@ -624,6 +624,7 @@ export class PtyClient extends EventEmitter {
           status: payload.status,
           bufferUtilization: payload.bufferUtilization,
           pauseDuration: payload.pauseDuration,
+          reason: payload.reason,
           timestamp: payload.timestamp,
         };
         this.emit("terminal-status", statusPayload);

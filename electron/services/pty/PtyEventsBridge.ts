@@ -128,6 +128,7 @@ export function bridgePtyEvent(event: PtyHostEvent, config?: PtyEventsBridgeConf
         status: event.status,
         bufferUtilization: event.bufferUtilization,
         pauseDuration: event.pauseDuration,
+        reason: event.reason,
         timestamp: event.timestamp,
       };
       events.emit("terminal:status", statusPayload);

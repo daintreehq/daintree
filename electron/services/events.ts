@@ -684,6 +684,7 @@ export type DaintreeEventMap = {
     status: "running" | "paused-backpressure" | "paused-user" | "suspended";
     bufferUtilization?: number;
     pauseDuration?: number;
+    reason?: string;
     timestamp: number;
   };
 
