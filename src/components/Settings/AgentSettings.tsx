@@ -941,7 +941,6 @@ export function AgentSettings({
                             })();
                           }}
                           suggestions={getAgentConfig(activeAgent.id)?.envSuggestions ?? []}
-                          datalistId="env-key-suggestions-global"
                           contextKey={`global-${activeAgent.id}`}
                           data-testid="global-env-editor"
                         />
@@ -958,7 +957,6 @@ export function AgentSettings({
                             env={selectedPreset.env ?? {}}
                             onChange={(env) => handleUpdatePreset(selectedPreset.id, { env })}
                             suggestions={getAgentConfig(activeAgent.id)?.envSuggestions ?? []}
-                            datalistId="env-key-suggestions"
                             contextKey={selectedPreset.id}
                             inheritedEnv={
                               activeEntry.globalEnv as Record<string, string> | undefined

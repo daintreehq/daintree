@@ -24,6 +24,17 @@ vi.mock("lucide-react", () => ({
   RotateCcw: () => <span data-testid="rotate-ccw-icon" />,
   Upload: () => <span data-testid="upload-icon" />,
   AlertTriangle: () => <span data-testid="alert-triangle-icon" />,
+  ChevronDown: () => <span data-testid="chevron-down-icon" />,
+}));
+
+// Render Popover children inline so jsdom doesn't need to wrestle Radix's
+// Portal / focus-trap machinery — we're asserting on the picker behavior,
+// not on portal mechanics.
+vi.mock("@/components/ui/popover", () => ({
+  Popover: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  PopoverAnchor: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  PopoverTrigger: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  PopoverContent: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }));
 
 interface DialogAction {
@@ -364,18 +375,123 @@ describe("EnvVarEditor", () => {
     });
   });
 
-  it("datalist is rendered when suggestions + datalistId provided", () => {
-    const { container } = render(
-      <EnvVarEditor
-        env={{}}
-        onChange={onChange}
-        suggestions={[{ key: "ANTHROPIC_API_KEY", hint: "Claude auth" }]}
-        datalistId="env-key-suggestions-test"
-      />
-    );
-    const datalist = container.querySelector("datalist#env-key-suggestions-test");
-    expect(datalist).toBeTruthy();
-    expect(datalist?.querySelectorAll("option").length).toBe(1);
+  describe("key suggestion picker", () => {
+    const sampleSuggestions = [
+      { key: "ANTHROPIC_API_KEY", hint: "Claude auth" },
+      { key: "OPENAI_API_KEY", hint: "OpenAI auth" },
+      { key: "DEBUG", hint: "Verbose logging" },
+    ];
+
+    it("renders a chevron trigger when suggestions are provided and the key has room to change", () => {
+      const { getAllByTestId } = render(
+        <EnvVarEditor env={{ FOO: "v" }} onChange={onChange} suggestions={sampleSuggestions} />
+      );
+      // FOO is not in the suggestions list, so all 3 are still available.
+      expect(getAllByTestId("env-editor-key-suggestions-trigger")).toHaveLength(1);
+    });
+
+    it("does not render a chevron when the suggestions list is empty", () => {
+      const { queryAllByTestId } = render(
+        <EnvVarEditor env={{ FOO: "v" }} onChange={onChange} suggestions={[]} />
+      );
+      expect(queryAllByTestId("env-editor-key-suggestions-trigger")).toHaveLength(0);
+    });
+
+    it("does not render a chevron on inherited (disabled) rows", () => {
+      const { queryAllByTestId } = render(
+        <EnvVarEditor
+          env={{}}
+          onChange={onChange}
+          inheritedEnv={{ ANTHROPIC_API_KEY: "from-global" }}
+          suggestions={sampleSuggestions}
+        />
+      );
+      expect(queryAllByTestId("env-editor-key-suggestions-trigger")).toHaveLength(0);
+    });
+
+    it("excludes keys already used in OTHER rows from the suggestion list", () => {
+      const { getAllByTestId } = render(
+        <EnvVarEditor
+          env={{ ANTHROPIC_API_KEY: "v1", DEBUG: "v2" }}
+          onChange={onChange}
+          suggestions={sampleSuggestions}
+        />
+      );
+      // Row 0 (ANTHROPIC_API_KEY) — the row's own current key is also filtered
+      // out (you can't pick what you already have), so OPENAI_API_KEY only.
+      // Row 1 (DEBUG) — only OPENAI_API_KEY remains as well (ANTHROPIC used by row 0).
+      const allOptions = getAllByTestId("env-editor-key-suggestion");
+      const optionTexts = allOptions.map((el) => el.textContent ?? "");
+      expect(optionTexts.every((t) => t.includes("OPENAI_API_KEY"))).toBe(true);
+      expect(optionTexts.some((t) => t.includes("ANTHROPIC_API_KEY"))).toBe(false);
+      expect(optionTexts.some((t) => t.includes("DEBUG"))).toBe(false);
+    });
+
+    it("clicking a suggestion replaces the key and closes the popover", () => {
+      const { getAllByTestId } = render(
+        <EnvVarEditor env={{ FOO: "v" }} onChange={onChange} suggestions={sampleSuggestions} />
+      );
+      const keyInput = getAllByTestId("env-editor-key")[0] as HTMLInputElement;
+      const options = getAllByTestId("env-editor-key-suggestion");
+      const anthropicOption = options.find((el) =>
+        (el.textContent ?? "").includes("ANTHROPIC_API_KEY")
+      );
+      expect(anthropicOption).toBeTruthy();
+
+      fireEvent.click(anthropicOption!);
+      fireEvent.blur(keyInput);
+
+      expect(onChange).toHaveBeenLastCalledWith({ ANTHROPIC_API_KEY: "v" });
+    });
+
+    it("ArrowDown opens the popover and Enter selects the highlighted suggestion", () => {
+      const { getAllByTestId } = render(
+        <EnvVarEditor env={{ FOO: "v" }} onChange={onChange} suggestions={sampleSuggestions} />
+      );
+      const keyInput = getAllByTestId("env-editor-key")[0] as HTMLInputElement;
+      expect(keyInput.getAttribute("aria-expanded")).toBe("false");
+
+      fireEvent.keyDown(keyInput, { key: "ArrowDown" });
+      expect(keyInput.getAttribute("aria-expanded")).toBe("true");
+
+      fireEvent.keyDown(keyInput, { key: "Enter" });
+      fireEvent.blur(keyInput);
+
+      // Row "FOO" had no override key in suggestions — first available is
+      // ANTHROPIC_API_KEY. After Enter, popover closes and value commits.
+      expect(keyInput.getAttribute("aria-expanded")).toBe("false");
+      expect(onChange).toHaveBeenLastCalledWith({ ANTHROPIC_API_KEY: "v" });
+    });
+
+    it("Escape closes an open popover without blurring the input", () => {
+      const { getAllByTestId } = render(
+        <EnvVarEditor env={{ FOO: "v" }} onChange={onChange} suggestions={sampleSuggestions} />
+      );
+      const keyInput = getAllByTestId("env-editor-key")[0] as HTMLInputElement;
+      keyInput.focus();
+      fireEvent.keyDown(keyInput, { key: "ArrowDown" });
+      expect(keyInput.getAttribute("aria-expanded")).toBe("true");
+
+      fireEvent.keyDown(keyInput, { key: "Escape" });
+
+      expect(keyInput.getAttribute("aria-expanded")).toBe("false");
+      // First Escape closes the popover; input keeps focus so the user can
+      // continue typing without losing context.
+      expect(document.activeElement).toBe(keyInput);
+    });
+
+    it("input has combobox role and listbox wiring for screen readers", () => {
+      const { getAllByTestId } = render(
+        <EnvVarEditor env={{ FOO: "v" }} onChange={onChange} suggestions={sampleSuggestions} />
+      );
+      const keyInput = getAllByTestId("env-editor-key")[0] as HTMLInputElement;
+      expect(keyInput.getAttribute("role")).toBe("combobox");
+      expect(keyInput.getAttribute("aria-autocomplete")).toBe("list");
+      const controls = keyInput.getAttribute("aria-controls");
+      expect(controls).toBeTruthy();
+      // The listbox referenced by aria-controls must exist in the DOM.
+      expect(document.getElementById(controls!)).toBeTruthy();
+    });
   });
 
   describe("inherited env", () => {
