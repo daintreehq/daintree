@@ -127,6 +127,7 @@ describe("FleetArmingDialog", () => {
       makeTerminal("trash-row", { title: "trashed", location: "trash" }),
       makeTerminal("nopty", { title: "no-pty", hasPty: false }),
       makeTerminal("exited", { title: "exited", runtimeStatus: "exited" }),
+      makeTerminal("docked", { title: "docked", location: "dock" }),
     ]);
     renderDialog([makeWorktreeSnap("wt-1", "Main")]);
     expect(screen.getByText("alpha")).toBeTruthy();
@@ -134,6 +135,7 @@ describe("FleetArmingDialog", () => {
     expect(screen.queryByText("trashed")).toBeNull();
     expect(screen.queryByText("no-pty")).toBeNull();
     expect(screen.queryByText("exited")).toBeNull();
+    expect(screen.queryByText("docked")).toBeNull();
   });
 
   it("shows empty state when there are no eligible terminals", () => {

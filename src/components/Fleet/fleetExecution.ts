@@ -1,7 +1,9 @@
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { usePanelStore } from "@/store/panelStore";
 import { terminalClient } from "@/clients";
+import { isTerminalFleetEligible } from "@/store/fleetEligibility";
 import { replaceRecipeVariables, type RecipeContext } from "@/utils/recipeVariables";
+import type { TerminalInstance } from "@shared/types";
 import {
   buildFleetBroadcastRecipeContext,
   FLEET_LARGE_PASTE_BATCH_SIZE,
@@ -39,8 +41,22 @@ export function buildFleetTargetPreviews(draft: string): FleetTargetPreview[] {
 
   for (const id of armOrder) {
     if (!armedIds.has(id)) continue;
-    const panel = panelsById[id];
-    if (!panel || panel.location === "trash" || panel.location === "background") {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const panel: any = panelsById[id];
+
+    if (isTerminalFleetEligible(panel)) {
+      const ctx = buildFleetBroadcastRecipeContext(id);
+      const resolved = ctx ? replaceRecipeVariables(draft, ctx) : draft;
+      const unresolvedVars = ctx ? detectUnresolved(draft, ctx) : [];
+
+      previews.push({
+        terminalId: id,
+        title: (panel as TerminalInstance).title ?? "Agent",
+        resolvedPayload: resolved,
+        unresolvedVars,
+        excluded: false,
+      });
+    } else {
       previews.push({
         terminalId: id,
         title: panel?.title ?? "Unknown",
@@ -49,20 +65,7 @@ export function buildFleetTargetPreviews(draft: string): FleetTargetPreview[] {
         excluded: true,
         exclusionReason: "Panel no longer eligible",
       });
-      continue;
     }
-
-    const ctx = buildFleetBroadcastRecipeContext(id);
-    const resolved = ctx ? replaceRecipeVariables(draft, ctx) : draft;
-    const unresolvedVars = ctx ? detectUnresolved(draft, ctx) : [];
-
-    previews.push({
-      terminalId: id,
-      title: panel.title ?? "Agent",
-      resolvedPayload: resolved,
-      unresolvedVars,
-      excluded: false,
-    });
   }
 
   return previews;
@@ -82,6 +85,11 @@ function detectUnresolved(text: string, ctx: RecipeContext): string[] {
     if (resolved === "") unresolved.push(name);
   }
   return unresolved;
+}
+
+function filterEligibleIds(ids: string[]): string[] {
+  const { panelsById } = usePanelStore.getState();
+  return ids.filter((id) => isTerminalFleetEligible(panelsById[id]));
 }
 
 function resolveVariable(name: string, ctx: RecipeContext): string {
@@ -209,7 +217,7 @@ export async function broadcastFleetLiteralPaste(
   text: string,
   targetIds?: string[]
 ): Promise<FleetExecutionResult> {
-  const ids = targetIds ?? resolveFleetBroadcastTargetIds();
+  const ids = targetIds ? filterEligibleIds(targetIds) : resolveFleetBroadcastTargetIds();
   const submissions: Promise<void>[] = [];
   const collected: string[] = [];
 

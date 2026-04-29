@@ -93,12 +93,26 @@ describe("broadcastFleetRawInput", () => {
       makeTerminal("t1"),
       makeTerminal("trashed", { location: "trash" }),
       makeTerminal("no-pty", { hasPty: false }),
+      makeTerminal("docked", { location: "dock" }),
     ]);
-    useFleetArmingStore.getState().armIds(["t1", "trashed", "no-pty"]);
+    useFleetArmingStore.getState().armIds(["t1", "trashed", "no-pty", "docked"]);
 
     expect(broadcastFleetRawInput("t1", "still-local")).toBe(false);
 
     expect(broadcastMock).not.toHaveBeenCalled();
+  });
+
+  it("silently drops dock terminals while broadcasting to live grid targets", () => {
+    seedPanels([
+      makeTerminal("grid-a"),
+      makeTerminal("grid-b"),
+      makeTerminal("docked", { location: "dock" }),
+    ]);
+    useFleetArmingStore.getState().armIds(["grid-a", "grid-b", "docked"]);
+
+    expect(broadcastFleetRawInput("grid-a", "ls\r")).toBe(true);
+
+    expect(broadcastMock).toHaveBeenCalledWith(["grid-a", "grid-b"], "ls\r");
   });
 
   it("returns false for empty raw input", () => {

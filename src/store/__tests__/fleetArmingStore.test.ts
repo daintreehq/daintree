@@ -192,12 +192,13 @@ describe("fleetArmingStore", () => {
       expect(useFleetArmingStore.getState().lastArmedId).toBe("t2");
     });
 
-    it("excludes trash/background/hasPty=false panels", () => {
+    it("excludes trash/background/dock/hasPty=false panels", () => {
       seedPanels([
         makeAgentTerminal("t1", { agentState: "working" }),
         makeAgentTerminal("t2", { agentState: "working", location: "trash" }),
         makeAgentTerminal("t3", { agentState: "working", location: "background" }),
         makeAgentTerminal("t4", { agentState: "working", hasPty: false }),
+        makeAgentTerminal("t5", { agentState: "working", location: "dock" }),
       ]);
       useFleetArmingStore.getState().armByState("working", "current", false);
       expect([...useFleetArmingStore.getState().armedIds]).toEqual(["t1"]);
@@ -229,6 +230,12 @@ describe("fleetArmingStore", () => {
       ]);
       useFleetArmingStore.getState().armAll("current");
       expect([...useFleetArmingStore.getState().armedIds].sort()).toEqual(["a1", "a2"]);
+    });
+
+    it("skips dock-located terminals", () => {
+      seedPanels([makeAgentTerminal("a1"), makeAgentTerminal("a2", { location: "dock" })]);
+      useFleetArmingStore.getState().armAll("current");
+      expect([...useFleetArmingStore.getState().armedIds]).toEqual(["a1"]);
     });
 
     it("scope 'all' arms across worktrees", () => {
@@ -299,6 +306,7 @@ describe("fleetArmingStore", () => {
           detectedAgentId: undefined,
           everDetectedAgent: false,
         }),
+        makeAgentTerminal("a6", { worktreeId: "wt-1", location: "dock" }),
       ]);
       useFleetArmingStore.getState().armMatchingFilter(["wt-1"]);
       expect([...useFleetArmingStore.getState().armedIds]).toEqual(["a1", "a5"]);
@@ -453,6 +461,10 @@ describe("fleetArmingStore", () => {
 
     it("rejects background terminals", () => {
       expect(isFleetArmEligible(makeAgentTerminal("a", { location: "background" }))).toBe(false);
+    });
+
+    it("rejects dock terminals", () => {
+      expect(isFleetArmEligible(makeAgentTerminal("a", { location: "dock" }))).toBe(false);
     });
 
     it("rejects hasPty=false terminals", () => {
@@ -668,6 +680,15 @@ describe("fleetArmingStore", () => {
       useFleetArmingStore.getState().armIds(["a", "b"]);
 
       seedPanels([makeAgentTerminal("a"), makeAgentTerminal("b", { location: "trash" })]);
+
+      expect([...useFleetArmingStore.getState().armedIds]).toEqual(["a"]);
+    });
+
+    it("drops armed ids when a panel transitions to dock", () => {
+      seedPanels([makeAgentTerminal("a"), makeAgentTerminal("b")]);
+      useFleetArmingStore.getState().armIds(["a", "b"]);
+
+      seedPanels([makeAgentTerminal("a"), makeAgentTerminal("b", { location: "dock" })]);
 
       expect([...useFleetArmingStore.getState().armedIds]).toEqual(["a"]);
     });

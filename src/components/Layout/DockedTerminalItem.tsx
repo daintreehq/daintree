@@ -13,7 +13,6 @@ import {
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
 import { useProjectPresetsStore } from "@/store/projectPresetsStore";
-import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { getMergedPresets } from "@/config/agents";
 import { TerminalContextMenu } from "@/components/Terminal/TerminalContextMenu";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
@@ -43,9 +42,6 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
   const backendStatus = usePanelStore((s) => s.backendStatus);
   const hybridInputEnabled = useTerminalInputStore((s) => s.hybridInputEnabled);
   const hybridInputAutoFocus = useTerminalInputStore((s) => s.hybridInputAutoFocus);
-  const isFleetHybridInputMember = useFleetArmingStore(
-    (s) => s.armedIds.has(terminal.id) && s.armedIds.size >= 2
-  );
 
   // Derive isOpen from store state
   const isOpen = activeDockTerminalId === terminal.id;
@@ -380,7 +376,7 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
         onOpenAutoFocus={(event) => {
           event.preventDefault();
           const focusTarget = getTerminalFocusTarget({
-            hasHybridInputSurface: chrome.isAgent || isFleetHybridInputMember,
+            hasHybridInputSurface: chrome.isAgent,
             isInputDisabled: backendStatus === "disconnected" || backendStatus === "recovering",
             hybridInputEnabled,
             hybridInputAutoFocus,
