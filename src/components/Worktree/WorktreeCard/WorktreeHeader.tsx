@@ -108,9 +108,9 @@ const IssueBadge = memo(function IssueBadge({
     (open: boolean) => {
       setIsOpen(open);
       if (open) {
-        fetchTooltip();
+        void fetchTooltip();
       } else {
-        reset();
+        void reset();
       }
     },
     [fetchTooltip, reset]
@@ -214,9 +214,9 @@ const PRBadge = memo(function PRBadge({
     (open: boolean) => {
       setIsOpen(open);
       if (open) {
-        fetchTooltip();
+        void fetchTooltip();
       } else {
-        reset();
+        void reset();
       }
     },
     [fetchTooltip, reset]
