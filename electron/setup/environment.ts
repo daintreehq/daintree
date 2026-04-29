@@ -16,7 +16,8 @@ for (const stream of [process.stdout, process.stderr]) {
 
 import nodeV8 from "node:v8";
 import vm from "node:vm";
-import { execFile } from "child_process";
+import { execFile, spawn } from "child_process";
+import { randomBytes } from "crypto";
 import { app } from "electron";
 import path from "path";
 import fs from "fs";
@@ -113,12 +114,20 @@ if (process.platform === "win32") {
   }
 }
 
-// Bumped from 5s to 8s to tolerate slow corporate shells (VPN-delayed NFS
-// home dirs, heavy .zshrc). The common case is ~50ms; the timeout exists
-// purely to bound worst-case hangs. If the shell call still times out,
-// refreshPath() falls back to getUnixFallbackPaths() so CLIs installed via
+// Bumped from 8s to 10s to match the markered shell-probe budget specified
+// in #6063. The common case is ~50ms; the timeout exists purely to bound
+// worst-case hangs. If the shell call still times out, refreshPath()
+// falls back to getUnixFallbackPaths() so CLIs installed via
 // mise/asdf/Volta are still discoverable.
-const REFRESH_TIMEOUT_MS = 8_000;
+const REFRESH_TIMEOUT_MS = 10_000;
+const SHELL_PROBE_KILL_GRACE_MS = 500;
+
+// Module-level singleton: caches the in-flight or successful probe Promise
+// so concurrent refreshPath() calls don't spawn duplicate shells. On a null
+// (failed) result we clear the cache to allow a future retry — caching a
+// transient failure for the entire session is worse than the bounded cost
+// of one extra probe.
+let shellProbePromise: Promise<string | null> | null = null;
 
 function deduplicatePath(pathStr: string, caseInsensitive: boolean): string {
   const entries = pathStr.split(path.delimiter).filter(Boolean);
@@ -278,23 +287,174 @@ function applyWindowsExtraPaths(currentPath: string): string {
   return missing.length ? [...missing, currentPath].join(path.delimiter) : currentPath;
 }
 
+function parseMarkeredPath(stdout: string, marker: string): string | null {
+  // Non-greedy quantifier so the first balanced marker pair wins. With a
+  // 32-hex-char random marker a collision is astronomically improbable,
+  // but the lazy match is structurally clearer than relying on uniqueness.
+  const regex = new RegExp(marker + "([\\s\\S]+?)" + marker);
+  const match = regex.exec(stdout);
+  if (!match) return null;
+  try {
+    const env = JSON.parse(match[1]) as Record<string, unknown>;
+    if (typeof env.PATH === "string" && env.PATH.trim().length > 0) {
+      return env.PATH;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+// Spawn $SHELL -i -l -c '<probe>' where <probe> brackets a JSON dump of
+// process.env between random hex markers. Parsing only what's between the
+// markers ignores prompt-tool noise (Powerlevel10k instant prompt,
+// oh-my-zsh update messages, fortune banners, motd output). Sets
+// DAINTREE_RESOLVING_ENVIRONMENT=1 in the child env so users can guard
+// slow .zshrc sections. Mirrors VS Code's getUnixShellEnvironment.
+function runShellProbe(): Promise<string | null> {
+  return new Promise((resolve) => {
+    let resolved = false;
+    let termTimer: NodeJS.Timeout | undefined = undefined;
+    let killTimer: NodeJS.Timeout | undefined = undefined;
+
+    const settle = (value: string | null) => {
+      if (resolved) return;
+      resolved = true;
+      if (termTimer !== undefined) clearTimeout(termTimer);
+      if (killTimer !== undefined) clearTimeout(killTimer);
+      resolve(value);
+    };
+
+    const shell = process.env.SHELL ?? (process.platform === "darwin" ? "/bin/zsh" : "/bin/bash");
+    const marker = randomBytes(16).toString("hex");
+    // process.execPath is the Electron binary; ELECTRON_RUN_AS_NODE=1 in the
+    // child env makes it act as plain Node so we don't depend on `node`
+    // being on the user's PATH.
+    const probeCmd = `printf '%s' "${marker}"; "${process.execPath}" -e 'process.stdout.write(JSON.stringify(process.env))'; printf '%s' "${marker}"`;
+
+    const childEnv: NodeJS.ProcessEnv = {
+      ...process.env,
+      DAINTREE_RESOLVING_ENVIRONMENT: "1",
+      ELECTRON_RUN_AS_NODE: "1",
+    };
+
+    let child: ReturnType<typeof spawn>;
+    try {
+      // stderr is intentionally ignored: a noisy oh-my-zsh/.zshrc can write
+      // tens of KB to stderr (update banners, compliance scripts), and a
+      // piped-but-undrained stderr would block the child once the OS pipe
+      // buffer fills — preventing the marker probe from ever reaching its
+      // closing printf and forcing a guaranteed timeout. Mirrors VS Code's
+      // getUnixShellEnvironment.
+      child = spawn(shell, ["-i", "-l", "-c", probeCmd], {
+        stdio: ["ignore", "pipe", "ignore"],
+        env: childEnv,
+      });
+    } catch (err) {
+      console.warn(
+        "[refreshPath] shell probe spawn failed:",
+        // eslint-disable-next-line no-restricted-syntax -- diagnostic console.warn passes the raw error if not an Error; not a user-visible string.
+        err instanceof Error ? err.message : err
+      );
+      settle(null);
+      return;
+    }
+
+    let stdout = "";
+    child.stdout?.on("data", (chunk: Buffer | string) => {
+      stdout += typeof chunk === "string" ? chunk : chunk.toString();
+    });
+    child.on("error", (err: Error) => {
+      console.warn("[refreshPath] shell probe error:", err.message);
+      settle(null);
+    });
+    child.on("close", () => {
+      settle(parseMarkeredPath(stdout, marker));
+    });
+
+    termTimer = setTimeout(() => {
+      console.warn(
+        "[refreshPath] Shell probe timed out after",
+        REFRESH_TIMEOUT_MS,
+        "ms — sending SIGTERM"
+      );
+      try {
+        child.kill("SIGTERM");
+      } catch {
+        // ignore kill errors — the close handler or kill timer below will settle
+      }
+    }, REFRESH_TIMEOUT_MS);
+
+    killTimer = setTimeout(() => {
+      try {
+        child.kill("SIGKILL");
+      } catch {
+        // ignore — process may already be gone
+      }
+      settle(null);
+    }, REFRESH_TIMEOUT_MS + SHELL_PROBE_KILL_GRACE_MS);
+  });
+}
+
+function resolvePathViaShellProbe(): Promise<string | null> {
+  if (shellProbePromise) return shellProbePromise;
+
+  const probe = runShellProbe();
+  shellProbePromise = probe;
+
+  // Clear the singleton on null/rejection so a subsequent refreshPath() can retry.
+  probe
+    .then((result) => {
+      if (result === null && shellProbePromise === probe) {
+        shellProbePromise = null;
+      }
+    })
+    .catch(() => {
+      if (shellProbePromise === probe) {
+        shellProbePromise = null;
+      }
+    });
+
+  return probe;
+}
+
 export async function refreshPath(): Promise<void> {
   let timeoutId: NodeJS.Timeout | undefined;
   let shellEnvFailed = false;
+  // Guards against late inner-IIFE writes to process.env.PATH after the
+  // outer race has already resolved with "timeout". Without this guard a
+  // shell that closes during the SIGTERM→SIGKILL grace window can clobber
+  // the fallback-augmented PATH that the post-race block has already set.
+  let timedOut = false;
   try {
     const result = await Promise.race([
       (async () => {
         if (process.platform === "win32") {
           const registryPath = await readWindowsRegistryPath();
-          if (!registryPath) return;
+          if (!registryPath || timedOut) return;
           const withExtras = applyWindowsExtraPaths(registryPath);
           process.env.PATH = deduplicatePath(withExtras, true);
+        } else if (process.env.DAINTREE_SHELL_PROBE === "1") {
+          // Opt-in markered shell-probe path (#6063). Replaces shell-env
+          // with a real `$SHELL -i -l -c` invocation so lazy-loaded version
+          // managers (mise/asdf), eval-based activations (pyenv/rbenv,
+          // `eval "$(tool init)"`), and non-bashrc layouts (fnm, pnpm)
+          // are visible. Gated behind the flag so we can dogfood for one
+          // release before flipping the default.
+          const probedPath = await resolvePathViaShellProbe();
+          if (timedOut) return;
+          if (probedPath) {
+            process.env.PATH = deduplicatePath(probedPath, false);
+          } else {
+            shellEnvFailed = true;
+          }
         } else {
           try {
             const { shellEnv } = (await import("shell-env")) as {
               shellEnv: () => Promise<Record<string, string>>;
             };
             const env = await shellEnv();
+            if (timedOut) return;
             if (env.PATH) {
               process.env.PATH = deduplicatePath(env.PATH, false);
             }
@@ -314,7 +474,10 @@ export async function refreshPath(): Promise<void> {
         }
       })(),
       new Promise<"timeout">((resolve) => {
-        timeoutId = setTimeout(() => resolve("timeout"), REFRESH_TIMEOUT_MS);
+        timeoutId = setTimeout(() => {
+          timedOut = true;
+          resolve("timeout");
+        }, REFRESH_TIMEOUT_MS);
       }),
     ]);
 
