@@ -108,7 +108,7 @@ export function GridNotificationBar({ className }: GridNotificationBarProps) {
                 "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent/60",
                 action.variant === "secondary"
                   ? "border border-tint/15 bg-tint/5 text-daintree-text/80 hover:bg-tint/10 hover:text-daintree-text"
-                  : "border border-daintree-accent/40 bg-daintree-accent/15 text-daintree-accent hover:bg-daintree-accent/25"
+                  : "border border-status-info/30 bg-status-info/15 text-status-info hover:bg-status-info/20"
               )}
             >
               {action.label}

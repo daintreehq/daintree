@@ -1194,7 +1194,7 @@ export function BulkCreateWorktreeDialog({
         <AppDialog.Title
           icon={
             isExecuting ? (
-              <Spinner size="lg" className="text-daintree-accent" />
+              <Spinner size="lg" className="text-activity-working" />
             ) : isDone ? (
               failedCount > 0 ? (
                 <AlertTriangle className="w-5 h-5 text-status-warning" />
@@ -1202,7 +1202,7 @@ export function BulkCreateWorktreeDialog({
                 <Check className="w-5 h-5 text-status-success" />
               )
             ) : (
-              <FolderGit2 className="w-5 h-5 text-daintree-accent" />
+              <FolderGit2 className="w-5 h-5 text-status-info" />
             )
           }
         >
@@ -1386,7 +1386,7 @@ export function BulkCreateWorktreeDialog({
                             {recipe.terminals.length !== 1 ? "s" : ""}
                           </span>
                           {recipe.id === defaultRecipeId && (
-                            <span className="text-xs text-daintree-accent shrink-0">(default)</span>
+                            <span className="text-xs text-status-info shrink-0">(default)</span>
                           )}
                         </div>
                         {recipe.id === selectedRecipeId && (
@@ -1460,7 +1460,7 @@ export function BulkCreateWorktreeDialog({
                     >
                       <div className="mt-0.5 shrink-0">
                         {isInProgress ? (
-                          <Spinner size="md" className="text-daintree-accent" />
+                          <Spinner size="md" className="text-activity-working" />
                         ) : itemStatus?.stage === "succeeded" ? (
                           <Check className="w-4 h-4 text-status-success" />
                         ) : itemStatus?.stage === "failed" ? (
@@ -1476,7 +1476,7 @@ export function BulkCreateWorktreeDialog({
                           </span>
                           <span className="text-daintree-text truncate">{item.item.title}</span>
                           {isInProgress && itemStatus.attempt > 1 && (
-                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-daintree-accent/10 text-daintree-accent shrink-0">
+                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-status-info/10 text-status-info shrink-0">
                               retry {itemStatus.attempt - 1}
                             </span>
                           )}
@@ -1499,7 +1499,7 @@ export function BulkCreateWorktreeDialog({
             <div className="space-y-2">
               <div className="h-2 rounded-full bg-overlay-soft overflow-hidden">
                 <div
-                  className="h-full rounded-full bg-daintree-accent transition-[width] duration-300"
+                  className="h-full rounded-full bg-status-info transition-[width] duration-300"
                   style={{
                     width: `${progress.items.size > 0 ? (processedCount / progress.items.size) * 100 : 0}%`,
                   }}

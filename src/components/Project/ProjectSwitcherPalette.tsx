@@ -83,7 +83,7 @@ const StatusDot = memo(function StatusDot({ project }: { project: SearchableProj
   if (hasActive) {
     return (
       <div
-        className="w-1.5 h-1.5 rounded-full bg-daintree-accent animate-activity-pulse shrink-0"
+        className="w-1.5 h-1.5 rounded-full bg-activity-active animate-activity-pulse shrink-0"
         aria-label="Agents working"
       />
     );
@@ -129,7 +129,7 @@ const ProjectListItem = memo(function ProjectListItem({
     if (project.isMissing)
       return { secondaryText: "Directory not found", secondaryClass: "text-status-warning/70" };
     if (project.activeAgentCount > 0)
-      return { secondaryText: "Agent working\u2026", secondaryClass: "text-daintree-accent/80" };
+      return { secondaryText: "Agent working\u2026", secondaryClass: "text-activity-working" };
     if (project.waitingAgentCount > 0)
       return { secondaryText: "Needs review", secondaryClass: "text-status-warning/80" };
     if (project.lastOpened > 0)

@@ -89,7 +89,7 @@ export function NotificationCenterEntry({
                     isAvailable
                       ? action.variant === "secondary"
                         ? "border border-daintree-text/20 text-daintree-text/70 hover:bg-overlay-medium"
-                        : "border border-daintree-accent/40 bg-daintree-accent/15 text-daintree-accent hover:bg-daintree-accent/25"
+                        : "border border-status-info/30 bg-status-info/15 text-status-info hover:bg-status-info/20"
                       : "border border-daintree-text/10 text-daintree-text/30 cursor-not-allowed"
                   )}
                 >
@@ -105,10 +105,7 @@ export function NotificationCenterEntry({
           {formatRelativeTime(entry.timestamp)}
         </span>
         {isNew && (
-          <span
-            aria-hidden="true"
-            className="h-1.5 w-1.5 rounded-full bg-daintree-accent shrink-0"
-          />
+          <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-status-info shrink-0" />
         )}
         {entry.context?.projectId && (
           <DropdownMenu>

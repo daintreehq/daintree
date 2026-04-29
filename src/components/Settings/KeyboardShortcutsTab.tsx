@@ -54,7 +54,7 @@ function ShortcutRow({ binding, isEditing, onEdit, onSave, onCancel, onReset }: 
             className={cn(
               "px-2 py-0.5 text-xs font-mono rounded",
               binding.isOverridden
-                ? "bg-daintree-accent/20 text-daintree-accent"
+                ? "bg-status-info/15 text-status-info"
                 : "bg-daintree-border text-daintree-text"
             )}
           >

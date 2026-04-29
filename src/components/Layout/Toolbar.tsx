@@ -960,7 +960,7 @@ export function Toolbar({
                   <span className="text-xs font-medium text-daintree-text tracking-wide truncate min-w-0">
                     Daintree
                   </span>
-                  <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-daintree-accent/20 text-daintree-accent shrink-0">
+                  <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-status-info/15 text-status-info shrink-0">
                     Beta
                   </span>
                   <ChevronsUpDown className="toolbar-project-meta ml-0.5 h-3 w-3 shrink-0" />

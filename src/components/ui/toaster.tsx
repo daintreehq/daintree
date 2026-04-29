@@ -220,8 +220,8 @@ function Toast({ notification }: { notification: Notification }) {
                   className={cn(
                     "px-2.5 py-1 rounded-[var(--radius-xs)]",
                     "text-xs font-medium",
-                    "bg-daintree-accent/10 text-daintree-accent",
-                    "hover:bg-daintree-accent/20 transition-colors",
+                    "bg-status-info/10 text-status-info",
+                    "hover:bg-status-info/20 transition-colors",
                     "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
                   )}
                 >

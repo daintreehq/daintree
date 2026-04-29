@@ -463,7 +463,7 @@ export function WorktreeHeader({
               const iconClass = cn(
                 "w-3 h-3 shrink-0",
                 isLifecycleRunning
-                  ? "animate-pulse text-daintree-accent"
+                  ? "animate-pulse text-activity-working"
                   : resourceStatusColor === "green"
                     ? "text-terminal-bright-green"
                     : resourceStatusColor === "yellow"
@@ -471,7 +471,7 @@ export function WorktreeHeader({
                       : resourceStatusColor === "red"
                         ? "text-status-error"
                         : resourceStatusColor === "neutral" || resourceStatusLabel
-                          ? "text-daintree-accent/70"
+                          ? "text-status-info/70"
                           : "text-daintree-text/30"
               );
               const hasDetails =
@@ -946,7 +946,7 @@ export function WorktreeHeader({
                 aria-disabled={!isActive || undefined}
                 aria-label="View agent plan file"
               >
-                <FileText className="w-3 h-3 shrink-0 text-daintree-accent/70" aria-hidden="true" />
+                <FileText className="w-3 h-3 shrink-0 text-status-info/70" aria-hidden="true" />
                 <span className={cn("font-mono", underlineOnHover && "hover:underline")}>
                   {worktree.planFilePath ?? "Plan"}
                 </span>

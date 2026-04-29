@@ -56,7 +56,7 @@ export function BulkActionBar({
           className="mx-2 mb-2 rounded-xl shadow-[var(--theme-shadow-floating)] bg-surface-panel ring-1 ring-border-default inset-shadow-[0_1px_0_var(--color-overlay-soft)] flex items-center gap-3 px-4 py-3"
         >
           <span className="inline-flex items-center gap-1.5 text-xs text-daintree-text/70">
-            <span className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded bg-daintree-accent/15 text-daintree-accent text-[10px] font-semibold tabular-nums">
+            <span className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded bg-status-info/15 text-status-info text-[10px] font-semibold tabular-nums">
               {count}
             </span>
             selected

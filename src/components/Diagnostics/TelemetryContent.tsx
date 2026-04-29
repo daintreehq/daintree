@@ -51,7 +51,7 @@ function TelemetryRow({ event, isSelected, onSelect }: RowProps) {
             "px-1.5 py-0.5 rounded text-[10px] font-mono uppercase tracking-wide shrink-0",
             event.kind === "sentry"
               ? "bg-status-error/15 text-status-error"
-              : "bg-daintree-accent/15 text-daintree-accent"
+              : "bg-status-info/15 text-status-info"
           )}
         >
           {kindLabel(event.kind)}
@@ -127,7 +127,7 @@ function TelemetryDetail({ event }: DetailProps) {
                   "px-1.5 py-0.5 rounded text-[10px] font-mono uppercase tracking-wide",
                   event.kind === "sentry"
                     ? "bg-status-error/15 text-status-error"
-                    : "bg-daintree-accent/15 text-daintree-accent"
+                    : "bg-status-info/15 text-status-info"
                 )}
               >
                 {kindLabel(event.kind)}

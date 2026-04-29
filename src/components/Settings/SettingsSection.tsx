@@ -38,7 +38,7 @@ export function SettingsSection({
           <Icon className={cn("w-4 h-4", iconColor)} aria-hidden="true" />
           {title}
           {badge && (
-            <span className="inline-flex items-center px-1.5 py-0.5 rounded-sm text-[10px] font-medium bg-daintree-accent/10 border border-daintree-border/50 text-daintree-text/50 uppercase tracking-wide">
+            <span className="inline-flex items-center px-1.5 py-0.5 rounded-sm text-[10px] font-medium bg-status-info/10 border border-daintree-border/50 text-daintree-text/50 uppercase tracking-wide">
               {badge}
             </span>
           )}

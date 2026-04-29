@@ -203,14 +203,14 @@ export function WorktreeFilterPopover({ hideSearchInput = false }: WorktreeFilte
             "relative flex items-center justify-center w-5 h-5 rounded",
             "text-daintree-text/60 hover:text-daintree-text hover:bg-tint/[0.06]",
             "transition-colors",
-            hasActiveFilters() && "text-daintree-accent"
+            hasActiveFilters() && "text-status-info"
           )}
           aria-label="Filter and sort worktrees"
           aria-haspopup="dialog"
         >
           <Filter className="w-3.5 h-3.5" />
           {showBadge && (
-            <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-daintree-accent" />
+            <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-status-info" />
           )}
         </button>
       </PopoverTrigger>

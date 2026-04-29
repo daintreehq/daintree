@@ -40,7 +40,7 @@ function getButtonClasses(variant: ButtonVariant): string {
     case "primary":
       return "bg-daintree-border text-daintree-text hover:bg-daintree-border/80";
     case "accent":
-      return "bg-daintree-accent/10 text-daintree-accent hover:bg-daintree-accent/20";
+      return "bg-status-info/10 text-status-info hover:bg-status-info/20";
     case "dismiss":
       return "text-daintree-text/60 hover:text-daintree-text hover:bg-daintree-border/50";
     case "danger":

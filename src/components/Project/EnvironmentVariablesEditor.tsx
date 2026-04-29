@@ -189,7 +189,7 @@ export function EnvironmentVariablesEditor({
                       Overridden
                     </span>
                   ) : (
-                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-daintree-accent/15 text-daintree-accent font-medium">
+                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-status-info/15 text-status-info font-medium">
                       Global
                     </span>
                   )}

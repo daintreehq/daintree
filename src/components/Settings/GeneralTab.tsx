@@ -419,7 +419,7 @@ export function GeneralTab({
             <div className="flex-1 min-w-0 space-y-1">
               <div className="flex items-center gap-2">
                 <span className="text-sm font-semibold text-daintree-text">Daintree</span>
-                <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-daintree-accent/15 text-daintree-accent leading-none">
+                <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-status-info/15 text-status-info leading-none">
                   Beta
                 </span>
                 <span className="text-xs text-text-muted font-mono ml-auto">v{appVersion}</span>

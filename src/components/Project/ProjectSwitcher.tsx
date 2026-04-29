@@ -123,7 +123,7 @@ export function ProjectSwitcher() {
     const totalActive = bgProjects.reduce((sum, p) => sum + p.activeAgentCount, 0);
 
     if (totalWaiting > 0) return { color: "bg-state-waiting", pulse: false, count: totalWaiting };
-    if (totalActive > 0) return { color: "bg-daintree-accent", pulse: true, count: totalActive };
+    if (totalActive > 0) return { color: "bg-activity-active", pulse: true, count: totalActive };
     return null;
   }, [projectSwitcher.results]);
 

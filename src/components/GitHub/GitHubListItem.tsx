@@ -356,7 +356,7 @@ export function GitHubListItem({
               <Tooltip>
                 <TooltipTrigger asChild>
                   {isActiveWorktree ? (
-                    <span className="shrink-0 text-daintree-accent">
+                    <span className="shrink-0 text-status-info">
                       <FolderGit2 className="w-3.5 h-3.5" />
                     </span>
                   ) : onSwitchToWorktree && matchedWorktree ? (

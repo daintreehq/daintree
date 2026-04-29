@@ -105,7 +105,7 @@ function OnboardingCard({
       />
       <div className="flex items-center gap-2 shrink-0">
         {presetCount > 1 && (
-          <span className="text-[10px] text-daintree-accent font-medium bg-daintree-accent/10 px-1.5 py-0.5 rounded">
+          <span className="text-[10px] text-status-info font-medium bg-status-info/10 px-1.5 py-0.5 rounded">
             {presetCount} presets
           </span>
         )}

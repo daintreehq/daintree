@@ -913,7 +913,7 @@ function CompleteStep({ installedAgents }: { installedAgents: string[] }) {
                 {presetCount > 1 && (
                   <span
                     data-testid="preset-count-badge"
-                    className="text-[10px] text-daintree-accent font-medium bg-daintree-accent/10 px-1.5 py-0.5 rounded"
+                    className="text-[10px] text-status-info font-medium bg-status-info/10 px-1.5 py-0.5 rounded"
                   >
                     {presetCount} presets
                   </span>

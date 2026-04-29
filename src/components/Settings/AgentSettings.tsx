@@ -730,7 +730,7 @@ export function AgentSettings({
                     {scopeKind === "custom" && (
                       <span
                         data-testid="preset-badge-custom"
-                        className="text-[10px] text-daintree-accent bg-daintree-accent/10 px-1.5 py-0.5 rounded"
+                        className="text-[10px] text-status-info bg-status-info/10 px-1.5 py-0.5 rounded"
                       >
                         custom
                       </span>
