@@ -164,6 +164,11 @@ export function AgentButton({
   const [primaryTooltipOpen, setPrimaryTooltipOpen] = useState(false);
   const [chevronTooltipOpen, setChevronTooltipOpen] = useState(false);
   const isRestoringFocusRef = useRef(false);
+  // Set in onPointerDownOutside, read in onCloseAutoFocus. Lets us
+  // preventDefault() the focus restoration only for pointer dismissals so the
+  // chevron doesn't keep its accent focus-visible ring; keyboard close
+  // (Escape/Enter) still gets default focus return for WAI-ARIA.
+  const wasPointerCloseRef = useRef(false);
 
   const handlePrimaryTooltipOpenChange = (open: boolean) => {
     if (open && isRestoringFocusRef.current) return;
@@ -481,8 +486,15 @@ export function AgentButton({
               align="start"
               sideOffset={4}
               className="min-w-[12rem] max-h-[var(--radix-dropdown-menu-content-available-height)] overflow-y-auto"
-              onCloseAutoFocus={() => {
+              onPointerDownOutside={() => {
+                wasPointerCloseRef.current = true;
+              }}
+              onCloseAutoFocus={(e) => {
                 suppressTooltipsDuringFocusRestore();
+                if (wasPointerCloseRef.current) {
+                  e.preventDefault();
+                  wasPointerCloseRef.current = false;
+                }
               }}
             >
               <DropdownMenuRadioGroup value={savedPresetId ?? ""}>

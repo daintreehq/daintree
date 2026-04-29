@@ -301,6 +301,11 @@ export function AgentTrayButton({
   // dialog lifetime. See issue #5153.
   const [tooltipOpen, setTooltipOpen] = useState(false);
   const isRestoringFocusRef = useRef(false);
+  // Set in onPointerDownOutside, read in onCloseAutoFocus. Lets us
+  // preventDefault() the focus restoration only for pointer dismissals so the
+  // tray button doesn't keep its accent focus-visible ring; keyboard close
+  // (Escape/Enter) still gets default focus return for WAI-ARIA.
+  const wasPointerCloseRef = useRef(false);
 
   // Re-probe on view visibility changes (Electron LRU reactivation, tab
   // switches). The window-focus trigger is handled once globally in
@@ -591,8 +596,15 @@ export function AgentTrayButton({
         align="start"
         sideOffset={4}
         className="min-w-[16rem]"
-        onCloseAutoFocus={() => {
+        onPointerDownOutside={() => {
+          wasPointerCloseRef.current = true;
+        }}
+        onCloseAutoFocus={(e) => {
           suppressTooltipDuringFocusRestore();
+          if (wasPointerCloseRef.current) {
+            e.preventDefault();
+            wasPointerCloseRef.current = false;
+          }
         }}
       >
         {isAvailabilityLoading && (

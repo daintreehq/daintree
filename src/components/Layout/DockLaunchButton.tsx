@@ -46,6 +46,11 @@ export function DockLaunchButton({
   // genuine pointer hover (cleared via onPointerEnter).
   const [tooltipOpen, setTooltipOpen] = useState(false);
   const isRestoringFocusRef = useRef(false);
+  // Set in onPointerDownOutside, read in onCloseAutoFocus. Lets us
+  // preventDefault() the focus restoration only for pointer dismissals so the
+  // launch pill doesn't keep its accent focus-visible ring; keyboard close
+  // (Escape/Enter) still gets default focus return for WAI-ARIA.
+  const wasPointerCloseRef = useRef(false);
 
   const handleTooltipOpenChange = (open: boolean) => {
     if (open && isRestoringFocusRef.current) return;
@@ -82,9 +87,16 @@ export function DockLaunchButton({
         align="start"
         sideOffset={4}
         className="min-w-[14rem]"
-        onCloseAutoFocus={() => {
+        onPointerDownOutside={() => {
+          wasPointerCloseRef.current = true;
+        }}
+        onCloseAutoFocus={(e) => {
           setTooltipOpen(false);
           isRestoringFocusRef.current = true;
+          if (wasPointerCloseRef.current) {
+            e.preventDefault();
+            wasPointerCloseRef.current = false;
+          }
         }}
       >
         <DockLaunchMenuItems

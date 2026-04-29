@@ -9,6 +9,8 @@ let mockRecipes: Array<{
   worktreeId?: string;
 }> = [];
 const runRecipeMock = vi.fn();
+let dropdownCloseAutoFocusSpy: ((e: { preventDefault: () => void }) => void) | null = null;
+let dropdownPointerDownOutsideSpy: (() => void) | null = null;
 
 vi.mock("@/store/recipeStore", () => ({
   useRecipeStore: Object.assign(
@@ -34,9 +36,19 @@ vi.mock("@/components/ui/tooltip", () => ({
 vi.mock("@/components/ui/dropdown-menu", () => ({
   DropdownMenu: ({ children }: { children: ReactNode }) => <>{children}</>,
   DropdownMenuTrigger: ({ children }: { children: ReactNode }) => <>{children}</>,
-  DropdownMenuContent: ({ children }: { children: ReactNode }) => (
-    <div data-testid="dock-launcher-content">{children}</div>
-  ),
+  DropdownMenuContent: ({
+    children,
+    onCloseAutoFocus,
+    onPointerDownOutside,
+  }: {
+    children: ReactNode;
+    onCloseAutoFocus?: (e: { preventDefault: () => void }) => void;
+    onPointerDownOutside?: () => void;
+  }) => {
+    dropdownCloseAutoFocusSpy = onCloseAutoFocus ?? null;
+    dropdownPointerDownOutsideSpy = onPointerDownOutside ?? null;
+    return <div data-testid="dock-launcher-content">{children}</div>;
+  },
   DropdownMenuItem: ({
     children,
     onSelect,
@@ -66,6 +78,8 @@ const AGENTS = [
 beforeEach(() => {
   mockRecipes = [];
   runRecipeMock.mockReset();
+  dropdownCloseAutoFocusSpy = null;
+  dropdownPointerDownOutsideSpy = null;
 });
 
 describe("DockLaunchButton", () => {
@@ -190,6 +204,38 @@ describe("DockLaunchButton", () => {
     expect(getByText("Project recipe")).toBeTruthy();
     expect(getByText("Worktree recipe")).toBeTruthy();
     expect(queryByText("Other worktree recipe")).toBeNull();
+  });
+
+  it("calls preventDefault on pointer close so the trigger does not keep its focus ring (issue #6119)", () => {
+    render(
+      <DockLaunchButton
+        agents={AGENTS}
+        hasDevPreview={false}
+        onLaunchAgent={vi.fn()}
+        activeWorktreeId={null}
+        cwd="/tmp"
+      />
+    );
+    expect(dropdownCloseAutoFocusSpy).toBeTruthy();
+    expect(dropdownPointerDownOutsideSpy).toBeTruthy();
+
+    // Keyboard close (no prior pointer-down-outside) must NOT preventDefault
+    // — focus restoration is required for WAI-ARIA Escape/Enter.
+    const keyboardPreventDefault = vi.fn();
+    dropdownCloseAutoFocusSpy!({ preventDefault: keyboardPreventDefault });
+    expect(keyboardPreventDefault).not.toHaveBeenCalled();
+
+    // Pointer close suppresses the focus ring.
+    dropdownPointerDownOutsideSpy!();
+    const pointerPreventDefault = vi.fn();
+    dropdownCloseAutoFocusSpy!({ preventDefault: pointerPreventDefault });
+    expect(pointerPreventDefault).toHaveBeenCalledTimes(1);
+
+    // The pointer flag must reset after one onCloseAutoFocus or a later
+    // keyboard-driven close would inherit suppression and break focus return.
+    const resetPreventDefault = vi.fn();
+    dropdownCloseAutoFocusSpy!({ preventDefault: resetPreventDefault });
+    expect(resetPreventDefault).not.toHaveBeenCalled();
   });
 
   it("invokes runRecipe with cwd, worktreeId, and recipe context when a recipe is selected", () => {

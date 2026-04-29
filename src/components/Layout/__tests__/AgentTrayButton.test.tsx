@@ -13,6 +13,7 @@ let openChangeSpy: ((open: boolean) => void) | null = null;
 let tooltipOpenChangeSpy: ((open: boolean) => void) | null = null;
 let capturedTooltipOpen: boolean | undefined = undefined;
 let closeAutoFocusSpy: ((e: { preventDefault: () => void }) => void) | null = null;
+let pointerDownOutsideSpy: (() => void) | null = null;
 
 let mockSettings: AgentSettings | null = null;
 let mockPanelsById: Record<string, unknown> = {};
@@ -153,11 +154,14 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
   DropdownMenuContent: ({
     children,
     onCloseAutoFocus,
+    onPointerDownOutside,
   }: {
     children: React.ReactNode;
     onCloseAutoFocus?: (e: { preventDefault: () => void }) => void;
+    onPointerDownOutside?: () => void;
   }) => {
     closeAutoFocusSpy = onCloseAutoFocus ?? null;
+    pointerDownOutsideSpy = onPointerDownOutside ?? null;
     return <div data-testid="dropdown-content">{children}</div>;
   },
   DropdownMenuItem: ({
@@ -308,6 +312,7 @@ describe("AgentTrayButton", () => {
     tooltipOpenChangeSpy = null;
     capturedTooltipOpen = undefined;
     closeAutoFocusSpy = null;
+    pointerDownOutsideSpy = null;
     mockSettings = null;
     mockPanelsById = {};
     mockPanelIds = [];
@@ -749,12 +754,50 @@ describe("AgentTrayButton", () => {
     expect(capturedTooltipOpen).toBe(true);
   });
 
-  it("does not call preventDefault in onCloseAutoFocus (preserves a11y focus return)", () => {
+  it("does not call preventDefault on keyboard close (preserves a11y focus return for issue #6119)", () => {
+    // No preceding onPointerDownOutside means the close source is keyboard
+    // (Escape/Enter); WAI-ARIA requires focus to return to the trigger.
     const availability = { claude: "ready" } as unknown as CliAvailability;
     mockSettings = settingsWith({ claude: { pinned: true } });
 
     render(<AgentTrayButton agentAvailability={availability} />);
     expect(closeAutoFocusSpy).toBeTruthy();
+
+    const preventDefault = vi.fn();
+    closeAutoFocusSpy!({ preventDefault });
+    expect(preventDefault).not.toHaveBeenCalled();
+  });
+
+  it("calls preventDefault on pointer close so the trigger does not keep its focus ring (issue #6119)", () => {
+    // Pointer-driven dismissal must suppress focus restoration to the trigger;
+    // otherwise Radix re-focuses it and :focus-visible repaints the accent
+    // ring even though the user clicked elsewhere.
+    const availability = { claude: "ready" } as unknown as CliAvailability;
+    mockSettings = settingsWith({ claude: { pinned: true } });
+
+    render(<AgentTrayButton agentAvailability={availability} />);
+    expect(closeAutoFocusSpy).toBeTruthy();
+    expect(pointerDownOutsideSpy).toBeTruthy();
+
+    pointerDownOutsideSpy!();
+    const preventDefault = vi.fn();
+    closeAutoFocusSpy!({ preventDefault });
+    expect(preventDefault).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not preventDefault on a subsequent keyboard close after a prior pointer close (issue #6119)", () => {
+    // The pointer flag must reset after one onCloseAutoFocus or a later
+    // keyboard-driven close would inherit suppression from the prior dismissal
+    // and break focus return.
+    const availability = { claude: "ready" } as unknown as CliAvailability;
+    mockSettings = settingsWith({ claude: { pinned: true } });
+
+    render(<AgentTrayButton agentAvailability={availability} />);
+    expect(closeAutoFocusSpy).toBeTruthy();
+    expect(pointerDownOutsideSpy).toBeTruthy();
+
+    pointerDownOutsideSpy!();
+    closeAutoFocusSpy!({ preventDefault: vi.fn() });
 
     const preventDefault = vi.fn();
     closeAutoFocusSpy!({ preventDefault });
