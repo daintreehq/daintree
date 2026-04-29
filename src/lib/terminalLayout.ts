@@ -130,15 +130,18 @@ export function getAutoGridCols(
     targetCols = 4;
   }
 
-  // Apply hysteresis: hold the prior wider count through the buffer zone
-  // between widenAt and narrowAt for any band whose `to` matches it.
-  if (previousCols !== undefined && previousCols > targetCols) {
+  // Apply hysteresis: walk every band whose `to` is at or below `previousCols`,
+  // hold the highest one whose narrowAt has not yet been reached. Cascading
+  // through intermediate bands matters when count drops several tiers at once
+  // (e.g. previousCols=4 → count=5 should pass through 3 cols, not jump to 2).
+  if (previousCols !== undefined) {
+    let stickyCols = targetCols;
     for (const band of HYSTERESIS_BANDS) {
-      if (previousCols === band.to && count > band.narrowAt) {
-        targetCols = band.to;
-        break;
+      if (previousCols >= band.to && count > band.narrowAt && band.to > stickyCols) {
+        stickyCols = band.to;
       }
     }
+    targetCols = stickyCols;
   }
 
   // Don't use more columns than we have terminals (no empty columns)

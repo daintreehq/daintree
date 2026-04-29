@@ -195,6 +195,33 @@ describe("getAutoGridCols", () => {
       // count=2 wants ≤2 cols regardless of any sticky prior.
       expect(getAutoGridCols(2, wideWidth, 3)).toBe(2);
     });
+
+    it("cascades through intermediate bands on multi-tier drops", () => {
+      // From 4 cols, dropping straight to count=5 should pass through 3 cols
+      // (the 2→3 band is still sticky at count=5), not skip to 2.
+      expect(getAutoGridCols(5, wideWidth, 4)).toBe(3);
+      // count=4 clears both bands' narrowAt thresholds → drops to 2.
+      expect(getAutoGridCols(4, wideWidth, 4)).toBe(2);
+    });
+
+    it("holds chained sequence through staged decrements (6→5→4)", () => {
+      // Simulate the per-render previousCols handoff for a 6→5→4 sequence.
+      const at6 = getAutoGridCols(6, wideWidth, 2);
+      const at5 = getAutoGridCols(5, wideWidth, at6);
+      const at4 = getAutoGridCols(4, wideWidth, at5);
+      expect(at6).toBe(3); // widens
+      expect(at5).toBe(3); // sticky
+      expect(at4).toBe(2); // drops at narrowAt
+    });
+
+    it("holds chained sequence at the 3→4 band (12→11→10)", () => {
+      const at12 = getAutoGridCols(12, wideWidth, 3);
+      const at11 = getAutoGridCols(11, wideWidth, at12);
+      const at10 = getAutoGridCols(10, wideWidth, at11);
+      expect(at12).toBe(4);
+      expect(at11).toBe(4); // sticky at 3→4 band
+      expect(at10).toBe(3); // drops to 3, still sticky there (10>4) until count<=4
+    });
   });
 });
 
