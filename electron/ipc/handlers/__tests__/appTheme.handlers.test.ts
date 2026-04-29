@@ -646,10 +646,7 @@ describe("appTheme handlers", () => {
       const handler = getHandler(CHANNELS.APP_THEME_SET_CUSTOM_SCHEMES);
       await handler({}, [validScheme]);
 
-      expect(storeMock.set).toHaveBeenCalledWith(
-        "appTheme",
-        expect.objectContaining({ customSchemes: [validScheme] })
-      );
+      expect(storeMock.set).toHaveBeenCalledWith("appTheme.customSchemes", [validScheme]);
     });
 
     it("rejects invalid scheme arrays", async () => {
@@ -689,12 +686,7 @@ describe("appTheme handlers", () => {
       expect(config.customSchemes).toHaveLength(1);
 
       // Verify it rewrote the store with the native array
-      expect(storeMock.set).toHaveBeenCalledWith(
-        "appTheme",
-        expect.objectContaining({
-          customSchemes: expect.any(Array),
-        })
-      );
+      expect(storeMock.set).toHaveBeenCalledWith("appTheme.customSchemes", expect.any(Array));
     });
 
     it("returns empty array for malformed legacy JSON", async () => {

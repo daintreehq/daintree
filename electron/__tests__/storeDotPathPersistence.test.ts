@@ -8,7 +8,7 @@ vi.mock("electron-store", async () => {
   return { default: conf.default };
 });
 
-import { initializeStore } from "../store.js";
+import { initializeStore, _resetStoreInstance } from "../store.js";
 
 type AnyStore = {
   set: (key: string, value: unknown) => void;
@@ -21,11 +21,13 @@ describe("Store dot-path persistence", () => {
   let configPath: string;
 
   beforeEach(() => {
+    _resetStoreInstance();
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "daintree-store-dotpath-"));
     configPath = path.join(tempDir, "config.json");
   });
 
   afterEach(() => {
+    _resetStoreInstance();
     fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
