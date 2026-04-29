@@ -174,7 +174,8 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
       type: "info",
       title: "Notifications muted",
       message: `Notifications muted ${label}`,
-      priority: "low",
+      priority: "high",
+      duration: 3000,
       urgent: true,
     });
   };
@@ -185,7 +186,8 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
       type: "info",
       title: "Notifications muted",
       message: `Notifications muted until ${timeFormatter.format(new Date(until))}`,
-      priority: "low",
+      priority: "high",
+      duration: 3000,
       urgent: true,
     });
   };

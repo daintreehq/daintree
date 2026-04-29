@@ -330,7 +330,15 @@ describe("NotificationCenter pause menu", () => {
     });
 
     expect(vi.mocked(notifyLib.muteForDuration)).toHaveBeenCalledWith(60 * 60 * 1000);
-    expect(vi.mocked(notifyLib.notify)).toHaveBeenCalled();
+    expect(vi.mocked(notifyLib.notify)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "info",
+        title: "Notifications muted",
+        priority: "high",
+        duration: 3000,
+        urgent: true,
+      })
+    );
     expect(dispatchMock).not.toHaveBeenCalled();
   });
 
@@ -349,6 +357,15 @@ describe("NotificationCenter pause menu", () => {
     });
 
     expect(vi.mocked(notifyLib.muteUntilNextMorning)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(notifyLib.notify)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "info",
+        title: "Notifications muted",
+        priority: "high",
+        duration: 3000,
+        urgent: true,
+      })
+    );
   });
 
   it("dispatches notification settings tab from the footer link", async () => {
