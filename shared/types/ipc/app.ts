@@ -106,6 +106,12 @@ export interface HydrateResult {
   gpuWebGLHardware: boolean;
   gpuHardwareAccelerationDisabled: boolean;
   safeMode: boolean;
+  /** Number of saved panels skipped due to safe-mode boot (0 when safe mode is inactive). */
+  skippedPanelCount?: number;
+  /** Consecutive recent unclean launches counted by the crash-loop guard. */
+  crashCount?: number;
+  /** Timestamp (ms since epoch) of the most recent unclean launch prior to this boot. */
+  lastCrashAt?: number;
   settingsRecovery?: SettingsRecovery | null;
   projectStateRecovery?: ProjectStateRecovery | null;
 }

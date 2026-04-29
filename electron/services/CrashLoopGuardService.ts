@@ -33,6 +33,8 @@ export class CrashLoopGuardService {
   private relaunchAllowed = true;
   private stabilityTimer: ReturnType<typeof setTimeout> | null = null;
   private initialized = false;
+  private crashCount = 0;
+  private lastCrashAt: number | undefined;
 
   constructor() {
     this.userData = app.getPath("userData");
@@ -54,6 +56,11 @@ export class CrashLoopGuardService {
       state.launches = [];
     }
 
+    // The previous launch (if any) is the most recent crash — captured before
+    // we append the current launch so launches[length - 1] becomes "now".
+    this.lastCrashAt =
+      state.launches.length > 0 ? state.launches[state.launches.length - 1] : undefined;
+
     state.launches.push(now);
     if (state.launches.length > HARD_STOP_THRESHOLD) {
       state.launches = state.launches.slice(-HARD_STOP_THRESHOLD);
@@ -61,6 +68,7 @@ export class CrashLoopGuardService {
 
     state.cleanExit = false;
 
+    this.crashCount = state.crashes;
     this.safeMode = state.crashes >= CRASH_THRESHOLD;
     this.relaunchAllowed = state.crashes < HARD_STOP_THRESHOLD;
 
@@ -90,6 +98,36 @@ export class CrashLoopGuardService {
 
   shouldRelaunch(): boolean {
     return this.relaunchAllowed;
+  }
+
+  getCrashCount(): number {
+    return this.crashCount;
+  }
+
+  getLastCrashTimestamp(): number | undefined {
+    return this.lastCrashAt;
+  }
+
+  /**
+   * User-initiated reset: cancel the stability timer first to avoid a race
+   * where the timer fires between our write and `app.exit(0)` and clobbers
+   * the fresh state with stale in-memory data, then atomically clear the
+   * state file and reset in-memory flags.
+   */
+  resetForNormalBoot(): void {
+    if (this.stabilityTimer) {
+      clearTimeout(this.stabilityTimer);
+      this.stabilityTimer = null;
+    }
+    try {
+      this.writeState(freshState());
+    } catch (err) {
+      console.error("[CrashLoopGuard] Failed to reset state for normal boot:", err);
+    }
+    this.safeMode = false;
+    this.relaunchAllowed = true;
+    this.crashCount = 0;
+    this.lastCrashAt = undefined;
   }
 
   markCleanExit(): void {

@@ -61,6 +61,10 @@ function logHydrationInfo(message: string, context?: Record<string, unknown>): v
 
 let hydrationBootstrapPromise: Promise<void> | null = null;
 
+// One-shot guard so the GPU-disabled toast fires at most once per renderer
+// lifecycle. Per-window module singleton; reset on app restart.
+let gpuAccelNotified = false;
+
 async function ensureHydrationBootstrap(): Promise<void> {
   if (!hydrationBootstrapPromise) {
     hydrationBootstrapPromise = (async () => {
@@ -255,7 +259,23 @@ export async function hydrateAppState(
     terminalInstanceService.setGPUHardwareAvailable(gpuWebGLHardware ?? true);
 
     if (hydrateResult.safeMode) {
-      useSafeModeStore.getState().setSafeMode(true);
+      useSafeModeStore.getState().setSafeMode(true, {
+        crashCount: hydrateResult.crashCount,
+        skippedPanelCount: hydrateResult.skippedPanelCount,
+        lastCrashAt: hydrateResult.lastCrashAt,
+      });
+    }
+
+    if (hydrateResult.gpuHardwareAccelerationDisabled && !gpuAccelNotified) {
+      gpuAccelNotified = true;
+      notify({
+        type: "warning",
+        title: "Hardware acceleration disabled",
+        message:
+          "Daintree disabled GPU acceleration after repeated GPU crashes. Performance may be reduced — re-enable it in Settings > Troubleshooting.",
+        priority: "watch",
+        duration: 0,
+      });
     }
 
     if (hydrateResult.settingsRecovery) {

@@ -593,6 +593,10 @@ export interface IpcInvokeMap {
     args: [];
     result: void;
   };
+  "app:reset-and-relaunch": {
+    args: [];
+    result: void;
+  };
   "app:first-interactive": {
     args: [];
     result: void;

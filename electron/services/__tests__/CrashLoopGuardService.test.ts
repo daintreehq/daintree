@@ -334,4 +334,89 @@ describe("CrashLoopGuardService", () => {
 
     guard.dispose();
   });
+
+  describe("crash metadata", () => {
+    it("getCrashCount reports zero on a fresh boot", () => {
+      const guard = new CrashLoopGuardService();
+      guard.initialize();
+      expect(guard.getCrashCount()).toBe(0);
+    });
+
+    it("getLastCrashTimestamp is undefined on a fresh boot", () => {
+      const guard = new CrashLoopGuardService();
+      guard.initialize();
+      expect(guard.getLastCrashTimestamp()).toBeUndefined();
+    });
+
+    it("getCrashCount tracks consecutive unclean exits", () => {
+      for (let i = 0; i < 3; i++) {
+        const guard = new CrashLoopGuardService();
+        guard.initialize();
+      }
+      const guard = new CrashLoopGuardService();
+      guard.initialize();
+      expect(guard.getCrashCount()).toBe(3);
+    });
+
+    it("getLastCrashTimestamp returns the most recent prior unclean launch", () => {
+      const start = Date.now();
+      vi.setSystemTime(start);
+      const guard1 = new CrashLoopGuardService();
+      guard1.initialize();
+
+      vi.setSystemTime(start + 10_000);
+      const guard2 = new CrashLoopGuardService();
+      guard2.initialize();
+
+      // The previous (crash) launch is the one written by guard1 at `start`.
+      expect(guard2.getLastCrashTimestamp()).toBe(start);
+    });
+  });
+
+  describe("resetForNormalBoot", () => {
+    it("clears state file and in-memory flags", () => {
+      for (let i = 0; i < 3; i++) {
+        const guard = new CrashLoopGuardService();
+        guard.initialize();
+      }
+      const guard = new CrashLoopGuardService();
+      guard.initialize();
+      expect(guard.isSafeMode()).toBe(true);
+
+      guard.resetForNormalBoot();
+
+      expect(guard.isSafeMode()).toBe(false);
+      expect(guard.shouldRelaunch()).toBe(true);
+      expect(guard.getCrashCount()).toBe(0);
+      expect(guard.getLastCrashTimestamp()).toBeUndefined();
+
+      const state = readState();
+      expect(state.crashes).toBe(0);
+      expect(state.cleanExit).toBe(true);
+      expect(state.launches).toEqual([]);
+    });
+
+    it("cancels the stability timer so it can't clobber the fresh state", () => {
+      for (let i = 0; i < 3; i++) {
+        const guard = new CrashLoopGuardService();
+        guard.initialize();
+      }
+      const guard = new CrashLoopGuardService();
+      guard.initialize();
+      guard.startStabilityTimer();
+
+      guard.resetForNormalBoot();
+
+      // Advancing past the 5-minute timeout must not re-fire the timer
+      // (which would also write fresh state, but more importantly must
+      // not throw on a torn-down service).
+      vi.advanceTimersByTime(6 * 60 * 1000);
+
+      const state = readState();
+      expect(state.crashes).toBe(0);
+      expect(state.cleanExit).toBe(true);
+
+      guard.dispose();
+    });
+  });
 });

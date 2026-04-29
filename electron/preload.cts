@@ -1037,6 +1037,8 @@ const api: ElectronAPI = {
 
     forceQuit: () => _unwrappingInvoke(CHANNELS.APP_FORCE_QUIT),
 
+    resetAndRelaunch: () => _unwrappingInvoke(CHANNELS.APP_RESET_AND_RELAUNCH),
+
     notifyFirstInteractive: () => _unwrappingInvoke(CHANNELS.APP_FIRST_INTERACTIVE),
 
     onMenuAction: (callback: (action: string) => void) => _typedOn(CHANNELS.MENU_ACTION, callback),
