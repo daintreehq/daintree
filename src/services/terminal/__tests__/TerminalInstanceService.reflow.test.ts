@@ -289,12 +289,10 @@ describe("TerminalInstanceService maybeReflowTerminal", () => {
 describe("TerminalInstanceService reflowHeartbeatTimer visibility gate", () => {
   let service: ReflowTestService;
   let visibilityState: DocumentVisibilityState;
-  let originalDescriptor: PropertyDescriptor | undefined;
 
   beforeEach(async () => {
     vi.useFakeTimers();
     visibilityState = "visible";
-    originalDescriptor = Object.getOwnPropertyDescriptor(Document.prototype, "visibilityState");
     Object.defineProperty(document, "visibilityState", {
       get: () => visibilityState,
       configurable: true,
@@ -312,15 +310,13 @@ describe("TerminalInstanceService reflowHeartbeatTimer visibility gate", () => {
     vi.useRealTimers();
     service.instances.clear();
     document.body.innerHTML = "";
-    if (originalDescriptor) {
-      Object.defineProperty(Document.prototype, "visibilityState", originalDescriptor);
-    } else {
-      // Fallback: leave the document in a sensible state for later tests
-      Object.defineProperty(document, "visibilityState", {
-        value: "visible",
-        configurable: true,
-      });
-    }
+    // Replace the live getter with a plain "visible" value so the document is
+    // back to a clean state for any subsequent tests.
+    Object.defineProperty(document, "visibilityState", {
+      value: "visible",
+      configurable: true,
+      writable: true,
+    });
   });
 
   it("skips reflows while document is hidden", () => {
