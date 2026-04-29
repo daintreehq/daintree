@@ -401,4 +401,162 @@ describe("useSlowCall", () => {
     expect(signals[1]).toBeDefined();
     expect(signals[0]).not.toBe(signals[1]);
   });
+
+  it("uses the latest fn and thresholds even when run() reference is stable", async () => {
+    vi.useFakeTimers();
+    const deferredA = createDeferred<string>();
+    const deferredB = createDeferred<string>();
+    const fnA = vi.fn(async () => deferredA.promise);
+    const fnB = vi.fn(async () => deferredB.promise);
+
+    type Props = { fn: typeof fnA; slowMs: number; verySlowMs: number };
+    const { result, rerender } = renderHook(
+      ({ fn, slowMs, verySlowMs }: Props) => useSlowCall(fn, { slowMs, verySlowMs }),
+      { initialProps: { fn: fnA, slowMs: 3000, verySlowMs: 10000 } }
+    );
+
+    const stableRun = result.current.run;
+    await act(async () => {
+      rerender({ fn: fnB, slowMs: 500, verySlowMs: 1500 });
+    });
+
+    let runPromise: Promise<string | undefined>;
+    act(() => {
+      runPromise = stableRun();
+    });
+
+    await act(async () => {
+      vi.advanceTimersByTime(500);
+    });
+    expect(result.current.isSlow).toBe(true);
+
+    await act(async () => {
+      vi.advanceTimersByTime(1000);
+    });
+    expect(result.current.isVerySlow).toBe(true);
+
+    deferredB.resolve("B");
+    await act(async () => {
+      const value = await runPromise;
+      expect(value).toBe("B");
+    });
+
+    expect(fnA).not.toHaveBeenCalled();
+    expect(fnB).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns undefined and swallows AbortError when cancel() races a rejection", async () => {
+    const deferred = createDeferred<string>();
+    const fn = vi.fn(async (signal: AbortSignal) => {
+      return new Promise<string>((resolve, reject) => {
+        signal.addEventListener("abort", () => reject(new Error("AbortError")));
+        deferred.promise.then(resolve, reject);
+      });
+    });
+    const { result } = renderHook(() => useSlowCall(fn));
+
+    let runPromise: Promise<string | undefined>;
+    act(() => {
+      runPromise = result.current.run();
+    });
+
+    act(() => {
+      result.current.cancel();
+    });
+
+    await act(async () => {
+      const value = await runPromise;
+      expect(value).toBeUndefined();
+    });
+
+    expect(result.current.isPending).toBe(false);
+  });
+
+  it("returns undefined when superseded by a newer run()", async () => {
+    const deferred1 = createDeferred<string>();
+    const deferred2 = createDeferred<string>();
+    let calls = 0;
+    const fn = vi.fn(async () => {
+      calls += 1;
+      return calls === 1 ? deferred1.promise : deferred2.promise;
+    });
+
+    const { result } = renderHook(() => useSlowCall(fn));
+
+    let firstPromise: Promise<string | undefined>;
+    act(() => {
+      firstPromise = result.current.run();
+    });
+
+    let secondPromise: Promise<string | undefined>;
+    act(() => {
+      secondPromise = result.current.run();
+    });
+
+    deferred1.resolve("late-A");
+    deferred2.resolve("B");
+
+    await act(async () => {
+      const firstValue = await firstPromise;
+      expect(firstValue).toBeUndefined();
+      const secondValue = await secondPromise;
+      expect(secondValue).toBe("B");
+    });
+  });
+
+  it("clears all timers after a fast resolve", async () => {
+    vi.useFakeTimers();
+    const initial = vi.getTimerCount();
+    const deferred = createDeferred<string>();
+    const fn = vi.fn(async () => deferred.promise);
+    const { result } = renderHook(() => useSlowCall(fn));
+
+    let runPromise: Promise<string | undefined>;
+    act(() => {
+      runPromise = result.current.run();
+    });
+
+    expect(vi.getTimerCount()).toBe(initial + 2);
+
+    deferred.resolve("ok");
+    await act(async () => {
+      await runPromise;
+    });
+
+    expect(vi.getTimerCount()).toBe(initial);
+  });
+
+  it("clears all timers after cancel()", async () => {
+    vi.useFakeTimers();
+    const initial = vi.getTimerCount();
+    const deferred = createDeferred<string>();
+    const fn = vi.fn(async () => deferred.promise);
+    const { result } = renderHook(() => useSlowCall(fn));
+
+    act(() => {
+      void result.current.run();
+    });
+    expect(vi.getTimerCount()).toBe(initial + 2);
+
+    act(() => {
+      result.current.cancel();
+    });
+    expect(vi.getTimerCount()).toBe(initial);
+  });
+
+  it("clears all timers on unmount", () => {
+    vi.useFakeTimers();
+    const initial = vi.getTimerCount();
+    const deferred = createDeferred<string>();
+    const fn = vi.fn(async () => deferred.promise);
+    const { result, unmount } = renderHook(() => useSlowCall(fn));
+
+    act(() => {
+      void result.current.run();
+    });
+    expect(vi.getTimerCount()).toBe(initial + 2);
+
+    unmount();
+    expect(vi.getTimerCount()).toBe(initial);
+  });
 });

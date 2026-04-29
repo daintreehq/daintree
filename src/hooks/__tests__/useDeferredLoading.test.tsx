@@ -137,4 +137,30 @@ describe("useDeferredLoading", () => {
     });
     expect(result.current).toBe(true);
   });
+
+  it("restarts the delay from scratch on rapid true→false→true flap", () => {
+    vi.useFakeTimers();
+    const { result, rerender } = renderHook(({ isPending }) => useDeferredLoading(isPending, 200), {
+      initialProps: { isPending: true },
+    });
+
+    act(() => {
+      vi.advanceTimersByTime(150);
+    });
+    rerender({ isPending: false });
+    act(() => {
+      vi.advanceTimersByTime(0);
+    });
+    rerender({ isPending: true });
+
+    act(() => {
+      vi.advanceTimersByTime(150);
+    });
+    expect(result.current).toBe(false);
+
+    act(() => {
+      vi.advanceTimersByTime(50);
+    });
+    expect(result.current).toBe(true);
+  });
 });

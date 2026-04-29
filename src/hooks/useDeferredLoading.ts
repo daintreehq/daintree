@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 
 export function useDeferredLoading(isPending: boolean, delay = 200): boolean {
-  const [showLoader, setShowLoader] = useState(false);
+  const [showLoader, setShowLoader] = useState(isPending && delay <= 0);
 
   useEffect(() => {
     if (!isPending) {

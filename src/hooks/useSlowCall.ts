@@ -103,20 +103,22 @@ export function useSlowCall<T>(
 
     try {
       const result = await fnRef.current(controller.signal);
-      if (runIdRef.current === myRunId) {
-        if (controllerRef.current === controller) {
-          controllerRef.current = null;
-        }
-        reset();
+      if (runIdRef.current !== myRunId) {
+        return undefined;
       }
+      if (controllerRef.current === controller) {
+        controllerRef.current = null;
+      }
+      reset();
       return result;
     } catch (error) {
-      if (runIdRef.current === myRunId) {
-        if (controllerRef.current === controller) {
-          controllerRef.current = null;
-        }
-        reset();
+      if (runIdRef.current !== myRunId || controller.signal.aborted) {
+        return undefined;
       }
+      if (controllerRef.current === controller) {
+        controllerRef.current = null;
+      }
+      reset();
       throw error;
     }
   }, [clearTimers, reset]);
