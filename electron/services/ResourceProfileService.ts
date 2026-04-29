@@ -43,6 +43,8 @@ export class ResourceProfileService {
   private tickCount = 0;
   private disposed = false;
   private cachedWorktreeCount = 0;
+  private thermalState: "unknown" | "nominal" | "fair" | "serious" | "critical" = "unknown";
+  private speedLimit = 100;
   private readonly memoryThresholdHighMb: number;
   private readonly memoryThresholdLowMb: number;
 
@@ -51,6 +53,26 @@ export class ResourceProfileService {
     this.memoryThresholdHighMb = totalRamMb * HIGH_FRACTION;
     this.memoryThresholdLowMb = totalRamMb * LOW_FRACTION;
   }
+
+  private onThermalStateChange = (details: { state: string }): void => {
+    const { state } = details;
+    if (
+      state === "unknown" ||
+      state === "nominal" ||
+      state === "fair" ||
+      state === "serious" ||
+      state === "critical"
+    ) {
+      this.thermalState = state;
+    }
+  };
+
+  private onSpeedLimitChange = (details: { limit: number }): void => {
+    const { limit } = details;
+    if (typeof limit === "number" && !isNaN(limit) && limit >= 0 && limit <= 100) {
+      this.speedLimit = limit;
+    }
+  };
 
   setWorktreeCount(count: number): void {
     this.cachedWorktreeCount = count;
@@ -67,6 +89,10 @@ export class ResourceProfileService {
     logInfo("resource-profile-service-started", { profile: this.currentProfile });
 
     this.refreshWorktreeCount();
+
+    powerMonitor.on("thermal-state-change", this.onThermalStateChange);
+    powerMonitor.on("speed-limit-change", this.onSpeedLimitChange);
+
     this.interval = setInterval(() => {
       this.refreshWorktreeCount();
       this.evaluate();
@@ -90,6 +116,9 @@ export class ResourceProfileService {
   }
 
   stop(): void {
+    powerMonitor.removeListener("thermal-state-change", this.onThermalStateChange);
+    powerMonitor.removeListener("speed-limit-change", this.onSpeedLimitChange);
+
     if (this.interval) {
       clearInterval(this.interval);
       this.interval = null;
@@ -144,11 +173,19 @@ export class ResourceProfileService {
     // Battery signal
     try {
       if (powerMonitor.isOnBatteryPower()) {
-        pressureScore += 2;
+        pressureScore += 1;
       }
     } catch {
       // Skip battery signal (may throw in utility process context)
     }
+
+    // Thermal signal (macOS only)
+    if (this.thermalState === "critical") pressureScore += 2;
+    else if (this.thermalState === "serious") pressureScore += 1;
+
+    // CPU speed-limit signal (macOS & Windows)
+    if (this.speedLimit < 50) pressureScore += 2;
+    else if (this.speedLimit < 100) pressureScore += 1;
 
     // Worktree count signal
     const worktreeCount = this.cachedWorktreeCount;

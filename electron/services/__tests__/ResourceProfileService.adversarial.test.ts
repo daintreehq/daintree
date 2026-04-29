@@ -9,6 +9,8 @@ vi.mock("electron", () => ({
   },
   powerMonitor: {
     isOnBatteryPower: vi.fn(() => false),
+    on: vi.fn(),
+    removeListener: vi.fn(),
   },
   BrowserWindow: {
     getAllWindows: vi.fn(() => []),
@@ -32,6 +34,8 @@ const EIGHT_GB = 8 * 1024 * 1024 * 1024;
 
 const mockGetAppMetrics = app.getAppMetrics as Mock;
 const mockIsOnBatteryPower = powerMonitor.isOnBatteryPower as unknown as Mock;
+const mockPowerMonitorOn = powerMonitor.on as unknown as Mock;
+const mockPowerMonitorRemoveListener = powerMonitor.removeListener as unknown as Mock;
 
 interface MockPtyClient {
   setResourceProfile: Mock;
@@ -212,6 +216,80 @@ describe("ResourceProfileService adversarial", () => {
     vi.advanceTimersByTime(60_000 + 30_000 + 30_000);
 
     expect(service.getProfile()).toBe("efficiency");
+    service.stop();
+  });
+
+  it("stop before start does not throw (removeListener is no-op)", () => {
+    const { deps } = createDeps();
+    const service = new ResourceProfileService(deps);
+
+    // stop() without start() -> removeListener on unregistered handlers is safe
+    expect(() => service.stop()).not.toThrow();
+  });
+
+  it("start after stop re-registers listeners", () => {
+    const { deps } = createDeps();
+    const service = new ResourceProfileService(deps);
+
+    service.start();
+    service.stop();
+
+    mockPowerMonitorOn.mockClear();
+    mockPowerMonitorRemoveListener.mockClear();
+
+    service.start();
+
+    expect(mockPowerMonitorOn).toHaveBeenCalledWith("thermal-state-change", expect.any(Function));
+    expect(mockPowerMonitorOn).toHaveBeenCalledWith("speed-limit-change", expect.any(Function));
+
+    service.stop();
+  });
+
+  it("does not register listeners twice on double start", () => {
+    const { deps } = createDeps();
+    const service = new ResourceProfileService(deps);
+
+    service.start();
+    const firstCallCount = mockPowerMonitorOn.mock.calls.length;
+    service.start();
+
+    expect(mockPowerMonitorOn).toHaveBeenCalledTimes(firstCallCount);
+
+    service.stop();
+  });
+
+  it("thermal and speed-limit signals combine with worktree count for efficiency", () => {
+    const { deps } = createDeps();
+    const service = new ResourceProfileService(deps);
+
+    service.setWorktreeCount(9);
+    service.start();
+
+    // Low memory (0) + battery (+1) + thermal serious (+1) + worktrees (+1) = 3 => efficiency
+    mockGetAppMetrics.mockReturnValue([makeMetric(200)]);
+    mockIsOnBatteryPower.mockReturnValue(true);
+    (service as unknown as { thermalState: string }).thermalState = "serious";
+
+    vi.advanceTimersByTime(60_000 + 30_000 + 30_000);
+    expect(service.getProfile()).toBe("efficiency");
+
+    service.stop();
+  });
+
+  it("speed limit 0 (fully clamped) + high memory triggers efficiency without battery", () => {
+    const { deps } = createDeps();
+    const service = new ResourceProfileService(deps);
+
+    service.start();
+
+    // High memory (+2) + speed limit 0 (+2) = 4 => efficiency
+    mockGetAppMetrics.mockReturnValue([makeMetric(1300)]);
+    mockIsOnBatteryPower.mockReturnValue(false);
+    (service as unknown as { speedLimit: number }).speedLimit = 0;
+
+    vi.advanceTimersByTime(60_000 + 30_000 + 30_000);
+    expect(service.getProfile()).toBe("efficiency");
+
     service.stop();
   });
 

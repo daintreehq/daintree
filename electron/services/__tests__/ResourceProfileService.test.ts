@@ -11,6 +11,8 @@ vi.mock("electron", () => ({
   },
   powerMonitor: {
     isOnBatteryPower: vi.fn(() => false),
+    on: vi.fn(),
+    removeListener: vi.fn(),
   },
   BrowserWindow: {
     getAllWindows: vi.fn(() => []),
@@ -35,6 +37,8 @@ const EIGHT_GB = 8 * 1024 * 1024 * 1024;
 
 const mockGetAppMetrics = app.getAppMetrics as Mock;
 const mockIsOnBatteryPower = powerMonitor.isOnBatteryPower as unknown as Mock;
+const mockPowerMonitorOn = powerMonitor.on as unknown as Mock;
+const mockPowerMonitorRemoveListener = powerMonitor.removeListener as unknown as Mock;
 
 function makeMetric(type: string, privateMb: number): Electron.ProcessMetric {
   return {
@@ -394,13 +398,13 @@ describe("ResourceProfileService", () => {
     const service = new ResourceProfileService(deps);
     service.start();
 
-    // Battery only (score 2) + moderate memory (score 1) = 3 => efficiency
+    // Moderate memory (+1) + battery (+1) = 2 => balanced
     mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 700)]);
     mockIsOnBatteryPower.mockReturnValue(true);
 
     // Past warmup + hysteresis for downgrade
     vi.advanceTimersByTime(60_000 + 30_000 + 30_000);
-    expect(service.getProfile()).toBe("efficiency");
+    expect(service.getProfile()).toBe("balanced");
 
     service.stop();
   });
@@ -411,12 +415,12 @@ describe("ResourceProfileService", () => {
     service.setWorktreeCount(10);
     service.start();
 
-    // Battery (2) + worktrees (1) = 3 => efficiency
+    // Low memory (0) + battery (+1) + worktrees (+1) = 2 => balanced
     mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 200)]);
     mockIsOnBatteryPower.mockReturnValue(true);
 
     vi.advanceTimersByTime(60_000 + 30_000 + 30_000);
-    expect(service.getProfile()).toBe("efficiency");
+    expect(service.getProfile()).toBe("balanced");
 
     service.stop();
   });
@@ -439,6 +443,204 @@ describe("ResourceProfileService", () => {
     expect(service.getProfile()).toBe("performance");
 
     service.stop();
+  });
+
+  it("thermal critical + battery drives to efficiency", () => {
+    const deps = createDeps();
+    const service = new ResourceProfileService(deps);
+    service.start();
+
+    // Low memory (0) + battery (+1) + thermal critical (+2) = 3 => efficiency
+    mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 200)]);
+    mockIsOnBatteryPower.mockReturnValue(true);
+    (service as unknown as { thermalState: string }).thermalState = "critical";
+
+    vi.advanceTimersByTime(60_000 + 30_000 + 30_000);
+    expect(service.getProfile()).toBe("efficiency");
+
+    service.stop();
+  });
+
+  it("thermal serious + battery + moderate memory = efficiency", () => {
+    const deps = createDeps();
+    const service = new ResourceProfileService(deps);
+    service.start();
+
+    // Moderate memory (+1) + battery (+1) + thermal serious (+1) = 3 => efficiency
+    mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 700)]);
+    mockIsOnBatteryPower.mockReturnValue(true);
+    (service as unknown as { thermalState: string }).thermalState = "serious";
+
+    vi.advanceTimersByTime(60_000 + 30_000 + 30_000);
+    expect(service.getProfile()).toBe("efficiency");
+
+    service.stop();
+  });
+
+  it("thermal fair and nominal do not contribute to pressure", () => {
+    const deps = createDeps();
+    const service = new ResourceProfileService(deps);
+    service.start();
+
+    // Moderate memory (+1) + battery (+1) + thermal fair (0) = 2 => balanced
+    mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 700)]);
+    mockIsOnBatteryPower.mockReturnValue(true);
+    (service as unknown as { thermalState: string }).thermalState = "fair";
+
+    vi.advanceTimersByTime(60_000 + 30_000 + 30_000);
+    expect(service.getProfile()).toBe("balanced");
+
+    service.stop();
+  });
+
+  it("speed limit under 50 + moderate memory drives to efficiency", () => {
+    const deps = createDeps();
+    const service = new ResourceProfileService(deps);
+    service.start();
+
+    // Moderate memory (+1) + speed limit 40 (+2) = 3 => efficiency
+    mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 700)]);
+    mockIsOnBatteryPower.mockReturnValue(false);
+    (service as unknown as { speedLimit: number }).speedLimit = 40;
+
+    vi.advanceTimersByTime(60_000 + 30_000 + 30_000);
+    expect(service.getProfile()).toBe("efficiency");
+
+    service.stop();
+  });
+
+  it("speed limit 50-99 contributes +1 to pressure", () => {
+    const deps = createDeps();
+    const service = new ResourceProfileService(deps);
+    service.start();
+
+    // Moderate memory (+1) + speed limit 75 (+1) = 2 => balanced
+    mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 700)]);
+    mockIsOnBatteryPower.mockReturnValue(false);
+    (service as unknown as { speedLimit: number }).speedLimit = 75;
+
+    vi.advanceTimersByTime(60_000 + 30_000 + 30_000);
+    expect(service.getProfile()).toBe("balanced");
+
+    service.stop();
+  });
+
+  it("speed limit 100 does not contribute to pressure", () => {
+    const deps = createDeps();
+    const service = new ResourceProfileService(deps);
+    service.start();
+
+    // Low memory (0) + speed limit 100 (0) = 0 => performance
+    mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 200)]);
+    mockIsOnBatteryPower.mockReturnValue(false);
+    (service as unknown as { speedLimit: number }).speedLimit = 100;
+
+    vi.advanceTimersByTime(60_000 + 30_000 + 30_000 + 30_000);
+    expect(service.getProfile()).toBe("performance");
+
+    service.stop();
+  });
+
+  it("routes thermal-state-change event through handler to profile scoring", () => {
+    const deps = createDeps();
+    const service = new ResourceProfileService(deps);
+    service.start();
+
+    // Capture the thermal handler registered with powerMonitor.on
+    const thermalHandler = mockPowerMonitorOn.mock.calls.find(
+      (call: string[]) => call[0] === "thermal-state-change"
+    )?.[1] as ((details: { state: string }) => void) | undefined;
+    expect(thermalHandler).toBeDefined();
+
+    // Simulate Electron 41 powerMonitor event (single object, not two args)
+    thermalHandler!({ state: "critical" });
+
+    // Low memory (0) + thermal critical (+2) + battery (+1) = 3 => efficiency
+    mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 200)]);
+    mockIsOnBatteryPower.mockReturnValue(true);
+
+    vi.advanceTimersByTime(60_000 + 30_000 + 30_000);
+    expect(service.getProfile()).toBe("efficiency");
+
+    service.stop();
+  });
+
+  it("routes speed-limit-change event through handler to profile scoring", () => {
+    const deps = createDeps();
+    const service = new ResourceProfileService(deps);
+    service.start();
+
+    // Capture the speed-limit handler registered with powerMonitor.on
+    const speedHandler = mockPowerMonitorOn.mock.calls.find(
+      (call: string[]) => call[0] === "speed-limit-change"
+    )?.[1] as ((details: { limit: number }) => void) | undefined;
+    expect(speedHandler).toBeDefined();
+
+    // Simulate Electron 41 powerMonitor event (single object)
+    speedHandler!({ limit: 30 });
+
+    // Low memory (0) + speed limit 30 (+2) = 2 => balanced (need more for efficiency)
+    mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 200)]);
+    mockIsOnBatteryPower.mockReturnValue(false);
+
+    vi.advanceTimersByTime(60_000 + 30_000 + 30_000);
+    expect(service.getProfile()).toBe("balanced");
+
+    service.stop();
+  });
+
+  it("removeListener receives the exact same handler reference passed to on", () => {
+    const service = new ResourceProfileService(createDeps());
+    service.start();
+    service.stop();
+
+    // Get the handlers passed to on
+    const thermalOnArg = mockPowerMonitorOn.mock.calls.find(
+      (call: string[]) => call[0] === "thermal-state-change"
+    )?.[1];
+    const speedOnArg = mockPowerMonitorOn.mock.calls.find(
+      (call: string[]) => call[0] === "speed-limit-change"
+    )?.[1];
+
+    // Get the handlers passed to removeListener
+    const thermalOffArg = mockPowerMonitorRemoveListener.mock.calls.find(
+      (call: string[]) => call[0] === "thermal-state-change"
+    )?.[1];
+    const speedOffArg = mockPowerMonitorRemoveListener.mock.calls.find(
+      (call: string[]) => call[0] === "speed-limit-change"
+    )?.[1];
+
+    expect(thermalOnArg).toBeDefined();
+    expect(thermalOffArg).toBeDefined();
+    expect(thermalOnArg).toBe(thermalOffArg);
+    expect(speedOnArg).toBeDefined();
+    expect(speedOffArg).toBeDefined();
+    expect(speedOnArg).toBe(speedOffArg);
+  });
+
+  it("registers powerMonitor listeners on start", () => {
+    const service = new ResourceProfileService(createDeps());
+    service.start();
+
+    expect(mockPowerMonitorOn).toHaveBeenCalledWith("thermal-state-change", expect.any(Function));
+    expect(mockPowerMonitorOn).toHaveBeenCalledWith("speed-limit-change", expect.any(Function));
+
+    service.stop();
+  });
+
+  it("removes powerMonitor listeners on stop", () => {
+    const service = new ResourceProfileService(createDeps());
+    service.start();
+    service.stop();
+
+    expect(mockPowerMonitorRemoveListener).toHaveBeenCalledWith(
+      "thermal-state-change",
+      expect.any(Function)
+    );
+    expect(mockPowerMonitorRemoveListener).toHaveBeenCalledWith(
+      "speed-limit-change",
+      expect.any(Function)
+    );
   });
 
   it("scales thresholds down on low-RAM devices so 500 MB usage is detected", () => {
