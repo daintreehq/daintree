@@ -16,7 +16,8 @@ const SAFE_GIT_CONFIG = [
   // macOS HFS+/APFS returns filenames as NFD (decomposed Unicode); without
   // this flag git emits NFD paths in porcelain/status output, causing silent
   // bitwise inequality against NFC paths from any other source. Pinning it
-  // forces NFC in all porcelain output. No-op on Linux/Windows.
+  // ensures working-tree paths are reported as NFC; pre-existing NFD index
+  // entries from legacy repos are unaffected. No-op on Linux/Windows.
   "core.precomposeunicode=true",
 ] as const;
 
