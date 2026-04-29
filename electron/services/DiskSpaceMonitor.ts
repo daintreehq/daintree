@@ -17,8 +17,8 @@ export interface DiskSpaceMonitorActions {
   isWindowFocused: () => boolean;
 }
 
-const WARNING_MB = 500;
-const CRITICAL_MB = 100;
+const WARNING_MB = 2000;
+const CRITICAL_MB = 500;
 const POLL_INTERVAL_MS = 5 * 60 * 1000;
 const NOTIFICATION_COOLDOWN_MS = 30 * 60 * 1000;
 

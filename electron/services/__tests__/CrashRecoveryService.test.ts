@@ -900,6 +900,39 @@ describe("CrashRecoveryService", () => {
       expect(storeMock.set).toHaveBeenCalledTimes(1);
       expect(storeMock.set.mock.calls[0][0]).toBe("appState");
     });
+
+    it("clears cached backup snapshot so restoreBackup has no stale reference", () => {
+      const markerPath = path.join(userData, "running.lock");
+      fs.writeFileSync(
+        markerPath,
+        JSON.stringify({
+          sessionStartMs: Date.now() - 5000,
+          appVersion: "1.0.0",
+          platform: "darwin",
+        })
+      );
+      const backupDir = path.join(userData, "backups");
+      fs.mkdirSync(backupDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(backupDir, "session-state.json"),
+        JSON.stringify({
+          capturedAt: Date.now(),
+          appState: { sidebarWidth: 999, terminals: [] },
+        })
+      );
+
+      storeMock.get.mockReturnValue({ autoRestoreOnCrash: false });
+      const svc = makeService();
+      svc.initialize();
+
+      // Delete backup file so restoreBackup can only succeed via cache
+      fs.unlinkSync(path.join(backupDir, "session-state.json"));
+
+      storeMock.set.mockClear();
+      svc.resetToFresh();
+
+      expect(svc.restoreBackup()).toBe(false);
+    });
   });
 
   describe("cleanupOnExit", () => {
@@ -927,6 +960,41 @@ describe("CrashRecoveryService", () => {
       // Actually in our impl, recordCrash writes a new lock with crash info, so it still exists
       // cleanupOnExit skips deletion when crashRecorded=true
       expect(fs.existsSync(markerPath)).toBe(true);
+    });
+
+    it("clears cached backup snapshot even when crashRecorded prevents backup/marker cleanup", () => {
+      const markerPath = path.join(userData, "running.lock");
+      fs.writeFileSync(
+        markerPath,
+        JSON.stringify({
+          sessionStartMs: Date.now() - 5000,
+          appVersion: "1.0.0",
+          platform: "darwin",
+        })
+      );
+      const backupDir = path.join(userData, "backups");
+      fs.mkdirSync(backupDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(backupDir, "session-state.json"),
+        JSON.stringify({
+          capturedAt: Date.now(),
+          appState: { sidebarWidth: 999, terminals: [] },
+        })
+      );
+
+      storeMock.get.mockReturnValue({ autoRestoreOnCrash: false });
+      const svc = makeService();
+      svc.initialize();
+
+      // Record crash so cleanupOnExit skips takeBackup/deleteMarker
+      svc.recordCrash(new Error("test crash"));
+
+      // Delete backup file so restoreBackup can only succeed via cache
+      fs.unlinkSync(path.join(backupDir, "session-state.json"));
+
+      svc.cleanupOnExit();
+
+      expect(svc.restoreBackup()).toBe(false);
     });
   });
 });

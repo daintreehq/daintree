@@ -79,7 +79,7 @@ describe("CrashLoopGuardService adversarial", () => {
     writeStateFile(statePath, {
       version: 1,
       crashes: 9,
-      launches: [now - 60_000, now - 59_999],
+      launches: [now - 300_000, now - 299_999],
       cleanExit: false,
       lastReset: now - 5_000,
     });
@@ -134,7 +134,14 @@ describe("CrashLoopGuardService adversarial", () => {
     writeStateFile(statePath, {
       version: 1,
       crashes: 5,
-      launches: [now - 120_000, now - 110_000, now - 100_000, now - 90_000, now - 1_000, now - 500],
+      launches: [
+        now - 320_000,
+        now - 310_000,
+        now - 305_000,
+        now - 301_000,
+        now - 1_000,
+        now - 500,
+      ],
       cleanExit: false,
       lastReset: now - 120_000,
     });

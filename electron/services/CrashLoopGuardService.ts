@@ -6,7 +6,7 @@ const STATE_FILENAME = "crash-loop-state.json";
 const CRASH_THRESHOLD = 3;
 const HARD_STOP_THRESHOLD = 5;
 const STABILITY_TIMEOUT_MS = 5 * 60 * 1000;
-const RAPID_CRASH_WINDOW_MS = 60_000;
+const RAPID_CRASH_WINDOW_MS = 300_000;
 
 interface CrashLoopState {
   version: 1;

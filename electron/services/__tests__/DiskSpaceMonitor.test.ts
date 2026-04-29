@@ -75,18 +75,18 @@ describe("DiskSpaceMonitor", () => {
   }
 
   it("runs startup poll immediately and reports normal status", async () => {
-    statfsMock.mockResolvedValue(makeStatfs(1000));
+    statfsMock.mockResolvedValue(makeStatfs(3000));
     const actions = createActions();
     const mod = await importAndStart(actions);
 
     // Normal status: no sendStatus call (status didn't change from initial "normal")
     expect(actions.calls.sendStatus).toHaveLength(0);
     expect(mod.getCurrentDiskSpaceStatus().status).toBe("normal");
-    expect(mod.getCurrentDiskSpaceStatus().availableMb).toBeCloseTo(1000, 0);
+    expect(mod.getCurrentDiskSpaceStatus().availableMb).toBeCloseTo(3000, 0);
   });
 
-  it("transitions to warning when disk space drops below 500MB", async () => {
-    statfsMock.mockResolvedValue(makeStatfs(400));
+  it("transitions to warning when disk space drops below 2000MB", async () => {
+    statfsMock.mockResolvedValue(makeStatfs(1500));
     const actions = createActions();
     await importAndStart(actions);
 
@@ -96,7 +96,7 @@ describe("DiskSpaceMonitor", () => {
     expect(actions.calls.onCriticalChange).toHaveLength(0);
   });
 
-  it("transitions to critical when disk space drops below 100MB", async () => {
+  it("transitions to critical when disk space drops below 500MB", async () => {
     statfsMock.mockResolvedValue(makeStatfs(50));
     const actions = createActions();
     await importAndStart(actions);
@@ -108,7 +108,7 @@ describe("DiskSpaceMonitor", () => {
   });
 
   it("sends native notification when not focused", async () => {
-    statfsMock.mockResolvedValue(makeStatfs(300));
+    statfsMock.mockResolvedValue(makeStatfs(1500));
     const actions = createActions();
     await importAndStart(actions);
 
@@ -117,7 +117,7 @@ describe("DiskSpaceMonitor", () => {
   });
 
   it("does not send native notification when focused", async () => {
-    statfsMock.mockResolvedValue(makeStatfs(300));
+    statfsMock.mockResolvedValue(makeStatfs(1500));
     const actions = createActions();
     actions.isWindowFocused = () => true;
     await importAndStart(actions);
@@ -133,7 +133,7 @@ describe("DiskSpaceMonitor", () => {
     expect(actions.calls.onCriticalChange).toEqual([true]);
 
     // Recover
-    statfsMock.mockResolvedValue(makeStatfs(1000));
+    statfsMock.mockResolvedValue(makeStatfs(3000));
     await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
 
     expect(actions.calls.onCriticalChange).toEqual([true, false]);
@@ -150,7 +150,7 @@ describe("DiskSpaceMonitor", () => {
     expect(actions.calls.sendStatus).toHaveLength(0);
 
     // Next poll works
-    statfsMock.mockResolvedValue(makeStatfs(300));
+    statfsMock.mockResolvedValue(makeStatfs(1500));
     await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
 
     expect(actions.calls.sendStatus).toHaveLength(1);
@@ -158,14 +158,14 @@ describe("DiskSpaceMonitor", () => {
   });
 
   it("respects notification cooldown", async () => {
-    statfsMock.mockResolvedValue(makeStatfs(400));
+    statfsMock.mockResolvedValue(makeStatfs(1500));
     const actions = createActions();
     await importAndStart(actions);
 
     expect(actions.calls.notifications).toHaveLength(1);
 
     // Still warning after 5 minutes - same status, no new sendStatus call
-    statfsMock.mockResolvedValue(makeStatfs(350));
+    statfsMock.mockResolvedValue(makeStatfs(1400));
     await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
 
     // No new notification (same status, cooldown not expired)
@@ -173,7 +173,7 @@ describe("DiskSpaceMonitor", () => {
   });
 
   it("bypasses cooldown when escalating to critical", async () => {
-    statfsMock.mockResolvedValue(makeStatfs(400));
+    statfsMock.mockResolvedValue(makeStatfs(1500));
     const actions = createActions();
     await importAndStart(actions);
 
@@ -188,7 +188,7 @@ describe("DiskSpaceMonitor", () => {
   });
 
   it("does not call callbacks after disposal", async () => {
-    statfsMock.mockResolvedValue(makeStatfs(1000));
+    statfsMock.mockResolvedValue(makeStatfs(3000));
     const actions = createActions();
     await importAndStart(actions);
 
@@ -202,13 +202,13 @@ describe("DiskSpaceMonitor", () => {
   });
 
   it("getCurrentDiskSpaceStatus returns cached value", async () => {
-    statfsMock.mockResolvedValue(makeStatfs(300));
+    statfsMock.mockResolvedValue(makeStatfs(1500));
     const actions = createActions();
     const mod = await importAndStart(actions);
 
     const status = mod.getCurrentDiskSpaceStatus();
     expect(status.status).toBe("warning");
-    expect(status.availableMb).toBeCloseTo(300, 0);
+    expect(status.availableMb).toBeCloseTo(1500, 0);
     expect(status.writesSuppressed).toBe(false);
   });
 });

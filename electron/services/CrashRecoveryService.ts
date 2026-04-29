@@ -191,6 +191,7 @@ export class CrashRecoveryService {
         hasSeenWelcome: true,
         panelGridConfig: { strategy: "automatic" as const, value: 3 },
       });
+      this.cachedBackupSnapshot = null;
       console.log("[CrashRecovery] Reset to fresh state");
     } catch (err) {
       console.error("[CrashRecovery] Failed to reset to fresh:", err);
@@ -204,6 +205,7 @@ export class CrashRecoveryService {
       this.deleteMarker();
       console.log("[CrashRecovery] Clean exit — marker removed");
     }
+    this.cachedBackupSnapshot = null;
   }
 
   private consumeMarker(): PendingCrash | null {

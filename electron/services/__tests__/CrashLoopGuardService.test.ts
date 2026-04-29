@@ -91,7 +91,7 @@ describe("isSafeModeActive", () => {
       JSON.stringify({
         version: 1,
         crashes: 3,
-        launches: [now - 120000, now - 90000, now - 70000],
+        launches: [now - 400000, now - 370000, now - 340000],
         cleanExit: false,
         lastReset: now - 300000,
       }),
@@ -261,11 +261,11 @@ describe("CrashLoopGuardService", () => {
   it("only counts crashes within the rapid crash window", () => {
     const now = Date.now();
 
-    // Write state with old launches (outside 60s window)
+    // Write state with old launches (outside 300s window)
     writeState({
       version: 1,
       crashes: 3,
-      launches: [now - 120000, now - 90000, now - 70000],
+      launches: [now - 400000, now - 370000, now - 340000],
       cleanExit: false,
       lastReset: now - 300000,
     });
@@ -273,7 +273,7 @@ describe("CrashLoopGuardService", () => {
     const guard = new CrashLoopGuardService();
     guard.initialize();
 
-    // Old launches are outside the 60s window, so crashes should be 0
+    // Old launches are outside the 300s window, so crashes should be 0
     expect(guard.isSafeMode()).toBe(false);
   });
 
