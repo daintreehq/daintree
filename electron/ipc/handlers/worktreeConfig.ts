@@ -21,7 +21,21 @@ function getWorktreeConfig(): WorktreeConfig {
   };
 }
 
-export function registerWorktreeConfigHandlers(_deps: HandlerDependencies): () => void {
+function readWslGitMap(): Record<string, { enabled: boolean; dismissed: boolean }> {
+  const raw = store.get("wslGitByWorktree");
+  if (!raw || typeof raw !== "object") return {};
+  return raw as Record<string, { enabled: boolean; dismissed: boolean }>;
+}
+
+function writeWslGitEntry(
+  worktreeId: string,
+  entry: { enabled: boolean; dismissed: boolean }
+): void {
+  const map = { ...readWslGitMap(), [worktreeId]: entry };
+  store.set("wslGitByWorktree", map);
+}
+
+export function registerWorktreeConfigHandlers(deps: HandlerDependencies): () => void {
   const handlers: Array<() => void> = [];
 
   const handleGetConfig = async (): Promise<WorktreeConfig> => {
@@ -51,6 +65,46 @@ export function registerWorktreeConfigHandlers(_deps: HandlerDependencies): () =
     return getWorktreeConfig();
   };
   handlers.push(typedHandle(CHANNELS.WORKTREE_CONFIG_SET_PATTERN, handleSetPattern));
+
+  const handleSetWslGit = async (payload: {
+    worktreeId: string;
+    enabled: boolean;
+  }): Promise<void> => {
+    if (!payload || typeof payload !== "object") {
+      throw new Error("Invalid set-wsl-git payload");
+    }
+    const { worktreeId, enabled } = payload;
+    if (typeof worktreeId !== "string" || !worktreeId.trim()) {
+      throw new Error("Invalid worktreeId: must be a non-empty string");
+    }
+    if (typeof enabled !== "boolean") {
+      throw new Error("Invalid enabled: must be a boolean");
+    }
+
+    // Opting in implies the banner is no longer needed; opting out leaves
+    // dismissed alone (so the banner won't pop back unexpectedly).
+    const existing = readWslGitMap()[worktreeId];
+    const dismissed = enabled ? true : Boolean(existing?.dismissed);
+    writeWslGitEntry(worktreeId, { enabled, dismissed });
+    deps.worktreeService?.setWslOptIn(worktreeId, enabled, dismissed);
+  };
+  handlers.push(typedHandle(CHANNELS.WORKTREE_CONFIG_SET_WSL_GIT, handleSetWslGit));
+
+  const handleDismissWslBanner = async (payload: { worktreeId: string }): Promise<void> => {
+    if (!payload || typeof payload !== "object") {
+      throw new Error("Invalid dismiss-wsl-banner payload");
+    }
+    const { worktreeId } = payload;
+    if (typeof worktreeId !== "string" || !worktreeId.trim()) {
+      throw new Error("Invalid worktreeId: must be a non-empty string");
+    }
+
+    const existing = readWslGitMap()[worktreeId];
+    const enabled = Boolean(existing?.enabled);
+    writeWslGitEntry(worktreeId, { enabled, dismissed: true });
+    deps.worktreeService?.setWslOptIn(worktreeId, enabled, true);
+  };
+  handlers.push(typedHandle(CHANNELS.WORKTREE_CONFIG_DISMISS_WSL_BANNER, handleDismissWslBanner));
 
   return () => handlers.forEach((cleanup) => cleanup());
 }

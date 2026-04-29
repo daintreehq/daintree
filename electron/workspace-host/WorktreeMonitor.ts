@@ -1,7 +1,8 @@
 import { readFile } from "fs/promises";
 import { join as pathJoin } from "path";
 import { existsSync } from "fs";
-import { createHardenedGit } from "../utils/hardenedGit.js";
+import { createHardenedGit, createWslHardenedGit } from "../utils/hardenedGit.js";
+import type { WslGitInvocation } from "../utils/hardenedGit.js";
 import type PQueue from "p-queue";
 import type { WorktreeChanges, FileChangeDetail } from "../../shared/types/git.js";
 import type {
@@ -134,6 +135,14 @@ export class WorktreeMonitor {
   private _pendingPollPromise: Promise<void> | null = null;
   private _pollAbortController: AbortController = new AbortController();
 
+  // WSL routing state (Windows only)
+  private _isWslPath: boolean = false;
+  private _wslDistro: string | undefined;
+  private _wslGitEligible: boolean = false;
+  private _wslGitOptIn: boolean = false;
+  private _wslGitDismissed: boolean = false;
+  private _wslPosixPath: string | undefined;
+
   // Components
   private pollingStrategy: AdaptivePollingStrategy;
   private noteReader: NoteFileReader;
@@ -167,6 +176,54 @@ export class WorktreeMonitor {
     );
 
     this.noteReader = new NoteFileReader(worktree.path);
+
+    this._isWslPath = Boolean(worktree.isWslPath);
+    this._wslDistro = worktree.wslDistro;
+    this._wslGitEligible = Boolean(worktree.wslGitEligible);
+    this._wslGitOptIn = Boolean(worktree.wslGitOptIn);
+    this._wslGitDismissed = Boolean(worktree.wslGitDismissed);
+    if (this._isWslPath && this._wslDistro) {
+      const m = /^\\\\wsl(?:\$|\.localhost)\\[^\\]+(.*)/i.exec(worktree.path);
+      const remainder = m ? (m[1] ?? "") : "";
+      this._wslPosixPath = remainder.replace(/\\/g, "/") || "/";
+    }
+  }
+
+  /**
+   * Build the WSL invocation passed to `createWslHardenedGit` /
+   * `getWorktreeChangesWithStats({ wsl })`. Returns `undefined` when this
+   * worktree should keep using the native git path: not on Windows, not a
+   * WSL path, ineligible distro (not the default), or user hasn't opted in.
+   */
+  private get wslInvocation(): WslGitInvocation | undefined {
+    if (process.platform !== "win32") return undefined;
+    if (!this._isWslPath || !this._wslGitEligible || !this._wslGitOptIn) return undefined;
+    if (!this._wslDistro || !this._wslPosixPath) return undefined;
+    return {
+      distro: this._wslDistro,
+      uncPath: this.path,
+      posixPath: this._wslPosixPath,
+    };
+  }
+
+  /**
+   * Update the WSL opt-in / dismissed state at runtime (called by the
+   * workspace-host message handler). Re-emits a snapshot so the renderer's
+   * banner state stays in sync.
+   */
+  setWslOptIn(enabled: boolean, dismissed: boolean): void {
+    let changed = false;
+    if (this._wslGitOptIn !== enabled) {
+      this._wslGitOptIn = enabled;
+      changed = true;
+    }
+    if (this._wslGitDismissed !== dismissed) {
+      this._wslGitDismissed = dismissed;
+      changed = true;
+    }
+    if (changed && this._hasInitialStatus) {
+      this.emitUpdate();
+    }
   }
 
   get name(): string {
@@ -598,6 +655,11 @@ export class WorktreeMonitor {
       planFilePath: this.planFilePath,
       aheadCount: this.aheadCount,
       behindCount: this.behindCount,
+      isWslPath: this._isWslPath || undefined,
+      wslDistro: this._wslDistro,
+      wslGitEligible: this._wslGitEligible || undefined,
+      wslGitOptIn: this._wslGitOptIn || undefined,
+      wslGitDismissed: this._wslGitDismissed || undefined,
     };
 
     return ensureSerializable(snapshot) as WorktreeSnapshot;
@@ -929,6 +991,7 @@ export class WorktreeMonitor {
       const newChanges = await getWorktreeChangesWithStats(this.path, {
         forceRefresh,
         cacheTTL,
+        wsl: this.wslInvocation,
       });
 
       if (!this._isRunning) {
@@ -1110,7 +1173,10 @@ export class WorktreeMonitor {
     }
 
     try {
-      const git = createHardenedGit(this.path, this._pollAbortController.signal);
+      const wsl = this.wslInvocation;
+      const git = wsl
+        ? createWslHardenedGit(wsl, this._pollAbortController.signal)
+        : createHardenedGit(this.path, this._pollAbortController.signal);
       const output = await git.raw(["rev-list", "--left-right", "--count", "HEAD...@{u}"]);
       const [aheadStr, behindStr] = output.trim().split(/\s+/);
       return {
@@ -1137,7 +1203,10 @@ export class WorktreeMonitor {
     }
 
     try {
-      const git = createHardenedGit(this.path, this._pollAbortController.signal);
+      const wsl = this.wslInvocation;
+      const git = wsl
+        ? createWslHardenedGit(wsl, this._pollAbortController.signal)
+        : createHardenedGit(this.path, this._pollAbortController.signal);
       const log = await git.log({ maxCount: 1 });
       const lastCommitMsg = log.latest?.message;
 

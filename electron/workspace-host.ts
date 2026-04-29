@@ -300,8 +300,13 @@ port.on("message", async (rawMsg: any) => {
         await workspaceService.loadProject(
           request.requestId,
           request.rootPath,
-          request.globalEnvVars
+          request.globalEnvVars,
+          request.wslGitByWorktree
         );
+        break;
+
+      case "set-wsl-opt-in":
+        workspaceService.setWslOptIn(request.worktreeId, request.enabled, request.dismissed);
         break;
 
       case "sync":

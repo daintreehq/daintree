@@ -1279,6 +1279,14 @@ export interface IpcInvokeMap {
     args: [payload: { pattern: string }];
     result: WorktreeConfig;
   };
+  "worktree-config:set-wsl-git": {
+    args: [payload: { worktreeId: string; enabled: boolean }];
+    result: void;
+  };
+  "worktree-config:dismiss-wsl-banner": {
+    args: [payload: { worktreeId: string }];
+    result: void;
+  };
 
   // Gemini channels
   "gemini:get-status": {

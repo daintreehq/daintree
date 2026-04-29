@@ -1851,6 +1851,12 @@ const api: ElectronAPI = {
 
     setPattern: (pattern: string) =>
       _unwrappingInvoke(CHANNELS.WORKTREE_CONFIG_SET_PATTERN, { pattern }),
+
+    setWslGit: (worktreeId: string, enabled: boolean) =>
+      _unwrappingInvoke(CHANNELS.WORKTREE_CONFIG_SET_WSL_GIT, { worktreeId, enabled }),
+
+    dismissWslBanner: (worktreeId: string) =>
+      _unwrappingInvoke(CHANNELS.WORKTREE_CONFIG_DISMISS_WSL_BANNER, { worktreeId }),
   },
 
   // Window API

@@ -18,6 +18,7 @@ import { refreshPath, expandWindowsEnvVars } from "../setup/environment.js";
 import { store } from "../store.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { broadcastToRenderer } from "../ipc/utils.js";
+import { listFirstWslDistro } from "../utils/wsl.js";
 
 interface ProbeSuccess {
   status: "found";
@@ -81,7 +82,6 @@ export class CliAvailabilityService {
   private static readonly AUTH_CHECK_TIMEOUT_MS = 3_000;
   private static readonly WHICH_TIMEOUT_MS = 5_000;
   private static readonly NPM_PREFIX_TIMEOUT_MS = 4_000;
-  private static readonly WSL_LIST_TIMEOUT_MS = 5_000;
   private static readonly WSL_PROBE_TIMEOUT_MS = 8_000;
   private static readonly VALID_COMMAND_RE = /^[a-zA-Z0-9._-]+$/;
 
@@ -646,7 +646,7 @@ export class CliAvailabilityService {
   }
 
   private async probeWsl(command: string): Promise<ProbeResult> {
-    const distro = await this.listFirstWslDistro();
+    const distro = await listFirstWslDistro();
     if (!distro) return { status: "missing" };
 
     return new Promise((resolve) => {
@@ -668,55 +668,6 @@ export class CliAvailabilityService {
             return;
           }
           resolve({ status: "missing" });
-        }
-      );
-    });
-  }
-
-  private listFirstWslDistro(): Promise<string | null> {
-    return new Promise((resolve) => {
-      execFile(
-        "wsl.exe",
-        ["--list", "--quiet"],
-        {
-          // Buffers are returned untouched — we decode below. Setting
-          // WSL_UTF8=1 asks WSL to emit UTF-8; older Windows builds still
-          // produce UTF-16LE so we fall back if UTF-8 looks empty.
-          env: { ...process.env, WSL_UTF8: "1" },
-          timeout: CliAvailabilityService.WSL_LIST_TIMEOUT_MS,
-          windowsHide: true,
-        },
-        (err, stdout) => {
-          if (err) {
-            resolve(null);
-            return;
-          }
-          const buf = Buffer.isBuffer(stdout)
-            ? stdout
-            : Buffer.from(typeof stdout === "string" ? stdout : "", "utf8");
-
-          // WSL has historically emitted UTF-16LE (with BOM) regardless of
-          // `WSL_UTF8=1`; recent Windows builds honor the env var and emit
-          // UTF-8. Pick the encoding heuristically: a UTF-16LE-encoded ASCII
-          // string is roughly half null bytes, and will also be prefixed by
-          // the FF FE BOM. Either signal is a strong indicator.
-          const sample = buf.subarray(0, Math.min(buf.length, 64));
-          let nullBytes = 0;
-          for (const byte of sample) {
-            if (byte === 0) nullBytes++;
-          }
-          const hasUtf16Bom = buf.length >= 2 && buf[0] === 0xff && buf[1] === 0xfe;
-          const looksUtf16 = hasUtf16Bom || nullBytes > sample.length / 3;
-
-          const decoded = looksUtf16
-            ? buf.toString("utf16le").replace(/^\uFEFF/, "")
-            : buf.toString("utf8");
-
-          const lines = decoded
-            .split(/\r?\n/)
-            .map((l) => l.trim())
-            .filter(Boolean);
-          resolve(lines[0] ?? null);
         }
       );
     });

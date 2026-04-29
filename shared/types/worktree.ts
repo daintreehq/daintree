@@ -177,6 +177,37 @@ export interface Worktree {
 
   /** Cached display label for the environment (e.g., "Docker", "Akash") */
   worktreeEnvironmentLabel?: string;
+
+  /**
+   * True when the worktree path is mounted via WSL (\\wsl$\… or
+   * \\wsl.localhost\…). Detected at bind time on Windows; never set on
+   * macOS/Linux.
+   */
+  isWslPath?: boolean;
+
+  /** WSL distro name parsed from the UNC mount, when `isWslPath` is true. */
+  wslDistro?: string;
+
+  /**
+   * True when the detected `wslDistro` matches the WSL default distro and
+   * Daintree can therefore route git operations through `wsl.exe git` (which
+   * always targets the default distro). When false, the banner shows a
+   * read-only informational note instead of an enable button.
+   */
+  wslGitEligible?: boolean;
+
+  /**
+   * User has opted in to routing this worktree's git operations through WSL.
+   * Persisted main-side in `wslGitByWorktree`; mirrored into the snapshot so
+   * the renderer can hide the banner without a separate IPC round-trip.
+   */
+  wslGitOptIn?: boolean;
+
+  /**
+   * User has dismissed the WSL git banner without opting in. Banner stays
+   * hidden until they explicitly enable WSL git from settings (future).
+   */
+  wslGitDismissed?: boolean;
 }
 
 /** Runtime worktree state (internal to WorktreeService) */
