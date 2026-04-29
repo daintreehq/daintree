@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import fs from "fs/promises";
 import os from "os";
 import path from "path";
-import { ProjectStateManager } from "../ProjectStateManager.js";
+import { ProjectStateManager, PROJECT_STATE_SCHEMA_VERSION } from "../ProjectStateManager.js";
 import { generateProjectId, stateFilePath } from "../projectStorePaths.js";
 import type { ProjectState } from "../../types/index.js";
 import { markPerformance, withPerformanceSpan } from "../../utils/performance.js";
@@ -245,5 +245,224 @@ describe("ProjectStateManager quarantine recovery", () => {
     const result = await manager.getProjectStateWithRecovery(projectId);
     expect(result.state).toBeNull();
     expect(result.quarantinedPath).toBe(`${filePath}.corrupted`);
+  });
+});
+
+describe("ProjectStateManager schema version", () => {
+  let tempDir: string;
+  let manager: ProjectStateManager;
+  let projectId: string;
+  let filePath: string;
+
+  beforeEach(async () => {
+    vi.mocked(markPerformance).mockClear();
+
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "daintree-state-schema-"));
+    manager = new ProjectStateManager(tempDir);
+    projectId = generateProjectId("/test/schema-project");
+    await fs.mkdir(path.join(tempDir, projectId), { recursive: true });
+    filePath = stateFilePath(tempDir, projectId)!;
+  });
+
+  afterEach(async () => {
+    await fs.rm(tempDir, { recursive: true, force: true });
+  });
+
+  async function writeRaw(content: unknown): Promise<void> {
+    await fs.writeFile(filePath, JSON.stringify(content), "utf-8");
+    manager.invalidateProjectStateCache(projectId);
+  }
+
+  it("reads a legacy unversioned file successfully", async () => {
+    await writeRaw({
+      projectId,
+      sidebarWidth: 350,
+      terminals: [],
+    });
+
+    const result = await manager.getProjectState(projectId);
+    expect(result).not.toBeNull();
+    expect(result!.sidebarWidth).toBe(350);
+  });
+
+  it("reads a v1 file successfully", async () => {
+    await writeRaw({
+      _schemaVersion: 1,
+      projectId,
+      sidebarWidth: 350,
+      terminals: [],
+    });
+
+    const result = await manager.getProjectState(projectId);
+    expect(result).not.toBeNull();
+  });
+
+  it("quarantines a future-version file to .future-vN and returns null", async () => {
+    await writeRaw({
+      _schemaVersion: 2,
+      projectId,
+      sidebarWidth: 350,
+      terminals: [],
+      mysteryNewField: "data we must not destroy",
+    });
+
+    const result = await manager.getProjectState(projectId);
+
+    expect(result).toBeNull();
+    await expect(fs.access(`${filePath}.future-v2`)).resolves.toBeUndefined();
+    await expect(fs.access(filePath)).rejects.toThrow();
+    await expect(fs.access(`${filePath}.corrupted`)).rejects.toThrow();
+  });
+
+  it("preserves the future-version file contents intact under the quarantine path", async () => {
+    const original = {
+      _schemaVersion: 99,
+      projectId,
+      sidebarWidth: 350,
+      terminals: [],
+      futureFeature: { nested: ["a", "b"] },
+    };
+    await writeRaw(original);
+
+    await manager.getProjectState(projectId);
+
+    const preserved = JSON.parse(await fs.readFile(`${filePath}.future-v99`, "utf-8"));
+    expect(preserved).toEqual(original);
+  });
+
+  it("emits PROJECT_STATE_QUARANTINE for future-version reads", async () => {
+    await writeRaw({
+      _schemaVersion: 2,
+      projectId,
+      terminals: [],
+    });
+
+    await manager.getProjectState(projectId);
+
+    expect(vi.mocked(markPerformance)).toHaveBeenCalledWith(PERF_MARKS.PROJECT_STATE_QUARANTINE, {
+      projectId,
+    });
+  });
+
+  it("surfaces the future-version quarantine path through getProjectStateWithRecovery", async () => {
+    await writeRaw({
+      _schemaVersion: 7,
+      projectId,
+      terminals: [],
+    });
+
+    const result = await manager.getProjectStateWithRecovery(projectId);
+
+    expect(result.state).toBeNull();
+    expect(result.quarantinedPath).toBe(`${filePath}.future-v7`);
+  });
+
+  it("stamps _schemaVersion on every save", async () => {
+    await manager.saveProjectState(projectId, makeState());
+
+    const raw = JSON.parse(await fs.readFile(filePath, "utf-8"));
+    expect(raw._schemaVersion).toBe(PROJECT_STATE_SCHEMA_VERSION);
+  });
+
+  it("does not leak _schemaVersion into the in-memory ProjectState returned to callers", async () => {
+    await manager.saveProjectState(projectId, makeState());
+    manager.invalidateProjectStateCache(projectId);
+
+    const result = await manager.getProjectState(projectId);
+
+    expect(result).not.toBeNull();
+    expect((result as unknown as Record<string, unknown>)._schemaVersion).toBeUndefined();
+  });
+
+  it("round-trips: save then invalidate cache then read returns equivalent state", async () => {
+    const original = makeState();
+    await manager.saveProjectState(projectId, original);
+    manager.invalidateProjectStateCache(projectId);
+
+    const result = await manager.getProjectState(projectId);
+
+    expect(result).not.toBeNull();
+    expect(result!.sidebarWidth).toBe(original.sidebarWidth);
+    expect(result!.terminals).toHaveLength(original.terminals.length);
+    expect(result!.terminalSizes).toEqual(original.terminalSizes);
+  });
+
+  it("treats a non-numeric _schemaVersion as legacy v0 and reads successfully", async () => {
+    await writeRaw({
+      _schemaVersion: "2",
+      projectId,
+      sidebarWidth: 350,
+      terminals: [],
+    });
+
+    const result = await manager.getProjectState(projectId);
+
+    expect(result).not.toBeNull();
+    expect(result!.sidebarWidth).toBe(350);
+    await expect(fs.access(filePath)).resolves.toBeUndefined();
+  });
+
+  it("treats a negative _schemaVersion as legacy v0 and reads successfully", async () => {
+    await writeRaw({
+      _schemaVersion: -1,
+      projectId,
+      sidebarWidth: 350,
+      terminals: [],
+    });
+
+    const result = await manager.getProjectState(projectId);
+
+    expect(result).not.toBeNull();
+  });
+
+  it("preserves a prior quarantine when a second future-version file lands at the same version", async () => {
+    const firstPayload = {
+      _schemaVersion: 2,
+      projectId,
+      sidebarWidth: 350,
+      terminals: [],
+      featureA: "first quarantine — must survive",
+    };
+    await writeRaw(firstPayload);
+    await manager.getProjectState(projectId);
+
+    const originalQuarantine = JSON.parse(await fs.readFile(`${filePath}.future-v2`, "utf-8"));
+    expect(originalQuarantine).toEqual(firstPayload);
+
+    const secondPayload = {
+      _schemaVersion: 2,
+      projectId,
+      sidebarWidth: 350,
+      terminals: [],
+      featureA: "second quarantine — must NOT clobber the first",
+    };
+    await writeRaw(secondPayload);
+    const result = await manager.getProjectState(projectId);
+
+    expect(result).toBeNull();
+    // Original quarantine still intact at the canonical path.
+    const stillThere = JSON.parse(await fs.readFile(`${filePath}.future-v2`, "utf-8"));
+    expect(stillThere).toEqual(firstPayload);
+
+    // Second future-version file moved to a timestamp-suffixed sibling.
+    const dir = path.dirname(filePath);
+    const entries = await fs.readdir(dir);
+    const suffixed = entries.find((name) => /^state\.json\.future-v2\.\d+$/.test(name));
+    expect(suffixed).toBeDefined();
+    const suffixedContent = JSON.parse(await fs.readFile(path.join(dir, suffixed!), "utf-8"));
+    expect(suffixedContent).toEqual(secondPayload);
+  });
+
+  it("quarantines a very large future-version number to .future-v{N}", async () => {
+    await writeRaw({
+      _schemaVersion: 999999,
+      projectId,
+      terminals: [],
+    });
+
+    const result = await manager.getProjectState(projectId);
+
+    expect(result).toBeNull();
+    await expect(fs.access(`${filePath}.future-v999999`)).resolves.toBeUndefined();
   });
 });
