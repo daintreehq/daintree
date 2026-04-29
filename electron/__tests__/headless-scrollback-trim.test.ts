@@ -73,7 +73,7 @@ describe("@xterm/headless options.scrollback active truncation (issue #6215)", (
       const postHeap = process.memoryUsage().heapUsed;
       expect(
         postHeap,
-        `expected V8 heap to drop after scrollback trim — preHeap=${preHeap} postHeap=${postHeap}`,
+        `expected V8 heap to drop after scrollback trim — preHeap=${preHeap} postHeap=${postHeap}`
       ).toBeLessThan(preHeap);
     }
   });
