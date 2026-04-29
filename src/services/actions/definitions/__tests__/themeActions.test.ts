@@ -19,6 +19,11 @@ vi.mock("@/store/notificationStore", () => ({
   useNotificationStore: { getState: () => ({ addNotification: mockAddNotification }) },
 }));
 
+const mockNotify = vi.fn().mockReturnValue("test-id");
+vi.mock("@/lib/notify", () => ({
+  notify: (...args: unknown[]) => mockNotify(...args),
+}));
+
 vi.mock("@/clients", () => ({ appClient: {} }));
 vi.mock("@/store/userAgentRegistryStore", () => ({
   useUserAgentRegistryStore: { getState: () => ({ refresh: vi.fn() }) },
@@ -194,8 +199,12 @@ describe("app.theme.toggle", () => {
     await toggle.run(undefined, stubCtx);
 
     expect(mockSetSelectedSchemeId).toHaveBeenCalledWith("light-a");
-    expect(mockAddNotification).toHaveBeenCalledTimes(1);
-    expect(mockAddNotification).toHaveBeenCalledWith(expect.objectContaining({ type: "error" }));
+    expect(mockNotify).toHaveBeenCalledTimes(1);
+    expect(mockNotify).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "error", message: "Failed to save theme: Light A" })
+    );
+    expect(mockNotify).not.toHaveBeenCalledWith(expect.objectContaining({ priority: "low" }));
+    expect(mockAddNotification).not.toHaveBeenCalled();
   });
 });
 
