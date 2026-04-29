@@ -12,6 +12,7 @@ import { getCrashRecoveryService } from "../../../services/CrashRecoveryService.
 import { isWebGLHardwareAccelerated } from "../../../utils/gpuDetection.js";
 import { isGpuDisabledByFlag } from "../../../services/GpuCrashMonitorService.js";
 import { getCrashLoopGuard } from "../../../services/CrashLoopGuardService.js";
+import { closeTelemetry } from "../../../services/TelemetryService.js";
 import { inferKind } from "../../../../shared/utils/inferPanelKind.js";
 import { typedHandle, typedHandleWithContext } from "../../utils.js";
 import { signalFirstInteractive } from "../../../window/deferredInitQueue.js";
@@ -192,12 +193,19 @@ export function registerAppStateHandlers(): () => void {
       terminalsSource = "global-fallback";
     }
 
-    // In safe mode, skip terminal restoration to break crash loops
-    const inSafeMode = getCrashLoopGuard().isSafeMode();
+    // In safe mode, skip terminal restoration to break crash loops.
+    // Capture the count of panels we're about to drop so the renderer
+    // banner can tell users how much was deferred.
+    const guard = getCrashLoopGuard();
+    const inSafeMode = guard.isSafeMode();
+    let skippedPanelCount = 0;
     if (inSafeMode) {
+      skippedPanelCount = terminalsToUse.length;
       terminalsToUse = [];
       terminalsSource = "safe-mode";
-      console.log("[AppHydrate] Safe mode active — skipping terminal restoration");
+      console.log(
+        `[AppHydrate] Safe mode active — skipping ${skippedPanelCount} terminal(s) restoration`
+      );
     }
 
     // Apply one-shot crash recovery panel filter if set
@@ -244,6 +252,9 @@ export function registerAppStateHandlers(): () => void {
       gpuWebGLHardware,
       gpuHardwareAccelerationDisabled: isGpuDisabledByFlag(app.getPath("userData")),
       safeMode: inSafeMode,
+      skippedPanelCount,
+      crashCount: guard.getCrashCount(),
+      lastCrashAt: guard.getLastCrashTimestamp(),
       settingsRecovery: consumePendingSettingsRecovery(),
       projectStateRecovery: projectStateQuarantinedPath
         ? { quarantinedPath: projectStateQuarantinedPath }
@@ -502,6 +513,18 @@ export function registerAppStateHandlers(): () => void {
     app.exit(0);
   };
   handlers.push(typedHandle(CHANNELS.APP_FORCE_QUIT, handleAppForceQuit));
+
+  const handleAppResetAndRelaunch = async () => {
+    // Clear the crash-loop sentinel before relaunch so the next boot starts
+    // fresh. Mirrors the gpu.ts pattern: prepare state -> relaunch -> close
+    // telemetry -> exit. Use app.exit (not app.quit) so beforeunload listeners
+    // can't veto the restart.
+    getCrashLoopGuard().resetForNormalBoot();
+    app.relaunch();
+    await closeTelemetry();
+    app.exit(0);
+  };
+  handlers.push(typedHandle(CHANNELS.APP_RESET_AND_RELAUNCH, handleAppResetAndRelaunch));
 
   handlers.push(
     typedHandleWithContext(CHANNELS.APP_FIRST_INTERACTIVE, async (ctx) => {

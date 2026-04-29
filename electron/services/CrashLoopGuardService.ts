@@ -33,6 +33,8 @@ export class CrashLoopGuardService {
   private relaunchAllowed = true;
   private stabilityTimer: ReturnType<typeof setTimeout> | null = null;
   private initialized = false;
+  private crashCount = 0;
+  private lastCrashAt: number | undefined;
 
   constructor() {
     this.userData = app.getPath("userData");
@@ -54,6 +56,11 @@ export class CrashLoopGuardService {
       state.launches = [];
     }
 
+    // The previous launch (if any) is the most recent crash — captured before
+    // we append the current launch so launches[length - 1] becomes "now".
+    this.lastCrashAt =
+      state.launches.length > 0 ? state.launches[state.launches.length - 1] : undefined;
+
     state.launches.push(now);
     if (state.launches.length > HARD_STOP_THRESHOLD) {
       state.launches = state.launches.slice(-HARD_STOP_THRESHOLD);
@@ -61,6 +68,7 @@ export class CrashLoopGuardService {
 
     state.cleanExit = false;
 
+    this.crashCount = state.crashes;
     this.safeMode = state.crashes >= CRASH_THRESHOLD;
     this.relaunchAllowed = state.crashes < HARD_STOP_THRESHOLD;
 
@@ -90,6 +98,36 @@ export class CrashLoopGuardService {
 
   shouldRelaunch(): boolean {
     return this.relaunchAllowed;
+  }
+
+  getCrashCount(): number {
+    return this.crashCount;
+  }
+
+  getLastCrashTimestamp(): number | undefined {
+    return this.lastCrashAt;
+  }
+
+  /**
+   * User-initiated reset: cancel the stability timer first so it can't
+   * fire between our write and exit and clobber the fresh state, then
+   * atomically clear the state file and reset in-memory flags.
+   *
+   * Throws if the disk write fails. The caller (IPC handler) must propagate
+   * the failure so the renderer can re-enable the restart button — silently
+   * swallowing the error here would leave the unclean sentinel on disk and
+   * boot the user straight back into safe mode after relaunch.
+   */
+  resetForNormalBoot(): void {
+    if (this.stabilityTimer) {
+      clearTimeout(this.stabilityTimer);
+      this.stabilityTimer = null;
+    }
+    this.writeState(freshState());
+    this.safeMode = false;
+    this.relaunchAllowed = true;
+    this.crashCount = 0;
+    this.lastCrashAt = undefined;
   }
 
   markCleanExit(): void {
@@ -136,6 +174,7 @@ export class CrashLoopGuardService {
         parsed.version === 1 &&
         typeof parsed.crashes === "number" &&
         Array.isArray(parsed.launches) &&
+        parsed.launches.every((ts) => typeof ts === "number" && Number.isFinite(ts)) &&
         typeof parsed.cleanExit === "boolean" &&
         typeof parsed.lastReset === "number"
       ) {
@@ -187,6 +226,7 @@ export function isSafeModeActive(userDataPath?: string): boolean {
       parsed.version === 1 &&
       typeof parsed.crashes === "number" &&
       Array.isArray(parsed.launches) &&
+      parsed.launches.every((ts) => typeof ts === "number" && Number.isFinite(ts)) &&
       typeof parsed.cleanExit === "boolean" &&
       typeof parsed.lastReset === "number"
     ) {
