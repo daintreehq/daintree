@@ -39,7 +39,9 @@ describe("AgentRouter", () => {
         "cursor",
         "kiro",
         "copilot",
+        "goose",
         "crush",
+        "qwen",
       ]).toContain(agentId);
     });
 
@@ -52,7 +54,7 @@ describe("AgentRouter", () => {
     });
 
     it("filters by required capabilities", async () => {
-      // Claude, Gemini, Codex, OpenCode, and Cursor all have javascript
+      // Claude, Gemini, Codex, OpenCode, Cursor, Goose, and Qwen all have javascript
       const agentId = await router.routeTask({
         requiredCapabilities: ["javascript"],
       });
@@ -65,7 +67,9 @@ describe("AgentRouter", () => {
         "cursor",
         "kiro",
         "copilot",
+        "goose",
         "crush",
+        "qwen",
       ]).toContain(agentId);
     });
 
@@ -94,6 +98,8 @@ describe("AgentRouter", () => {
       events.emit("task:assigned", { taskId: "t15", agentId: "goose", timestamp: Date.now() });
       events.emit("task:assigned", { taskId: "t16", agentId: "crush", timestamp: Date.now() });
       events.emit("task:assigned", { taskId: "t17", agentId: "crush", timestamp: Date.now() });
+      events.emit("task:assigned", { taskId: "t18", agentId: "qwen", timestamp: Date.now() });
+      events.emit("task:assigned", { taskId: "t19", agentId: "qwen", timestamp: Date.now() });
 
       // Now all agents should be at capacity
       const agentId = await router.routeTask({
