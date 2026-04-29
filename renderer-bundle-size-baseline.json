@@ -2,200 +2,212 @@
   "entryChunk": "index",
   "chunks": {
     "ActionService": {
-      "raw": 140,
-      "gzip": 126
+      "raw": 30319,
+      "gzip": 7344
     },
     "AgentCard": {
-      "raw": 13392,
-      "gzip": 4871
+      "raw": 13474,
+      "gzip": 4881
     },
     "AgentSettings": {
-      "raw": 61610,
-      "gzip": 17076
+      "raw": 74678,
+      "gzip": 21891
     },
     "App": {
-      "raw": 1162364,
-      "gzip": 318363
+      "raw": 1194228,
+      "gzip": 328849
     },
     "BrowserPane": {
-      "raw": 30337,
-      "gzip": 9359
+      "raw": 32881,
+      "gzip": 9983
     },
     "CommitList": {
-      "raw": 10792,
-      "gzip": 4078
+      "raw": 10771,
+      "gzip": 4098
     },
     "ConfirmDialog": {
-      "raw": 1553,
-      "gzip": 846
+      "raw": 1499,
+      "gzip": 830
     },
     "DevPreviewPane": {
-      "raw": 26888,
-      "gzip": 8681
+      "raw": 30667,
+      "gzip": 9442
+    },
+    "EmptyState": {
+      "raw": 1527,
+      "gzip": 813
     },
     "EnvironmentSettingsTab": {
-      "raw": 5479,
-      "gzip": 2202
+      "raw": 5521,
+      "gzip": 2218
     },
     "FileViewerModal": {
-      "raw": 755,
-      "gzip": 392
+      "raw": 22667,
+      "gzip": 8233
     },
     "GitHubDropdownSkeletons": {
       "raw": 7298,
-      "gzip": 2323
+      "gzip": 2329
     },
     "GitHubResourceList": {
-      "raw": 34598,
-      "gzip": 11179
+      "raw": 36734,
+      "gzip": 11886
     },
     "GitHubSettingsTab": {
-      "raw": 7419,
-      "gzip": 2351
+      "raw": 7975,
+      "gzip": 2511
     },
     "HybridInputBar": {
-      "raw": 111655,
-      "gzip": 33816
+      "raw": 115600,
+      "gzip": 35382
     },
     "IntegrationsTab": {
-      "raw": 11133,
-      "gzip": 3197
+      "raw": 11296,
+      "gzip": 3246
     },
     "KeyboardShortcuts": {
-      "raw": 11114,
-      "gzip": 4044
+      "raw": 11105,
+      "gzip": 4072
     },
     "KeyboardShortcutsTab": {
-      "raw": 9159,
-      "gzip": 3250
+      "raw": 9276,
+      "gzip": 3295
     },
     "McpServerSettingsTab": {
-      "raw": 8618,
-      "gzip": 2773
+      "raw": 10945,
+      "gzip": 3316
     },
     "NewWorktreeDialog": {
-      "raw": 55480,
-      "gzip": 15533
+      "raw": 51637,
+      "gzip": 13836
     },
     "NotificationSettingsTab": {
-      "raw": 14307,
-      "gzip": 4547
+      "raw": 14303,
+      "gzip": 4550
     },
     "PaletteStrip": {
       "raw": 1250,
-      "gzip": 754
+      "gzip": 755
     },
     "PortalSettingsTab": {
-      "raw": 13834,
-      "gzip": 4806
+      "raw": 14045,
+      "gzip": 4878
     },
     "PrivacyDataTab": {
-      "raw": 11185,
-      "gzip": 3605
+      "raw": 12096,
+      "gzip": 3687
     },
     "RecipeEditor": {
-      "raw": 19122,
-      "gzip": 5175
+      "raw": 19154,
+      "gzip": 5200
     },
     "SearchablePalette": {
-      "raw": 28491,
-      "gzip": 9833
+      "raw": 30025,
+      "gzip": 10371
     },
     "SettingsCheckbox": {
-      "raw": 3185,
-      "gzip": 1469
+      "raw": 3268,
+      "gzip": 1507
     },
     "SettingsDialog": {
-      "raw": 196038,
-      "gzip": 47528
+      "raw": 195605,
+      "gzip": 47695
     },
     "SettingsSection": {
-      "raw": 1472,
-      "gzip": 820
+      "raw": 1489,
+      "gzip": 834
     },
     "SettingsSelect": {
-      "raw": 2243,
-      "gzip": 998
+      "raw": 2266,
+      "gzip": 1015
     },
     "SettingsSubtabBar": {
       "raw": 1810,
-      "gzip": 959
+      "gzip": 961
     },
     "SettingsSwitchCard": {
-      "raw": 5651,
-      "gzip": 2322
+      "raw": 5963,
+      "gzip": 2422
     },
     "SettingsValidationRegistry": {
       "raw": 1213,
-      "gzip": 682
+      "gzip": 683
     },
     "Spinner": {
       "raw": 575,
-      "gzip": 394
+      "gzip": 398
     },
     "TerminalAppearanceTab": {
-      "raw": 28812,
-      "gzip": 9434
+      "raw": 28714,
+      "gzip": 9478
     },
     "TerminalInstanceService": {
-      "raw": 189074,
-      "gzip": 49830
+      "raw": 202035,
+      "gzip": 53434
     },
     "TerminalSettingsTab": {
-      "raw": 22361,
-      "gzip": 6453
+      "raw": 22037,
+      "gzip": 6293
     },
     "ToolbarSettingsTab": {
-      "raw": 12394,
-      "gzip": 4740
+      "raw": 12473,
+      "gzip": 4770
     },
     "TroubleshootingTab": {
-      "raw": 18781,
-      "gzip": 6320
+      "raw": 18970,
+      "gzip": 6445
+    },
+    "TruncatedTooltip": {
+      "raw": 1324,
+      "gzip": 809
     },
     "VoiceInputSettingsTab": {
-      "raw": 22190,
-      "gzip": 7614
+      "raw": 22213,
+      "gzip": 7632
     },
     "WorktreeSettingsTab": {
-      "raw": 8313,
-      "gzip": 2371
+      "raw": 8311,
+      "gzip": 2413
     },
     "YarnIcon": {
-      "raw": 40836,
-      "gzip": 13681
-    },
-    "agentRegistry": {
-      "raw": 20426,
-      "gzip": 5102
+      "raw": 48067,
+      "gzip": 15553
     },
     "agentSettingsStore": {
-      "raw": 5032,
-      "gzip": 1708
+      "raw": 312,
+      "gzip": 202
     },
     "agents": {
-      "raw": 15451,
-      "gzip": 5153
+      "raw": 16382,
+      "gzip": 5486
     },
     "appClient": {
       "raw": 364,
       "gzip": 195
     },
     "clients": {
-      "raw": 18937,
-      "gzip": 4694
+      "raw": 19361,
+      "gzip": 4792
     },
     "createWorktreeStore": {
-      "raw": 628,
-      "gzip": 341
+      "raw": 3881,
+      "gzip": 1437
     },
     "envVars": {
       "raw": 76,
       "gzip": 94
     },
+    "errorMessage": {
+      "raw": 5867,
+      "gzip": 2329
+    },
+    "githubConfigStore": {
+      "raw": 3891,
+      "gzip": 1377
+    },
     "index": {
-      "raw": 408950,
-      "gzip": 124218
+      "raw": 389310,
+      "gzip": 120314
     },
     "logger": {
       "raw": 597,
@@ -206,32 +218,32 @@
       "gzip": 200
     },
     "notificationSettingsStore": {
-      "raw": 1659,
-      "gzip": 531
+      "raw": 1729,
+      "gzip": 558
     },
     "notify": {
-      "raw": 5775,
-      "gzip": 2103
+      "raw": 7321,
+      "gzip": 2705
     },
     "panelStore": {
-      "raw": 717,
-      "gzip": 379
+      "raw": 716,
+      "gzip": 380
     },
     "persistedStoreRegistry": {
       "raw": 547,
       "gzip": 300
     },
     "popover": {
-      "raw": 1821,
-      "gzip": 1019
+      "raw": 1839,
+      "gzip": 1030
+    },
+    "portalStore": {
+      "raw": 6724,
+      "gzip": 2300
     },
     "projectStore": {
-      "raw": 98430,
-      "gzip": 23413
-    },
-    "pulseStore": {
-      "raw": 3310,
-      "gzip": 1178
+      "raw": 98322,
+      "gzip": 23432
     },
     "renderer": {
       "raw": 72,
@@ -242,56 +254,60 @@
       "gzip": 469
     },
     "safeStorage": {
-      "raw": 3654,
-      "gzip": 1449
+      "raw": 46835,
+      "gzip": 10575
     },
     "select": {
       "raw": 6033,
-      "gzip": 2120
+      "gzip": 2121
+    },
+    "store": {
+      "raw": 25881,
+      "gzip": 7574
     },
     "svgSanitizer": {
       "raw": 1863,
       "gzip": 960
     },
     "terminalInputStore": {
-      "raw": 5478,
-      "gzip": 1596
+      "raw": 153,
+      "gzip": 125
     },
     "ttlCache": {
-      "raw": 1068,
-      "gzip": 504
+      "raw": 1133,
+      "gzip": 530
     },
     "useFindInPage": {
-      "raw": 23452,
-      "gzip": 7887
+      "raw": 23558,
+      "gzip": 7946
     },
     "useNewWorktreeProjectSettings": {
-      "raw": 6742,
-      "gzip": 2685
+      "raw": 6767,
+      "gzip": 2708
     },
     "usePluginToolbarButtons": {
-      "raw": 797,
-      "gzip": 516
+      "raw": 884,
+      "gzip": 562
     },
     "utils": {
       "raw": 218,
       "gzip": 193
     },
     "vendor": {
-      "raw": 644897,
-      "gzip": 205948
+      "raw": 653944,
+      "gzip": 209793
     },
     "vendor-editor": {
       "raw": 1763598,
       "gzip": 600991
     },
     "vendor-icons": {
-      "raw": 44093,
-      "gzip": 13338
+      "raw": 45541,
+      "gzip": 13771
     },
     "vendor-motion": {
-      "raw": 123956,
-      "gzip": 39966
+      "raw": 125193,
+      "gzip": 40363
     },
     "vendor-xterm": {
       "raw": 575947,
@@ -306,18 +322,18 @@
       "gzip": 130
     },
     "worktreeStore": {
-      "raw": 587,
-      "gzip": 324
+      "raw": 586,
+      "gzip": 325
     }
   },
   "totals": {
     "js": {
-      "raw": 6124512,
-      "gzip": 1865362
+      "raw": 6266370,
+      "gzip": 1910829
     },
     "css": {
-      "raw": 288256,
-      "gzip": 58446
+      "raw": 299705,
+      "gzip": 59855
     }
   }
 }
