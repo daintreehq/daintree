@@ -58,7 +58,7 @@ export function setupPowerMonitor(deps: PowerMonitorDeps): void {
           await workspaceClient.waitForReady();
           workspaceClient.setPollingEnabled(true);
           workspaceClient.resumeHealthCheck();
-          await workspaceClient.refresh();
+          await workspaceClient.refreshOnWake();
         }
         // Force an immediate token-health probe on wake — a PAT that expired
         // during a long laptop sleep would otherwise sit undetected until the

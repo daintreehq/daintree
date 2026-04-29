@@ -39,6 +39,7 @@ function createMockWorkspaceClient(overrides: Partial<WorkspaceClient> = {}): Wo
     setPollingEnabled: vi.fn(),
     waitForReady: vi.fn().mockResolvedValue(undefined),
     refresh: vi.fn().mockResolvedValue(undefined),
+    refreshOnWake: vi.fn().mockResolvedValue(undefined),
     ...overrides,
   } as unknown as WorkspaceClient;
 }
@@ -118,7 +119,7 @@ describe("setupPowerMonitor", () => {
 
     expect(workspaceClient.waitForReady).not.toHaveBeenCalled();
     expect(workspaceClient.setPollingEnabled).not.toHaveBeenCalled();
-    expect(workspaceClient.refresh).not.toHaveBeenCalled();
+    expect(workspaceClient.refreshOnWake).not.toHaveBeenCalled();
   });
 
   it("runs the full refresh sequence after the 2s debounce and broadcasts SYSTEM_WAKE", async () => {
@@ -135,8 +136,8 @@ describe("setupPowerMonitor", () => {
       resumeHealthCheck: vi.fn(() => {
         callLog.push("resumeHealthCheck");
       }),
-      refresh: vi.fn(() => {
-        callLog.push("refresh");
+      refreshOnWake: vi.fn(() => {
+        callLog.push("refreshOnWake");
         return Promise.resolve();
       }),
     } as unknown as Partial<WorkspaceClient>);
@@ -160,7 +161,7 @@ describe("setupPowerMonitor", () => {
       "waitForReady",
       "setPollingEnabled(true)",
       "resumeHealthCheck",
-      "refresh",
+      "refreshOnWake",
     ]);
     expect(ptyClient.resumeAll).toHaveBeenCalledTimes(1);
     expect(ptyClient.resumeHealthCheck).toHaveBeenCalledTimes(1);
@@ -191,7 +192,7 @@ describe("setupPowerMonitor", () => {
     resume();
     await vi.advanceTimersByTimeAsync(2000);
 
-    expect(workspaceClient.refresh).toHaveBeenCalledTimes(1);
+    expect(workspaceClient.refreshOnWake).toHaveBeenCalledTimes(1);
     expect(workspaceClient.setPollingEnabled).toHaveBeenCalledWith(true);
   });
 
@@ -207,7 +208,7 @@ describe("setupPowerMonitor", () => {
     powerHandlers.get("suspend")!();
     await vi.advanceTimersByTimeAsync(3000);
 
-    expect(workspaceClient.refresh).not.toHaveBeenCalled();
+    expect(workspaceClient.refreshOnWake).not.toHaveBeenCalled();
     expect(workspaceClient.setPollingEnabled).toHaveBeenCalledWith(false);
     expect(workspaceClient.setPollingEnabled).not.toHaveBeenCalledWith(true);
   });
@@ -233,10 +234,10 @@ describe("setupPowerMonitor", () => {
     );
   });
 
-  it("catches and logs errors from workspaceClient.refresh", async () => {
+  it("catches and logs errors from workspaceClient.refreshOnWake", async () => {
     const refreshError = new Error("refresh failed");
     const workspaceClient = createMockWorkspaceClient({
-      refresh: vi.fn().mockRejectedValue(refreshError),
+      refreshOnWake: vi.fn().mockRejectedValue(refreshError),
     });
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
 
@@ -294,7 +295,7 @@ describe("setupPowerMonitor", () => {
     expect(workspaceClient.waitForReady).toHaveBeenCalledTimes(1);
     expect(workspaceClient.setPollingEnabled).not.toHaveBeenCalled();
     expect(workspaceClient.resumeHealthCheck).not.toHaveBeenCalled();
-    expect(workspaceClient.refresh).not.toHaveBeenCalled();
+    expect(workspaceClient.refreshOnWake).not.toHaveBeenCalled();
     expect(wc.send).not.toHaveBeenCalled();
 
     resolveReady!();
@@ -302,11 +303,25 @@ describe("setupPowerMonitor", () => {
 
     expect(workspaceClient.setPollingEnabled).toHaveBeenCalledWith(true);
     expect(workspaceClient.resumeHealthCheck).toHaveBeenCalledTimes(1);
-    expect(workspaceClient.refresh).toHaveBeenCalledTimes(1);
+    expect(workspaceClient.refreshOnWake).toHaveBeenCalledTimes(1);
     expect(wc.send).toHaveBeenCalledWith(
       "events:push",
       expect.objectContaining({ name: "system:wake", payload: expect.any(Object) })
     );
+  });
+
+  it("uses refreshOnWake (not refresh) on resume so adaptive polling state is reset", async () => {
+    const workspaceClient = createMockWorkspaceClient();
+    setupPowerMonitor({
+      getPtyClient: () => createMockPtyClient(),
+      getWorkspaceClient: () => workspaceClient,
+    });
+
+    powerHandlers.get("resume")!();
+    await vi.advanceTimersByTimeAsync(2000);
+
+    expect(workspaceClient.refreshOnWake).toHaveBeenCalledTimes(1);
+    expect(workspaceClient.refresh).not.toHaveBeenCalled();
   });
 
   it("skips SYSTEM_WAKE for a window whose webContents is destroyed", async () => {

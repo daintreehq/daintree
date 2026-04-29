@@ -262,3 +262,148 @@ describe("WorkspaceService.pause/resume", () => {
     expect(() => service.pause()).not.toThrow();
   });
 });
+
+describe("WorkspaceService.refreshOnWake", () => {
+  let service: WorkspaceService;
+  let mockSendEvent: ReturnType<typeof vi.fn>;
+  let WorktreeMonitorClass: typeof WorktreeMonitor;
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    mockSendEvent = vi.fn();
+
+    const WorkspaceServiceModule = await import("../WorkspaceService.js");
+    service = new WorkspaceServiceModule.WorkspaceService(mockSendEvent as any);
+
+    const WorktreeMonitorModule = await import("../WorktreeMonitor.js");
+    WorktreeMonitorClass = WorktreeMonitorModule.WorktreeMonitor;
+
+    service["projectRootPath"] = "/test/root";
+    service["git"] = mockSimpleGit as any;
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function registerMonitor(id: string): WorktreeMonitor {
+    const monitor = new WorktreeMonitorClass(
+      {
+        id,
+        path: id,
+        name: `feature/${id}`,
+        branch: `feature/${id}`,
+        isCurrent: false,
+        isMainWorktree: false,
+        gitDir: `${id}/.git`,
+      },
+      {
+        basePollingInterval: 10000,
+        adaptiveBackoff: false,
+        pollIntervalMax: 30000,
+        circuitBreakerThreshold: 3,
+        gitWatchEnabled: false,
+      },
+      { onUpdate: vi.fn() },
+      "main"
+    );
+    service["monitors"].set(id, monitor);
+    return monitor;
+  }
+
+  it("resets every monitor's polling strategy before triggering refresh", async () => {
+    const m1 = registerMonitor("/test/wt-1");
+    const m2 = registerMonitor("/test/wt-2");
+
+    const callOrder: string[] = [];
+    const reset1 = vi.spyOn(m1, "resetPollingStrategy").mockImplementation(() => {
+      callOrder.push("reset:wt-1");
+    });
+    const reset2 = vi.spyOn(m2, "resetPollingStrategy").mockImplementation(() => {
+      callOrder.push("reset:wt-2");
+    });
+    vi.spyOn(m1, "updateGitStatus").mockImplementation(async () => {
+      callOrder.push("updateGitStatus:wt-1");
+    });
+    vi.spyOn(m2, "updateGitStatus").mockImplementation(async () => {
+      callOrder.push("updateGitStatus:wt-2");
+    });
+    mockPullRequestService.refresh.mockImplementation(() => {
+      callOrder.push("pr-refresh");
+    });
+
+    await service.refreshOnWake("req-wake-1");
+
+    expect(reset1).toHaveBeenCalledTimes(1);
+    expect(reset2).toHaveBeenCalledTimes(1);
+    // Both resets must complete before any updateGitStatus runs.
+    const firstUpdateIdx = callOrder.findIndex((s) => s.startsWith("updateGitStatus"));
+    const lastResetIdx = Math.max(
+      callOrder.lastIndexOf("reset:wt-1"),
+      callOrder.lastIndexOf("reset:wt-2")
+    );
+    expect(lastResetIdx).toBeLessThan(firstUpdateIdx);
+    expect(mockPullRequestService.refresh).toHaveBeenCalledTimes(1);
+    expect(mockSendEvent).toHaveBeenCalledWith({
+      type: "refresh-result",
+      requestId: "req-wake-1",
+      success: true,
+    });
+  });
+
+  it("triggers PR refresh and reports success even when no monitors are registered", async () => {
+    await service.refreshOnWake("req-wake-empty");
+
+    expect(mockPullRequestService.refresh).toHaveBeenCalledTimes(1);
+    expect(mockSendEvent).toHaveBeenCalledWith({
+      type: "refresh-result",
+      requestId: "req-wake-empty",
+      success: true,
+    });
+  });
+
+  it("does not call discoverAndSyncWorktrees on wake (worktree list is stable across sleep)", async () => {
+    registerMonitor("/test/wt-1");
+    const discoverSpy = vi.spyOn(service as any, "discoverAndSyncWorktrees");
+
+    await service.refreshOnWake("req-wake-no-discover");
+
+    expect(discoverSpy).not.toHaveBeenCalled();
+  });
+
+  it("reports failure via refresh-result when PR refresh throws", async () => {
+    registerMonitor("/test/wt-1");
+    mockPullRequestService.refresh.mockRejectedValueOnce(new Error("rate limited"));
+
+    await service.refreshOnWake("req-wake-fail");
+
+    expect(mockSendEvent).toHaveBeenCalledWith({
+      type: "refresh-result",
+      requestId: "req-wake-fail",
+      success: false,
+      error: "rate limited",
+    });
+  });
+
+  it("staggers wake refresh — at most one git status runs at a time", async () => {
+    const monitors = ["/test/wt-1", "/test/wt-2", "/test/wt-3", "/test/wt-4"].map(registerMonitor);
+
+    let inFlight = 0;
+    let maxInFlight = 0;
+    for (const monitor of monitors) {
+      vi.spyOn(monitor, "updateGitStatus").mockImplementation(async () => {
+        inFlight++;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        await new Promise((r) => setTimeout(r, 5));
+        inFlight--;
+      });
+    }
+
+    await service.refreshOnWake("req-wake-stagger");
+
+    expect(maxInFlight).toBe(1);
+    for (const monitor of monitors) {
+      expect(monitor.updateGitStatus).toHaveBeenCalledWith(true);
+    }
+  });
+});

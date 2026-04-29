@@ -203,6 +203,7 @@ export type WorkspaceHostRequest =
   // Worktree operations
   | { type: "set-active"; requestId: string; worktreeId: string }
   | { type: "refresh"; requestId: string; worktreeId?: string }
+  | { type: "refresh-on-wake"; requestId: string }
   | { type: "refresh-prs"; requestId: string }
   | { type: "get-pr-status"; requestId: string }
   | { type: "reset-pr-state"; requestId: string }

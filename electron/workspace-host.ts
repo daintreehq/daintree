@@ -348,6 +348,10 @@ port.on("message", async (rawMsg: any) => {
         await workspaceService.refresh(request.requestId, request.worktreeId);
         break;
 
+      case "refresh-on-wake":
+        await workspaceService.refreshOnWake(request.requestId);
+        break;
+
       case "refresh-prs":
         {
           const { pullRequestService } = await import("./services/PullRequestService.js");

@@ -83,7 +83,7 @@ test.describe.serial("Core: Cross-Worktree Terminal Isolation", () => {
         .toContain("selected");
     });
 
-    const mainPanel = await spawnTerminalAndVerify(window);
+    await spawnTerminalAndVerify(window);
     const mainPanelIds = await getGridPanelIds(window);
     const mainPanelId = mainPanelIds[mainPanelIds.length - 1];
 
@@ -106,7 +106,7 @@ test.describe.serial("Core: Cross-Worktree Terminal Isolation", () => {
         .toContain("selected");
     });
 
-    const featurePanel = await spawnTerminalAndVerify(window);
+    await spawnTerminalAndVerify(window);
     const featurePanelIds = await getGridPanelIds(window);
     const featurePanelId = featurePanelIds[featurePanelIds.length - 1];
 

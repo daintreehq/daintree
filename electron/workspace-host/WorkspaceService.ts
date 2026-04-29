@@ -793,6 +793,46 @@ export class WorkspaceService {
     }
   }
 
+  /**
+   * Refresh the workspace after the OS wakes from sleep.
+   *
+   * Resets each monitor's adaptive polling strategy synchronously before
+   * enqueuing a serialized refresh, so pre-sleep operation durations and
+   * circuit-breaker counters don't poison the post-wake polling cadence.
+   * The wake refresh runs through a dedicated `concurrency: 1` queue rather
+   * than the shared `pollQueue` so we don't burst N concurrent `git status`
+   * processes against shared `packed-refs` / `gc.pid` immediately on wake.
+   */
+  async refreshOnWake(requestId: string): Promise<void> {
+    try {
+      for (const monitor of this.monitors.values()) {
+        monitor.resetPollingStrategy();
+      }
+      const wakeQueue = new PQueue({ concurrency: 1 });
+      const promises = Array.from(this.monitors.values()).map((monitor) =>
+        wakeQueue.add(async () => {
+          try {
+            await monitor.updateGitStatus(true);
+          } finally {
+            if (monitor.isRunning && this.pollingEnabled) {
+              monitor.reschedulePolling();
+            }
+          }
+        })
+      );
+      await Promise.all(promises);
+      await pullRequestService.refresh();
+      this.sendEvent({ type: "refresh-result", requestId, success: true });
+    } catch (error) {
+      this.sendEvent({
+        type: "refresh-result",
+        requestId,
+        success: false,
+        error: (error as Error).message,
+      });
+    }
+  }
+
   private async discoverAndSyncWorktrees(): Promise<void> {
     if (!this.git) {
       return;

@@ -127,7 +127,7 @@ test.describe.serial("Presets: CCR Discovery & Auto-Config (1–12)", () => {
   test("7. Invalid CCR JSON does not crash the app", async () => {
     writeCcrConfig([{ id: "before" }] as import("../helpers/presets").CcrModelEntry[]);
     const { writeFileSync, mkdirSync } = await import("fs");
-    const { join, dirname } = await import("path");
+    const { dirname } = await import("path");
     const configPath = process.env.DAINTREE_CCR_CONFIG_PATH;
     if (configPath) {
       mkdirSync(dirname(configPath), { recursive: true });

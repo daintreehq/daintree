@@ -823,6 +823,20 @@ export class WorkspaceClient extends EventEmitter {
     }
   }
 
+  async refreshOnWake(): Promise<void> {
+    // Fan out to all hosts in parallel — wake recovery responsiveness across
+    // multiple open projects shouldn't be gated on the slowest host.
+    await Promise.allSettled(
+      Array.from(this.entries.values()).map(async (entry) => {
+        const requestId = entry.host.generateRequestId();
+        await entry.host.sendWithResponse({
+          type: "refresh-on-wake",
+          requestId,
+        });
+      })
+    );
+  }
+
   async refreshPullRequests(): Promise<void> {
     for (const entry of this.entries.values()) {
       try {
