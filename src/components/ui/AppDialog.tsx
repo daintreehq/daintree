@@ -354,6 +354,7 @@ interface AppDialogFooterProps {
   className?: string;
   primaryAction?: DialogAction;
   secondaryAction?: DialogAction;
+  hint?: React.ReactNode;
 }
 
 AppDialog.Footer = function AppDialogFooter({
@@ -361,6 +362,7 @@ AppDialog.Footer = function AppDialogFooter({
   className,
   primaryAction,
   secondaryAction,
+  hint,
 }: AppDialogFooterProps) {
   const context = useContext(AppDialogContext);
   const dialogVariant = context?.variant ?? "default";
@@ -375,31 +377,39 @@ AppDialog.Footer = function AppDialogFooter({
   return (
     <div
       className={cn(
-        "px-6 py-4 border-t border-daintree-border flex justify-end gap-3 shrink-0",
+        "px-6 py-4 border-t border-daintree-border flex items-center gap-3 shrink-0",
+        hint ? "justify-between" : "justify-end",
         className
       )}
     >
-      {children}
-      {!children && secondaryAction && (
-        <Button
-          variant="ghost"
-          onClick={secondaryAction.onClick}
-          disabled={secondaryAction.disabled || secondaryAction.loading}
-          className="text-daintree-text/70 hover:text-daintree-text"
-        >
-          {secondaryAction.loading && <Spinner />}
-          {secondaryAction.label}
-        </Button>
+      {hint && (
+        <div className="text-[12px] text-daintree-text/55 flex items-center gap-1">{hint}</div>
       )}
-      {!children && primaryAction && (
-        <Button
-          variant={getPrimaryVariant()}
-          onClick={primaryAction.onClick}
-          disabled={primaryAction.disabled || primaryAction.loading}
-        >
-          {primaryAction.loading && <Spinner />}
-          {primaryAction.label}
-        </Button>
+      {children}
+      {!children && (
+        <div className="flex items-center gap-3">
+          {secondaryAction && (
+            <Button
+              variant="ghost"
+              onClick={secondaryAction.onClick}
+              disabled={secondaryAction.disabled || secondaryAction.loading}
+              className="text-daintree-text/70 hover:text-daintree-text"
+            >
+              {secondaryAction.loading && <Spinner />}
+              {secondaryAction.label}
+            </Button>
+          )}
+          {primaryAction && (
+            <Button
+              variant={getPrimaryVariant()}
+              onClick={primaryAction.onClick}
+              disabled={primaryAction.disabled || primaryAction.loading}
+            >
+              {primaryAction.loading && <Spinner />}
+              {primaryAction.label}
+            </Button>
+          )}
+        </div>
       )}
     </div>
   );

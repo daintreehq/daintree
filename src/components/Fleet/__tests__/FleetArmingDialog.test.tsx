@@ -25,6 +25,7 @@ vi.mock("@/hooks/useAnimatedPresence", () => ({
 import { FleetArmingDialog } from "../FleetArmingDialog";
 import { usePanelStore } from "@/store/panelStore";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
+import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { _resetForTests as resetEscapeStack, dispatchEscape } from "@/lib/escapeStack";
 import { WorktreeStoreContext } from "@/contexts/WorktreeStoreContext";
 import { createWorktreeStore } from "@/store/createWorktreeStore";
@@ -88,6 +89,7 @@ function resetStores(): void {
     broadcastSignal: 0,
   });
   usePanelStore.setState({ panelsById: {}, panelIds: [], focusedId: null });
+  useWorktreeSelectionStore.setState({ activeWorktreeId: null });
   resetEscapeStack();
 }
 
@@ -613,5 +615,172 @@ describe("FleetArmingDialog", () => {
     // Click Main's header (indeterminate: 1/2 selected) — should deselect Main only.
     fireEvent.click(screen.getByLabelText("Select all 2 terminals in Main"));
     expect(screen.getByText("Arm 1 selected")).toBeTruthy();
+  });
+
+  describe("pre-selection", () => {
+    it("pre-selects terminals belonging to the active worktree on open", () => {
+      useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-1" });
+      seedTerminals([
+        makeTerminal("a", { title: "alpha", worktreeId: "wt-1" }),
+        makeTerminal("b", { title: "beta", worktreeId: "wt-1" }),
+        makeTerminal("c", { title: "gamma", worktreeId: "wt-2" }),
+      ]);
+      renderDialog([makeWorktreeSnap("wt-1", "Main"), makeWorktreeSnap("wt-2", "Other")]);
+      expect(screen.getByText("Arm 2 selected")).toBeTruthy();
+    });
+
+    it("opens empty when activeWorktreeId is null", () => {
+      useWorktreeSelectionStore.setState({ activeWorktreeId: null });
+      seedTerminals([
+        makeTerminal("a", { title: "alpha", worktreeId: "wt-1" }),
+        makeTerminal("b", { title: "beta", worktreeId: "wt-1" }),
+      ]);
+      renderDialog([makeWorktreeSnap("wt-1", "Main")]);
+      expect(screen.getByText("Arm selected")).toBeTruthy();
+    });
+
+    it("first shift+click after pre-selection extends range, not plain toggle", () => {
+      useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-1" });
+      seedTerminals([
+        makeTerminal("a", { title: "alpha", worktreeId: "wt-1" }),
+        makeTerminal("b", { title: "beta", worktreeId: "wt-1" }),
+        makeTerminal("c", { title: "gamma", worktreeId: "wt-2" }),
+      ]);
+      renderDialog([makeWorktreeSnap("wt-1", "Main"), makeWorktreeSnap("wt-2", "Other")]);
+      // a and b are pre-selected, anchor = b. Shift+click gamma (c) on wt-2.
+      fireEvent.click(screen.getByText("gamma").closest("label")!, { shiftKey: true });
+      expect(screen.getByText("Arm 3 selected")).toBeTruthy();
+    });
+
+    it("opens empty when active worktree has no eligible terminals", () => {
+      useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-2" });
+      seedTerminals([makeTerminal("a", { title: "alpha", worktreeId: "wt-1" })]);
+      renderDialog([makeWorktreeSnap("wt-1", "Main"), makeWorktreeSnap("wt-2", "empty")]);
+      expect(screen.getByText("Arm selected")).toBeTruthy();
+    });
+  });
+
+  describe("shift+click range selection", () => {
+    it("selects inclusive range between anchor and shift-clicked terminal", () => {
+      seedTerminals([
+        makeTerminal("a", { title: "alpha", worktreeId: "wt-1" }),
+        makeTerminal("b", { title: "beta", worktreeId: "wt-1" }),
+        makeTerminal("c", { title: "gamma", worktreeId: "wt-1" }),
+      ]);
+      renderDialog([makeWorktreeSnap("wt-1", "Main")]);
+      // Plain click on "a" to set anchor.
+      fireEvent.click(screen.getByLabelText("Select alpha"));
+      expect(screen.getByText("Arm 1 selected")).toBeTruthy();
+      // Shift+click on "c" row — must click the label (not checkbox) so shiftKey propagates.
+      fireEvent.click(screen.getByText("gamma").closest("label")!, { shiftKey: true });
+      expect(screen.getByText("Arm 3 selected")).toBeTruthy();
+    });
+
+    it("shift+click across worktree groups selects intermediate terminals", () => {
+      seedTerminals([
+        makeTerminal("a", { title: "alpha", worktreeId: "wt-1" }),
+        makeTerminal("b", { title: "beta", worktreeId: "wt-2" }),
+        makeTerminal("c", { title: "gamma", worktreeId: "wt-2" }),
+      ]);
+      renderDialog([makeWorktreeSnap("wt-1", "Main"), makeWorktreeSnap("wt-2", "Other")]);
+      fireEvent.click(screen.getByLabelText("Select alpha"));
+      fireEvent.click(screen.getByText("gamma").closest("label")!, { shiftKey: true });
+      expect(screen.getByText("Arm 3 selected")).toBeTruthy();
+    });
+
+    it("shift+click without prior anchor behaves as plain toggle", () => {
+      seedTerminals([
+        makeTerminal("a", { title: "alpha", worktreeId: "wt-1" }),
+        makeTerminal("b", { title: "beta", worktreeId: "wt-1" }),
+      ]);
+      renderDialog([makeWorktreeSnap("wt-1", "Main")]);
+      // Shift+click with no anchor — should just toggle "alpha".
+      fireEvent.click(screen.getByText("alpha").closest("label")!, { shiftKey: true });
+      expect(screen.getByText("Arm 1 selected")).toBeTruthy();
+      // Now alpha is selected AND anchor is set. Shift+click beta.
+      fireEvent.click(screen.getByText("beta").closest("label")!, { shiftKey: true });
+      expect(screen.getByText("Arm 2 selected")).toBeTruthy();
+    });
+
+    it("shift+click falls back to plain toggle when anchor is filtered out", () => {
+      seedTerminals([
+        makeTerminal("a", { title: "alpha", worktreeId: "wt-1", agentState: "waiting" }),
+        makeTerminal("b", { title: "beta", worktreeId: "wt-1", agentState: "working" }),
+        makeTerminal("c", { title: "gamma", worktreeId: "wt-1", agentState: "working" }),
+      ]);
+      renderDialog([makeWorktreeSnap("wt-1", "Main")]);
+      // Click alpha to set anchor.
+      fireEvent.click(screen.getByLabelText("Select alpha"));
+      // Filter to "working" — anchor (alpha, "waiting") is now filtered out.
+      fireEvent.click(screen.getByTestId("fleet-arming-dialog-chip-working"));
+      // Shift+click gamma with anchor filtered out — should behave as plain toggle.
+      fireEvent.click(screen.getByText("gamma").closest("label")!, { shiftKey: true });
+      // alpha is still selected (not visible), gamma was toggled on.
+      expect(screen.getByText("Arm 2 selected")).toBeTruthy();
+    });
+
+    it("anchor reset on dialog close/reopen allows fresh plain click", () => {
+      seedTerminals([makeTerminal("a", { title: "alpha", worktreeId: "wt-1" })]);
+      const store = createWorktreeStore();
+      store.getState().applySnapshot([makeWorktreeSnap("wt-1", "Main")], 1);
+      const { rerender } = render(
+        <WorktreeStoreContext.Provider value={store}>
+          <FleetArmingDialog isOpen={true} onClose={() => {}} />
+        </WorktreeStoreContext.Provider>
+      );
+      fireEvent.click(screen.getByLabelText("Select alpha"));
+      // Close.
+      rerender(
+        <WorktreeStoreContext.Provider value={store}>
+          <FleetArmingDialog isOpen={false} onClose={() => {}} />
+        </WorktreeStoreContext.Provider>
+      );
+      // Reopen.
+      rerender(
+        <WorktreeStoreContext.Provider value={store}>
+          <FleetArmingDialog isOpen={true} onClose={() => {}} />
+        </WorktreeStoreContext.Provider>
+      );
+      // Shift+click without prior anchor in new session — plain toggle.
+      fireEvent.click(screen.getByText("alpha").closest("label")!, { shiftKey: true });
+      expect(screen.getByText("Arm 1 selected")).toBeTruthy();
+    });
+
+    it("reverse range confirms all 3 terminals selected", () => {
+      seedTerminals([
+        makeTerminal("a", { title: "alpha", worktreeId: "wt-1" }),
+        makeTerminal("b", { title: "beta", worktreeId: "wt-1" }),
+        makeTerminal("c", { title: "gamma", worktreeId: "wt-1" }),
+      ]);
+      renderDialog([makeWorktreeSnap("wt-1", "Main")]);
+      // Click gamma (last), then shift-click alpha (first).
+      fireEvent.click(screen.getByLabelText("Select gamma"));
+      fireEvent.click(screen.getByText("alpha").closest("label")!, { shiftKey: true });
+      fireEvent.click(screen.getByText("Arm 3 selected"));
+      const order = useFleetArmingStore.getState().armOrder;
+      expect(order.length).toBe(3);
+      expect(new Set(order)).toEqual(new Set(["a", "b", "c"]));
+    });
+  });
+
+  describe("footer hint", () => {
+    it("shows Cmd+A hint when nothing is selected", () => {
+      seedTerminals([makeTerminal("a", { title: "alpha" })]);
+      renderDialog([makeWorktreeSnap("wt-1", "Main")]);
+      expect(screen.getByText("Select all")).toBeTruthy();
+    });
+
+    it("shows shift+click hint when at least one terminal is selected", () => {
+      seedTerminals([makeTerminal("a", { title: "alpha" }), makeTerminal("b", { title: "beta" })]);
+      renderDialog([makeWorktreeSnap("wt-1", "Main")]);
+      fireEvent.click(screen.getByLabelText("Select alpha"));
+      expect(screen.getByText(/Select range/)).toBeTruthy();
+    });
+
+    it("shows no hint when no terminals are visible", () => {
+      renderDialog([makeWorktreeSnap("wt-1", "Main")]);
+      expect(screen.queryByText("Select all")).toBeNull();
+      expect(screen.queryByText("Select range")).toBeNull();
+    });
   });
 });

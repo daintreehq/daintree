@@ -16,6 +16,9 @@ import { useEscapeStack } from "@/hooks";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { usePanelStore } from "@/store/panelStore";
 import { useFleetArmingStore, isFleetArmEligible } from "@/store/fleetArmingStore";
+import { useWorktreeSelectionStore } from "@/store/worktreeStore";
+import { Kbd } from "@/components/ui/Kbd";
+import { isMac } from "@/lib/platform";
 import { cn } from "@/lib/utils";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import type { SemanticSearchMatch, TerminalInstance } from "@shared/types";
@@ -98,18 +101,42 @@ export function FleetArmingDialog({
   // results. Incremented before each call; the response captures its issue
   // number and is dropped if the counter has since advanced.
   const searchRequestRef = useRef(0);
+  const rangeAnchorRef = useRef<string | null>(null);
 
   // Reset all dialog-local state on each open/close transition. Single
   // useEffect keyed on [isOpen] per lesson #4958.
   useEffect(() => {
     if (isOpen) {
-      setSelectedIds(new Set());
       setSearchTerm("");
       setActiveChip("all");
       setIsRegexMode(false);
       setSnippetMap(new Map());
       setRegexError(null);
       searchRequestRef.current = 0;
+      rangeAnchorRef.current = null;
+
+      // Pre-select terminals belonging to the active worktree.
+      const activeId = useWorktreeSelectionStore.getState().activeWorktreeId;
+      if (activeId) {
+        const preSelected = new Set<string>();
+        for (const tId of usePanelStore.getState().panelIds) {
+          const t = usePanelStore.getState().panelsById[tId];
+          if (t && isFleetArmEligible(t) && t.worktreeId === activeId) {
+            preSelected.add(t.id);
+          }
+        }
+        setSelectedIds(preSelected);
+        // Set anchor to the last pre-selected terminal so the first
+        // shift+click after open extends the range rather than
+        // falling through to a plain toggle.
+        if (preSelected.size > 0) {
+          rangeAnchorRef.current = [...preSelected].pop()!;
+        }
+      } else {
+        setSelectedIds(new Set());
+      }
+    } else {
+      rangeAnchorRef.current = null;
     }
   }, [isOpen]);
 
@@ -262,17 +289,39 @@ export function FleetArmingDialog({
   // is non-empty.
   useEscapeStack(isOpen && searchTerm !== "", clearSearch);
 
-  const toggleId = useCallback((id: string) => {
-    setSelectedIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) {
-        next.delete(id);
-      } else {
-        next.add(id);
+  const handleToggleId = useCallback(
+    (id: string, event?: React.MouseEvent) => {
+      if (event) event.preventDefault();
+      if (event?.shiftKey && rangeAnchorRef.current !== null) {
+        const anchorIdx = visibleIds.indexOf(rangeAnchorRef.current);
+        const clickedIdx = visibleIds.indexOf(id);
+        if (anchorIdx !== -1 && clickedIdx !== -1 && anchorIdx !== clickedIdx) {
+          const lo = Math.min(anchorIdx, clickedIdx);
+          const hi = Math.max(anchorIdx, clickedIdx);
+          const rangeIds = visibleIds.slice(lo, hi + 1);
+          setSelectedIds((prev) => {
+            const next = new Set(prev);
+            for (const rid of rangeIds) next.add(rid);
+            return next;
+          });
+          rangeAnchorRef.current = id;
+          return;
+        }
       }
-      return next;
-    });
-  }, []);
+      // Plain toggle (no shift, or anchor invalid/filtered out).
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        if (next.has(id)) {
+          next.delete(id);
+        } else {
+          next.add(id);
+        }
+        return next;
+      });
+      rangeAnchorRef.current = id;
+    },
+    [visibleIds]
+  );
 
   const handleGroupHeaderToggle = useCallback((group: WorktreeGroup) => {
     setSelectedIds((prev) => {
@@ -311,6 +360,22 @@ export function FleetArmingDialog({
 
   const confirmLabel =
     confirmedIds.length === 0 ? "Arm selected" : `Arm ${confirmedIds.length} selected`;
+
+  const footerHint = useMemo(() => {
+    if (visibleIds.length === 0) return null;
+    if (selectedIds.size === 0) {
+      return (
+        <>
+          <Kbd>{isMac() ? "⌘A" : "Ctrl+A"}</Kbd> Select all
+        </>
+      );
+    }
+    return (
+      <>
+        <Kbd>Shift</Kbd>+<Kbd>Click</Kbd> Select range
+      </>
+    );
+  }, [visibleIds.length, selectedIds.size]);
 
   return (
     <AppDialog
@@ -438,7 +503,7 @@ export function FleetArmingDialog({
                 selectedIds={selectedIds}
                 hideHeader={isSingleWorktree}
                 snippetMap={snippetMap}
-                onToggleId={toggleId}
+                onToggleId={handleToggleId}
                 onToggleGroup={handleGroupHeaderToggle}
               />
             ))
@@ -447,6 +512,7 @@ export function FleetArmingDialog({
       </div>
 
       <AppDialog.Footer
+        hint={footerHint}
         primaryAction={{
           label: confirmLabel,
           onClick: handleConfirm,
@@ -513,7 +579,7 @@ interface WorktreeGroupSectionProps {
   selectedIds: ReadonlySet<string>;
   hideHeader: boolean;
   snippetMap: ReadonlyMap<string, SemanticSearchMatch>;
-  onToggleId: (id: string) => void;
+  onToggleId: (id: string, event?: React.MouseEvent) => void;
   onToggleGroup: (group: WorktreeGroup) => void;
 }
 
@@ -567,7 +633,7 @@ function WorktreeGroupSection({
             terminal={t}
             checked={selectedIds.has(t.id)}
             snippet={snippetMap.get(t.id)}
-            onToggle={() => onToggleId(t.id)}
+            onToggle={(e) => onToggleId(t.id, e)}
           />
         ))}
       </ul>
@@ -579,7 +645,7 @@ interface TerminalRowProps {
   terminal: DialogTerminal;
   checked: boolean;
   snippet?: SemanticSearchMatch;
-  onToggle: () => void;
+  onToggle: (event?: React.MouseEvent) => void;
 }
 
 function TerminalRow({ terminal, checked, snippet, onToggle }: TerminalRowProps): ReactElement {
@@ -591,10 +657,11 @@ function TerminalRow({ terminal, checked, snippet, onToggle }: TerminalRowProps)
           "flex flex-1 items-start gap-2 pl-5 pr-2 py-1.5 rounded text-[13px] text-daintree-text cursor-pointer",
           "hover:bg-tint/[0.06]"
         )}
+        onClick={onToggle}
       >
         <DialogCheckbox
           checked={checked}
-          onCheckedChange={onToggle}
+          onCheckedChange={() => onToggle()}
           ariaLabel={`Select ${terminal.title}`}
         />
         <div className="flex-1 min-w-0">
