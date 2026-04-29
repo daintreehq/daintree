@@ -3,8 +3,9 @@ import { useWebviewThrottle } from "@/hooks/useWebviewThrottle";
 import { useHasBeenVisible } from "@/hooks/useHasBeenVisible";
 import { useWebviewEviction } from "@/hooks/useWebviewEviction";
 import { useWebviewDialog } from "@/hooks/useWebviewDialog";
-import { AlertTriangle, ExternalLink } from "lucide-react";
+import { AlertTriangle, ExternalLink, RotateCw, Square } from "lucide-react";
 import { Spinner } from "@/components/ui/Spinner";
+import { Button } from "@/components/ui/button";
 import { usePanelStore } from "@/store";
 import type { BrowserHistory } from "@shared/types/browser";
 import { ContentPanel, type BasePanelProps } from "@/components/Panel";
@@ -147,6 +148,8 @@ export function BrowserPane({
   // Track if webview has been mounted and is ready
   const [isWebviewReady, setIsWebviewReady] = useState(false);
   const loadTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const [isSlowLoad, setIsSlowLoad] = useState(false);
+  const slowLoadTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   const hasBeenVisible = useHasBeenVisible(id, location);
 
@@ -272,25 +275,52 @@ export function BrowserPane({
       return;
     }
 
-    const handleDomReady = () => {
-      isInitialRestoredLoadRef.current = false;
-      setIsWebviewReady(true);
+    const clearAllTimers = () => {
+      if (slowLoadTimeoutRef.current) {
+        clearTimeout(slowLoadTimeoutRef.current);
+        slowLoadTimeoutRef.current = null;
+      }
       if (loadTimeoutRef.current) {
         clearTimeout(loadTimeoutRef.current);
         loadTimeoutRef.current = null;
       }
     };
 
+    const handleDomReady = () => {
+      isInitialRestoredLoadRef.current = false;
+      setIsWebviewReady(true);
+      clearAllTimers();
+    };
+
     const handleDidStartLoading = () => {
       setIsLoading(true);
       setLoadError(null);
+      setIsSlowLoad(false);
+      if (slowLoadTimeoutRef.current) {
+        clearTimeout(slowLoadTimeoutRef.current);
+      }
       if (loadTimeoutRef.current) {
         clearTimeout(loadTimeoutRef.current);
       }
-      loadTimeoutRef.current = setTimeout(() => {
+      slowLoadTimeoutRef.current = setTimeout(() => {
         try {
           if (webview.isLoading()) {
-            webview.reload();
+            setIsSlowLoad(true);
+          }
+        } catch {
+          // Webview detached before timeout fired
+        }
+      }, 5000);
+      loadTimeoutRef.current = setTimeout(() => {
+        loadTimeoutRef.current = null;
+        try {
+          if (webview.isLoading()) {
+            webview.stop();
+            setIsSlowLoad(false);
+            setIsLoading(false);
+            setLoadError(
+              `Load timed out after ${Math.round(loadTimeoutMs / 1000)}s. The server at ${webview.getURL()} may be unreachable or slow to respond.`
+            );
           }
         } catch {
           // Webview detached before timeout fired
@@ -300,6 +330,11 @@ export function BrowserPane({
 
     const handleDidStopLoading = () => {
       setIsLoading(false);
+      setIsSlowLoad(false);
+      if (slowLoadTimeoutRef.current) {
+        clearTimeout(slowLoadTimeoutRef.current);
+        slowLoadTimeoutRef.current = null;
+      }
       if (loadTimeoutRef.current) {
         clearTimeout(loadTimeoutRef.current);
         loadTimeoutRef.current = null;
@@ -307,6 +342,11 @@ export function BrowserPane({
     };
 
     const handleDidFailLoad = (event: Electron.DidFailLoadEvent) => {
+      setIsSlowLoad(false);
+      if (slowLoadTimeoutRef.current) {
+        clearTimeout(slowLoadTimeoutRef.current);
+        slowLoadTimeoutRef.current = null;
+      }
       if (loadTimeoutRef.current) {
         clearTimeout(loadTimeoutRef.current);
         loadTimeoutRef.current = null;
@@ -317,6 +357,9 @@ export function BrowserPane({
       if (event.errorCode === -6) return;
       setIsLoading(false);
       const ERR_CONNECTION_REFUSED = -102;
+      const ERR_NAME_NOT_RESOLVED = -105;
+      const ERR_INTERNET_DISCONNECTED = -106;
+      const ERR_CONNECTION_TIMED_OUT = -118;
       if (
         event.isMainFrame &&
         event.errorCode === ERR_CONNECTION_REFUSED &&
@@ -325,8 +368,35 @@ export function BrowserPane({
         setLoadError(
           "The saved URL is no longer reachable. The server may have moved to a different port."
         );
-      } else {
-        setLoadError(event.errorDescription || "Failed to load page. The site may be unavailable.");
+      } else if (
+        event.isMainFrame &&
+        event.errorCode === ERR_NAME_NOT_RESOLVED &&
+        event.validatedURL
+      ) {
+        let hostname = event.validatedURL;
+        try {
+          hostname = new URL(event.validatedURL).hostname;
+        } catch {
+          // Use raw validatedURL if parsing fails
+        }
+        setLoadError(`Couldn't resolve ${hostname}. Check the URL or your connection.`);
+      } else if (event.isMainFrame && event.errorCode === ERR_INTERNET_DISCONNECTED) {
+        setLoadError("No internet connection. Check your network.");
+      } else if (
+        event.isMainFrame &&
+        event.errorCode === ERR_CONNECTION_TIMED_OUT &&
+        event.validatedURL
+      ) {
+        setLoadError(
+          `Connection to ${event.validatedURL} timed out. The server may be unreachable.`
+        );
+      } else if (event.isMainFrame) {
+        const urlContext = event.validatedURL ? ` at ${event.validatedURL}` : "";
+        setLoadError(
+          event.errorDescription
+            ? `${event.errorDescription}${urlContext}`
+            : `Failed to load page${urlContext}. The site may be unavailable.`
+        );
       }
     };
 
@@ -442,6 +512,14 @@ export function BrowserPane({
       if (faviconDebounceTimer) {
         clearTimeout(faviconDebounceTimer);
         faviconDebounceTimer = null;
+      }
+      if (slowLoadTimeoutRef.current) {
+        clearTimeout(slowLoadTimeoutRef.current);
+        slowLoadTimeoutRef.current = null;
+      }
+      if (loadTimeoutRef.current) {
+        clearTimeout(loadTimeoutRef.current);
+        loadTimeoutRef.current = null;
       }
     };
   }, [
@@ -561,11 +639,39 @@ export function BrowserPane({
     setBlockedNav(null);
     setIsLoading(true);
     setLoadError(null);
-    const webview = webviewRef.current;
-    if (webview && isWebviewReady) {
-      webview.reload();
+    setIsSlowLoad(false);
+    webviewRef.current?.reload();
+  }, []);
+
+  const handleCancelLoad = useCallback(() => {
+    if (slowLoadTimeoutRef.current) {
+      clearTimeout(slowLoadTimeoutRef.current);
+      slowLoadTimeoutRef.current = null;
     }
-  }, [isWebviewReady]);
+    if (loadTimeoutRef.current) {
+      clearTimeout(loadTimeoutRef.current);
+      loadTimeoutRef.current = null;
+    }
+    setIsSlowLoad(false);
+    setIsLoading(false);
+    try {
+      webviewRef.current?.stop();
+    } catch {
+      // Webview detached
+    }
+    setLoadError("Load cancelled.");
+  }, []);
+
+  const handleRetryFromError = useCallback(() => {
+    setLoadError(null);
+    setIsSlowLoad(false);
+    setIsLoading(true);
+    if (currentUrl) {
+      webviewRef.current?.loadURL(currentUrl);
+    } else {
+      webviewRef.current?.reload();
+    }
+  }, [currentUrl]);
 
   const handleHardReload = useCallback(() => {
     setBlockedNav(null);
@@ -626,6 +732,9 @@ export function BrowserPane({
     return () => {
       if (blockedNavTimerRef.current) {
         clearTimeout(blockedNavTimerRef.current);
+      }
+      if (slowLoadTimeoutRef.current) {
+        clearTimeout(slowLoadTimeoutRef.current);
       }
       if (loadTimeoutRef.current) {
         clearTimeout(loadTimeoutRef.current);
@@ -946,30 +1055,48 @@ export function BrowserPane({
               Browser will load when this panel is first viewed
             </p>
           </div>
-        ) : loadError ? (
-          <div className="absolute inset-0 flex flex-col items-center justify-center bg-daintree-bg text-daintree-text p-6">
-            <AlertTriangle className="w-6 h-6 text-status-warning mb-3" />
-            <h3 className="text-sm font-medium text-daintree-text/70 mb-1">
-              Unable to Display Page
-            </h3>
-            <p className="text-xs text-daintree-text/50 text-center mb-3 max-w-md">{loadError}</p>
-            <button
-              type="button"
-              onClick={handleOpenExternal}
-              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md hover:bg-overlay-soft transition-colors group focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-daintree-accent/50"
-            >
-              <ExternalLink className="h-3.5 w-3.5 text-daintree-text/50 group-hover:text-daintree-text/70 transition-colors" />
-              <span className="text-xs text-daintree-text/50 group-hover:text-daintree-text/70 transition-colors">
-                Open in External Browser
-              </span>
-            </button>
-          </div>
         ) : isEvicted ? (
           <div className="absolute inset-0 flex flex-col items-center justify-center bg-daintree-bg text-daintree-text p-6">
             <p className="text-xs text-daintree-text/50">Reclaimed for memory</p>
           </div>
         ) : (
           <>
+            {loadError && (
+              <div className="absolute inset-0 z-30 flex flex-col items-center justify-center bg-daintree-bg text-daintree-text p-6">
+                <AlertTriangle className="w-6 h-6 text-status-warning mb-3" />
+                <h3 className="text-sm font-medium text-daintree-text/70 mb-1">
+                  {loadError.startsWith("Load timed out")
+                    ? "Page Load Timed Out"
+                    : loadError.startsWith("Load cancelled")
+                      ? "Load Cancelled"
+                      : "Unable to Display Page"}
+                </h3>
+                <p className="text-xs text-daintree-text/50 text-center mb-3 max-w-md">
+                  {loadError}
+                </p>
+                <div className="flex items-center gap-1">
+                  <Button
+                    onClick={handleRetryFromError}
+                    variant="ghost"
+                    size="sm"
+                    className="gap-1.5 px-2.5 py-1.5 group text-daintree-accent/70 hover:text-daintree-accent"
+                  >
+                    <RotateCw className="h-3.5 w-3.5" />
+                    <span className="text-xs">Retry</span>
+                  </Button>
+                  <button
+                    type="button"
+                    onClick={handleOpenExternal}
+                    className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md hover:bg-overlay-soft transition-colors group focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-daintree-accent/50"
+                  >
+                    <ExternalLink className="h-3.5 w-3.5 text-daintree-text/50 group-hover:text-daintree-text/70 transition-colors" />
+                    <span className="text-xs text-daintree-text/50 group-hover:text-daintree-text/70 transition-colors">
+                      Open in External Browser
+                    </span>
+                  </button>
+                </div>
+              </div>
+            )}
             {blockedNav && (
               <div className="flex items-center gap-2 px-3 py-1.5 text-xs bg-status-warning/10 border-b border-status-warning/20 text-daintree-text/80">
                 <ExternalLink className="h-3.5 w-3.5 shrink-0 text-status-warning" />
@@ -1012,8 +1139,22 @@ export function BrowserPane({
             <div className="relative flex-1 min-h-0">
               {isDragging && <div className="absolute inset-0 z-10 bg-transparent" />}
               {isLoading && (
-                <div className="absolute inset-0 flex items-center justify-center bg-daintree-bg z-10">
+                <div className="absolute inset-0 flex flex-col items-center justify-center bg-daintree-bg z-10 gap-3">
                   <Spinner size="2xl" className="text-status-info" />
+                  {isSlowLoad && (
+                    <>
+                      <p className="text-xs text-daintree-text/50">Taking longer than usual...</p>
+                      <Button
+                        onClick={handleCancelLoad}
+                        variant="ghost"
+                        size="sm"
+                        className="gap-1.5 px-2.5 py-1.5 group text-daintree-text/50 hover:text-daintree-text/70"
+                      >
+                        <Square className="h-3.5 w-3.5" />
+                        <span className="text-xs">Cancel</span>
+                      </Button>
+                    </>
+                  )}
                 </div>
               )}
               {findInPage.isOpen && <FindBar find={findInPage} />}

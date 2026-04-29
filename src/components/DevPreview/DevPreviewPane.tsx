@@ -1,5 +1,12 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from "react";
-import { AlertTriangle, RotateCw, ExternalLink, Settings, WandSparkles } from "lucide-react";
+import {
+  AlertTriangle,
+  RotateCw,
+  ExternalLink,
+  Settings,
+  Square,
+  WandSparkles,
+} from "lucide-react";
 import { Spinner } from "@/components/ui/Spinner";
 import { Button } from "@/components/ui/button";
 import { usePanelStore } from "@/store";
@@ -245,6 +252,8 @@ export function DevPreviewPane({
   const [isWebviewReady, setIsWebviewReady] = useState(false);
   const [consoleTerminalId, setConsoleTerminalId] = useState<string | null>(terminalId);
   const loadTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const slowLoadTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const [isSlowLoad, setIsSlowLoad] = useState(false);
   const failLoadRetryRef = useRef<NodeJS.Timeout | null>(null);
   const failLoadRetryCountRef = useRef<number>(0);
   // Generation token to invalidate in-flight async scroll captures when the
@@ -401,8 +410,40 @@ export function DevPreviewPane({
   }, [canGoForward]);
 
   const handleReload = useCallback(() => {
+    setWebviewLoadError(null);
+    setIsSlowLoad(false);
     webviewRef.current?.reload();
   }, []);
+
+  const handleCancelLoad = useCallback(() => {
+    if (slowLoadTimeoutRef.current) {
+      clearTimeout(slowLoadTimeoutRef.current);
+      slowLoadTimeoutRef.current = null;
+    }
+    if (loadTimeoutRef.current) {
+      clearTimeout(loadTimeoutRef.current);
+      loadTimeoutRef.current = null;
+    }
+    setIsSlowLoad(false);
+    setIsLoading(false);
+    try {
+      webviewRef.current?.stop();
+    } catch {
+      // Webview detached
+    }
+    setWebviewLoadError("Load cancelled.");
+  }, []);
+
+  const handleRetryWebviewLoad = useCallback(() => {
+    setWebviewLoadError(null);
+    setIsSlowLoad(false);
+    setIsLoading(true);
+    if (currentUrl) {
+      webviewRef.current?.loadURL(currentUrl);
+    } else {
+      webviewRef.current?.reload();
+    }
+  }, [currentUrl]);
 
   const handleHardReload = useCallback(() => {
     const webview = webviewRef.current;
@@ -441,6 +482,10 @@ export function DevPreviewPane({
     // stale data back over the cleared position.
     scrollCaptureGenerationRef.current += 1;
     setDevPreviewScrollPosition(id, undefined);
+    if (slowLoadTimeoutRef.current) {
+      clearTimeout(slowLoadTimeoutRef.current);
+      slowLoadTimeoutRef.current = null;
+    }
     if (loadTimeoutRef.current) {
       clearTimeout(loadTimeoutRef.current);
       loadTimeoutRef.current = null;
@@ -449,6 +494,7 @@ export function DevPreviewPane({
     setBrowserUrl(id, "");
     lastSetUrlRef.current = "";
     setIsLoading(false);
+    setIsSlowLoad(false);
     setIsWebviewReady(false);
     setWebviewLoadError(null);
     void restart();
@@ -509,13 +555,33 @@ export function DevPreviewPane({
 
     const handleDidStartLoading = () => {
       setIsLoading(true);
+      setWebviewLoadError(null);
+      setIsSlowLoad(false);
+      if (slowLoadTimeoutRef.current) {
+        clearTimeout(slowLoadTimeoutRef.current);
+      }
       if (loadTimeoutRef.current) {
         clearTimeout(loadTimeoutRef.current);
       }
-      loadTimeoutRef.current = setTimeout(() => {
+      slowLoadTimeoutRef.current = setTimeout(() => {
         try {
           if (webview.isLoading()) {
-            webview.reload();
+            setIsSlowLoad(true);
+          }
+        } catch {
+          // Webview detached before timeout fired
+        }
+      }, 5000);
+      loadTimeoutRef.current = setTimeout(() => {
+        loadTimeoutRef.current = null;
+        try {
+          if (webview.isLoading()) {
+            webview.stop();
+            setIsSlowLoad(false);
+            setIsLoading(false);
+            setWebviewLoadError(
+              `Load timed out after ${Math.round(loadTimeoutMs / 1000)}s. The server at ${webview.getURL()} may be unreachable or slow to respond.`
+            );
           }
         } catch {
           // Webview detached before timeout fired
@@ -525,6 +591,11 @@ export function DevPreviewPane({
 
     const handleDidStopLoading = () => {
       setIsLoading(false);
+      setIsSlowLoad(false);
+      if (slowLoadTimeoutRef.current) {
+        clearTimeout(slowLoadTimeoutRef.current);
+        slowLoadTimeoutRef.current = null;
+      }
       if (loadTimeoutRef.current) {
         clearTimeout(loadTimeoutRef.current);
         loadTimeoutRef.current = null;
@@ -534,6 +605,11 @@ export function DevPreviewPane({
     const handleDidFinishLoad = () => {
       setIsLoading(false);
       setWebviewLoadError(null);
+      setIsSlowLoad(false);
+      if (slowLoadTimeoutRef.current) {
+        clearTimeout(slowLoadTimeoutRef.current);
+        slowLoadTimeoutRef.current = null;
+      }
       if (loadTimeoutRef.current) {
         clearTimeout(loadTimeoutRef.current);
         loadTimeoutRef.current = null;
@@ -546,16 +622,51 @@ export function DevPreviewPane({
     };
 
     const handleDidFailLoad = (e: Electron.DidFailLoadEvent) => {
+      // Ignore aborted loads (e.g., navigation interrupted by another navigation)
+      if (e.errorCode === -3) return;
+      // Ignore cancellations
+      if (e.errorCode === -6) return;
       setIsLoading(false);
+      setIsSlowLoad(false);
+      if (slowLoadTimeoutRef.current) {
+        clearTimeout(slowLoadTimeoutRef.current);
+        slowLoadTimeoutRef.current = null;
+      }
       if (loadTimeoutRef.current) {
         clearTimeout(loadTimeoutRef.current);
         loadTimeoutRef.current = null;
       }
 
-      // Retry on connection-refused errors: the readiness check may have passed
-      // a moment before the server was fully reachable from the webview.
       const ERR_CONNECTION_REFUSED = -102;
       const ERR_CONNECTION_RESET = -101;
+      const ERR_NAME_NOT_RESOLVED = -105;
+      const ERR_INTERNET_DISCONNECTED = -106;
+      const ERR_CONNECTION_TIMED_OUT = -118;
+
+      // Non-retryable errors: surface directly with friendly messages
+      if (e.isMainFrame && e.errorCode === ERR_NAME_NOT_RESOLVED && e.validatedURL) {
+        let hostname = e.validatedURL;
+        try {
+          hostname = new URL(e.validatedURL).hostname;
+        } catch {
+          // Use raw validatedURL if parsing fails
+        }
+        setWebviewLoadError(`Couldn't resolve ${hostname}. Check the URL or your connection.`);
+        return;
+      }
+      if (e.isMainFrame && e.errorCode === ERR_INTERNET_DISCONNECTED) {
+        setWebviewLoadError("No internet connection. Check your network.");
+        return;
+      }
+      if (e.isMainFrame && e.errorCode === ERR_CONNECTION_TIMED_OUT && e.validatedURL) {
+        setWebviewLoadError(
+          `Connection to ${e.validatedURL} timed out. The server may be unreachable.`
+        );
+        return;
+      }
+
+      // Retry on connection-refused errors: the readiness check may have passed
+      // a moment before the server was fully reachable from the webview.
       if (
         e.isMainFrame &&
         (e.errorCode === ERR_CONNECTION_REFUSED || e.errorCode === ERR_CONNECTION_RESET)
@@ -563,8 +674,9 @@ export function DevPreviewPane({
         const MAX_RETRIES = 5;
         const retryCount = failLoadRetryCountRef.current;
         if (retryCount >= MAX_RETRIES) {
+          const urlContext = e.validatedURL ? ` at ${e.validatedURL}` : "";
           setWebviewLoadError(
-            "Unable to connect to dev server. The server may be on a different port."
+            `Unable to connect to dev server${urlContext}. The server may be on a different port.`
           );
         } else if (retryCount < MAX_RETRIES) {
           failLoadRetryCountRef.current += 1;
@@ -643,6 +755,14 @@ export function DevPreviewPane({
         clearTimeout(failLoadRetryRef.current);
         failLoadRetryRef.current = null;
       }
+      if (slowLoadTimeoutRef.current) {
+        clearTimeout(slowLoadTimeoutRef.current);
+        slowLoadTimeoutRef.current = null;
+      }
+      if (loadTimeoutRef.current) {
+        clearTimeout(loadTimeoutRef.current);
+        loadTimeoutRef.current = null;
+      }
     };
   }, [webviewElement, loadTimeoutMs, evictingRef]);
 
@@ -672,6 +792,10 @@ export function DevPreviewPane({
         }
       } catch {
         // WebContents not available yet
+      }
+      if (slowLoadTimeoutRef.current) {
+        clearTimeout(slowLoadTimeoutRef.current);
+        slowLoadTimeoutRef.current = null;
       }
       if (loadTimeoutRef.current) {
         clearTimeout(loadTimeoutRef.current);
@@ -759,6 +883,9 @@ export function DevPreviewPane({
 
   useEffect(() => {
     return () => {
+      if (slowLoadTimeoutRef.current) {
+        clearTimeout(slowLoadTimeoutRef.current);
+      }
       if (loadTimeoutRef.current) {
         clearTimeout(loadTimeoutRef.current);
       }
@@ -789,6 +916,10 @@ export function DevPreviewPane({
         wv.src = "about:blank";
       } catch {
         // webview may already be detached
+      }
+      if (slowLoadTimeoutRef.current) {
+        clearTimeout(slowLoadTimeoutRef.current);
+        slowLoadTimeoutRef.current = null;
       }
       if (loadTimeoutRef.current) {
         clearTimeout(loadTimeoutRef.current);
@@ -1089,20 +1220,50 @@ export function DevPreviewPane({
                     <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-daintree-bg text-daintree-text p-6">
                       <AlertTriangle className="w-6 h-6 text-status-warning mb-3" />
                       <h3 className="text-sm font-medium text-daintree-text/70 mb-1">
-                        Dev Server Unreachable
+                        {webviewLoadError.startsWith("Load timed out") ||
+                        webviewLoadError.startsWith("Connection to")
+                          ? "Page Load Timed Out"
+                          : webviewLoadError.startsWith("Load cancelled")
+                            ? "Load Cancelled"
+                            : "Dev Server Unreachable"}
                       </h3>
                       <p className="text-xs text-daintree-text/50 text-center mb-3 max-w-md">
                         {webviewLoadError}
                       </p>
-                      <Button
-                        onClick={handleHardRestart}
-                        variant="ghost"
-                        size="sm"
-                        className="gap-1.5 px-2.5 py-1.5 group text-daintree-accent/70 hover:text-daintree-accent"
-                      >
-                        <RotateCw className="h-3.5 w-3.5" />
-                        <span className="text-xs">Hard Restart</span>
-                      </Button>
+                      <div className="flex items-center gap-1">
+                        <Button
+                          onClick={
+                            webviewLoadError.startsWith("Load cancelled") ||
+                            webviewLoadError.startsWith("Load timed out") ||
+                            webviewLoadError.startsWith("Connection to")
+                              ? handleRetryWebviewLoad
+                              : handleHardRestart
+                          }
+                          variant="ghost"
+                          size="sm"
+                          className="gap-1.5 px-2.5 py-1.5 group text-daintree-accent/70 hover:text-daintree-accent"
+                        >
+                          <RotateCw className="h-3.5 w-3.5" />
+                          <span className="text-xs">
+                            {webviewLoadError.startsWith("Load cancelled") ||
+                            webviewLoadError.startsWith("Load timed out") ||
+                            webviewLoadError.startsWith("Connection to")
+                              ? "Retry"
+                              : "Hard Restart"}
+                          </span>
+                        </Button>
+                        {currentUrl && (
+                          <Button
+                            onClick={handleOpenExternal}
+                            variant="ghost"
+                            size="sm"
+                            className="gap-1.5 px-2.5 py-1.5 group text-daintree-text/50 hover:text-daintree-text/70"
+                          >
+                            <ExternalLink className="h-3.5 w-3.5" />
+                            <span className="text-xs">Open External</span>
+                          </Button>
+                        )}
+                      </div>
                     </div>
                   )}
                   {blockedNav && (
@@ -1112,6 +1273,27 @@ export function DevPreviewPane({
                       webviewElement={webviewElement}
                       onDismiss={() => setBlockedNav(null)}
                     />
+                  )}
+                  {isLoading && (
+                    <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-daintree-bg gap-3">
+                      <Spinner size="2xl" className="text-status-info" />
+                      {isSlowLoad && (
+                        <>
+                          <p className="text-xs text-daintree-text/50">
+                            Taking longer than usual...
+                          </p>
+                          <Button
+                            onClick={handleCancelLoad}
+                            variant="ghost"
+                            size="sm"
+                            className="gap-1.5 px-2.5 py-1.5 group text-daintree-text/50 hover:text-daintree-text/70"
+                          >
+                            <Square className="h-3.5 w-3.5" />
+                            <span className="text-xs">Cancel</span>
+                          </Button>
+                        </>
+                      )}
+                    </div>
                   )}
                   {isDragging && <div className="absolute inset-0 z-10 bg-transparent" />}
                   {findInPage.isOpen && <FindBar find={findInPage} />}
