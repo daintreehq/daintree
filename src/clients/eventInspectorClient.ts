@@ -21,10 +21,6 @@ export const eventInspectorClient = {
     window.electron.eventInspector.unsubscribe();
   },
 
-  onEvent: (callback: (event: EventRecord) => void): (() => void) => {
-    return window.electron.eventInspector.onEvent(callback);
-  },
-
   onEventBatch: (callback: (events: EventRecord[]) => void): (() => void) => {
     return window.electron.eventInspector.onEventBatch(callback);
   },

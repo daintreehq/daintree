@@ -2248,7 +2248,6 @@ export interface IpcEventMap {
   "logs:batch": LogEntry[];
 
   // Event inspector events
-  "event-inspector:event": EventRecord;
   "event-inspector:event-batch": EventRecord[];
 
   // Project events

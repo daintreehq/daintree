@@ -182,7 +182,6 @@ export const CHANNELS = {
   EVENT_INSPECTOR_GET_EVENTS: "event-inspector:get-events",
   EVENT_INSPECTOR_GET_FILTERED: "event-inspector:get-filtered",
   EVENT_INSPECTOR_CLEAR: "event-inspector:clear",
-  EVENT_INSPECTOR_EVENT: "event-inspector:event",
   EVENT_INSPECTOR_EVENT_BATCH: "event-inspector:event-batch",
   EVENT_INSPECTOR_SUBSCRIBE: "event-inspector:subscribe",
   EVENT_INSPECTOR_UNSUBSCRIBE: "event-inspector:unsubscribe",

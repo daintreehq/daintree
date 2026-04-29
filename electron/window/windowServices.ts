@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, session, webContents } from "electron";
+import { app, BrowserWindow, dialog, session, webContents } from "electron";
 import os from "os";
 import type { HandlerDependencies } from "../ipc/types.js";
 import { registerIpcHandlers, sendToRenderer } from "../ipc/handlers.js";
@@ -1107,30 +1107,6 @@ export async function setupWindowServices(
       console.error("[MAIN] Failed to initialize task queue:", error);
     }
   }
-
-  // Event inspector (per-window: uses named listeners for safe per-window cleanup)
-  let eventInspectorActive = false;
-  const onEventInspectorSubscribe = () => {
-    eventInspectorActive = true;
-  };
-  const onEventInspectorUnsubscribe = () => {
-    eventInspectorActive = false;
-  };
-  ipcMain.on(CHANNELS.EVENT_INSPECTOR_SUBSCRIBE, onEventInspectorSubscribe);
-  ipcMain.on(CHANNELS.EVENT_INSPECTOR_UNSUBSCRIBE, onEventInspectorUnsubscribe);
-
-  const unsubscribeFromEventBuffer = ctx.services.eventBuffer!.onRecord((record) => {
-    if (!eventInspectorActive) return;
-    sendToRenderer(win, CHANNELS.EVENT_INSPECTOR_EVENT, record);
-  });
-
-  ctx.cleanup.add(
-    toDisposable(() => {
-      unsubscribeFromEventBuffer();
-      ipcMain.removeListener(CHANNELS.EVENT_INSPECTOR_SUBSCRIBE, onEventInspectorSubscribe);
-      ipcMain.removeListener(CHANNELS.EVENT_INSPECTOR_UNSUBSCRIBE, onEventInspectorUnsubscribe);
-    })
-  );
 
   // Smoke test
   if (isSmokeTest) {

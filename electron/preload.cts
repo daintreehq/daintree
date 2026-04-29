@@ -1114,9 +1114,6 @@ const api: ElectronAPI = {
 
     unsubscribe: () => ipcRenderer.send(CHANNELS.EVENT_INSPECTOR_UNSUBSCRIBE),
 
-    onEvent: (callback: (event: EventRecord) => void) =>
-      _typedOn(CHANNELS.EVENT_INSPECTOR_EVENT, callback),
-
     onEventBatch: (callback: (events: EventRecord[]) => void) =>
       _typedOn(CHANNELS.EVENT_INSPECTOR_EVENT_BATCH, callback),
   },
