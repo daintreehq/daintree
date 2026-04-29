@@ -1036,7 +1036,11 @@ describe("GitFileWatcher", () => {
     expect(gitWatcher.start()).toBe(true);
 
     // The .git dir watcher is reused for sentinels — no extra fs.watch is opened.
-    const dotGitCalls = vi.mocked(watch).mock.calls.filter(([path]) => path === gitDir);
+    const dotGitCalls = vi
+      .mocked(watch)
+      .mock.calls.filter(([path]) => path === gitDir) as unknown as Array<
+      [unknown, unknown, unknown]
+    >;
     expect(dotGitCalls).toHaveLength(1);
     const dotGitCallback = dotGitCalls[0][2] as
       | ((eventType: string, filename: string | Buffer | null) => void)
