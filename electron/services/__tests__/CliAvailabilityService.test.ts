@@ -1623,6 +1623,15 @@ describe("CliAvailabilityService", () => {
       // BusyBox/minimal `which` builds reject `-a` with a non-zero exit
       // (no errno code). Without a fallback, every agent on Alpine would
       // silently surface as "missing".
+      const { access } = await import("fs/promises");
+      // Resolve kiro's AWS SSO token probe so the agent reaches "ready" —
+      // this test is about path resolution, not auth discovery.
+      vi.mocked(access).mockImplementation(async (path) => {
+        if (typeof path === "string" && path.endsWith("kiro-auth-token.json")) {
+          return undefined;
+        }
+        throw new Error("ENOENT");
+      });
       mockedExecFileSync.mockImplementation((_file, args) => {
         const argv = args as string[] | undefined;
         if (argv?.[0] === "-a") {
