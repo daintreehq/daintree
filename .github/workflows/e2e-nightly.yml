@@ -99,6 +99,29 @@ jobs:
             libnotify4 \
             xvfb
 
+      - name: Fontconfig cache key
+        id: fontconfig-cache-key
+        if: runner.os == 'Linux'
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.cache/fontconfig
+          source /etc/os-release
+          echo "ubuntu=${ID}-${VERSION_ID}-${VERSION_CODENAME}" >> "$GITHUB_OUTPUT"
+          echo "fc_version=$(fc-cache --version 2>&1 | head -1)" >> "$GITHUB_OUTPUT"
+          echo "font_pkg_hash=$(dpkg-query -W -f='${Package} ${Version}\n' 2>/dev/null | grep -E '^fonts-|^fontconfig' | LC_ALL=C sort | sha256sum | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache fontconfig
+        id: cache-fontconfig
+        if: runner.os == 'Linux'
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/fontconfig
+          key: fontconfig-${{ runner.os }}-${{ runner.arch }}-${{ steps.fontconfig-cache-key.outputs.ubuntu }}-${{ steps.fontconfig-cache-key.outputs.fc_version }}-${{ steps.fontconfig-cache-key.outputs.font_pkg_hash }}
+
+      - name: Warm fontconfig cache
+        if: runner.os == 'Linux'
+        run: fc-cache -fv
+
       - name: Install dependencies (Windows)
         if: runner.os == 'Windows'
         run: npm ci
