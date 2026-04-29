@@ -55,6 +55,18 @@ describe("@xterm/headless options.scrollback active truncation (issue #6215)", (
     expect(lengthAfter).toBeLessThanOrEqual(REDUCED_SCROLLBACK + ROWS);
     expect(lengthAfter).toBeLessThan(lengthBefore);
 
+    // Eviction must drop the oldest lines, not the newest — otherwise the trim primitive
+    // would silently corrupt the most recently captured output.
+    let foundNewest = false;
+    let foundOldest = false;
+    for (let y = 0; y < lengthAfter; y++) {
+      const text = terminal.buffer.active.getLine(y)?.translateToString(true);
+      if (text === `line ${LINES_TO_WRITE - 1}`) foundNewest = true;
+      if (text === "line 0") foundOldest = true;
+    }
+    expect(foundNewest).toBe(true);
+    expect(foundOldest).toBe(false);
+
     if (typeof global.gc === "function" && preHeap !== undefined) {
       global.gc();
       global.gc();
