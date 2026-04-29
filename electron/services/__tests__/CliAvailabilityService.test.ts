@@ -8,6 +8,8 @@ import { join } from "path";
 import { CliAvailabilityService } from "../CliAvailabilityService.js";
 import { execFile, execFileSync } from "child_process";
 import { refreshPath } from "../../setup/environment.js";
+import { broadcastToRenderer } from "../../ipc/utils.js";
+import { CHANNELS } from "../../ipc/channels.js";
 
 // Mock child_process. Both `execFileSync` (sync shell probe) and `execFile`
 // (async npm-global / WSL probes) are used by the service — mock both or
@@ -46,6 +48,42 @@ vi.mock("fs/promises", () => ({
   constants: { R_OK: 4, X_OK: 1 },
 }));
 
+// Mock the electron-store singleton so duplicate-detection persistence
+// stays in-memory across the test run. Each test re-seeds via beforeEach.
+const { storeBackingMap } = vi.hoisted(() => ({
+  storeBackingMap: new Map<string, unknown>(),
+}));
+vi.mock("../../store.js", () => ({
+  store: {
+    get: vi.fn((key: string) => storeBackingMap.get(key)),
+    set: vi.fn((key: string, value: unknown) => {
+      storeBackingMap.set(key, value);
+    }),
+    delete: vi.fn((key: string) => {
+      storeBackingMap.delete(key);
+    }),
+    has: vi.fn((key: string) => storeBackingMap.has(key)),
+  },
+}));
+
+// Mock the IPC broadcast so duplicate-detection emits can be asserted
+// without spinning up real BrowserWindows. The CHANNELS module is real
+// (no mock) — the duplicate-emit code uses CHANNELS.NOTIFICATION_SHOW_TOAST.
+vi.mock("../../ipc/utils.js", () => ({
+  broadcastToRenderer: vi.fn(),
+}));
+
+/**
+ * Extract the command name from a `which`/`where` args array. On Unix the
+ * service now invokes `which -a <cmd>` (#6054), so the command is the last
+ * element; on Windows it remains `where <cmd>`. The command always sits at
+ * the tail of the args array, so this works on both platforms.
+ */
+const cmdOf = (args: unknown): string | undefined => {
+  if (!Array.isArray(args) || args.length === 0) return undefined;
+  return args[args.length - 1] as string;
+};
+
 describe("CliAvailabilityService", () => {
   let service: CliAvailabilityService;
   const mockedExecFileSync = vi.mocked(execFileSync);
@@ -74,6 +112,9 @@ describe("CliAvailabilityService", () => {
     }
 
     service = new CliAvailabilityService();
+    // Reset the in-memory store between tests so duplicate-cli milestone
+    // flags don't leak across cases.
+    storeBackingMap.clear();
     vi.clearAllMocks();
     // Re-establish default "file not found" behavior for fs access. A prior
     // test may have set mockResolvedValue on the same vi.fn(), and
@@ -185,7 +226,7 @@ describe("CliAvailabilityService", () => {
 
       // Only claude binary found
       mockedExecFileSync.mockImplementation((_file, args) => {
-        if (args?.[0] === "claude") {
+        if (cmdOf(args) === "claude") {
           return Buffer.from("/usr/local/bin/claude");
         }
         throw new Error("Command not found");
@@ -219,7 +260,7 @@ describe("CliAvailabilityService", () => {
       process.env.DAINTREE_CLI_PATH_PREPEND = "/tmp/daintree-fake-bin";
 
       mockedExecFileSync.mockImplementation((_file, args) => {
-        if (args?.[0] === "claude") {
+        if (cmdOf(args) === "claude") {
           return Buffer.from("/usr/local/bin/claude");
         }
         throw new Error("Command not found");
@@ -235,7 +276,11 @@ describe("CliAvailabilityService", () => {
 
       expect(result.claude).toBe("ready");
       expect(service.getDetails()?.claude?.resolvedPath).toBe("/tmp/daintree-fake-bin/claude");
-      expect(mockedExecFileSync).not.toHaveBeenCalledWith("which", ["claude"], expect.any(Object));
+      expect(mockedExecFileSync).not.toHaveBeenCalledWith(
+        "which",
+        ["-a", "claude"],
+        expect.any(Object)
+      );
     });
 
     it("uses which on Unix-like systems", async () => {
@@ -342,7 +387,7 @@ describe("CliAvailabilityService", () => {
       try {
         // Only codex binary found
         mockedExecFileSync.mockImplementation((_file, args) => {
-          if (args?.[0] === "codex") return Buffer.from("");
+          if (cmdOf(args) === "codex") return Buffer.from("");
           throw new Error("not found");
         });
 
@@ -365,7 +410,7 @@ describe("CliAvailabilityService", () => {
 
       // Only opencode binary found
       mockedExecFileSync.mockImplementation((_file, args) => {
-        if (args?.[0] === "opencode") return Buffer.from("");
+        if (cmdOf(args) === "opencode") return Buffer.from("");
         throw new Error("not found");
       });
 
@@ -387,7 +432,7 @@ describe("CliAvailabilityService", () => {
       try {
         // Only opencode binary found, no config file
         mockedExecFileSync.mockImplementation((_file, args) => {
-          if (args?.[0] === "opencode") return Buffer.from("");
+          if (cmdOf(args) === "opencode") return Buffer.from("");
           throw new Error("not found");
         });
 
@@ -409,7 +454,7 @@ describe("CliAvailabilityService", () => {
       try {
         // Only opencode binary found, no config file
         mockedExecFileSync.mockImplementation((_file, args) => {
-          if (args?.[0] === "opencode") return Buffer.from("");
+          if (cmdOf(args) === "opencode") return Buffer.from("");
           throw new Error("not found");
         });
 
@@ -431,7 +476,7 @@ describe("CliAvailabilityService", () => {
       try {
         // Only opencode binary found, no config file
         mockedExecFileSync.mockImplementation((_file, args) => {
-          if (args?.[0] === "opencode") return Buffer.from("");
+          if (cmdOf(args) === "opencode") return Buffer.from("");
           throw new Error("not found");
         });
 
@@ -449,7 +494,7 @@ describe("CliAvailabilityService", () => {
     it("returns ready with authConfirmed=false when OpenCode binary found but no auth", async () => {
       // Only opencode binary found, no config file, no env vars
       mockedExecFileSync.mockImplementation((_file, args) => {
-        if (args?.[0] === "opencode") return Buffer.from("");
+        if (cmdOf(args) === "opencode") return Buffer.from("");
         throw new Error("not found");
       });
 
@@ -470,7 +515,7 @@ describe("CliAvailabilityService", () => {
       try {
         // Only opencode binary found
         mockedExecFileSync.mockImplementation((_file, args) => {
-          if (args?.[0] === "opencode") return Buffer.from("");
+          if (cmdOf(args) === "opencode") return Buffer.from("");
           throw new Error("not found");
         });
 
@@ -529,7 +574,7 @@ describe("CliAvailabilityService", () => {
 
       // Only claude available now
       mockedExecFileSync.mockImplementation((_file, args) => {
-        if (args?.[0] === "claude") {
+        if (cmdOf(args) === "claude") {
           return Buffer.from("/usr/local/bin/claude");
         }
         throw new Error("Command not found");
@@ -542,7 +587,11 @@ describe("CliAvailabilityService", () => {
       expect(refreshed.codex).toBe("missing");
 
       expect(service.getAvailability()).toEqual(refreshed);
-      expect(mockedExecFileSync).toHaveBeenCalledTimes(7);
+      // 7 successful primary calls + 6 BusyBox-style bare-`which` retries
+      // (the 6 agents whose mock throws a generic `Error` with no errno
+      // code — which `probeViaShell` retries without `-a` to recover
+      // BusyBox/minimal `which` builds that reject the flag).
+      expect(mockedExecFileSync).toHaveBeenCalledTimes(13);
     });
 
     it("works on cold start before initial check", async () => {
@@ -563,9 +612,8 @@ describe("CliAvailabilityService", () => {
       const executionOrder: string[] = [];
 
       mockedExecFileSync.mockImplementation((_file, args) => {
-        if (args?.[0]) {
-          executionOrder.push(args[0]);
-        }
+        const cmd = cmdOf(args);
+        if (cmd) executionOrder.push(cmd);
         return Buffer.from("");
       });
 
@@ -624,7 +672,7 @@ describe("CliAvailabilityService", () => {
 
       // Only kiro-cli binary found; no auth files exist
       mockedExecFileSync.mockImplementation((_file, args) => {
-        if (args?.[0] === "kiro-cli") return Buffer.from("");
+        if (cmdOf(args) === "kiro-cli") return Buffer.from("");
         throw new Error("not found");
       });
       mockedAccess.mockRejectedValue(new Error("ENOENT"));
@@ -648,7 +696,7 @@ describe("CliAvailabilityService", () => {
       const mockedAccess = vi.mocked(access);
 
       mockedExecFileSync.mockImplementation((_file, args) => {
-        if (args?.[0] === "kiro-cli") return Buffer.from("");
+        if (cmdOf(args) === "kiro-cli") return Buffer.from("");
         throw new Error("not found");
       });
 
@@ -675,7 +723,7 @@ describe("CliAvailabilityService", () => {
 
       // Only copilot binary found
       mockedExecFileSync.mockImplementation((_file, args) => {
-        if (args?.[0] === "copilot") return Buffer.from("");
+        if (cmdOf(args) === "copilot") return Buffer.from("");
         throw new Error("not found");
       });
 
@@ -698,7 +746,7 @@ describe("CliAvailabilityService", () => {
       const mockedAccess = vi.mocked(access);
 
       mockedExecFileSync.mockImplementation((_file, args) => {
-        if (args?.[0] === "copilot") return Buffer.from("");
+        if (cmdOf(args) === "copilot") return Buffer.from("");
         throw new Error("not found");
       });
 
@@ -716,7 +764,7 @@ describe("CliAvailabilityService", () => {
   describe("diagnostic logging for auth discovery", () => {
     it("logs exactly once when auth discovery finds no credential", async () => {
       mockedExecFileSync.mockImplementation((_file, args) => {
-        if (args?.[0] === "copilot") return Buffer.from("");
+        if (cmdOf(args) === "copilot") return Buffer.from("");
         throw new Error("not found");
       });
 
@@ -743,7 +791,7 @@ describe("CliAvailabilityService", () => {
       const mockedAccess = vi.mocked(access);
 
       mockedExecFileSync.mockImplementation((_file, args) => {
-        if (args?.[0] === "kiro-cli") return Buffer.from("");
+        if (cmdOf(args) === "kiro-cli") return Buffer.from("");
         throw new Error("not found");
       });
       mockedAccess.mockRejectedValue(new Error("ENOENT"));
@@ -761,7 +809,7 @@ describe("CliAvailabilityService", () => {
     it("does NOT log when auth check is short-circuited by envVar (OPENAI_API_KEY)", async () => {
       process.env.OPENAI_API_KEY = "sk-test";
       mockedExecFileSync.mockImplementation((_file, args) => {
-        if (args?.[0] === "codex") return Buffer.from("");
+        if (cmdOf(args) === "codex") return Buffer.from("");
         throw new Error("not found");
       });
 
@@ -782,7 +830,7 @@ describe("CliAvailabilityService", () => {
       vi.useFakeTimers();
       try {
         mockedExecFileSync.mockImplementation((_file, args) => {
-          if (args?.[0] === "copilot") return Buffer.from("");
+          if (cmdOf(args) === "copilot") return Buffer.from("");
           throw new Error("not found");
         });
         // Make fs.access hang forever ONLY for copilot's auth config path so
@@ -824,7 +872,7 @@ describe("CliAvailabilityService", () => {
       const mockedAccess = vi.mocked(access);
 
       mockedExecFileSync.mockImplementation((_file, args) => {
-        if (args?.[0] === "copilot") return Buffer.from("");
+        if (cmdOf(args) === "copilot") return Buffer.from("");
         throw new Error("not found");
       });
       mockedAccess.mockResolvedValue(undefined);
@@ -846,7 +894,7 @@ describe("CliAvailabilityService", () => {
       const calls = mockedExecFileSync.mock.calls;
       calls.forEach((call) => {
         const args = call[1] as string[];
-        const command = args[0];
+        const command = cmdOf(args);
         expect(command).toMatch(/^[a-zA-Z0-9._-]+$/);
       });
     });
@@ -894,7 +942,7 @@ describe("CliAvailabilityService", () => {
 
       // Force the shell probe to miss Claude so the native path fallback runs.
       mockedExecFileSync.mockImplementation((_file, args) => {
-        if (args?.[0] === "claude") {
+        if (cmdOf(args) === "claude") {
           throw Object.assign(new Error("not found"), { code: "ENOENT" });
         }
         return Buffer.from("");
@@ -927,7 +975,7 @@ describe("CliAvailabilityService", () => {
 
       // Shell probe fails for claude.
       mockedExecFileSync.mockImplementation((_file, args) => {
-        if (args?.[0] === "claude") {
+        if (cmdOf(args) === "claude") {
           throw Object.assign(new Error("not found"), { code: "ENOENT" });
         }
         throw Object.assign(new Error("not found"), { code: "ENOENT" });
@@ -954,7 +1002,7 @@ describe("CliAvailabilityService", () => {
 
     it("captures the resolved path from `which` stdout", async () => {
       mockedExecFileSync.mockImplementation((_file, args) => {
-        if (args?.[0] === "claude") {
+        if (cmdOf(args) === "claude") {
           return Buffer.from("/opt/homebrew/bin/claude\n");
         }
         return Buffer.from("");
@@ -1388,6 +1436,243 @@ describe("CliAvailabilityService", () => {
           expect(argv[cmdIdx + 1]).toBe("codex");
         }
       }
+    });
+  });
+
+  describe("duplicate CLI detection (#6054)", () => {
+    const mockedBroadcast = vi.mocked(broadcastToRenderer);
+
+    it("requests all PATH matches via `which -a` on Unix", async () => {
+      mockedExecFileSync.mockImplementation(() => Buffer.from(""));
+
+      await service.checkAvailability();
+
+      const claudeCall = mockedExecFileSync.mock.calls.find(
+        (call) => Array.isArray(call[1]) && (call[1] as string[])[1] === "claude"
+      );
+      expect(claudeCall).toBeDefined();
+      expect(claudeCall![0]).toBe("which");
+      expect(claudeCall![1]).toEqual(["-a", "claude"]);
+    });
+
+    it("captures every line of `which -a` stdout into allResolvedPaths", async () => {
+      mockedExecFileSync.mockImplementation((_file, args) => {
+        const argv = args as string[] | undefined;
+        if (argv?.[1] === "claude") {
+          return Buffer.from("/opt/homebrew/bin/claude\n/Users/x/.local/bin/claude\n");
+        }
+        return Buffer.from("");
+      });
+
+      await service.checkAvailability();
+
+      const detail = service.getDetails()!.claude!;
+      expect(detail.resolvedPath).toBe("/opt/homebrew/bin/claude");
+      expect(detail.allResolvedPaths).toEqual([
+        "/opt/homebrew/bin/claude",
+        "/Users/x/.local/bin/claude",
+      ]);
+    });
+
+    it("emits a one-time warning toast per agent when duplicates exist", async () => {
+      mockedExecFileSync.mockImplementation((_file, args) => {
+        const argv = args as string[] | undefined;
+        if (argv?.[1] === "claude") {
+          return Buffer.from("/opt/homebrew/bin/claude\n/Users/x/.local/bin/claude\n");
+        }
+        return Buffer.from("");
+      });
+
+      await service.checkAvailability();
+
+      const toastCalls = mockedBroadcast.mock.calls.filter(
+        (call) => call[0] === CHANNELS.NOTIFICATION_SHOW_TOAST
+      );
+      expect(toastCalls).toHaveLength(1);
+      const payload = toastCalls[0][1] as {
+        type: string;
+        title: string;
+        message: string;
+      };
+      expect(payload.type).toBe("warning");
+      expect(payload.title).toBe("Multiple Claude installations found");
+      expect(payload.message).toContain("/opt/homebrew/bin/claude");
+      expect(payload.message).toContain("/Users/x/.local/bin/claude");
+    });
+
+    it("does not re-fire the toast on subsequent refresh() calls (milestone guard)", async () => {
+      mockedExecFileSync.mockImplementation((_file, args) => {
+        const argv = args as string[] | undefined;
+        if (argv?.[1] === "claude") {
+          return Buffer.from("/opt/homebrew/bin/claude\n/Users/x/.local/bin/claude\n");
+        }
+        return Buffer.from("");
+      });
+
+      await service.checkAvailability();
+      mockedBroadcast.mockClear();
+
+      await service.refresh();
+
+      const toastCalls = mockedBroadcast.mock.calls.filter(
+        (call) => call[0] === CHANNELS.NOTIFICATION_SHOW_TOAST
+      );
+      expect(toastCalls).toHaveLength(0);
+    });
+
+    it("does not emit a toast when only one PATH match is found", async () => {
+      mockedExecFileSync.mockImplementation(() => Buffer.from("/opt/homebrew/bin/claude\n"));
+
+      await service.checkAvailability();
+
+      const toastCalls = mockedBroadcast.mock.calls.filter(
+        (call) => call[0] === CHANNELS.NOTIFICATION_SHOW_TOAST
+      );
+      expect(toastCalls).toHaveLength(0);
+
+      const detail = service.getDetails()!.claude!;
+      expect(detail.allResolvedPaths).toBeUndefined();
+    });
+
+    it("dedupes Windows where.exe results that share a directory (.cmd + .exe)", async () => {
+      const originalPlatform = process.platform;
+      Object.defineProperty(process, "platform", { value: "win32", writable: true });
+      try {
+        mockedExecFileSync.mockImplementation((_file, args) => {
+          const argv = args as string[] | undefined;
+          if (argv?.[0] === "claude") {
+            // Same npm-global directory, two extensions — counts as one install.
+            return Buffer.from(
+              "C:\\Users\\x\\AppData\\Roaming\\npm\\claude.cmd\r\n" +
+                "C:\\Users\\x\\AppData\\Roaming\\npm\\claude.exe\r\n"
+            );
+          }
+          return Buffer.from("");
+        });
+
+        await service.checkAvailability();
+
+        const detail = service.getDetails()!.claude!;
+        // Only one unique install after dedup, so `allResolvedPaths` is
+        // intentionally omitted — the field signals duplicates only.
+        expect(detail.allResolvedPaths).toBeUndefined();
+        expect(detail.resolvedPath).toBe("C:\\Users\\x\\AppData\\Roaming\\npm\\claude.cmd");
+
+        const toastCalls = mockedBroadcast.mock.calls.filter(
+          (call) => call[0] === CHANNELS.NOTIFICATION_SHOW_TOAST
+        );
+        expect(toastCalls).toHaveLength(0);
+      } finally {
+        Object.defineProperty(process, "platform", {
+          value: originalPlatform,
+          writable: true,
+        });
+      }
+    });
+
+    it("emits separate toasts per agent when multiple agents have duplicates", async () => {
+      mockedExecFileSync.mockImplementation((_file, args) => {
+        const argv = args as string[] | undefined;
+        const cmd = argv?.[1];
+        if (cmd === "claude") {
+          return Buffer.from("/opt/homebrew/bin/claude\n/Users/x/.local/bin/claude\n");
+        }
+        if (cmd === "gemini") {
+          return Buffer.from("/opt/homebrew/bin/gemini\n/Users/x/.npm-global/bin/gemini\n");
+        }
+        return Buffer.from("");
+      });
+
+      await service.checkAvailability();
+
+      const toastCalls = mockedBroadcast.mock.calls.filter(
+        (call) => call[0] === CHANNELS.NOTIFICATION_SHOW_TOAST
+      );
+      expect(toastCalls).toHaveLength(2);
+      const titles = toastCalls.map((c) => (c[1] as { title: string }).title);
+      expect(titles).toContain("Multiple Claude installations found");
+      expect(titles).toContain("Multiple Gemini installations found");
+    });
+
+    it("truncates the 'Also found' list and notes how many additional copies remain", async () => {
+      mockedExecFileSync.mockImplementation((_file, args) => {
+        const argv = args as string[] | undefined;
+        if (argv?.[1] === "claude") {
+          return Buffer.from(
+            "/a/bin/claude\n/b/bin/claude\n/c/bin/claude\n/d/bin/claude\n/e/bin/claude\n"
+          );
+        }
+        return Buffer.from("");
+      });
+
+      await service.checkAvailability();
+
+      const toastCalls = mockedBroadcast.mock.calls.filter(
+        (call) => call[0] === CHANNELS.NOTIFICATION_SHOW_TOAST
+      );
+      expect(toastCalls).toHaveLength(1);
+      const message = (toastCalls[0][1] as { message: string }).message;
+      expect(message).toContain("Active: /a/bin/claude");
+      expect(message).toContain("/b/bin/claude");
+      expect(message).toContain("/c/bin/claude");
+      // Tail entries should be summarized, not enumerated, to keep the toast short.
+      expect(message).not.toContain("/d/bin/claude");
+      expect(message).not.toContain("/e/bin/claude");
+      expect(message).toContain("and 2 more");
+    });
+
+    it("falls back to bare `which` when BusyBox-style `which -a` exits non-zero", async () => {
+      // BusyBox/minimal `which` builds reject `-a` with a non-zero exit
+      // (no errno code). Without a fallback, every agent on Alpine would
+      // silently surface as "missing".
+      mockedExecFileSync.mockImplementation((_file, args) => {
+        const argv = args as string[] | undefined;
+        if (argv?.[0] === "-a") {
+          const e = new Error("which: invalid option -- a");
+          throw Object.assign(e, { status: 1 });
+        }
+        // Plain `which kiro-cli` succeeds.
+        if (cmdOf(args) === "kiro-cli") {
+          return Buffer.from("/usr/local/bin/kiro-cli\n");
+        }
+        const enoent = new Error("not found");
+        throw Object.assign(enoent, { status: 1 });
+      });
+
+      const result = await service.checkAvailability();
+      expect(result.kiro).toBe("ready");
+      const detail = service.getDetails()!.kiro!;
+      expect(detail.resolvedPath).toBe("/usr/local/bin/kiro-cli");
+      // Single-result fallback never surfaces duplicates.
+      expect(detail.allResolvedPaths).toBeUndefined();
+
+      const toastCalls = mockedBroadcast.mock.calls.filter(
+        (call) => call[0] === CHANNELS.NOTIFICATION_SHOW_TOAST
+      );
+      expect(toastCalls).toHaveLength(0);
+    });
+
+    it("survives a milestone load with falsy/undefined value (legacy stores)", async () => {
+      // Simulate a store that has never persisted orchestrationMilestones.
+      storeBackingMap.delete("orchestrationMilestones");
+
+      mockedExecFileSync.mockImplementation((_file, args) => {
+        const argv = args as string[] | undefined;
+        if (argv?.[1] === "claude") {
+          return Buffer.from("/opt/homebrew/bin/claude\n/Users/x/.local/bin/claude\n");
+        }
+        return Buffer.from("");
+      });
+
+      await service.checkAvailability();
+
+      const toastCalls = mockedBroadcast.mock.calls.filter(
+        (call) => call[0] === CHANNELS.NOTIFICATION_SHOW_TOAST
+      );
+      expect(toastCalls).toHaveLength(1);
+      // Milestone now persisted for follow-up checks.
+      const stored = storeBackingMap.get("orchestrationMilestones") as Record<string, boolean>;
+      expect(stored["duplicate-cli-warning:claude"]).toBe(true);
     });
   });
 });

@@ -79,6 +79,13 @@ export interface AgentCliDetail {
   /** WSL distribution used when `via === "wsl"`. */
   wslDistro?: string;
   /**
+   * All paths emitted by the shell probe (`which -a` / `where.exe`), in PATH
+   * order. Populated only when the probe succeeded via `which`. The first
+   * entry equals {@link AgentCliDetail.resolvedPath}; additional entries are
+   * the duplicate installs that drove the duplicate-detection notification.
+   */
+  allResolvedPaths?: string[];
+  /**
    * Passive auth discovery result. Populated alongside the binary probe to
    * drive onboarding nudges ("Needs Setup" tray section, Settings auth
    * panel) without gating launch.

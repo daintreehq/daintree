@@ -1,6 +1,6 @@
 import { execFile, execFileSync } from "child_process";
 import { access, constants } from "fs/promises";
-import { delimiter, join } from "path";
+import { delimiter, dirname, join } from "path";
 import { homedir } from "os";
 import type {
   CliAvailability,
@@ -15,12 +15,21 @@ import {
   type AgentAuthCheck,
 } from "../../shared/config/agentRegistry.js";
 import { refreshPath, expandWindowsEnvVars } from "../setup/environment.js";
+import { store } from "../store.js";
+import { CHANNELS } from "../ipc/channels.js";
+import { broadcastToRenderer } from "../ipc/utils.js";
 
 interface ProbeSuccess {
   status: "found";
   path: string;
   via: AgentCliProbeSource;
   wslDistro?: string;
+  /**
+   * All resolved paths from a shell probe (`which -a` on Unix, `where.exe`
+   * on Windows), deduplicated by directory. Populated only when the probe
+   * succeeded via `which`; first entry equals {@link ProbeSuccess.path}.
+   */
+  allPaths?: string[];
 }
 
 interface ProbeMissing {
@@ -45,6 +54,27 @@ interface AgentCheckOutcome {
 }
 
 const SECURITY_ERROR_CODES = new Set(["EACCES", "EPERM"]);
+
+/**
+ * Collapse PATH-resolved binary candidates that live in the same install
+ * directory. `where.exe` returns both `claude.cmd` and `claude.exe` for a
+ * single npm-global install — counting them as two installations would
+ * false-positive the duplicate-detection notification. Comparison is
+ * case-insensitive on Windows to mirror NTFS path semantics
+ * (matches `electron/setup/environment.ts:128`).
+ */
+function dedupePathsByDirectory(paths: string[], isWindows: boolean): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const p of paths) {
+    const dir = dirname(p);
+    const key = isWindows ? dir.toLowerCase() : dir;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(p);
+  }
+  return out;
+}
 
 export class CliAvailabilityService {
   private static readonly CHECK_TIMEOUT_MS = 10_000;
@@ -144,6 +174,7 @@ export class CliAvailabilityService {
         if (this.checkId === currentCheckId) {
           this.availability = availability;
           this.details = details;
+          this.notifyDuplicateInstalls(outcomeEntries, entries);
         }
 
         return availability;
@@ -230,6 +261,12 @@ export class CliAvailabilityService {
         resolvedPath: probe.path,
         via: probe.via,
         authConfirmed,
+        // Only set when the shell probe surfaced multiple PATH matches —
+        // single-install probes leave this undefined so consumers can
+        // distinguish "not measured" from "exactly one install".
+        ...(probe.allPaths && probe.allPaths.length > 1
+          ? { allResolvedPaths: probe.allPaths }
+          : {}),
       },
     };
   }
@@ -421,36 +458,86 @@ export class CliAvailabilityService {
   private probeViaShell(command: string): Promise<ProbeResult> {
     return new Promise((resolve) => {
       setImmediate(() => {
-        const checkCmd = process.platform === "win32" ? "where" : "which";
-        try {
-          // Capture stdout to expose the resolved absolute path in
-          // diagnostics. `where` may print multiple candidates on Windows
-          // (one per line) — the first line is the one `CreateProcess`
-          // resolves to, so take that.
-          const buffer = execFileSync(checkCmd, [command], {
-            stdio: ["ignore", "pipe", "ignore"],
-            timeout: CliAvailabilityService.WHICH_TIMEOUT_MS,
-          });
-          const output = buffer.toString("utf8").trim();
-          const resolved = output.split(/\r?\n/)[0]?.trim() || command;
-          resolve({ status: "found", path: resolved, via: "which" });
-        } catch (err) {
+        const isWindows = process.platform === "win32";
+        const checkCmd = isWindows ? "where" : "which";
+        // `where.exe` already prints every PATH match. On Unix, request all
+        // matches via `which -a` to drive duplicate detection (#6054). When
+        // `-a` is rejected by a minimal `which` (e.g. older BusyBox), retry
+        // without the flag so duplicate detection degrades to a single-path
+        // lookup rather than reporting the agent as missing.
+        const runWhich = (
+          extraArgs: string[]
+        ): { ok: true; lines: string[] } | { ok: false; err: unknown } => {
+          try {
+            const buffer = execFileSync(checkCmd, [...extraArgs, command], {
+              stdio: ["ignore", "pipe", "ignore"],
+              timeout: CliAvailabilityService.WHICH_TIMEOUT_MS,
+            });
+            const output = buffer.toString("utf8").trim();
+            const lines = output
+              .split(/\r?\n/)
+              .map((line) => line.trim())
+              .filter(Boolean);
+            return { ok: true, lines };
+          } catch (err) {
+            return { ok: false, err };
+          }
+        };
+
+        const classifyError = (err: unknown): ProbeResult | null => {
           const code = (err as NodeJS.ErrnoException | undefined)?.code;
           // EACCES / EPERM from which/where itself is rare — most endpoint
           // security blocks surface on the spawn attempt. Still, when they
           // do, the binary clearly exists on disk (otherwise we'd have
           // ENOENT) so "blocked" is the correct classification.
           if (typeof code === "string" && SECURITY_ERROR_CODES.has(code)) {
-            resolve({
+            return {
               status: "blocked",
               reason: "security",
               via: "which",
               message: `${checkCmd} "${command}" failed with ${code} — likely blocked by security software or missing execute permission`,
-            });
+            };
+          }
+          return null;
+        };
+
+        const primary = runWhich(isWindows ? [] : ["-a"]);
+        if (primary.ok) {
+          if (primary.lines.length === 0) {
+            // Some shells exit 0 with empty stdout. Preserve the historical
+            // contract: fall back to the bare command so the binary is still
+            // launchable via PATH lookup at spawn time.
+            resolve({ status: "found", path: command, via: "which" });
             return;
           }
-          resolve({ status: "missing" });
+          const allPaths = dedupePathsByDirectory(primary.lines, isWindows);
+          resolve({ status: "found", path: allPaths[0], via: "which", allPaths });
+          return;
         }
+
+        // Non-zero exit. On Unix this can be BusyBox/minimal `which`
+        // rejecting `-a`; retry without the flag so a real install isn't
+        // misreported as missing. Skip for security errors so the blocked
+        // verdict surfaces directly.
+        const primaryBlocked = classifyError(primary.err);
+        if (primaryBlocked) {
+          resolve(primaryBlocked);
+          return;
+        }
+        if (!isWindows) {
+          const fallback = runWhich([]);
+          if (fallback.ok) {
+            const path = fallback.lines[0] ?? command;
+            resolve({ status: "found", path, via: "which" });
+            return;
+          }
+          const fallbackBlocked = classifyError(fallback.err);
+          if (fallbackBlocked) {
+            resolve(fallbackBlocked);
+            return;
+          }
+        }
+        resolve({ status: "missing" });
       });
     });
   }
@@ -652,5 +739,69 @@ export class CliAvailabilityService {
       return null;
     }
     return expanded;
+  }
+
+  /**
+   * Surface a one-time toast per agent when the shell probe found multiple
+   * PATH-resolved binaries (#6054). Multiple installs typically come from a
+   * mix of Homebrew, npm-global, and native installer paths and can leave
+   * the user confused about which copy is being launched.
+   *
+   * Persistence reuses `orchestrationMilestones` keyed by agent ID, so the
+   * notification fires exactly once per agent across app restarts. A user
+   * who consolidates their installs and triggers a re-check will not see
+   * the toast again.
+   */
+  private notifyDuplicateInstalls(
+    outcomeEntries: [string, AgentCheckOutcome][],
+    registryEntries: [string, AgentConfig][]
+  ): void {
+    const configById = new Map(registryEntries);
+    let milestones = store.get("orchestrationMilestones") ?? {};
+    let dirty = false;
+
+    for (const [agentId, outcome] of outcomeEntries) {
+      const paths = outcome.detail.allResolvedPaths;
+      if (!paths || paths.length <= 1) continue;
+
+      const milestoneKey = `duplicate-cli-warning:${agentId}`;
+      if (milestones[milestoneKey]) continue;
+
+      const config = configById.get(agentId);
+      const agentName = config?.name ?? agentId;
+      const [active, ...others] = paths;
+      const PREVIEW_LIMIT = 2;
+      const preview = others.slice(0, PREVIEW_LIMIT).join(", ");
+      const remainder = others.length - PREVIEW_LIMIT;
+      const alsoFound = remainder > 0 ? `${preview}, and ${remainder} more` : preview;
+
+      try {
+        broadcastToRenderer(CHANNELS.NOTIFICATION_SHOW_TOAST, {
+          type: "warning",
+          title: `Multiple ${agentName} installations found`,
+          message: `Active: ${active}. Also found: ${alsoFound}. Pick one install method and remove the others so the most up-to-date version launches.`,
+        });
+      } catch (err) {
+        console.warn(
+          `[CliAvailabilityService] Failed to broadcast duplicate-install toast for ${agentId}:`,
+          err
+        );
+        continue;
+      }
+
+      milestones = { ...milestones, [milestoneKey]: true };
+      dirty = true;
+    }
+
+    if (dirty) {
+      try {
+        store.set("orchestrationMilestones", milestones);
+      } catch (err) {
+        console.warn(
+          "[CliAvailabilityService] Failed to persist duplicate-install milestone:",
+          err
+        );
+      }
+    }
   }
 }
