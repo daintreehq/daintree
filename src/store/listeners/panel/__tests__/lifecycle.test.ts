@@ -56,7 +56,7 @@ function setupPanel(overrides: Record<string, unknown> = {}) {
 
 beforeEach(() => {
   usePanelStore.setState({ panelsById: {}, panelIds: [] });
-  useAgentSettingsStore.setState({ settings: {} });
+  useAgentSettingsStore.setState({ settings: { agents: {} } });
   useCcrPresetsStore.setState({ ccrPresetsByAgent: {} });
   useProjectPresetsStore.setState({ presetsByAgent: {} });
   dispatchMock.mockClear();
