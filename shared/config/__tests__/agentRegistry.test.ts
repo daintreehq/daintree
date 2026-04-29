@@ -1219,15 +1219,12 @@ describe("all built-in agents have Windows or generic install", () => {
     "mistral",
     "kimi",
     "amp",
-  ])(
-    "%s has windows or generic install block",
-    (agentId) => {
-      const config = getAgentConfig(agentId);
-      const hasWindows = (config?.install?.byOs?.windows?.length ?? 0) > 0;
-      const hasGeneric = (config?.install?.byOs?.generic?.length ?? 0) > 0;
-      expect(hasWindows || hasGeneric).toBe(true);
-    }
-  );
+  ])("%s has windows or generic install block", (agentId) => {
+    const config = getAgentConfig(agentId);
+    const hasWindows = (config?.install?.byOs?.windows?.length ?? 0) > 0;
+    const hasGeneric = (config?.install?.byOs?.generic?.length ?? 0) > 0;
+    expect(hasWindows || hasGeneric).toBe(true);
+  });
 });
 
 describe("ASSISTANT_FAST_MODELS", () => {
