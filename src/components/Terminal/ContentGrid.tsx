@@ -2,6 +2,13 @@ import React, { useMemo, useCallback, useEffect, useEffectEvent, useRef, useStat
 import { useShallow } from "zustand/react/shallow";
 import { SortableContext, rectSortingStrategy } from "@dnd-kit/sortable";
 import { useDroppable } from "@dnd-kit/core";
+import {
+  AnimatePresence,
+  LayoutGroup,
+  motion,
+  type TransformProperties,
+  type Transition,
+} from "framer-motion";
 import { cn } from "@/lib/utils";
 import { logError } from "@/utils/logger";
 import { useMacroFocusStore } from "@/store/macroFocusStore";
@@ -67,6 +74,16 @@ import { buildPanelDuplicateOptions } from "@/services/terminal/panelDuplication
 import { getEffectiveAgentIds, getEffectiveAgentConfig } from "@shared/config/agentRegistry";
 import type { BuiltInAgentId } from "@shared/config/agentIds";
 import { getMaximizedGroupFocusTarget } from "./contentGridFocus";
+
+// Snap mid-flight FLIP translations to integer pixels. xterm canvas/WebGL
+// renderers blur when an ancestor receives a fractional CSS transform
+// (Chromium bug 40892376) — this runs on every animation frame for grid
+// panels, so we round before composing the transform string.
+function pixelSnapTransform({ x, y }: TransformProperties): string {
+  const tx = typeof x === "number" ? x : parseFloat(x ?? "0") || 0;
+  const ty = typeof y === "number" ? y : parseFloat(y ?? "0") || 0;
+  return `translate3d(${Math.round(tx)}px, ${Math.round(ty)}px, 0)`;
+}
 
 interface TipEntry {
   id: string;
@@ -669,6 +686,20 @@ export function ContentGrid({
     return computeGridColumns(gridItemCount, gridWidth, strategy, value);
   }, [gridItemCount, layoutConfig, gridWidth, maximizedId, preMaximizeLayout, activeWorktreeId]);
 
+  // FLIP transition shared across every panel in this grid. During project
+  // switching the duration drops to 0 so the freshly-hydrated panels snap into
+  // place — matching the prior CSS-transition `none` branch and preserving
+  // #4467's project-switch fit timing. MotionConfig propagates the global
+  // reduced-motion preference, so no `prefers-reduced-motion` check is needed
+  // here. Ease curve mirrors the previous `ease-out` CSS transition.
+  const layoutTransition: Transition = useMemo(
+    () => ({
+      duration: isProjectSwitching ? 0 : GRID_TRANSITION_DURATION_MS / 1000,
+      ease: [0.22, 1, 0.36, 1],
+    }),
+    [isProjectSwitching]
+  );
+
   const gridAgentMenuItems = useMemo(() => {
     return getEffectiveAgentIds()
       .filter((id) => !gridSelectedAgentIds || gridSelectedAgentIds.has(id))
@@ -747,11 +778,25 @@ export function ContentGrid({
   // promote every mounted fleet cell to VISIBLE so cross-worktree terminals
   // keep streaming output — worktreeStore's per-worktree policy would
   // otherwise demote them to BACKGROUND (showing stale frames).
+  const prevFleetGridColsRef = useRef(fleetGridCols);
   useEffect(() => {
-    if (!isFleetScopeRender) return;
+    if (!isFleetScopeRender) {
+      prevFleetGridColsRef.current = fleetGridCols;
+      return;
+    }
     const ids = fleetPanels.map((t) => t.id);
     for (const id of ids) {
       terminalInstanceService.applyRendererPolicy(id, TerminalRefreshTier.VISIBLE);
+    }
+    // Mirror the main grid: lock resizes for the FLIP window when fleet column
+    // count changes so motion.div translations don't trigger spurious SIGWINCH.
+    const fleetColsChanged = prevFleetGridColsRef.current !== fleetGridCols;
+    prevFleetGridColsRef.current = fleetGridCols;
+    if (fleetColsChanged && !isDraggingRef.current && ids.length > 0) {
+      terminalInstanceService.suppressResizesDuringLayoutTransition(
+        ids,
+        GRID_TRANSITION_DURATION_MS
+      );
     }
     const cancelRef = { cancelled: false };
     const timeoutId = window.setTimeout(() => {
@@ -799,9 +844,34 @@ export function ContentGrid({
       processNext();
     }, GRID_FIT_DELAY_MS);
   });
+  // When the column count changes, the grid runs a per-panel FLIP animation
+  // (`layout="position"` on each SortableTerminal). Lock xterm resizes for the
+  // animation window so mid-flight `getBoundingClientRect` reads — which would
+  // otherwise produce fractional dimensions and spurious SIGWINCH on Codex and
+  // similar PTY-sensitive CLIs — are deferred until the panels settle. The
+  // batch-fit then runs `GRID_FIT_DELAY_MS` later (200ms animation + 50ms
+  // safety buffer), once geometry is final. See lessons #4170 and #4467.
+  // We deliberately skip the suppress call while a drag is active: the unlock
+  // fires unconditionally after 200ms and would prematurely clear a drag-held
+  // resize lock if a drop crosses a column threshold.
+  const prevGridColsRef = useRef(gridCols);
   useEffect(() => {
     void gridCols;
     void panelIds;
+
+    const colsChanged = prevGridColsRef.current !== gridCols;
+    prevGridColsRef.current = gridCols;
+
+    if (colsChanged && !isProjectSwitching && !isDraggingRef.current) {
+      const realPanelIds = panelIds.filter((id) => id !== GRID_PLACEHOLDER_ID);
+      if (realPanelIds.length > 0) {
+        terminalInstanceService.suppressResizesDuringLayoutTransition(
+          realPanelIds,
+          GRID_TRANSITION_DURATION_MS
+        );
+      }
+    }
+
     const cancelRef = { cancelled: false };
     const timeoutId = startBatchFit(cancelRef);
 
@@ -809,7 +879,7 @@ export function ContentGrid({
       cancelRef.cancelled = true;
       clearTimeout(timeoutId);
     };
-  }, [gridCols, panelIds]);
+  }, [gridCols, panelIds, isProjectSwitching]);
 
   // Show "grid full" overlay when trying to drag from dock to a full grid
   const showGridFullOverlay = sourceContainer === "dock" && isGridFull;
@@ -832,6 +902,7 @@ export function ContentGrid({
       .slice(0, 2)
       .map((g) => getTabGroupPanels(g.id, "grid")[0])
       .filter((t): t is TerminalInstance => t !== undefined);
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
     return panels.length === 2 ? (panels as [TerminalInstance, TerminalInstance]) : null;
   }, [useTwoPaneSplitMode, tabGroups, getTabGroupPanels]);
 
@@ -851,6 +922,7 @@ export function ContentGrid({
       prevModeRef.current = currentMode;
 
       // Immediate stabilization fit after mode switch
+      const MODE_SWITCH_FIT_DELAY_MS = 50;
       const timeoutId = window.setTimeout(() => {
         if (isDraggingRef.current) return;
 
@@ -862,7 +934,7 @@ export function ContentGrid({
             terminalInstanceService.fit(id);
           }
         }
-      }, 50);
+      }, MODE_SWITCH_FIT_DELAY_MS);
 
       return () => clearTimeout(timeoutId);
     }
@@ -1004,9 +1076,6 @@ export function ContentGrid({
                   gridAutoRows: `minmax(${MIN_TERMINAL_HEIGHT_PX}px, 1fr)`,
                   gap: "4px",
                   backgroundColor: "var(--color-grid-bg)",
-                  transition: isProjectSwitching
-                    ? "none"
-                    : `grid-template-columns ${GRID_TRANSITION_DURATION_MS}ms ease-out`,
                   overflowY: "auto",
                 }}
                 id="panel-grid"
@@ -1024,32 +1093,47 @@ export function ContentGrid({
                     />
                   </div>
                 ) : (
-                  fleetPanels.map((terminal) => {
-                    let titleOverride: string | undefined;
-                    if (fleetNeedsWorktreePrefix) {
-                      const worktreeId = terminal.worktreeId ?? null;
-                      const worktree = worktreeId ? worktreeMap.get(worktreeId) : null;
-                      const prefix = worktree
-                        ? worktree.isMainWorktree
-                          ? worktree.name?.trim() || worktree.branch?.trim() || "Unknown Worktree"
-                          : worktree.branch?.trim() || worktree.name?.trim() || "Unknown Worktree"
-                        : null;
-                      if (prefix) {
-                        titleOverride = `${prefix} — ${terminal.title}`;
-                      }
-                    }
-                    return (
-                      <GridPanel
-                        key={terminal.id}
-                        terminal={terminal}
-                        isFocused={terminal.id === focusedId}
-                        gridPanelCount={fleetPanels.length}
-                        gridCols={fleetGridCols}
-                        isFleetScope
-                        titleOverride={titleOverride}
-                      />
-                    );
-                  })
+                  <LayoutGroup id="fleet-grid">
+                    <AnimatePresence initial={false}>
+                      {fleetPanels.map((terminal) => {
+                        let titleOverride: string | undefined;
+                        if (fleetNeedsWorktreePrefix) {
+                          const worktreeId = terminal.worktreeId ?? null;
+                          const worktree = worktreeId ? worktreeMap.get(worktreeId) : null;
+                          const prefix = worktree
+                            ? worktree.isMainWorktree
+                              ? worktree.name?.trim() ||
+                                worktree.branch?.trim() ||
+                                "Unknown Worktree"
+                              : worktree.branch?.trim() ||
+                                worktree.name?.trim() ||
+                                "Unknown Worktree"
+                            : null;
+                          if (prefix) {
+                            titleOverride = `${prefix} — ${terminal.title}`;
+                          }
+                        }
+                        return (
+                          <motion.div
+                            key={terminal.id}
+                            layout="position"
+                            transition={layoutTransition}
+                            transformTemplate={pixelSnapTransform}
+                            className="h-full min-w-0"
+                          >
+                            <GridPanel
+                              terminal={terminal}
+                              isFocused={terminal.id === focusedId}
+                              gridPanelCount={fleetPanels.length}
+                              gridCols={fleetGridCols}
+                              isFleetScope
+                              titleOverride={titleOverride}
+                            />
+                          </motion.div>
+                        );
+                      })}
+                    </AnimatePresence>
+                  </LayoutGroup>
                 )}
               </div>
             </ContextMenuTrigger>
@@ -1211,9 +1295,6 @@ export function ContentGrid({
                   gridAutoRows: `minmax(${MIN_TERMINAL_HEIGHT_PX}px, 1fr)`,
                   gap: "4px",
                   backgroundColor: "var(--color-grid-bg)",
-                  transition: isProjectSwitching
-                    ? "none"
-                    : `grid-template-columns ${GRID_TRANSITION_DURATION_MS}ms ease-out`,
                   overflowY: "auto",
                 }}
                 id="panel-grid"
@@ -1233,7 +1314,7 @@ export function ContentGrid({
                     )}
                   </div>
                 ) : (
-                  <>
+                  <LayoutGroup id="main-grid">
                     {tabGroups.map((group, index) => {
                       const groupPanels = getTabGroupPanels(group.id, "grid");
                       if (groupPanels.length === 0) return null;
@@ -1255,6 +1336,7 @@ export function ContentGrid({
                             sourceLocation="grid"
                             sourceIndex={index}
                             disabled={isGroupDisabled}
+                            layoutTransition={layoutTransition}
                           >
                             <GridPanel
                               terminal={terminal}
@@ -1276,6 +1358,7 @@ export function ContentGrid({
                             disabled={isGroupDisabled}
                             groupId={group.id}
                             groupPanelIds={group.panelIds}
+                            layoutTransition={layoutTransition}
                           >
                             <GridTabGroup
                               group={group}
@@ -1295,7 +1378,7 @@ export function ContentGrid({
                       placeholderIndex === tabGroups.length && (
                         <SortableGridPlaceholder key={GRID_PLACEHOLDER_ID} />
                       )}
-                  </>
+                  </LayoutGroup>
                 )}
               </div>
             </ContextMenuTrigger>
