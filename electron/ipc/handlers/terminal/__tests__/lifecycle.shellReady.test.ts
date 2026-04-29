@@ -63,6 +63,7 @@ vi.mock("../../../utils.js", () => ({
     ipcMainMock.handle(channel, async (_e: unknown, ...args: unknown[]) => {
       const parsed = schema.safeParse(args[0]);
       if (!parsed.success) {
+        console.error(`[IPC] Validation failed for ${channel}:`, parsed.error);
         throw new Error(`IPC validation failed: ${channel}`);
       }
       return (handler as (payload: unknown) => unknown)(parsed.data);
