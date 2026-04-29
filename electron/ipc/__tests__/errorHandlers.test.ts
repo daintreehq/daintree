@@ -814,7 +814,7 @@ describe("errorHandlers", () => {
     });
   });
 
-  describe("recoveryHint via createAppError", () => {
+  describe("recoveryHint via createErrorRecord", () => {
     it("returns permissions hint for EACCES with file syscall", async () => {
       const CHANNELS = await getChannels();
       const mockWindow = createMockWindow();

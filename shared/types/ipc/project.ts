@@ -28,16 +28,12 @@ export interface ProjectSwitchPayload {
   hydrateResult?: HydrateResult;
 }
 
-/** Result from project:close operation */
+/** Result from project:close operation. Failures throw `AppError`. */
 export interface ProjectCloseResult {
-  /** Whether the operation succeeded */
-  success: boolean;
   /** Total number of processes killed */
   processesKilled: number;
   /** Number of terminals killed */
   terminalsKilled: number;
-  /** Error message if operation failed */
-  error?: string;
 }
 
 /** Project resource statistics */

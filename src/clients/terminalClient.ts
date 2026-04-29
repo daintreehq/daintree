@@ -405,7 +405,7 @@ export const terminalClient = {
    * Force resume a terminal that may be paused due to backpressure.
    * User-initiated action to unblock a terminal.
    */
-  forceResume: (id: string): Promise<{ success: boolean; error?: string }> => {
+  forceResume: (id: string): Promise<void> => {
     return window.electron.terminal.forceResume(id);
   },
 

@@ -11,7 +11,7 @@ export { useLogsStore, filterLogs, collapseConsecutiveDuplicates } from "./logsS
 export type { DisplayEntry } from "./logsStore";
 
 export { useErrorStore } from "./errorStore";
-export type { AppError, ErrorType, RetryAction } from "./errorStore";
+export type { ErrorRecord, ErrorType, RetryAction } from "./errorStore";
 
 export { useEventStore } from "./eventStore";
 

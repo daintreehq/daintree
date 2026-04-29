@@ -118,12 +118,17 @@ function BlockedNavBanner({
               /* webview not ready */
             }
             if (wcId != null) {
-              await window.electron.webview.startOAuthLoopback(
-                url,
-                panelId,
-                wcId,
-                blockedNav.sessionStorageSnapshot
-              );
+              try {
+                await window.electron.webview.startOAuthLoopback(
+                  url,
+                  panelId,
+                  wcId,
+                  blockedNav.sessionStorageSnapshot
+                );
+              } catch {
+                // OAuth loopback may fail if the webview is gone or CDP setup
+                // breaks; silently fall through — the dialog has been dismissed.
+              }
             }
           }}
           className="shrink-0 px-2 py-0.5 rounded text-xs bg-status-warning/20 hover:bg-status-warning/30 text-daintree-text/90 transition-colors"

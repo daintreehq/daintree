@@ -11,10 +11,10 @@ import {
   XCircle,
   type LucideIcon,
 } from "lucide-react";
-import type { AppError, RetryAction } from "@/store/errorStore";
+import type { ErrorRecord, RetryAction } from "@/store/errorStore";
 
 export interface ErrorBannerProps {
-  error: AppError;
+  error: ErrorRecord;
   onDismiss: (id: string) => void;
   onRetry?: (id: string, action: RetryAction, args?: Record<string, unknown>) => void;
   onCancelRetry?: (id: string) => void;

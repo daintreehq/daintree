@@ -9,8 +9,8 @@ export interface PrimarySelectionDeps {
   isInputLocked: () => boolean;
   writeToPty: (id: string, data: string) => void;
   notifyUserInput: (id: string) => void;
-  writeSelection: (text: string) => Promise<unknown>;
-  readSelection: () => Promise<{ ok: true; text: string } | { ok: false; error: string }>;
+  writeSelection: (text: string) => Promise<void>;
+  readSelection: () => Promise<{ text: string }>;
 }
 
 // Installs Linux PRIMARY selection listeners on the terminal host element:
@@ -51,16 +51,16 @@ export function installLinuxPrimarySelectionListeners(deps: PrimarySelectionDeps
     event.preventDefault();
     event.stopPropagation();
     try {
-      const result = await readSelection();
-      if (!result.ok || !result.text) return;
+      const { text } = await readSelection();
+      if (!text) return;
       if (isDisposed() || isInputLocked()) return;
       const payload = getBracketedPasteMode()
-        ? formatWithBracketedPaste(result.text)
-        : result.text.replace(/\r?\n/g, "\r");
+        ? formatWithBracketedPaste(text)
+        : text.replace(/\r?\n/g, "\r");
       writeToPty(terminalId, payload);
       notifyUserInput(terminalId);
     } catch {
-      // IPC can reject if the main process is unavailable.
+      // UNSUPPORTED on non-Linux, IPC failure during shutdown, etc.
     }
   };
 

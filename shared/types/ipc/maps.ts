@@ -85,7 +85,7 @@ import type {
 } from "./system.js";
 import type { AppState, HydrateResult } from "./app.js";
 import type { LogEntry, LogFilterOptions } from "./logs.js";
-import type { RetryAction, AppError, RetryProgressPayload } from "./errors.js";
+import type { RetryAction, ErrorRecord, RetryProgressPayload } from "./errors.js";
 import type { EventRecord, EventFilterOptions } from "./events.js";
 import type {
   ProjectCloseResult,
@@ -381,7 +381,7 @@ export interface IpcInvokeMap {
   };
   "terminal:force-resume": {
     args: [id: string];
-    result: { success: boolean; error?: string };
+    result: void;
   };
   "terminal:restart-service": {
     args: [];
@@ -658,7 +658,7 @@ export interface IpcInvokeMap {
   };
   "logs:set-verbose": {
     args: [enabled: boolean];
-    result: { success: boolean };
+    result: void;
   };
   "logs:get-verbose": {
     args: [];
@@ -702,7 +702,7 @@ export interface IpcInvokeMap {
   };
   "error:get-pending": {
     args: [];
-    result: AppError[];
+    result: ErrorRecord[];
   };
 
   // Event inspector channels
@@ -1108,7 +1108,11 @@ export interface IpcInvokeMap {
   };
   "git:push": {
     args: [payload: { cwd: string; setUpstream?: boolean }];
-    result: { success: boolean; error?: string };
+    /**
+     * Resolves on success. Throws `GitOperationError` on failure — the renderer
+     * reads `caught.gitReason` to surface a classified recovery hint.
+     */
+    result: void;
   };
   "git:get-staging-status": {
     args: [cwd: string];
@@ -1394,30 +1398,32 @@ export interface IpcInvokeMap {
     result: CliInstallStatus;
   };
 
-  // Clipboard channels
+  // Clipboard channels — handlers throw `AppError` on failure (CLIPBOARD_EMPTY,
+  // CLIPBOARD_INVALID, UNSUPPORTED, VALIDATION). Renderer consumers use
+  // try/catch + isClientAppError(e) to branch on e.code.
   "clipboard:save-image": {
     args: [];
-    result: { ok: true; filePath: string; thumbnailDataUrl: string } | { ok: false; error: string };
+    result: { filePath: string; thumbnailDataUrl: string };
   };
   "clipboard:thumbnail-from-path": {
     args: [filePath: string];
-    result: { ok: true; filePath: string; thumbnailDataUrl: string } | { ok: false; error: string };
+    result: { filePath: string; thumbnailDataUrl: string };
   };
   "clipboard:write-image": {
     args: [pngData: Uint8Array];
-    result: { ok: true } | { ok: false; error: string };
+    result: void;
   };
   "clipboard:write-text": {
     args: [text: string];
-    result: { ok: true } | { ok: false; error: string };
+    result: void;
   };
   "clipboard:write-selection": {
     args: [text: string];
-    result: { ok: true } | { ok: false; error: string };
+    result: void;
   };
   "clipboard:read-selection": {
     args: [];
-    result: { ok: true; text: string } | { ok: false; error: string };
+    result: { text: string };
   };
 
   // Notification settings channels
@@ -2141,7 +2147,8 @@ export interface IpcInvokeMap {
       webContentsId: number,
       sessionStorageSnapshot?: Array<[string, string]>,
     ];
-    result: { success: boolean; error?: string } | null;
+    /** Resolves with `{ success: true }` on success or `null` if the loopback was aborted. Throws `AppError` on hard failure. */
+    result: { success: true } | null;
   };
 
   // Additional worktree channels
@@ -2215,7 +2222,7 @@ export interface IpcEventMap {
   "github:token-health-changed": GitHubTokenHealthPayload;
 
   // Error events
-  "error:notify": AppError;
+  "error:notify": ErrorRecord;
   "error:retry-progress": RetryProgressPayload;
 
   // Log events

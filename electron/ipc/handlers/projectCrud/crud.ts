@@ -7,6 +7,7 @@ import { broadcastToRenderer, typedHandle, typedHandleWithContext } from "../../
 import type { HandlerDependencies } from "../../types.js";
 import type { Project } from "../../../types/index.js";
 import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
+import { AppError } from "../../../utils/errorTypes.js";
 
 export function registerProjectCrudCoreHandlers(deps: HandlerDependencies): () => void {
   const handlers: Array<() => void> = [];
@@ -157,7 +158,7 @@ export function registerProjectCrudCoreHandlers(deps: HandlerDependencies): () =
     }
 
     if (!killTerminals && project.status === "closed") {
-      return { success: true, processesKilled: 0, terminalsKilled: 0 };
+      return { processesKilled: 0, terminalsKilled: 0 };
     }
 
     try {
@@ -179,7 +180,6 @@ export function registerProjectCrudCoreHandlers(deps: HandlerDependencies): () =
         );
 
         return {
-          success: true,
           processesKilled: terminalsKilled,
           terminalsKilled,
         };
@@ -194,19 +194,18 @@ export function registerProjectCrudCoreHandlers(deps: HandlerDependencies): () =
         );
 
         return {
-          success: true,
           processesKilled: 0,
           terminalsKilled: 0,
         };
       }
     } catch (error) {
       console.error(`[IPC] project:close: Failed to close project ${projectId}:`, error);
-      return {
-        success: false,
-        error: formatErrorMessage(error, "Failed to close project"),
-        processesKilled: 0,
-        terminalsKilled: 0,
-      };
+      throw new AppError({
+        code: "INTERNAL",
+        message: formatErrorMessage(error, "Failed to close project"),
+        context: { projectId },
+        cause: error instanceof Error ? error : undefined,
+      });
     }
   };
   handlers.push(typedHandle(CHANNELS.PROJECT_CLOSE, handleProjectClose));

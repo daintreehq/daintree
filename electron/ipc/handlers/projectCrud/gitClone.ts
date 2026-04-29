@@ -14,6 +14,7 @@ import type {
   CloneRepoProgressEvent,
 } from "../../../../shared/types/ipc/gitClone.js";
 import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
+import { AppError } from "../../../utils/errorTypes.js";
 
 export function registerGitCloneHandlers(): () => void {
   const handlers: Array<() => void> = [];
@@ -118,7 +119,7 @@ export function registerGitCloneHandlers(): () => void {
       await git.clone(url, trimmedFolder, shallowClone ? ["--depth", "1"] : []);
 
       emitProgress("complete", 100, "Clone complete");
-      return { success: true, clonedPath: targetPath };
+      return { clonedPath: targetPath };
     } catch (error) {
       const wasCancelled =
         cloneAbortController?.signal.aborted ||
@@ -135,12 +136,21 @@ export function registerGitCloneHandlers(): () => void {
 
       if (wasCancelled) {
         emitProgress("cancelled", 0, "Clone cancelled");
-        return { success: false, cancelled: true, error: "Clone cancelled" };
+        throw new AppError({
+          code: "CANCELLED",
+          message: "Clone cancelled",
+          context: { targetPath },
+        });
       }
 
       const errorMessage = formatErrorMessage(error, "Failed to clone repository");
       emitProgress("error", 0, `Clone failed: ${errorMessage}`);
-      return { success: false, error: errorMessage };
+      throw new AppError({
+        code: "INTERNAL",
+        message: errorMessage,
+        context: { targetPath },
+        cause: error instanceof Error ? error : undefined,
+      });
     } finally {
       cloneAbortController = null;
     }

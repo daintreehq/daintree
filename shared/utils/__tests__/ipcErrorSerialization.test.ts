@@ -227,12 +227,10 @@ describe("round-trip serialization", () => {
     // Shared-layer test synthesizes the GitOperationError shape without importing
     // the electron/ module — shared/ must not depend on electron/.
     //
-    // NOTE: electron/setup/security.ts strips `properties` from the IPC envelope in
-    // packaged builds. This test proves the `properties` bag survives a naive
-    // serialize/clone/deserialize cycle, which is what dev-mode IPC uses and what
-    // our renderer event payloads (e.g. fetch-pr-branch-result, handlePush return)
-    // use. In packaged builds we rely on top-level AppError.gitReason, not on the
-    // wrapped-error properties bag.
+    // The handler's `reason` field is promoted to the top-level `gitReason`
+    // slot on `SerializedError` so it survives the packaged-build strip in
+    // `electron/setup/security.ts` (which clears `context`/`cause`/`properties`
+    // but preserves named top-level fields).
     const original = Object.assign(new Error("fatal: not a git repository"), {
       name: "GitOperationError",
       context: { cwd: "/repo", op: "status", reason: "not-a-repository" },
@@ -242,16 +240,18 @@ describe("round-trip serialization", () => {
     });
 
     const serialized = serializeError(original);
+    expect(serialized.gitReason).toBe("not-a-repository");
+
     const cloned = structuredClone(serialized);
     const restored = deserializeError(cloned) as Error & {
-      reason: string;
+      gitReason: string;
       op: string;
       rawMessage: string;
       context: Record<string, unknown>;
     };
 
     expect(restored.name).toBe("GitOperationError");
-    expect(restored.reason).toBe("not-a-repository");
+    expect(restored.gitReason).toBe("not-a-repository");
     expect(restored.op).toBe("status");
     expect(restored.rawMessage).toBe("fatal: not a git repository");
     expect(restored.context).toEqual({
@@ -259,6 +259,29 @@ describe("round-trip serialization", () => {
       op: "status",
       reason: "not-a-repository",
     });
+  });
+
+  it("round-trips an AppError code + userMessage via serialize -> structuredClone -> deserialize", () => {
+    const original = Object.assign(new Error("Binary file"), {
+      name: "AppError",
+      code: "BINARY_FILE",
+      userMessage: "This file can't be displayed.",
+      context: { filePath: "/repo/asset.bin" },
+    });
+
+    const serialized = serializeError(original);
+    expect(serialized.code).toBe("BINARY_FILE");
+    expect(serialized.userMessage).toBe("This file can't be displayed.");
+
+    const cloned = structuredClone(serialized);
+    const restored = deserializeError(cloned) as Error & {
+      code: string;
+      userMessage: string;
+    };
+
+    expect(restored.name).toBe("AppError");
+    expect(restored.code).toBe("BINARY_FILE");
+    expect(restored.userMessage).toBe("This file can't be displayed.");
   });
 });
 

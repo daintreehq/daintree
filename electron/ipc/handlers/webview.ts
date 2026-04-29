@@ -13,6 +13,7 @@ import type {
   CdpPropertyDescriptor,
 } from "../../../shared/types/ipc/webviewConsole.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
+import { AppError } from "../../utils/errorTypes.js";
 
 interface CdpSession {
   runtimeEnabled: boolean;
@@ -550,7 +551,7 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
     panelId: unknown,
     webContentsId: unknown,
     providedSessionStorageSnapshot: unknown
-  ): Promise<{ success: boolean; error?: string } | null> => {
+  ): Promise<{ success: true } | null> => {
     if (
       typeof authUrl !== "string" ||
       typeof panelId !== "string" ||
@@ -580,7 +581,11 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
     const wc = webContents.fromId(webContentsId);
     if (!wc || wc.isDestroyed()) {
       console.error("[OAuthLoopback] WebContents not found or destroyed:", webContentsId);
-      return { success: false, error: "WebView no longer available" };
+      throw new AppError({
+        code: "NOT_FOUND",
+        message: "WebView no longer available",
+        context: { webContentsId, panelId },
+      });
     }
 
     let sessionStorageSnapshot =
@@ -760,7 +765,12 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
       // Still try to navigate even without interception — might work for providers
       // that don't enforce strict redirect_uri matching at token exchange
       wc.loadURL(callbackUrl).catch(() => {});
-      return { success: false, error: `CDP interception failed: ${msg}` };
+      throw new AppError({
+        code: "INTERNAL",
+        message: `CDP interception failed: ${msg}`,
+        context: { panelId },
+        cause: err instanceof Error ? err : undefined,
+      });
     } finally {
       // Clean up CDP Fetch — remove listener and disable
       if (interceptorListener) {

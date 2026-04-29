@@ -11,6 +11,7 @@ import type { PtyHostActivityTier } from "../../../../shared/types/pty-host.js";
 import { normalizeObservedTitle } from "../../../../shared/utils/isUselessTitle.js";
 import { typedHandle } from "../../utils.js";
 import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
+import { AppError } from "../../../utils/errorTypes.js";
 
 export function registerTerminalIOHandlers(deps: HandlerDependencies): () => void {
   const { ptyClient } = deps;
@@ -206,19 +207,24 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
     )
   );
 
-  const handleTerminalForceResume = async (
-    id: string
-  ): Promise<{ success: boolean; error?: string }> => {
+  const handleTerminalForceResume = async (id: string): Promise<void> => {
+    if (typeof id !== "string" || !id) {
+      throw new AppError({
+        code: "VALIDATION",
+        message: "Invalid terminal ID: must be a non-empty string",
+      });
+    }
     try {
-      if (typeof id !== "string" || !id) {
-        throw new Error("Invalid terminal ID: must be a non-empty string");
-      }
       ptyClient.forceResume(id);
-      return { success: true };
     } catch (error) {
       const errorMessage = formatErrorMessage(error, "Failed to force resume terminal");
       console.error(`[IPC] Failed to force resume terminal ${id}:`, errorMessage);
-      return { success: false, error: errorMessage };
+      throw new AppError({
+        code: "INTERNAL",
+        message: errorMessage,
+        context: { terminalId: id },
+        cause: error instanceof Error ? error : undefined,
+      });
     }
   };
   handlers.push(typedHandle(CHANNELS.TERMINAL_FORCE_RESUME, handleTerminalForceResume));

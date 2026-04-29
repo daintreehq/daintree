@@ -263,10 +263,8 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       () =>
         createImagePasteHandler(async (view) => {
           try {
-            const result = await window.electron.clipboard.saveImage();
-            if (!result.ok) return;
+            const { filePath, thumbnailDataUrl } = await window.electron.clipboard.saveImage();
             const cursor = view.state.selection.main.head;
-            const { filePath, thumbnailDataUrl } = result;
             view.dispatch({
               changes: { from: cursor, insert: filePath + " " },
               effects: addImageChip.of({
@@ -278,7 +276,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
               selection: { anchor: cursor + filePath.length + 1 },
             });
           } catch {
-            // Editor may have been destroyed before IPC returned
+            // Empty clipboard, editor destroyed mid-IPC, etc. — nothing to do.
           }
         }),
       []

@@ -18,6 +18,7 @@ import {
 import type { FilterOptions as LogFilterOptions } from "../../services/LogBuffer.js";
 import { typedHandle } from "../utils.js";
 import { store } from "../../store.js";
+import { AppError } from "../../utils/errorTypes.js";
 import type { HandlerDependencies } from "../types.js";
 
 /**
@@ -115,10 +116,13 @@ export function registerLogsHandlers(
   };
   handlers.push(typedHandle(CHANNELS.LOGS_OPEN_FILE, handleLogsOpenFile));
 
-  const handleLogsSetVerbose = async (enabled: boolean) => {
+  const handleLogsSetVerbose = async (enabled: boolean): Promise<void> => {
     if (typeof enabled !== "boolean") {
       logError("Invalid verbose logging payload", undefined, { payload: enabled });
-      return { success: false };
+      throw new AppError({
+        code: "VALIDATION",
+        message: "logs:set-verbose requires a boolean",
+      });
     }
     // Verbose toggle maps to the `"*"` wildcard override so it flows through
     // the same persistence + utility-process propagation as explicit per-module
@@ -144,7 +148,6 @@ export function registerLogsHandlers(
     setLogLevelOverrides(current);
     fanOut(current, deps);
     logInfo(`Verbose logging ${enabled ? "enabled" : "disabled"} by user`);
-    return { success: true };
   };
   handlers.push(typedHandle(CHANNELS.LOGS_SET_VERBOSE, handleLogsSetVerbose));
 

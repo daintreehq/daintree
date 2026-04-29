@@ -19,7 +19,7 @@ import { store } from "../store.js";
 import { FAULT_MODE_ENABLED } from "./faultRegistry.js";
 import type { PtyClient } from "../services/PtyClient.js";
 import type { WorkspaceClient } from "../services/WorkspaceClient.js";
-import type { AppError, ErrorType, RetryAction } from "../../shared/types/ipc/errors.js";
+import type { ErrorRecord, ErrorType, RetryAction } from "../../shared/types/ipc/errors.js";
 import type { SpawnResult } from "../../shared/types/pty-host.js";
 
 interface RetryPayload {
@@ -171,15 +171,15 @@ function generateErrorId(): string {
   return `error-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 }
 
-function createAppError(
+function createErrorRecord(
   error: unknown,
   options: {
     source?: string;
-    context?: AppError["context"];
+    context?: ErrorRecord["context"];
     retryAction?: RetryAction;
     retryArgs?: Record<string, unknown>;
   } = {}
-): AppError {
+): ErrorRecord {
   const details = getErrorDetails(error);
   const correlationId = randomUUID();
 
@@ -216,7 +216,7 @@ function isAbortError(error: unknown): boolean {
 class ErrorService {
   private worktreeService: WorkspaceClient | null = null;
   private ptyClient: PtyClient | null = null;
-  private pendingQueue: AppError[] = [];
+  private pendingQueue: ErrorRecord[] = [];
   private isFlushing = false;
   private activeRetries = new Map<string, AbortController>();
 
@@ -231,7 +231,7 @@ class ErrorService {
     );
   }
 
-  private bufferError(error: AppError): void {
+  private bufferError(error: ErrorRecord): void {
     this.pendingQueue.push(error);
     if (this.pendingQueue.length > MAX_PENDING_ERRORS) {
       this.pendingQueue.shift();
@@ -242,9 +242,9 @@ class ErrorService {
     }
   }
 
-  private persistError(error: AppError): void {
+  private persistError(error: ErrorRecord): void {
     try {
-      const existing = (store.get("pendingErrors") as AppError[] | undefined) ?? [];
+      const existing = (store.get("pendingErrors") as ErrorRecord[] | undefined) ?? [];
       const updated = [...existing, error].slice(-MAX_PENDING_ERRORS);
       store.set("pendingErrors", updated);
     } catch {
@@ -260,7 +260,7 @@ class ErrorService {
     }
   }
 
-  sendError(error: AppError) {
+  sendError(error: ErrorRecord) {
     if (!this.canSendToRenderer()) {
       this.bufferError(error);
       return;
@@ -269,8 +269,8 @@ class ErrorService {
     broadcastToRenderer(CHANNELS.ERROR_NOTIFY, error);
   }
 
-  notifyError(error: unknown, options: Parameters<typeof createAppError>[1] = {}) {
-    const appError = createAppError(error, options);
+  notifyError(error: unknown, options: Parameters<typeof createErrorRecord>[1] = {}) {
+    const appError = createErrorRecord(error, options);
     logErrorUtil(`[${appError.correlationId}] ${appError.message}`, error, {
       correlationId: appError.correlationId,
       type: appError.type,
@@ -301,9 +301,9 @@ class ErrorService {
     }
   }
 
-  getPendingPersistedErrors(): AppError[] {
+  getPendingPersistedErrors(): ErrorRecord[] {
     try {
-      const persisted = (store.get("pendingErrors") as AppError[] | undefined) ?? [];
+      const persisted = (store.get("pendingErrors") as ErrorRecord[] | undefined) ?? [];
       this.clearPersistedErrors();
       return persisted.map((e) => ({ ...e, fromPreviousSession: true }));
     } catch {
@@ -514,8 +514,8 @@ export function flushPendingErrors(): void {
 
 export function notifyError(
   error: unknown,
-  options: Parameters<typeof createAppError>[1] = {}
-): AppError {
+  options: Parameters<typeof createErrorRecord>[1] = {}
+): ErrorRecord {
   return errorService.notifyError(error, options);
 }
 

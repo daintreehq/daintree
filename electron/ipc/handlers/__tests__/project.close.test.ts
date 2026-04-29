@@ -88,7 +88,7 @@ describe("project:close handler", () => {
       event: unknown,
       projectId: string,
       options?: { killTerminals?: boolean }
-    ) => Promise<{ success: boolean; terminalsKilled: number; processesKilled: number }>;
+    ) => Promise<{ terminalsKilled: number; processesKilled: number }>;
 
     const result = await handler(
       { senderFrame: { url: "http://localhost:5173" } },
@@ -96,7 +96,6 @@ describe("project:close handler", () => {
       { killTerminals: true }
     );
 
-    expect(result.success).toBe(true);
     expect(result.terminalsKilled).toBe(2);
     expect(result.processesKilled).toBe(2);
     expect(ptyClient.killByProject).toHaveBeenCalledWith("project-active");
@@ -186,13 +185,12 @@ describe("project:close handler", () => {
       event: unknown,
       projectId: string,
       options?: { killTerminals?: boolean }
-    ) => Promise<{ success: boolean; terminalsKilled: number; processesKilled: number }>;
+    ) => Promise<{ terminalsKilled: number; processesKilled: number }>;
 
     const result = await handler({ senderFrame: { url: "http://localhost:5173" } }, "project-bg", {
       killTerminals: false,
     });
 
-    expect(result.success).toBe(true);
     expect(result.terminalsKilled).toBe(0);
     expect(projectStoreMock.updateProjectStatus).toHaveBeenCalledWith("project-bg", "background");
     expect(worktreeService.pauseProject).toHaveBeenCalledWith("/test/project-bg");
@@ -241,7 +239,7 @@ describe("project:close handler", () => {
       event: unknown,
       projectId: string,
       options?: { killTerminals?: boolean }
-    ) => Promise<{ success: boolean }>;
+    ) => Promise<{ terminalsKilled: number; processesKilled: number }>;
 
     await handler({ senderFrame: { url: "http://localhost:5173" } }, "project-active", {
       killTerminals: true,

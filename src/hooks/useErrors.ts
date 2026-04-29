@@ -1,5 +1,5 @@
 import { useEffect, useCallback, useRef } from "react";
-import { useErrorStore, type AppError, type RetryAction } from "@/store";
+import { useErrorStore, type ErrorRecord, type RetryAction } from "@/store";
 import { isElectronAvailable } from "./useElectron";
 import { errorsClient } from "@/clients";
 import { logErrorWithContext } from "@/utils/errorContext";
@@ -7,13 +7,13 @@ import { notify, shouldEscalateTransientError, consumeEscalation } from "@/lib/n
 import type { NotificationPriority } from "@/store/notificationStore";
 
 export function getErrorPriority(
-  error: Pick<AppError, "type" | "isTransient">
+  error: Pick<ErrorRecord, "type" | "isTransient">
 ): NotificationPriority {
   if (error.isTransient) return "low";
   return "high";
 }
 
-function routeError(error: AppError): void {
+function routeError(error: ErrorRecord): void {
   const escalated = shouldEscalateTransientError(error);
   const priority = escalated ? "high" : getErrorPriority(error);
 
@@ -68,7 +68,7 @@ export function useErrors() {
     ipcListenerAttached = true;
     didAttachListener.current = true;
 
-    const unsubscribeError = errorsClient.onError((error: AppError) => {
+    const unsubscribeError = errorsClient.onError((error: ErrorRecord) => {
       routeError(error);
     });
 

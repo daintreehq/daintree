@@ -27,12 +27,9 @@ function playSoundFireAndForget(id: SoundId): void {
 }
 import { preAgentSnapshotService } from "../../services/PreAgentSnapshotService.js";
 import type { SnapshotInfo, SnapshotRevertResult } from "../../../shared/types/ipc/git.js";
-import type { GitOperationReason, RecoveryAction } from "../../../shared/types/ipc/errors.js";
-import {
-  classifyGitError,
-  getGitRecoveryAction,
-} from "../../../shared/utils/gitOperationErrors.js";
+import { classifyGitError } from "../../../shared/utils/gitOperationErrors.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
+import { GitOperationError } from "../../utils/errorTypes.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -323,15 +320,7 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
   };
   handlers.push(typedHandle(CHANNELS.GIT_COMMIT, handleCommit));
 
-  const handlePush = async (payload: {
-    cwd: string;
-    setUpstream?: boolean;
-  }): Promise<{
-    success: boolean;
-    error?: string;
-    gitReason?: GitOperationReason;
-    recoveryAction?: RecoveryAction;
-  }> => {
+  const handlePush = async (payload: { cwd: string; setUpstream?: boolean }): Promise<void> => {
     checkRateLimit(CHANNELS.GIT_PUSH, 5, 10_000);
     validateCwd(payload?.cwd);
 
@@ -360,19 +349,17 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
       if (store.get("notificationSettings").uiFeedbackSoundEnabled) {
         playSoundFireAndForget("git-push");
       }
-      return { success: true };
     } catch (error) {
       if (store.get("notificationSettings").uiFeedbackSoundEnabled) {
         playSoundFireAndForget("git-push-error");
       }
       const errorMessage = formatErrorMessage(error, "git push failed");
       const gitReason = classifyGitError(error);
-      return {
-        success: false,
-        error: errorMessage,
-        gitReason,
-        recoveryAction: getGitRecoveryAction(gitReason),
-      };
+      throw new GitOperationError(gitReason, errorMessage, {
+        cwd: payload.cwd,
+        op: "push",
+        cause: error instanceof Error ? error : undefined,
+      });
     }
   };
   handlers.push(typedHandle(CHANNELS.GIT_PUSH, handlePush));

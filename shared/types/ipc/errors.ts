@@ -4,6 +4,18 @@ export interface SerializedError {
   message: string;
   stack?: string;
   code?: string;
+  /**
+   * User-facing message carried by `AppError`. Promoted to a top-level field
+   * (rather than living in `properties`) so it survives the packaged-build
+   * strip in `electron/setup/security.ts`.
+   */
+  userMessage?: string;
+  /**
+   * Classified reason carried by `GitOperationError`. Promoted to a top-level
+   * field so it survives the packaged-build strip and lets the renderer drive
+   * recovery UI without relying on substring-matching the message.
+   */
+  gitReason?: GitOperationReason;
   errno?: number;
   syscall?: string;
   path?: string;
@@ -81,8 +93,8 @@ export interface RetryProgressPayload {
   maxAttempts: number;
 }
 
-/** Application error for UI display */
-export interface AppError {
+/** Application error record stored for UI display (errorStore / banners). */
+export interface ErrorRecord {
   /** Unique identifier */
   id: string;
   /** Timestamp when error occurred */

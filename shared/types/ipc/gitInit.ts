@@ -27,10 +27,11 @@ export interface GitInitProgressEvent {
   timestamp: number;
 }
 
+/**
+ * Successful result from `project:init-git`. Failures throw `AppError` whose
+ * `context.completedSteps` carries the partial progress for diagnostics.
+ */
 export interface GitInitResult {
-  success: boolean;
-  /** Error message if initialization failed */
-  error?: string;
-  /** Steps completed before failure (if any) */
-  completedSteps?: GitInitStepType[];
+  /** Steps completed during a successful init */
+  completedSteps: GitInitStepType[];
 }

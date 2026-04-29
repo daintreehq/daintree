@@ -55,12 +55,9 @@ export function useDragDrop(editorViewRef: React.RefObject<EditorView | null>) {
 
         if (IMAGE_EXTENSIONS.test(file.name)) {
           try {
-            const result = await window.electron.clipboard.thumbnailFromPath(filePath);
-            if (result.ok) {
-              resolved.push({ type: "image", filePath, thumbnailDataUrl: result.thumbnailDataUrl });
-            } else {
-              resolved.push({ type: "file", filePath, fileName: name, fileSize: file.size });
-            }
+            const { thumbnailDataUrl } =
+              await window.electron.clipboard.thumbnailFromPath(filePath);
+            resolved.push({ type: "image", filePath, thumbnailDataUrl });
           } catch {
             resolved.push({ type: "file", filePath, fileName: name, fileSize: file.size });
           }

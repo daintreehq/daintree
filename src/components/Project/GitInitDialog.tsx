@@ -71,17 +71,13 @@ export function GitInitDialog({ isOpen, directoryPath, onSuccess, onCancel }: Gi
     hasFinalizedSuccessRef.current = false;
 
     try {
-      const result = await projectClient.initGitGuided({
+      await projectClient.initGitGuided({
         directoryPath,
         createInitialCommit: true,
         initialCommitMessage: "Initial commit",
         createGitignore: true,
         gitignoreTemplate: "node",
       });
-
-      if (!result.success) {
-        setError(result.error || "Initialization failed");
-      }
     } catch (err) {
       setError(formatErrorMessage(err, "Failed to initialize git repository"));
     } finally {

@@ -2,7 +2,7 @@ import type React from "react";
 import { useEffect, useRef, useState } from "react";
 import type { WorktreeState } from "@/types";
 import type { RetryAction } from "@/store";
-import type { AppError } from "@/store/errorStore";
+import type { ErrorRecord } from "@/store/errorStore";
 import { cn } from "@/lib/utils";
 import { ActivityLight } from "../ActivityLight";
 import { LiveTimeAgo } from "../LiveTimeAgo";
@@ -35,7 +35,7 @@ export interface WorktreeDetailsSectionProps {
   computedSubtitle: ComputedSubtitle;
   effectiveNote?: string;
   effectiveSummary?: string | null;
-  worktreeErrors: AppError[];
+  worktreeErrors: ErrorRecord[];
   isFocused: boolean;
   onToggleExpand: (e: React.MouseEvent) => void;
   onPathClick: () => void;

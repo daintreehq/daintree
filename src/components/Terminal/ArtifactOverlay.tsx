@@ -32,10 +32,10 @@ const ARTIFACT_TYPE_ICONS: Record<string, string> = {
 interface ArtifactItemProps {
   artifact: Artifact;
   onCopy: (artifact: Artifact) => Promise<boolean>;
-  onSave: (artifact: Artifact) => Promise<{ filePath: string; success: boolean } | null>;
+  onSave: (artifact: Artifact) => Promise<{ filePath: string } | null>;
   onApplyPatch: (
     artifact: Artifact
-  ) => Promise<{ success: boolean; error?: string; modifiedFiles?: string[] }>;
+  ) => Promise<{ success: true; modifiedFiles: string[] } | { success: false; error: string }>;
   canApplyPatch: boolean;
   isProcessing: boolean;
 }
@@ -77,7 +77,7 @@ function ArtifactItem({
 
   const handleSave = useCallback(async () => {
     const result = await onSave(artifact);
-    if (result?.success) {
+    if (result?.filePath) {
       showFeedback("Saved!", "success");
     } else {
       showFeedback("Save failed", "error");

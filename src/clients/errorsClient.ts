@@ -1,7 +1,7 @@
-import type { AppError, RetryAction, RetryProgressPayload } from "@shared/types";
+import type { ErrorRecord, RetryAction, RetryProgressPayload } from "@shared/types";
 
 export const errorsClient = {
-  onError: (callback: (error: AppError) => void): (() => void) => {
+  onError: (callback: (error: ErrorRecord) => void): (() => void) => {
     return window.electron.errors.onError(callback);
   },
 
@@ -21,7 +21,7 @@ export const errorsClient = {
     return window.electron.errors.openLogs();
   },
 
-  getPending: (): Promise<AppError[]> => {
+  getPending: (): Promise<ErrorRecord[]> => {
     return window.electron.errors.getPending();
   },
 } as const;

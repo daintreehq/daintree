@@ -13,6 +13,7 @@ import { contextBridge, ipcRenderer, webFrame, webUtils } from "electron";
 import { isTrustedRendererUrl } from "../shared/utils/trustedRenderer.js";
 import { isIpcEnvelope } from "../shared/types/ipc/errors.js";
 import { deserializeError } from "../shared/utils/ipcErrorSerialization.js";
+import type { AppErrorCode } from "../shared/types/appError.js";
 import { CHANNELS } from "./ipc/channels.js";
 import { buildClipboardPreloadBindings } from "./ipc/handlers/clipboard.preload.js";
 import { buildSlashCommandsPreloadBindings } from "./ipc/handlers/slashCommands.preload.js";
@@ -34,7 +35,7 @@ import type {
   EventFilterOptions,
   RetryAction,
   RetryProgressPayload,
-  AppError,
+  ErrorRecord,
   ElectronAPI,
   CreateWorktreeOptions,
   IpcInvokeMap,
@@ -487,11 +488,41 @@ ipcRenderer.on(
   }
 );
 
+/**
+ * Reconstruct `AppError` thrown in the main process. Electron's IPC strips
+ * Error subclass prototypes, so the renderer-side `ClientAppError` class
+ * (in `src/utils/clientAppError.ts`) provides the prototype identity. Here
+ * we throw a plain `Error` with `name === "AppError"` and the discriminant
+ * properties — the renderer's `isClientAppError(e)` guard duck-types on
+ * `e.name === "AppError" && typeof e.code === "string"`, which is the
+ * realm-safe pattern.
+ */
+function _reconstructAppError(serialized: {
+  name: string;
+  message: string;
+  code?: string;
+  userMessage?: string;
+}): Error {
+  const error = new Error(serialized.message);
+  error.name = "AppError";
+  (error as Error & { code: AppErrorCode }).code = serialized.code as AppErrorCode;
+  if (serialized.userMessage !== undefined) {
+    (error as Error & { userMessage: string }).userMessage = serialized.userMessage;
+  }
+  return error;
+}
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- matches ipcRenderer.invoke return type
 async function _unwrappingInvoke(channel: string, ...args: unknown[]): Promise<any> {
   const response = await ipcRenderer.invoke(channel, ...args);
   if (isIpcEnvelope(response)) {
-    if (!response.ok) throw deserializeError(response.error);
+    if (!response.ok) {
+      const serialized = response.error;
+      if (serialized.name === "AppError" && typeof serialized.code === "string") {
+        throw _reconstructAppError(serialized);
+      }
+      throw deserializeError(serialized);
+    }
     return response.data;
   }
   return response;
@@ -763,7 +794,7 @@ const api: ElectronAPI = {
     getAnalysisBuffer: (): Promise<SharedArrayBuffer | null> =>
       _unwrappingInvoke(CHANNELS.TERMINAL_GET_ANALYSIS_BUFFER),
 
-    forceResume: (id: string): Promise<{ success: boolean; error?: string }> =>
+    forceResume: (id: string): Promise<void> =>
       _unwrappingInvoke(CHANNELS.TERMINAL_FORCE_RESUME, id),
 
     onStatus: (callback: (data: TerminalStatusPayload) => void) =>
@@ -1053,7 +1084,7 @@ const api: ElectronAPI = {
 
   // Error API
   errors: {
-    onError: (callback: (error: AppError) => void) => _typedOn(CHANNELS.ERROR_NOTIFY, callback),
+    onError: (callback: (error: ErrorRecord) => void) => _typedOn(CHANNELS.ERROR_NOTIFY, callback),
 
     retry: (errorId: string, action: RetryAction, args?: Record<string, unknown>) =>
       _unwrappingInvoke(CHANNELS.ERROR_RETRY, { errorId, action, args }),
@@ -1695,7 +1726,7 @@ const api: ElectronAPI = {
       panelId: string,
       webContentsId: number,
       sessionStorageSnapshot?: Array<[string, string]>
-    ): Promise<{ success: boolean; error?: string } | null> =>
+    ): Promise<{ success: true } | null> =>
       _unwrappingInvoke(
         CHANNELS.WEBVIEW_OAUTH_LOOPBACK,
         authUrl,

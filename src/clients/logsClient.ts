@@ -27,7 +27,7 @@ export const logsClient = {
     return window.electron.logs.openFile();
   },
 
-  setVerbose: (enabled: boolean): Promise<{ success: boolean }> => {
+  setVerbose: (enabled: boolean): Promise<void> => {
     return window.electron.logs.setVerbose(enabled);
   },
 

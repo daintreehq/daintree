@@ -35,7 +35,7 @@ describe("usePlanFileContent", () => {
   });
 
   it("reads file immediately on open and transitions to loaded", async () => {
-    mockRead.mockResolvedValue({ ok: true, content: "# Plan\n- item 1" });
+    mockRead.mockResolvedValue({ content: "# Plan\n- item 1" });
 
     const { result } = renderHook(() => usePlanFileContent(true, "TODO.md", "/project", 2000));
 
@@ -51,9 +51,7 @@ describe("usePlanFileContent", () => {
   });
 
   it("polls content at the given interval", async () => {
-    mockRead
-      .mockResolvedValueOnce({ ok: true, content: "v1" })
-      .mockResolvedValueOnce({ ok: true, content: "v2" });
+    mockRead.mockResolvedValueOnce({ content: "v1" }).mockResolvedValueOnce({ content: "v2" });
 
     const { result } = renderHook(() => usePlanFileContent(true, "PLAN.md", "/project", 2000));
 
@@ -71,7 +69,9 @@ describe("usePlanFileContent", () => {
   });
 
   it("transitions to error state on read failure", async () => {
-    mockRead.mockResolvedValue({ ok: false, code: "NOT_FOUND" });
+    mockRead.mockRejectedValue(
+      Object.assign(new Error("File not found"), { name: "AppError", code: "NOT_FOUND" })
+    );
 
     const { result } = renderHook(() => usePlanFileContent(true, "TODO.md", "/project", 2000));
 
@@ -85,7 +85,7 @@ describe("usePlanFileContent", () => {
   });
 
   it("clears content and resets to idle when isOpen becomes false", async () => {
-    mockRead.mockResolvedValue({ ok: true, content: "# Plan" });
+    mockRead.mockResolvedValue({ content: "# Plan" });
 
     const { result, rerender } = renderHook(
       ({ isOpen }: { isOpen: boolean }) => usePlanFileContent(isOpen, "TODO.md", "/project", 2000),
@@ -104,8 +104,10 @@ describe("usePlanFileContent", () => {
 
   it("transitions to error when a later poll returns NOT_FOUND (plan file deleted)", async () => {
     mockRead
-      .mockResolvedValueOnce({ ok: true, content: "# Plan" })
-      .mockResolvedValueOnce({ ok: false, code: "NOT_FOUND" });
+      .mockResolvedValueOnce({ content: "# Plan" })
+      .mockRejectedValueOnce(
+        Object.assign(new Error("File not found"), { name: "AppError", code: "NOT_FOUND" })
+      );
 
     const { result } = renderHook(() => usePlanFileContent(true, "TODO.md", "/project", 2000));
 
@@ -125,7 +127,7 @@ describe("usePlanFileContent", () => {
   });
 
   it("stops polling after interval is cleared on unmount", async () => {
-    mockRead.mockResolvedValue({ ok: true, content: "content" });
+    mockRead.mockResolvedValue({ content: "content" });
 
     const { unmount } = renderHook(() => usePlanFileContent(true, "TODO.md", "/project", 2000));
 
@@ -145,7 +147,7 @@ describe("usePlanFileContent", () => {
   });
 
   it("uses absolute path directly when filePath is already absolute", async () => {
-    mockRead.mockResolvedValue({ ok: true, content: "content" });
+    mockRead.mockResolvedValue({ content: "content" });
 
     renderHook(() => usePlanFileContent(true, "/absolute/path/TODO.md", "/project", 2000));
 

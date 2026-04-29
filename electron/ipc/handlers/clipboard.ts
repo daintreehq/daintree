@@ -6,7 +6,7 @@ import * as crypto from "node:crypto";
 import * as os from "node:os";
 import { defineIpcNamespace, op } from "../define.js";
 import { CLIPBOARD_METHOD_CHANNELS } from "./clipboard.preload.js";
-import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
+import { AppError } from "../../utils/errorTypes.js";
 
 const CLIPBOARD_DIR_NAME = "daintree-clipboard";
 const MAX_AGE_MS = 24 * 60 * 60 * 1000;
@@ -52,123 +52,112 @@ async function cleanupOldClipboardImages(): Promise<void> {
   }
 }
 
-async function handleSaveImage(): Promise<
-  { ok: true; filePath: string; thumbnailDataUrl: string } | { ok: false; error: string }
-> {
-  try {
-    const image = clipboard.readImage();
-    if (image.isEmpty()) {
-      return { ok: false, error: "No image in clipboard" };
-    }
-
-    const pngBuffer = image.toPNG();
-    const dir = getClipboardDir();
-    await fs.mkdir(dir, { recursive: true });
-
-    const id = crypto.randomBytes(3).toString("hex");
-    const filename = `clipboard-${Date.now()}-${id}.png`;
-    const filePath = path.join(dir, filename);
-    await fs.writeFile(filePath, pngBuffer);
-
-    const size = image.getSize();
-    const thumbHeight = 40;
-    const thumbWidth = Math.max(1, Math.round((size.width / size.height) * thumbHeight));
-    const thumbnail = image.resize({ width: thumbWidth, height: thumbHeight });
-    const thumbnailDataUrl = `data:image/png;base64,${thumbnail.toPNG().toString("base64")}`;
-
-    return { ok: true, filePath, thumbnailDataUrl };
-  } catch (err: unknown) {
-    const message = formatErrorMessage(err, "Failed to save clipboard image");
-    return { ok: false, error: message };
+async function handleSaveImage(): Promise<{ filePath: string; thumbnailDataUrl: string }> {
+  const image = clipboard.readImage();
+  if (image.isEmpty()) {
+    throw new AppError({
+      code: "CLIPBOARD_EMPTY",
+      message: "No image in clipboard",
+      userMessage: "There's no image on the clipboard to save.",
+    });
   }
+
+  const pngBuffer = image.toPNG();
+  const dir = getClipboardDir();
+  await fs.mkdir(dir, { recursive: true });
+
+  const id = crypto.randomBytes(3).toString("hex");
+  const filename = `clipboard-${Date.now()}-${id}.png`;
+  const filePath = path.join(dir, filename);
+  await fs.writeFile(filePath, pngBuffer);
+
+  const size = image.getSize();
+  const thumbHeight = 40;
+  const thumbWidth = Math.max(1, Math.round((size.width / size.height) * thumbHeight));
+  const thumbnail = image.resize({ width: thumbWidth, height: thumbHeight });
+  const thumbnailDataUrl = `data:image/png;base64,${thumbnail.toPNG().toString("base64")}`;
+
+  return { filePath, thumbnailDataUrl };
 }
 
 async function handleThumbnailFromPath(
   filePath: string
-): Promise<
-  { ok: true; filePath: string; thumbnailDataUrl: string } | { ok: false; error: string }
-> {
-  try {
-    const image = nativeImage.createFromPath(filePath);
-    if (image.isEmpty()) {
-      return { ok: false, error: "Unsupported image format or file not found" };
-    }
-
-    const size = image.getSize();
-    const thumbHeight = 40;
-    const thumbWidth = Math.max(1, Math.round((size.width / size.height) * thumbHeight));
-    const thumbnail = image.resize({ width: thumbWidth, height: thumbHeight });
-    const thumbnailDataUrl = `data:image/png;base64,${thumbnail.toPNG().toString("base64")}`;
-
-    return { ok: true, filePath, thumbnailDataUrl };
-  } catch (err: unknown) {
-    const message = formatErrorMessage(err, "Failed to generate clipboard thumbnail");
-    return { ok: false, error: message };
+): Promise<{ filePath: string; thumbnailDataUrl: string }> {
+  const image = nativeImage.createFromPath(filePath);
+  if (image.isEmpty()) {
+    throw new AppError({
+      code: "CLIPBOARD_INVALID",
+      message: "Unsupported image format or file not found",
+      userMessage: "Couldn't read that image — the format isn't supported or the file is missing.",
+      context: { filePath },
+    });
   }
+
+  const size = image.getSize();
+  const thumbHeight = 40;
+  const thumbWidth = Math.max(1, Math.round((size.width / size.height) * thumbHeight));
+  const thumbnail = image.resize({ width: thumbWidth, height: thumbHeight });
+  const thumbnailDataUrl = `data:image/png;base64,${thumbnail.toPNG().toString("base64")}`;
+
+  return { filePath, thumbnailDataUrl };
 }
 
-async function handleWriteImage(
-  pngData: Uint8Array
-): Promise<{ ok: true } | { ok: false; error: string }> {
-  try {
-    const buffer = Buffer.from(pngData.buffer, pngData.byteOffset, pngData.byteLength);
-    const image = nativeImage.createFromBuffer(buffer);
-    if (image.isEmpty()) {
-      return { ok: false, error: "Invalid image data" };
-    }
-    clipboard.writeImage(image);
-    return { ok: true };
-  } catch (err: unknown) {
-    const message = formatErrorMessage(err, "Failed to write clipboard image");
-    return { ok: false, error: message };
+async function handleWriteImage(pngData: Uint8Array): Promise<void> {
+  const buffer = Buffer.from(pngData.buffer, pngData.byteOffset, pngData.byteLength);
+  const image = nativeImage.createFromBuffer(buffer);
+  if (image.isEmpty()) {
+    throw new AppError({
+      code: "CLIPBOARD_INVALID",
+      message: "Invalid image data",
+      userMessage: "Couldn't write the image — the data is corrupt or unsupported.",
+    });
   }
+  clipboard.writeImage(image);
 }
 
-function handleWriteText(text: string): { ok: true } | { ok: false; error: string } {
-  try {
-    if (typeof text !== "string") {
-      return { ok: false, error: "Text must be a string" };
-    }
-    clipboard.writeText(text);
-    return { ok: true };
-  } catch (err: unknown) {
-    const message = formatErrorMessage(err, "Failed to write clipboard text");
-    return { ok: false, error: message };
+async function handleWriteText(text: string): Promise<void> {
+  if (typeof text !== "string") {
+    throw new AppError({
+      code: "VALIDATION",
+      message: "Text must be a string",
+    });
   }
+  clipboard.writeText(text);
 }
 
 // Linux PRIMARY selection — underpins copy-on-select and middle-click paste.
 // The 'selection' clipboard type only exists on Linux; short-circuit elsewhere.
-function handleWriteSelection(text: string): { ok: true } | { ok: false; error: string } {
-  try {
-    if (process.platform !== "linux") {
-      return { ok: false, error: "PRIMARY selection is only available on Linux" };
-    }
-    if (typeof text !== "string") {
-      return { ok: false, error: "Text must be a string" };
-    }
-    if (text.length === 0) {
-      return { ok: false, error: "Text must not be empty" };
-    }
-    clipboard.writeText(text, "selection");
-    return { ok: true };
-  } catch (err: unknown) {
-    const message = formatErrorMessage(err, "Failed to write PRIMARY selection");
-    return { ok: false, error: message };
+async function handleWriteSelection(text: string): Promise<void> {
+  if (process.platform !== "linux") {
+    throw new AppError({
+      code: "UNSUPPORTED",
+      message: "PRIMARY selection is only available on Linux",
+    });
   }
+  if (typeof text !== "string") {
+    throw new AppError({
+      code: "VALIDATION",
+      message: "Text must be a string",
+    });
+  }
+  if (text.length === 0) {
+    throw new AppError({
+      code: "VALIDATION",
+      message: "Text must not be empty",
+    });
+  }
+  clipboard.writeText(text, "selection");
 }
 
-function handleReadSelection(): { ok: true; text: string } | { ok: false; error: string } {
-  try {
-    if (process.platform !== "linux") {
-      return { ok: false, error: "PRIMARY selection is only available on Linux" };
-    }
-    const text = clipboard.readText("selection");
-    return { ok: true, text };
-  } catch (err: unknown) {
-    const message = formatErrorMessage(err, "Failed to read PRIMARY selection");
-    return { ok: false, error: message };
+async function handleReadSelection(): Promise<{ text: string }> {
+  if (process.platform !== "linux") {
+    throw new AppError({
+      code: "UNSUPPORTED",
+      message: "PRIMARY selection is only available on Linux",
+    });
   }
+  const text = clipboard.readText("selection");
+  return { text };
 }
 
 export const clipboardNamespace = defineIpcNamespace({

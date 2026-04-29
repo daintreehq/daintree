@@ -1,6 +1,6 @@
 import { useMemo, useCallback, useState, useRef, useEffect } from "react";
 import { cn } from "@/lib/utils";
-import { useErrorStore, type AppError, type RetryAction } from "@/store";
+import { useErrorStore, type ErrorRecord, type RetryAction } from "@/store";
 import { Copy, Check, Lightbulb } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { logError } from "@/utils/logger";
@@ -34,7 +34,7 @@ function formatTimestamp(timestamp: number): string {
 }
 
 interface ErrorRowProps {
-  error: AppError;
+  error: ErrorRecord;
   isExpanded: boolean;
   onToggleExpand: () => void;
   onDismiss: () => void;

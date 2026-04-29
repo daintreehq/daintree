@@ -141,12 +141,10 @@ export interface SaveArtifactOptions {
   cwd?: string;
 }
 
-/** Result from saving an artifact */
+/** Result from saving an artifact. `null` is returned when the user cancels the save dialog; failures throw `AppError`. */
 export interface SaveArtifactResult {
   /** Path where the file was saved */
   filePath: string;
-  /** Whether the operation succeeded */
-  success: boolean;
 }
 
 /** Options for applying a patch */
@@ -157,14 +155,10 @@ export interface ApplyPatchOptions {
   cwd: string;
 }
 
-/** Result from applying a patch */
+/** Result from applying a patch. Failures throw `AppError`. */
 export interface ApplyPatchResult {
-  /** Whether the patch applied successfully */
-  success: boolean;
-  /** Error message if the patch failed */
-  error?: string;
   /** Files that were modified */
-  modifiedFiles?: string[];
+  modifiedFiles: string[];
 }
 
 export interface AgentHelpRequest {

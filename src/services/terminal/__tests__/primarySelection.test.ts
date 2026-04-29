@@ -2,13 +2,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installLinuxPrimarySelectionListeners } from "../primarySelection";
 
-type ReadSelectionResult = { ok: true; text: string } | { ok: false; error: string };
+type ReadSelectionResult = { text: string };
 
 describe("installLinuxPrimarySelectionListeners", () => {
   let hostElement: HTMLElement;
   let writeToPty: ReturnType<typeof vi.fn<(id: string, data: string) => void>>;
   let notifyUserInput: ReturnType<typeof vi.fn<(id: string) => void>>;
-  let writeSelection: ReturnType<typeof vi.fn<(text: string) => Promise<unknown>>>;
+  let writeSelection: ReturnType<typeof vi.fn<(text: string) => Promise<void>>>;
   let readSelection: ReturnType<typeof vi.fn<() => Promise<ReadSelectionResult>>>;
   let cachedSelection: string | undefined;
   let bracketedPasteMode: boolean;
@@ -21,10 +21,8 @@ describe("installLinuxPrimarySelectionListeners", () => {
     document.body.appendChild(hostElement);
     writeToPty = vi.fn<(id: string, data: string) => void>();
     notifyUserInput = vi.fn<(id: string) => void>();
-    writeSelection = vi.fn<(text: string) => Promise<unknown>>().mockResolvedValue({ ok: true });
-    readSelection = vi
-      .fn<() => Promise<ReadSelectionResult>>()
-      .mockResolvedValue({ ok: true, text: "" });
+    writeSelection = vi.fn<(text: string) => Promise<void>>().mockResolvedValue(undefined);
+    readSelection = vi.fn<() => Promise<ReadSelectionResult>>().mockResolvedValue({ text: "" });
     cachedSelection = undefined;
     bracketedPasteMode = false;
     disposed = false;
@@ -99,7 +97,7 @@ describe("installLinuxPrimarySelectionListeners", () => {
     });
 
     it("reads PRIMARY and writes to the PTY on middle-click", async () => {
-      readSelection.mockResolvedValueOnce({ ok: true, text: "pasted" });
+      readSelection.mockResolvedValueOnce({ text: "pasted" });
       hostElement.dispatchEvent(new MouseEvent("auxclick", { button: 1, bubbles: true }));
       await flush();
       expect(readSelection).toHaveBeenCalledTimes(1);
@@ -109,7 +107,7 @@ describe("installLinuxPrimarySelectionListeners", () => {
 
     it("wraps the payload with bracketed-paste markers when the mode is active", async () => {
       bracketedPasteMode = true;
-      readSelection.mockResolvedValueOnce({ ok: true, text: "pasted" });
+      readSelection.mockResolvedValueOnce({ text: "pasted" });
       hostElement.dispatchEvent(new MouseEvent("auxclick", { button: 1, bubbles: true }));
       await flush();
       expect(writeToPty).toHaveBeenCalledTimes(1);
@@ -122,22 +120,24 @@ describe("installLinuxPrimarySelectionListeners", () => {
     });
 
     it("normalizes newlines to carriage returns when bracketed paste is off", async () => {
-      readSelection.mockResolvedValueOnce({ ok: true, text: "line1\nline2\r\nline3" });
+      readSelection.mockResolvedValueOnce({ text: "line1\nline2\r\nline3" });
       hostElement.dispatchEvent(new MouseEvent("auxclick", { button: 1, bubbles: true }));
       await flush();
       expect(writeToPty).toHaveBeenCalledWith("term-1", "line1\rline2\rline3");
     });
 
     it("skips PTY write when PRIMARY is empty", async () => {
-      readSelection.mockResolvedValueOnce({ ok: true, text: "" });
+      readSelection.mockResolvedValueOnce({ text: "" });
       hostElement.dispatchEvent(new MouseEvent("auxclick", { button: 1, bubbles: true }));
       await flush();
       expect(writeToPty).not.toHaveBeenCalled();
       expect(notifyUserInput).not.toHaveBeenCalled();
     });
 
-    it("skips PTY write when readSelection returns an error", async () => {
-      readSelection.mockResolvedValueOnce({ ok: false, error: "no focus" });
+    it("skips PTY write when readSelection rejects", async () => {
+      readSelection.mockRejectedValueOnce(
+        Object.assign(new Error("no focus"), { name: "AppError", code: "UNSUPPORTED" })
+      );
       hostElement.dispatchEvent(new MouseEvent("auxclick", { button: 1, bubbles: true }));
       await flush();
       expect(writeToPty).not.toHaveBeenCalled();
@@ -147,7 +147,7 @@ describe("installLinuxPrimarySelectionListeners", () => {
     it("skips PTY write when the terminal was disposed during the async read", async () => {
       readSelection.mockImplementationOnce(async () => {
         disposed = true;
-        return { ok: true, text: "pasted" };
+        return { text: "pasted" };
       });
       hostElement.dispatchEvent(new MouseEvent("auxclick", { button: 1, bubbles: true }));
       await flush();
@@ -166,7 +166,7 @@ describe("installLinuxPrimarySelectionListeners", () => {
     it("skips PTY write when input becomes locked during the async read", async () => {
       readSelection.mockImplementationOnce(async () => {
         inputLocked = true;
-        return { ok: true, text: "pasted" };
+        return { text: "pasted" };
       });
       hostElement.dispatchEvent(new MouseEvent("auxclick", { button: 1, bubbles: true }));
       await flush();
@@ -185,7 +185,7 @@ describe("installLinuxPrimarySelectionListeners", () => {
       // on hostElement guarantees we see the event before xterm stopPropagation()s.
       const child = document.createElement("div");
       hostElement.appendChild(child);
-      readSelection.mockResolvedValueOnce({ ok: true, text: "pasted" });
+      readSelection.mockResolvedValueOnce({ text: "pasted" });
       child.dispatchEvent(new MouseEvent("auxclick", { button: 1, bubbles: true }));
       await flush();
       expect(readSelection).toHaveBeenCalledTimes(1);
@@ -194,8 +194,8 @@ describe("installLinuxPrimarySelectionListeners", () => {
 
     it("handles two rapid middle-clicks without corrupting state", async () => {
       readSelection
-        .mockResolvedValueOnce({ ok: true, text: "first" })
-        .mockResolvedValueOnce({ ok: true, text: "second" });
+        .mockResolvedValueOnce({ text: "first" })
+        .mockResolvedValueOnce({ text: "second" });
       hostElement.dispatchEvent(new MouseEvent("auxclick", { button: 1, bubbles: true }));
       hostElement.dispatchEvent(new MouseEvent("auxclick", { button: 1, bubbles: true }));
       await flush();

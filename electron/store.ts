@@ -9,7 +9,7 @@ import type {
   AppAgentConfig,
 } from "../shared/types/index.js";
 import type { IssueAssociation } from "../shared/types/ipc/worktree.js";
-import type { AppError } from "../shared/types/ipc/errors.js";
+import type { ErrorRecord } from "../shared/types/ipc/errors.js";
 import type { BuiltInAgentId } from "../shared/config/agentIds.js";
 import type { AgentId } from "../shared/types/agent.js";
 import { DEFAULT_AGENT_SETTINGS, DEFAULT_APP_AGENT_CONFIG } from "../shared/types/index.js";
@@ -170,7 +170,7 @@ export interface StoreSchema {
     port: number | null;
     apiKey: string;
   };
-  pendingErrors: AppError[];
+  pendingErrors: ErrorRecord[];
   gpu: {
     hardwareAccelerationDisabled: boolean;
   };

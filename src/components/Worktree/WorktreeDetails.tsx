@@ -1,6 +1,6 @@
 import { useMemo, useState, useRef, useEffect } from "react";
 import type { WorktreeState } from "../../types";
-import type { AppError, RetryAction } from "../../store/errorStore";
+import type { ErrorRecord, RetryAction } from "../../store/errorStore";
 import { ErrorBanner } from "../Errors/ErrorBanner";
 import { FileChangeList } from "./FileChangeList";
 import { ActivityLight } from "./ActivityLight";
@@ -17,7 +17,7 @@ export interface WorktreeDetailsProps {
   homeDir?: string;
   effectiveNote?: string;
   effectiveSummary?: string | null;
-  worktreeErrors: AppError[];
+  worktreeErrors: ErrorRecord[];
   hasChanges: boolean;
   isFocused: boolean;
   showLastCommit?: boolean;

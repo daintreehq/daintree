@@ -1,6 +1,6 @@
 import { useCallback, useMemo } from "react";
 import type { WorktreeSnapshot, RecipeTerminal } from "@/types";
-import { useErrorStore, type AppError } from "@/store";
+import { useErrorStore, type ErrorRecord } from "@/store";
 import { useRecipeStore } from "@/store/recipeStore";
 import { logError } from "@/utils/logger";
 import { useNotificationStore } from "@/store/notificationStore";
@@ -77,7 +77,7 @@ export async function copyContextWithFeedback(
       dismissed: false,
     });
 
-    let errorType: AppError["type"] = "process";
+    let errorType: ErrorRecord["type"] = "process";
     if (message.includes("not available") || message.includes("not installed")) {
       errorType = "config";
     } else if (
@@ -144,7 +144,7 @@ export function useWorktreeActions({
         const message = formatErrorMessage(e, "Failed to copy context to clipboard");
         const details = e instanceof Error ? e.stack : undefined;
 
-        let errorType: AppError["type"] = "process";
+        let errorType: ErrorRecord["type"] = "process";
         if (message.includes("not available") || message.includes("not installed")) {
           errorType = "config";
         } else if (

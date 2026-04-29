@@ -229,7 +229,7 @@ describe("ReviewHub", () => {
     openInEditorMock.mockReset().mockResolvedValue(undefined);
     stageFileMock.mockReset().mockResolvedValue(undefined);
     commitMock.mockReset().mockResolvedValue({ hash: "abc123", summary: "commit" });
-    pushMock.mockReset().mockResolvedValue({ success: true });
+    pushMock.mockReset().mockResolvedValue(undefined);
     actionDispatchMock.mockReset().mockResolvedValue({ ok: true });
 
     Object.defineProperty(window, "electron", {
@@ -995,11 +995,12 @@ describe("ReviewHub", () => {
 
     it("shows auth-failed banner with Open GitHub settings CTA and dispatches settings tab", async () => {
       const rawError = "fatal: Authentication failed for 'https://github.com/foo/bar.git/'";
-      pushMock.mockResolvedValue({
-        success: false,
-        gitReason: "auth-failed",
-        error: rawError,
-      });
+      pushMock.mockRejectedValue(
+        Object.assign(new Error(rawError), {
+          name: "GitOperationError",
+          gitReason: "auth-failed",
+        })
+      );
 
       await triggerCommitAndPush();
 
@@ -1022,11 +1023,12 @@ describe("ReviewHub", () => {
     });
 
     it("shows push-rejected-outdated banner without a CTA", async () => {
-      pushMock.mockResolvedValue({
-        success: false,
-        gitReason: "push-rejected-outdated",
-        error: "! [rejected] main -> main (non-fast-forward)",
-      });
+      pushMock.mockRejectedValue(
+        Object.assign(new Error("! [rejected] main -> main (non-fast-forward)"), {
+          name: "GitOperationError",
+          gitReason: "push-rejected-outdated",
+        })
+      );
 
       await triggerCommitAndPush();
 
@@ -1039,11 +1041,12 @@ describe("ReviewHub", () => {
 
     it("shows push-rejected-policy banner with raw stderr and no CTA", async () => {
       const rawError = "GH006: Protected branch update failed for refs/heads/main.";
-      pushMock.mockResolvedValue({
-        success: false,
-        gitReason: "push-rejected-policy",
-        error: rawError,
-      });
+      pushMock.mockRejectedValue(
+        Object.assign(new Error(rawError), {
+          name: "GitOperationError",
+          gitReason: "push-rejected-policy",
+        })
+      );
 
       await triggerCommitAndPush();
 
@@ -1056,11 +1059,12 @@ describe("ReviewHub", () => {
 
     it("shows hook-rejected banner with raw stderr", async () => {
       const rawError = "[remote rejected] main -> main (pre-receive hook declined)";
-      pushMock.mockResolvedValue({
-        success: false,
-        gitReason: "hook-rejected",
-        error: rawError,
-      });
+      pushMock.mockRejectedValue(
+        Object.assign(new Error(rawError), {
+          name: "GitOperationError",
+          gitReason: "hook-rejected",
+        })
+      );
 
       await triggerCommitAndPush();
 
@@ -1072,11 +1076,12 @@ describe("ReviewHub", () => {
 
     it("shows network-unavailable banner with Retry push button that re-pushes without re-committing", async () => {
       const rawError = "Could not resolve host: github.com";
-      pushMock.mockResolvedValueOnce({
-        success: false,
-        gitReason: "network-unavailable",
-        error: rawError,
-      });
+      pushMock.mockRejectedValueOnce(
+        Object.assign(new Error(rawError), {
+          name: "GitOperationError",
+          gitReason: "network-unavailable",
+        })
+      );
 
       await triggerCommitAndPush();
 
@@ -1087,7 +1092,7 @@ describe("ReviewHub", () => {
       expect(commitMock).toHaveBeenCalledTimes(1);
       expect(pushMock).toHaveBeenCalledTimes(1);
 
-      pushMock.mockResolvedValueOnce({ success: true });
+      pushMock.mockResolvedValueOnce(undefined);
 
       const retryBtn = screen.getByTestId("review-hub-push-error-cta");
       expect(retryBtn.textContent).toMatch(/Retry push/i);
@@ -1115,21 +1120,23 @@ describe("ReviewHub", () => {
     });
 
     it("updates the banner when a retry fails with a different reason", async () => {
-      pushMock.mockResolvedValueOnce({
-        success: false,
-        gitReason: "network-unavailable",
-        error: "Could not resolve host: github.com",
-      });
+      pushMock.mockRejectedValueOnce(
+        Object.assign(new Error("Could not resolve host: github.com"), {
+          name: "GitOperationError",
+          gitReason: "network-unavailable",
+        })
+      );
 
       await triggerCommitAndPush();
 
       await screen.findByTestId("review-hub-push-error");
 
-      pushMock.mockResolvedValueOnce({
-        success: false,
-        gitReason: "hook-rejected",
-        error: "[remote rejected] main -> main (pre-receive hook declined)",
-      });
+      pushMock.mockRejectedValueOnce(
+        Object.assign(new Error("[remote rejected] main -> main (pre-receive hook declined)"), {
+          name: "GitOperationError",
+          gitReason: "hook-rejected",
+        })
+      );
 
       await act(async () => {
         fireEvent.click(screen.getByTestId("review-hub-push-error-cta"));
@@ -1145,11 +1152,12 @@ describe("ReviewHub", () => {
     });
 
     it("clears the push banner when the modal is closed and reopened", async () => {
-      pushMock.mockResolvedValue({
-        success: false,
-        gitReason: "auth-failed",
-        error: "Authentication failed",
-      });
+      pushMock.mockRejectedValue(
+        Object.assign(new Error("Authentication failed"), {
+          name: "GitOperationError",
+          gitReason: "auth-failed",
+        })
+      );
 
       getStagingStatusMock.mockResolvedValue(makeStatus({ hasRemote: true }));
       const { rerender } = render(
@@ -1195,10 +1203,7 @@ describe("ReviewHub", () => {
 
     it("falls back to generic copy + raw stderr for an unclassified failure", async () => {
       const rawError = "unexpected: something weird happened";
-      pushMock.mockResolvedValue({
-        success: false,
-        error: rawError,
-      });
+      pushMock.mockRejectedValue(new Error(rawError));
 
       await triggerCommitAndPush();
 
@@ -1209,8 +1214,24 @@ describe("ReviewHub", () => {
       expect(screen.queryByTestId("review-hub-push-error-cta")).toBeNull();
     });
 
+    it("shows a rate-limit message when push throws AppError(RATE_LIMITED)", async () => {
+      pushMock.mockRejectedValue(
+        Object.assign(new Error("Rate limit exceeded"), {
+          name: "AppError",
+          code: "RATE_LIMITED",
+        })
+      );
+
+      await triggerCommitAndPush();
+
+      const banner = await screen.findByTestId("review-hub-push-error");
+      expect(banner.getAttribute("data-reason")).toBe("unknown");
+      const details = screen.queryByTestId("review-hub-push-error-details");
+      expect(details?.textContent ?? "").toMatch(/Too many push attempts/i);
+    });
+
     it("does not render the banner on successful push", async () => {
-      pushMock.mockResolvedValue({ success: true });
+      pushMock.mockResolvedValue(undefined);
 
       await triggerCommitAndPush();
 

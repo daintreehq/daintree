@@ -14,6 +14,7 @@ import type {
   GitInitProgressEvent,
 } from "../../../../shared/types/ipc/gitInit.js";
 import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
+import { AppError } from "../../../utils/errorTypes.js";
 
 export function registerGitInitHandlers(): () => void {
   const handlers: Array<() => void> = [];
@@ -146,25 +147,23 @@ export function registerGitInitHandlers(): () => void {
               "Please configure git user.name and user.email before creating commits"
             );
             emitProgress("complete", "success", "Git initialization complete (no initial commit)");
-            return {
-              success: true,
-              completedSteps,
-            };
+            return { completedSteps };
           }
           throw commitError;
         }
       }
 
       emitProgress("complete", "success", "Git initialization complete");
-      return { success: true, completedSteps };
+      return { completedSteps };
     } catch (error) {
       const errorMessage = formatErrorMessage(error, "Git initialization failed");
       emitProgress("error", "error", "Git initialization failed", errorMessage);
-      return {
-        success: false,
-        error: errorMessage,
-        completedSteps,
-      };
+      throw new AppError({
+        code: "INTERNAL",
+        message: errorMessage,
+        context: { directoryPath, completedSteps },
+        cause: error instanceof Error ? error : undefined,
+      });
     }
   };
   handlers.push(

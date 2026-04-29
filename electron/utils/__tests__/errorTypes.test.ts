@@ -1,12 +1,15 @@
 import { describe, it, expect } from "vitest";
 import {
+  AppError,
   GitError,
   GitOperationError,
   WorktreeRemovedError,
   DaintreeError,
+  isAppError,
   toGitOperationError,
   getUserMessage,
 } from "../errorTypes.js";
+import { serializeError, deserializeError } from "../../../shared/utils/ipcErrorSerialization.js";
 
 describe("GitOperationError", () => {
   it("preserves the GitError -> DaintreeError -> Error hierarchy", () => {
@@ -73,6 +76,61 @@ describe("toGitOperationError", () => {
   });
 });
 
+describe("AppError", () => {
+  it("preserves the AppError -> DaintreeError -> Error hierarchy", () => {
+    const err = new AppError({ code: "BINARY_FILE", message: "binary" });
+    expect(err).toBeInstanceOf(AppError);
+    expect(err).toBeInstanceOf(DaintreeError);
+    expect(err).toBeInstanceOf(Error);
+  });
+
+  it("sets name to 'AppError' so renderer-side duck-typing works after IPC", () => {
+    const err = new AppError({ code: "VALIDATION", message: "bad input" });
+    expect(err.name).toBe("AppError");
+  });
+
+  it("stamps code and userMessage onto own properties", () => {
+    const err = new AppError({
+      code: "FILE_TOO_LARGE",
+      message: "exceeds limit",
+      userMessage: "This file is too large to preview.",
+      context: { size: 600 * 1024, limit: 512 * 1024 },
+    });
+    expect(err.code).toBe("FILE_TOO_LARGE");
+    expect(err.userMessage).toBe("This file is too large to preview.");
+    expect(err.context).toEqual({ size: 600 * 1024, limit: 512 * 1024 });
+  });
+
+  it("exposes isAppError narrowing", () => {
+    expect(isAppError(new AppError({ code: "CANCELLED", message: "cancel" }))).toBe(true);
+    expect(isAppError(new GitError("git error"))).toBe(false);
+    expect(isAppError(new Error("plain"))).toBe(false);
+    expect(isAppError(null)).toBe(false);
+  });
+
+  it("survives the serialize → structuredClone → deserialize cycle with code preserved", () => {
+    const original = new AppError({
+      code: "RATE_LIMITED",
+      message: "Too many requests",
+      userMessage: "Slow down — try again in a moment.",
+    });
+
+    const serialized = serializeError(original);
+    expect(serialized.name).toBe("AppError");
+    expect(serialized.code).toBe("RATE_LIMITED");
+    expect(serialized.userMessage).toBe("Slow down — try again in a moment.");
+
+    const restored = deserializeError(structuredClone(serialized)) as Error & {
+      code: string;
+      userMessage?: string;
+    };
+    expect(restored.name).toBe("AppError");
+    expect(restored.message).toBe("Too many requests");
+    expect(restored.code).toBe("RATE_LIMITED");
+    expect(restored.userMessage).toBe("Slow down — try again in a moment.");
+  });
+});
+
 describe("getUserMessage", () => {
   it("returns the Daintree error's own message when given a DaintreeError", () => {
     const err = new GitOperationError("auth-failed", "permission denied", { op: "push" });
@@ -96,5 +154,19 @@ describe("getUserMessage", () => {
     expect(getUserMessage(null)).toBe("An unknown error occurred");
     expect(getUserMessage(undefined)).toBe("An unknown error occurred");
     expect(getUserMessage({ code: "EFAIL" })).toBe("An unknown error occurred");
+  });
+
+  it("prefers AppError.userMessage over message when present", () => {
+    const err = new AppError({
+      code: "BINARY_FILE",
+      message: "Binary file cannot be displayed as text",
+      userMessage: "This file can't be previewed.",
+    });
+    expect(getUserMessage(err)).toBe("This file can't be previewed.");
+  });
+
+  it("falls back to AppError.message when userMessage is absent", () => {
+    const err = new AppError({ code: "VALIDATION", message: "Invalid payload" });
+    expect(getUserMessage(err)).toBe("Invalid payload");
   });
 });

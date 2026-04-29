@@ -361,8 +361,7 @@ export function TroubleshootingTab() {
         { enabled: newState },
         { source: "user" }
       );
-      const payload = result.ok ? (result.result as { success: boolean }) : null;
-      if (!result.ok || !payload?.success) {
+      if (!result.ok) {
         logWarn("Backend rejected verbose logging toggle");
         setVerboseLogging(!newState);
       }

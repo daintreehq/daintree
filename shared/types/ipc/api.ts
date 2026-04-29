@@ -81,13 +81,7 @@ import type {
 } from "./system.js";
 import type { AppState, HydrateResult } from "./app.js";
 import type { LogEntry, LogFilterOptions } from "./logs.js";
-import type {
-  RetryAction,
-  AppError,
-  RetryProgressPayload,
-  GitOperationReason,
-  RecoveryAction,
-} from "./errors.js";
+import type { RetryAction, ErrorRecord, RetryProgressPayload } from "./errors.js";
 import type { EventRecord, EventFilterOptions } from "./events.js";
 import type {
   ProjectCloseResult,
@@ -276,7 +270,7 @@ export interface ElectronAPI {
     onActivity(callback: (data: TerminalActivityPayload) => void): () => void;
     onTrashed(callback: (data: { id: string; expiresAt: number }) => void): () => void;
     onRestored(callback: (data: { id: string }) => void): () => void;
-    forceResume(id: string): Promise<{ success: boolean; error?: string }>;
+    forceResume(id: string): Promise<void>;
     onStatus(callback: (data: TerminalStatusPayload) => void): () => void;
     onResourceMetrics(
       callback: (data: { metrics: TerminalResourceBatchPayload; timestamp: number }) => void
@@ -399,7 +393,7 @@ export interface ElectronAPI {
     getSources(): Promise<string[]>;
     clear(): Promise<void>;
     openFile(): Promise<void>;
-    setVerbose(enabled: boolean): Promise<{ success: boolean }>;
+    setVerbose(enabled: boolean): Promise<void>;
     getVerbose(): Promise<boolean>;
     onEntry(callback: (entry: LogEntry) => void): () => void;
     onBatch(callback: (entries: LogEntry[]) => void): () => void;
@@ -414,12 +408,12 @@ export interface ElectronAPI {
     getRegistry(): Promise<string[]>;
   };
   errors: {
-    onError(callback: (error: AppError) => void): () => void;
+    onError(callback: (error: ErrorRecord) => void): () => void;
     retry(errorId: string, action: RetryAction, args?: Record<string, unknown>): Promise<void>;
     cancelRetry(errorId: string): void;
     onRetryProgress(callback: (payload: RetryProgressPayload) => void): () => void;
     openLogs(): Promise<void>;
-    getPending(): Promise<AppError[]>;
+    getPending(): Promise<ErrorRecord[]>;
   };
   eventInspector: {
     getEvents(): Promise<EventRecord[]>;
@@ -710,15 +704,7 @@ export interface ElectronAPI {
     stageAll(cwd: string): Promise<void>;
     unstageAll(cwd: string): Promise<void>;
     commit(cwd: string, message: string): Promise<{ hash: string; summary: string }>;
-    push(
-      cwd: string,
-      setUpstream?: boolean
-    ): Promise<{
-      success: boolean;
-      error?: string;
-      gitReason?: GitOperationReason;
-      recoveryAction?: RecoveryAction;
-    }>;
+    push(cwd: string, setUpstream?: boolean): Promise<void>;
     getStagingStatus(cwd: string): Promise<StagingStatus>;
     abortRepositoryOperation(cwd: string): Promise<void>;
     continueRepositoryOperation(cwd: string): Promise<void>;
@@ -821,7 +807,7 @@ export interface ElectronAPI {
       panelId: string,
       webContentsId: number,
       sessionStorageSnapshot?: Array<[string, string]>
-    ): Promise<{ success: boolean; error?: string } | null>;
+    ): Promise<{ success: true } | null>;
     /** Start CDP console capture for a webview panel */
     startConsoleCapture(webContentsId: number, paneId: string): Promise<void>;
     /** Stop CDP console capture for a webview panel */
@@ -1095,18 +1081,12 @@ export interface ElectronAPI {
     clear(worktreeId?: string): Promise<void>;
   };
   clipboard: {
-    saveImage(): Promise<
-      { ok: true; filePath: string; thumbnailDataUrl: string } | { ok: false; error: string }
-    >;
-    thumbnailFromPath(
-      filePath: string
-    ): Promise<
-      { ok: true; filePath: string; thumbnailDataUrl: string } | { ok: false; error: string }
-    >;
-    writeImage(pngData: Uint8Array): Promise<{ ok: true } | { ok: false; error: string }>;
-    writeText(text: string): Promise<{ ok: true } | { ok: false; error: string }>;
-    writeSelection(text: string): Promise<{ ok: true } | { ok: false; error: string }>;
-    readSelection(): Promise<{ ok: true; text: string } | { ok: false; error: string }>;
+    saveImage(): Promise<{ filePath: string; thumbnailDataUrl: string }>;
+    thumbnailFromPath(filePath: string): Promise<{ filePath: string; thumbnailDataUrl: string }>;
+    writeImage(pngData: Uint8Array): Promise<void>;
+    writeText(text: string): Promise<void>;
+    writeSelection(text: string): Promise<void>;
+    readSelection(): Promise<{ text: string }>;
   };
   webUtils: {
     getPathForFile(file: File): string;

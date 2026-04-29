@@ -5,6 +5,7 @@ import { checkRateLimit, typedHandle } from "../utils.js";
 import { fileSearchService } from "../../services/FileSearchService.js";
 import { FileSearchPayloadSchema, FileReadPayloadSchema } from "../../schemas/ipc.js";
 import type { FileReadResult } from "../../../shared/types/ipc/files.js";
+import { AppError } from "../../utils/errorTypes.js";
 
 const FILE_SIZE_LIMIT = 512 * 1024; // 500 KB
 
@@ -48,13 +49,17 @@ export function registerFilesHandlers(): () => void {
     const parsed = FileReadPayloadSchema.safeParse(payload);
     if (!parsed.success) {
       console.error("[IPC] Invalid files:read payload:", parsed.error.format());
-      return { ok: false, code: "INVALID_PATH" };
+      throw new AppError({ code: "INVALID_PATH", message: "Invalid files:read payload" });
     }
 
     const { path: filePath, rootPath } = parsed.data;
 
     if (!path.isAbsolute(filePath) || !path.isAbsolute(rootPath)) {
-      return { ok: false, code: "INVALID_PATH" };
+      throw new AppError({
+        code: "INVALID_PATH",
+        message: "filePath and rootPath must be absolute",
+        context: { filePath, rootPath },
+      });
     }
 
     // Containment check: file must be inside rootPath
@@ -64,39 +69,88 @@ export function registerFilesHandlers(): () => void {
       !normalizedFile.startsWith(normalizedRoot + path.sep) &&
       normalizedFile !== normalizedRoot
     ) {
-      return { ok: false, code: "OUTSIDE_ROOT" };
+      throw new AppError({
+        code: "OUTSIDE_ROOT",
+        message: "File is outside the project root",
+        context: { filePath, rootPath },
+      });
     }
 
-    try {
-      const stat = await fs.stat(normalizedFile);
-
-      if (stat.size > FILE_SIZE_LIMIT) {
-        return { ok: false, code: "FILE_TOO_LARGE" };
+    // Map ENOENT/EACCES/EPERM the same way for both stat and readFile — the
+    // file can disappear or change permissions between the two calls (TOCTOU).
+    function fsErrorToAppError(error: unknown, fallbackMessage: string): AppError {
+      const errCode = (error as NodeJS.ErrnoException).code;
+      if (errCode === "ENOENT") {
+        return new AppError({
+          code: "NOT_FOUND",
+          message: "File not found",
+          context: { filePath },
+          cause: error instanceof Error ? error : undefined,
+        });
       }
-
-      const buffer = await fs.readFile(normalizedFile);
-
-      // Binary detection: check for null bytes in first 8 KB
-      const checkLength = Math.min(buffer.length, 8192);
-      for (let i = 0; i < checkLength; i++) {
-        if (buffer[i] === 0) {
-          return { ok: false, code: "BINARY_FILE" };
-        }
-      }
-
-      if (isLfsPointer(buffer)) {
-        return { ok: false, code: "LFS_POINTER" };
-      }
-
-      return { ok: true, content: buffer.toString("utf-8") };
-    } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code;
-      if (code === "ENOENT") {
-        return { ok: false, code: "NOT_FOUND" };
+      if (errCode === "EACCES" || errCode === "EPERM") {
+        return new AppError({
+          code: "PERMISSION",
+          message: "Permission denied",
+          userMessage: "You don't have permission to read this file.",
+          context: { filePath },
+          cause: error instanceof Error ? error : undefined,
+        });
       }
       console.error("[IPC] files:read failed:", error);
-      return { ok: false, code: "INVALID_PATH" };
+      return new AppError({
+        code: "INVALID_PATH",
+        message: fallbackMessage,
+        context: { filePath },
+        cause: error instanceof Error ? error : undefined,
+      });
     }
+
+    let stat: Awaited<ReturnType<typeof fs.stat>>;
+    try {
+      stat = await fs.stat(normalizedFile);
+    } catch (error) {
+      throw fsErrorToAppError(error, "Could not stat file");
+    }
+
+    if (stat.size > FILE_SIZE_LIMIT) {
+      throw new AppError({
+        code: "FILE_TOO_LARGE",
+        message: `File exceeds ${FILE_SIZE_LIMIT} byte limit`,
+        userMessage: "This file is too large to preview.",
+        context: { filePath, size: stat.size, limit: FILE_SIZE_LIMIT },
+      });
+    }
+
+    let buffer: Buffer;
+    try {
+      buffer = await fs.readFile(normalizedFile);
+    } catch (error) {
+      throw fsErrorToAppError(error, "Could not read file");
+    }
+
+    // Binary detection: check for null bytes in first 8 KB
+    const checkLength = Math.min(buffer.length, 8192);
+    for (let i = 0; i < checkLength; i++) {
+      if (buffer[i] === 0) {
+        throw new AppError({
+          code: "BINARY_FILE",
+          message: "Binary file cannot be displayed as text",
+          context: { filePath },
+        });
+      }
+    }
+
+    if (isLfsPointer(buffer)) {
+      throw new AppError({
+        code: "LFS_POINTER",
+        message: "File is a Git LFS pointer",
+        userMessage: "This file is stored in Git LFS — fetch it locally to preview.",
+        context: { filePath },
+      });
+    }
+
+    return { content: buffer.toString("utf-8") };
   };
 
   handlers.push(typedHandle(CHANNELS.FILES_READ, handleRead));

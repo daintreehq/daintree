@@ -531,10 +531,6 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
     try {
       const result = await projectClient.close(projectId, options);
 
-      if (!result.success) {
-        throw new Error(result.error || "Failed to close project");
-      }
-
       const action = options?.killTerminals ? "killed" : "backgrounded";
       logDebug("[ProjectStore] Closed project", { action, projectId });
 
@@ -560,10 +556,6 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
 
     try {
       const result = await projectClient.close(projectId, { killTerminals: true });
-
-      if (!result.success) {
-        throw new Error(result.error || "Failed to close project");
-      }
 
       logDebug("[ProjectStore] Closed active project, transitioning to no-project state", {
         projectId,

@@ -127,21 +127,21 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
     hasFinalizedRef.current = false;
 
     try {
-      const result = await projectClient.cloneRepo({
+      const { clonedPath: resultPath } = await projectClient.cloneRepo({
         url: normalizeCloneUrl(url),
         parentPath,
         folderName: folderName.trim(),
         shallowClone,
       });
 
-      if (result.success && result.clonedPath) {
-        setClonedPath(result.clonedPath);
-        setIsComplete(true);
-      } else if (!result.cancelled) {
-        setError(result.error || "Clone failed");
-      }
+      setClonedPath(resultPath);
+      setIsComplete(true);
     } catch (err) {
-      setError(formatErrorMessage(err, "Failed to clone repository"));
+      // CANCELLED is the user aborting via the cancel button — not a failure.
+      const code = (err as { code?: string })?.code;
+      if (code !== "CANCELLED") {
+        setError(formatErrorMessage(err, "Failed to clone repository"));
+      }
     } finally {
       setIsCloning(false);
     }

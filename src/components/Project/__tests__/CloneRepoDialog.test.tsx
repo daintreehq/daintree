@@ -87,7 +87,7 @@ describe("CloneRepoDialog", () => {
       return vi.fn();
     });
 
-    cloneRepoMock.mockResolvedValue({ success: true, clonedPath: "/tmp/my-repo" });
+    cloneRepoMock.mockResolvedValue({ clonedPath: "/tmp/my-repo" });
     openDialogMock.mockResolvedValue("/tmp");
   });
 
@@ -210,7 +210,9 @@ describe("CloneRepoDialog", () => {
   });
 
   it("shows error and retry button on clone failure", async () => {
-    cloneRepoMock.mockResolvedValue({ success: false, error: "Auth failed" });
+    cloneRepoMock.mockRejectedValue(
+      Object.assign(new Error("Auth failed"), { name: "AppError", code: "INTERNAL" })
+    );
 
     render(<CloneRepoDialog isOpen={true} onSuccess={vi.fn()} onCancel={vi.fn()} />);
 
@@ -357,7 +359,9 @@ describe("CloneRepoDialog", () => {
   });
 
   it("does not show error after cancelled clone", async () => {
-    cloneRepoMock.mockResolvedValue({ success: false, cancelled: true, error: "Clone cancelled" });
+    cloneRepoMock.mockRejectedValue(
+      Object.assign(new Error("Clone cancelled"), { name: "AppError", code: "CANCELLED" })
+    );
 
     render(<CloneRepoDialog isOpen={true} onSuccess={vi.fn()} onCancel={vi.fn()} />);
 

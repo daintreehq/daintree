@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import type { StagingStatus, GitStatus } from "@shared/types";
 import type { CrossWorktreeFile } from "@shared/types/ipc/git";
 import type { GitOperationReason } from "@shared/types/ipc/errors";
+import { isClientAppError } from "@/utils/clientAppError";
 import { cn } from "@/lib/utils";
 import { useOverlayState } from "@/hooks";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
@@ -415,19 +416,21 @@ export function ReviewHub({ isOpen, worktreePath, onClose }: ReviewHubProps) {
 
   const runPush = useCallback(async () => {
     try {
-      const result = await window.electron.git.push(worktreePath);
-      if (result.success) {
-        setPushError(null);
-      } else {
-        setPushError({
-          reason: result.gitReason ?? "unknown",
-          rawMessage: result.error ?? "",
-        });
-      }
+      await window.electron.git.push(worktreePath);
+      setPushError(null);
     } catch (err) {
+      // GitOperationError carries `gitReason` (auth-failed, push-rejected-*, etc.).
+      // AppError carries `code` from a different union (RATE_LIMITED, etc.) — fall
+      // back to "unknown" so getPushBannerConfig surfaces the raw message rather
+      // than rendering an unmapped reason.
+      const gitReason = (err as { gitReason?: GitOperationReason }).gitReason;
+      const isRateLimited =
+        isClientAppError(err) && (err as { code?: string }).code === "RATE_LIMITED";
       setPushError({
-        reason: "unknown",
-        rawMessage: formatErrorMessage(err, "Failed to push"),
+        reason: gitReason ?? "unknown",
+        rawMessage: isRateLimited
+          ? "Too many push attempts in a short window — wait a moment and try again."
+          : formatErrorMessage(err, "Failed to push"),
       });
     }
   }, [worktreePath]);

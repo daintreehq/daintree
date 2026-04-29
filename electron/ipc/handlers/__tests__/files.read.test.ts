@@ -96,14 +96,15 @@ describe("files:read handler", () => {
     vi.clearAllMocks();
   });
 
-  it("returns LFS_POINTER when the file is a git-lfs v1 pointer", async () => {
+  it("throws AppError(LFS_POINTER) when the file is a git-lfs v1 pointer", async () => {
     fsMock.stat.mockResolvedValue({ size: VALID_POINTER.length });
     fsMock.readFile.mockResolvedValue(VALID_POINTER);
     registerFilesHandlers();
 
-    const result = await getReadHandler()({}, { path: file, rootPath: root });
-
-    expect(result).toEqual({ ok: false, code: "LFS_POINTER" });
+    await expect(getReadHandler()({}, { path: file, rootPath: root })).rejects.toMatchObject({
+      name: "AppError",
+      code: "LFS_POINTER",
+    });
   });
 
   it("returns plain content for a normal text file", async () => {
@@ -114,57 +115,95 @@ describe("files:read handler", () => {
 
     const result = await getReadHandler()({}, { path: file, rootPath: root });
 
-    expect(result).toEqual({ ok: true, content: "hello world\n" });
+    expect(result).toEqual({ content: "hello world\n" });
   });
 
-  it("returns BINARY_FILE before LFS detection when null bytes are present", async () => {
+  it("throws AppError(BINARY_FILE) before LFS detection when null bytes are present", async () => {
     const content = Buffer.concat([Buffer.from(LFS_HEADER, "ascii"), Buffer.from([0x00])]);
     fsMock.stat.mockResolvedValue({ size: content.length });
     fsMock.readFile.mockResolvedValue(content);
     registerFilesHandlers();
 
-    const result = await getReadHandler()({}, { path: file, rootPath: root });
-
-    expect(result).toEqual({ ok: false, code: "BINARY_FILE" });
+    await expect(getReadHandler()({}, { path: file, rootPath: root })).rejects.toMatchObject({
+      name: "AppError",
+      code: "BINARY_FILE",
+    });
   });
 
-  it("returns FILE_TOO_LARGE without reading the buffer for oversized files", async () => {
+  it("throws AppError(FILE_TOO_LARGE) without reading the buffer for oversized files", async () => {
     fsMock.stat.mockResolvedValue({ size: 600 * 1024 });
     registerFilesHandlers();
 
-    const result = await getReadHandler()({}, { path: file, rootPath: root });
-
-    expect(result).toEqual({ ok: false, code: "FILE_TOO_LARGE" });
+    await expect(getReadHandler()({}, { path: file, rootPath: root })).rejects.toMatchObject({
+      name: "AppError",
+      code: "FILE_TOO_LARGE",
+    });
     expect(fsMock.readFile).not.toHaveBeenCalled();
   });
 
-  it("returns OUTSIDE_ROOT when the file is not under rootPath", async () => {
+  it("throws AppError(OUTSIDE_ROOT) when the file is not under rootPath", async () => {
     registerFilesHandlers();
 
-    const result = await getReadHandler()(
-      {},
-      { path: path.resolve("/etc/passwd"), rootPath: root }
-    );
-
-    expect(result).toEqual({ ok: false, code: "OUTSIDE_ROOT" });
+    await expect(
+      getReadHandler()({}, { path: path.resolve("/etc/passwd"), rootPath: root })
+    ).rejects.toMatchObject({ name: "AppError", code: "OUTSIDE_ROOT" });
     expect(fsMock.stat).not.toHaveBeenCalled();
   });
 
-  it("returns INVALID_PATH for relative paths", async () => {
+  it("throws AppError(INVALID_PATH) for relative paths", async () => {
     registerFilesHandlers();
 
-    const result = await getReadHandler()({}, { path: "./relative", rootPath: root });
-
-    expect(result).toEqual({ ok: false, code: "INVALID_PATH" });
+    await expect(
+      getReadHandler()({}, { path: "./relative", rootPath: root })
+    ).rejects.toMatchObject({ name: "AppError", code: "INVALID_PATH" });
   });
 
-  it("returns NOT_FOUND when stat raises ENOENT", async () => {
+  it("throws AppError(NOT_FOUND) when stat raises ENOENT", async () => {
     const err = Object.assign(new Error("no such file"), { code: "ENOENT" });
     fsMock.stat.mockRejectedValue(err);
     registerFilesHandlers();
 
-    const result = await getReadHandler()({}, { path: file, rootPath: root });
+    await expect(getReadHandler()({}, { path: file, rootPath: root })).rejects.toMatchObject({
+      name: "AppError",
+      code: "NOT_FOUND",
+    });
+  });
 
-    expect(result).toEqual({ ok: false, code: "NOT_FOUND" });
+  it("throws AppError(NOT_FOUND) when stat succeeds but readFile raises ENOENT (TOCTOU)", async () => {
+    fsMock.stat.mockResolvedValue({ size: 100 });
+    fsMock.readFile.mockRejectedValue(
+      Object.assign(new Error("file disappeared"), { code: "ENOENT" })
+    );
+    registerFilesHandlers();
+
+    await expect(getReadHandler()({}, { path: file, rootPath: root })).rejects.toMatchObject({
+      name: "AppError",
+      code: "NOT_FOUND",
+    });
+  });
+
+  it("throws AppError(PERMISSION) when readFile raises EACCES", async () => {
+    fsMock.stat.mockResolvedValue({ size: 100 });
+    fsMock.readFile.mockRejectedValue(
+      Object.assign(new Error("permission denied"), { code: "EACCES" })
+    );
+    registerFilesHandlers();
+
+    await expect(getReadHandler()({}, { path: file, rootPath: root })).rejects.toMatchObject({
+      name: "AppError",
+      code: "PERMISSION",
+    });
+  });
+
+  it("throws AppError(PERMISSION) when stat raises EPERM", async () => {
+    fsMock.stat.mockRejectedValue(
+      Object.assign(new Error("operation not permitted"), { code: "EPERM" })
+    );
+    registerFilesHandlers();
+
+    await expect(getReadHandler()({}, { path: file, rootPath: root })).rejects.toMatchObject({
+      name: "AppError",
+      code: "PERMISSION",
+    });
   });
 });

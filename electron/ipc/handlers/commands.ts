@@ -14,6 +14,7 @@ import type {
   DaintreeCommand,
 } from "../../../shared/types/commands.js";
 import { typedHandle } from "../utils.js";
+import { AppError } from "../../utils/errorTypes.js";
 
 export function registerCommandHandlers(): () => void {
   const handlers: Array<() => void> = [];
@@ -36,40 +37,32 @@ export function registerCommandHandlers(): () => void {
   };
   handlers.push(typedHandle(CHANNELS.COMMANDS_GET, handleCommandsGet));
 
-  // Execute command
+  // Execute command. Validation failures throw `AppError({code: "VALIDATION"})`;
+  // command-domain success/failure is still carried by the returned
+  // `CommandResult` (the commands system has its own structured result contract
+  // that includes optional `prompt` injection — intentional, not an envelope).
   const handleCommandsExecute = async (payload: CommandExecutePayload): Promise<CommandResult> => {
     if (!payload || typeof payload.commandId !== "string") {
-      return {
-        success: false,
-        error: {
-          code: "INVALID_PAYLOAD",
-          message: "Invalid command execution payload",
-        },
-      };
+      throw new AppError({
+        code: "VALIDATION",
+        message: "Invalid command execution payload",
+      });
     }
 
-    // Validate context is a plain object
     const context = payload.context ?? {};
     if (typeof context !== "object" || Array.isArray(context)) {
-      return {
-        success: false,
-        error: {
-          code: "INVALID_PAYLOAD",
-          message: "Context must be a plain object",
-        },
-      };
+      throw new AppError({
+        code: "VALIDATION",
+        message: "Context must be a plain object",
+      });
     }
 
-    // Validate args is a plain object
     const args = payload.args ?? {};
     if (args !== null && (typeof args !== "object" || Array.isArray(args))) {
-      return {
-        success: false,
-        error: {
-          code: "INVALID_PAYLOAD",
-          message: "Arguments must be a plain object",
-        },
-      };
+      throw new AppError({
+        code: "VALIDATION",
+        message: "Arguments must be a plain object",
+      });
     }
 
     return commandService.execute(payload.commandId, context, args);

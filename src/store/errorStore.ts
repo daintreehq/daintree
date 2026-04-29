@@ -4,7 +4,7 @@ export type ErrorType = "git" | "process" | "filesystem" | "network" | "config" 
 
 export type RetryAction = "terminal" | "git" | "worktree";
 
-export interface AppError {
+export interface ErrorRecord {
   id: string;
   timestamp: number;
   type: ErrorType;
@@ -28,19 +28,19 @@ export interface AppError {
 }
 
 interface ErrorStore {
-  errors: AppError[];
+  errors: ErrorRecord[];
   isPanelOpen: boolean;
   lastErrorTime: number;
 
-  addError: (error: Omit<AppError, "id" | "timestamp" | "dismissed">) => string;
+  addError: (error: Omit<ErrorRecord, "id" | "timestamp" | "dismissed">) => string;
   dismissError: (id: string) => void;
   clearAll: () => void;
   removeError: (id: string) => void;
   togglePanel: () => void;
   setPanelOpen: (open: boolean) => void;
-  getWorktreeErrors: (worktreeId: string) => AppError[];
-  getTerminalErrors: (terminalId: string) => AppError[];
-  getActiveErrors: () => AppError[];
+  getWorktreeErrors: (worktreeId: string) => ErrorRecord[];
+  getTerminalErrors: (terminalId: string) => ErrorRecord[];
+  getActiveErrors: () => ErrorRecord[];
   updateRetryProgress: (id: string, attempt: number, maxAttempts: number) => void;
   clearRetryProgress: (id: string) => void;
   reset: () => void;
@@ -82,7 +82,7 @@ const createErrorStore: StateCreator<ErrorStore> = (set, get) => ({
       return recentDuplicate.id;
     }
 
-    const newError: AppError = {
+    const newError: ErrorRecord = {
       ...error,
       id: generateErrorId(),
       timestamp: now,

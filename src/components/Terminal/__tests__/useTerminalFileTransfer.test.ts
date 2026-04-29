@@ -63,7 +63,6 @@ describe("useTerminalFileTransfer hook", () => {
     (window as unknown as Record<string, unknown>).electron = {
       clipboard: {
         saveImage: vi.fn().mockResolvedValue({
-          ok: true,
           filePath: "/tmp/daintree-clipboard/clipboard-123-abc.png",
           thumbnailDataUrl: "data:image/png;base64,abc",
         }),
@@ -187,10 +186,12 @@ describe("useTerminalFileTransfer hook", () => {
   });
 
   it("image paste with saveImage failure does not write to terminal", async () => {
-    (window.electron.clipboard.saveImage as ReturnType<typeof vi.fn>).mockResolvedValue({
-      ok: false,
-      error: "No image in clipboard",
-    });
+    (window.electron.clipboard.saveImage as ReturnType<typeof vi.fn>).mockRejectedValue(
+      Object.assign(new Error("No image in clipboard"), {
+        name: "AppError",
+        code: "CLIPBOARD_EMPTY",
+      })
+    );
 
     renderFileTransferHook();
     const event = makePasteEvent(true);
@@ -218,7 +219,6 @@ describe("useTerminalFileTransfer hook", () => {
 
   it("image paste escapes paths with spaces", async () => {
     (window.electron.clipboard.saveImage as ReturnType<typeof vi.fn>).mockResolvedValue({
-      ok: true,
       filePath: "/tmp/daintree clipboard/my screenshot.png",
       thumbnailDataUrl: "data:image/png;base64,abc",
     });

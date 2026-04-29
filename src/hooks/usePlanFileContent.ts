@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { filesClient } from "@/clients/filesClient";
 import type { FileReadErrorCode } from "@shared/types/ipc/files";
+import { isClientAppError } from "@/utils/clientAppError";
 
 type PlanContentStatus = "idle" | "loading" | "loaded" | "error";
 
@@ -47,21 +48,19 @@ export function usePlanFileContent(
       if (!isMountedRef.current) return;
 
       try {
-        const result = await filesClient.read({ path: absolutePath, rootPath });
+        const { content: fileContent } = await filesClient.read({
+          path: absolutePath,
+          rootPath,
+        });
         if (!isMountedRef.current || requestRef.current !== requestId) return;
 
-        if (result.ok) {
-          setContent(result.content);
-          setStatus("loaded");
-          setErrorCode(null);
-        } else {
-          setErrorCode(result.code);
-          setStatus("error");
-          setContent(null);
-        }
-      } catch {
+        setContent(fileContent);
+        setStatus("loaded");
+        setErrorCode(null);
+      } catch (error) {
         if (!isMountedRef.current || requestRef.current !== requestId) return;
-        setErrorCode("INVALID_PATH");
+        const code = isClientAppError(error) ? (error.code as FileReadErrorCode) : "INVALID_PATH";
+        setErrorCode(code);
         setStatus("error");
         setContent(null);
       }

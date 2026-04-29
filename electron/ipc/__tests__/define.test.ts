@@ -46,11 +46,10 @@ describe("defineIpcNamespace", () => {
       name: "clipboard",
       ops: {
         saveImage: op(CH.saveImage, async () => ({
-          ok: true as const,
           filePath: "/tmp/x.png",
           thumbnailDataUrl: "data:image/png;base64,AA",
         })),
-        writeText: op(CH.writeText, async (_text: string) => ({ ok: true as const })),
+        writeText: op(CH.writeText, async (_text: string) => undefined),
       },
     });
 
@@ -69,12 +68,11 @@ describe("defineIpcNamespace", () => {
       name: "clipboard",
       ops: {
         saveImage: op(CH.saveImage, async () => ({
-          ok: true as const,
           filePath: "/tmp/x.png",
           thumbnailDataUrl: "data:image/png;base64,AA",
         })),
-        writeText: op(CH.writeText, async (_text: string) => ({ ok: true as const })),
-        readSelection: op(CH.readSelection, async () => ({ ok: true as const, text: "" })),
+        writeText: op(CH.writeText, async (_text: string) => undefined),
+        readSelection: op(CH.readSelection, async () => ({ text: "" })),
       },
     });
 
@@ -93,11 +91,10 @@ describe("defineIpcNamespace", () => {
       name: "clipboard",
       ops: {
         saveImage: op(CH.saveImage, async () => ({
-          ok: true as const,
           filePath: "/tmp/x.png",
           thumbnailDataUrl: "data:image/png;base64,AA",
         })),
-        writeText: op(CH.writeText, async (_text: string) => ({ ok: true as const })),
+        writeText: op(CH.writeText, async (_text: string) => undefined),
       },
     });
 
@@ -113,11 +110,10 @@ describe("defineIpcNamespace", () => {
       name: "clipboard",
       ops: {
         saveImage: op(CH.saveImage, async () => ({
-          ok: true as const,
           filePath: "/tmp/x.png",
           thumbnailDataUrl: "data:image/png;base64,AA",
         })),
-        writeText: op(CH.writeText, async (_text: string) => ({ ok: true as const })),
+        writeText: op(CH.writeText, async (_text: string) => undefined),
       },
     });
 
@@ -142,11 +138,10 @@ describe("defineIpcNamespace", () => {
       name: "clipboard",
       ops: {
         saveImage: op(CH.saveImage, async () => ({
-          ok: true as const,
           filePath: "/tmp/x.png",
           thumbnailDataUrl: "data:image/png;base64,AA",
         })),
-        writeText: op(CH.writeText, async (_text: string) => ({ ok: true as const })),
+        writeText: op(CH.writeText, async (_text: string) => undefined),
       },
     });
 
@@ -170,11 +165,10 @@ describe("defineIpcNamespace", () => {
       name: "clipboard",
       ops: {
         saveImage: op(CH.saveImage, async () => ({
-          ok: true as const,
           filePath: "/tmp/x.png",
           thumbnailDataUrl: "data:image/png;base64,AA",
         })),
-        writeText: op(CH.writeText, async (_text: string) => ({ ok: true as const })),
+        writeText: op(CH.writeText, async (_text: string) => undefined),
       },
     });
 

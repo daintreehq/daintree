@@ -14,6 +14,7 @@ import {
   markPerformance,
   sampleIpcTiming,
 } from "../utils/performance.js";
+import { AppError } from "../utils/errorTypes.js";
 
 const rateLimitTimestamps = new Map<string, number[]>();
 
@@ -41,7 +42,12 @@ export function checkRateLimit(channel: string, maxCalls: number, windowMs: numb
   const now = Date.now();
   const timestamps = (rateLimitTimestamps.get(key) ?? []).filter((t) => now - t < windowMs);
   if (timestamps.length >= maxCalls) {
-    throw new Error("Rate limit exceeded");
+    throw new AppError({
+      code: "RATE_LIMITED",
+      message: "Rate limit exceeded",
+      userMessage: "Slow down — too many requests in a short window.",
+      context: { channel, maxCalls, windowMs },
+    });
   }
   timestamps.push(now);
   rateLimitTimestamps.set(key, timestamps);
@@ -178,7 +184,12 @@ async function waitForLeakyBucketSlot(key: string, intervalMs: number): Promise<
   const state = getOrCreateLeakyState(key);
 
   if (state.pendingCount >= MAX_QUEUE_DEPTH) {
-    throw new Error("Spawn queue full");
+    throw new AppError({
+      code: "RATE_LIMITED",
+      message: "Spawn queue full",
+      userMessage: "Too many pending operations — wait a moment and try again.",
+      context: { key, queueDepth: state.pendingCount, maxDepth: MAX_QUEUE_DEPTH },
+    });
   }
 
   // Synchronous slot reservation — MUST happen before any await so that
@@ -224,7 +235,12 @@ async function waitForSlidingWindowSlot(
   }
 
   if (state.queue.length >= MAX_QUEUE_DEPTH) {
-    throw new Error("Spawn queue full");
+    throw new AppError({
+      code: "RATE_LIMITED",
+      message: "Spawn queue full",
+      userMessage: "Too many pending operations — wait a moment and try again.",
+      context: { key, queueDepth: state.queue.length, maxDepth: MAX_QUEUE_DEPTH },
+    });
   }
 
   return new Promise<void>((resolve, reject) => {

@@ -2,13 +2,13 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { ErrorBanner } from "../ErrorBanner";
-import type { AppError } from "@/store/errorStore";
+import type { ErrorRecord } from "@/store/errorStore";
 
 vi.mock("@/lib/utils", () => ({
   cn: (...args: unknown[]) => args.filter(Boolean).join(" "),
 }));
 
-function makeError(overrides: Partial<AppError> = {}): AppError {
+function makeError(overrides: Partial<ErrorRecord> = {}): ErrorRecord {
   return {
     id: "err-1",
     timestamp: Date.now(),

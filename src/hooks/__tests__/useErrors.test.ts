@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { renderHook, act } from "@testing-library/react";
-import type { AppError } from "@/store";
+import type { ErrorRecord } from "@/store";
 
 const { onErrorMock, getPendingMock, notifyMock, shouldEscalateMock, consumeEscalationMock } =
   vi.hoisted(() => ({
@@ -37,7 +37,7 @@ vi.mock("@/lib/notify", async (importOriginal) => {
   };
 });
 
-function makeError(overrides: Partial<AppError> = {}): AppError {
+function makeError(overrides: Partial<ErrorRecord> = {}): ErrorRecord {
   return {
     id: "err-1",
     timestamp: Date.now(),
@@ -91,7 +91,7 @@ describe("getErrorPriority", () => {
 });
 
 describe("useErrors — onError path", () => {
-  let capturedOnError: (error: AppError) => void;
+  let capturedOnError: (error: ErrorRecord) => void;
 
   beforeEach(() => {
     Object.defineProperty(window, "electron", {
@@ -100,7 +100,7 @@ describe("useErrors — onError path", () => {
       configurable: true,
     });
 
-    onErrorMock.mockImplementation((cb: (error: AppError) => void) => {
+    onErrorMock.mockImplementation((cb: (error: ErrorRecord) => void) => {
       capturedOnError = cb;
       return vi.fn();
     });
@@ -195,7 +195,7 @@ describe("useErrors — getPending path", () => {
 });
 
 describe("useErrors — escalation of persistent transient errors", () => {
-  let capturedOnError: (error: AppError) => void;
+  let capturedOnError: (error: ErrorRecord) => void;
 
   beforeEach(() => {
     Object.defineProperty(window, "electron", {
@@ -204,7 +204,7 @@ describe("useErrors — escalation of persistent transient errors", () => {
       configurable: true,
     });
 
-    onErrorMock.mockImplementation((cb: (error: AppError) => void) => {
+    onErrorMock.mockImplementation((cb: (error: ErrorRecord) => void) => {
       capturedOnError = cb;
       return vi.fn();
     });

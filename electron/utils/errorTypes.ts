@@ -1,5 +1,6 @@
 import { classifyGitError, extractGitErrorMessage } from "../../shared/utils/gitOperationErrors.js";
 import type { GitOperationReason } from "../../shared/types/ipc/errors.js";
+import type { AppErrorCode } from "../../shared/types/appError.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 
 export class DaintreeError extends Error {
@@ -106,6 +107,34 @@ export class WatcherError extends DaintreeError {
   }
 }
 
+/**
+ * Generic typed error thrown by IPC handlers. The `code` discriminant survives
+ * Electron's structured-clone strip in `electron/setup/security.ts` and is
+ * reconstructed in the renderer as a `ClientAppError` so consumers can do
+ * `if (e.code === "BINARY_FILE")` instead of substring-matching messages.
+ */
+export class AppError extends DaintreeError {
+  readonly code: AppErrorCode;
+  readonly userMessage?: string;
+
+  constructor(opts: {
+    code: AppErrorCode;
+    message: string;
+    userMessage?: string;
+    context?: Record<string, unknown>;
+    cause?: Error;
+  }) {
+    super(opts.message, opts.context, opts.cause);
+    this.name = "AppError";
+    this.code = opts.code;
+    this.userMessage = opts.userMessage;
+  }
+}
+
+export function isAppError(error: unknown): error is AppError {
+  return error instanceof AppError;
+}
+
 export function isDaintreeError(error: unknown): error is DaintreeError {
   return error instanceof DaintreeError;
 }
@@ -128,6 +157,9 @@ export function isTransientError(error: unknown): boolean {
 }
 
 export function getUserMessage(error: unknown): string {
+  if (isAppError(error) && error.userMessage) {
+    return error.userMessage;
+  }
   if (isDaintreeError(error)) {
     return error.message;
   }
