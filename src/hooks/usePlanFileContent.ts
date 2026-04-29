@@ -69,8 +69,37 @@ export function usePlanFileContent(
     setStatus("loading");
     void fetchContent();
 
-    const intervalId = setInterval(() => void fetchContent(), pollIntervalMs);
-    return () => clearInterval(intervalId);
+    let intervalId: ReturnType<typeof setInterval> | null = null;
+
+    const startInterval = () => {
+      if (intervalId !== null) return;
+      intervalId = setInterval(() => void fetchContent(), pollIntervalMs);
+    };
+
+    const stopInterval = () => {
+      if (intervalId === null) return;
+      clearInterval(intervalId);
+      intervalId = null;
+    };
+
+    const handleVisibility = () => {
+      if (document.hidden) {
+        stopInterval();
+      } else {
+        void fetchContent();
+        startInterval();
+      }
+    };
+
+    document.addEventListener("visibilitychange", handleVisibility);
+    if (!document.hidden) {
+      startInterval();
+    }
+
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibility);
+      stopInterval();
+    };
   }, [isOpen, filePath, rootPath, pollIntervalMs]);
 
   return { status, content, errorCode };

@@ -266,6 +266,7 @@ export function ProjectResourceBadge() {
 
   useEffect(() => {
     let cancelled = false;
+    let interval: ReturnType<typeof setInterval> | null = null;
 
     const runFetch = async () => {
       const result = await fetchStats();
@@ -275,12 +276,36 @@ export function ProjectResourceBadge() {
       }
     };
 
-    void runFetch();
-    const interval = setInterval(() => void runFetch(), BADGE_POLL_MS);
+    const startInterval = () => {
+      if (interval !== null) return;
+      interval = setInterval(() => void runFetch(), BADGE_POLL_MS);
+    };
+
+    const stopInterval = () => {
+      if (interval === null) return;
+      clearInterval(interval);
+      interval = null;
+    };
+
+    const handleVisibility = () => {
+      if (document.hidden) {
+        stopInterval();
+      } else {
+        void runFetch();
+        startInterval();
+      }
+    };
+
+    document.addEventListener("visibilitychange", handleVisibility);
+    if (!document.hidden) {
+      void runFetch();
+      startInterval();
+    }
 
     return () => {
       cancelled = true;
-      clearInterval(interval);
+      document.removeEventListener("visibilitychange", handleVisibility);
+      stopInterval();
     };
   }, [fetchStats]);
 

@@ -5,6 +5,7 @@ import { usePanelStore, type TerminalInstance } from "@/store/panelStore";
 import { terminalClient } from "@/clients";
 import { cn } from "@/lib/utils";
 import { logError } from "@/utils/logger";
+import { useGlobalSecondTicker } from "@/hooks/useGlobalSecondTicker";
 
 const MAX_VISIBLE = 5;
 const AUTO_CLEAR_DELAY = 3000;
@@ -61,11 +62,12 @@ export function RunningTaskList({ worktreeId }: RunningTaskListProps) {
     (t) => deriveTaskStatus(t) === "running" || deriveTaskStatus(t) === "restarting"
   );
 
+  // Shared visibility-aware ticker; pauses while the document is hidden.
+  const tick = useGlobalSecondTicker();
   useEffect(() => {
     if (!hasRunning) return;
-    const id = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(id);
-  }, [hasRunning]);
+    setNow(Date.now());
+  }, [tick, hasRunning]);
 
   // Auto-clear successful tasks after delay, and clear dismiss/timers on restart
   useEffect(() => {

@@ -290,4 +290,148 @@ describe("NotificationCenterToolbarButton — DND state surface", () => {
       expect(queryByTestId("icon-bell-off")).toBeNull();
     });
   });
+
+  describe("visibility gating — pause timers while document is hidden", () => {
+    let originalHidden: boolean;
+    let visibilityState: DocumentVisibilityState;
+    let visibilityListeners: Array<() => void>;
+
+    beforeEach(() => {
+      visibilityListeners = [];
+      originalHidden = document.hidden;
+      visibilityState = "visible";
+
+      Object.defineProperty(document, "hidden", {
+        get: () => visibilityState === "hidden",
+        configurable: true,
+      });
+      Object.defineProperty(document, "visibilityState", {
+        get: () => visibilityState,
+        configurable: true,
+      });
+
+      const origAdd = document.addEventListener.bind(document);
+      const origRemove = document.removeEventListener.bind(document);
+      vi.spyOn(document, "addEventListener").mockImplementation((type, handler, options) => {
+        if (type === "visibilitychange") {
+          visibilityListeners.push(handler as () => void);
+        }
+        return origAdd(type, handler, options);
+      });
+      vi.spyOn(document, "removeEventListener").mockImplementation((type, handler, options) => {
+        if (type === "visibilitychange") {
+          visibilityListeners = visibilityListeners.filter((l) => l !== handler);
+        }
+        return origRemove(type, handler, options);
+      });
+    });
+
+    afterEach(() => {
+      Object.defineProperty(document, "hidden", {
+        value: originalHidden,
+        configurable: true,
+        writable: true,
+      });
+    });
+
+    function fireVisibilityChange(state: DocumentVisibilityState) {
+      visibilityState = state;
+      visibilityListeners.forEach((l) => l());
+    }
+
+    it("does not schedule the minute poll when mounted while hidden", async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date(2024, 0, 1, 22, 59, 30));
+      visibilityState = "hidden";
+
+      useNotificationSettingsStore.setState({
+        quietHoursEnabled: true,
+        quietHoursStartMin: 23 * 60,
+        quietHoursEndMin: 23 * 60 + 1,
+      });
+
+      const setIntervalSpy = vi.spyOn(globalThis, "setInterval");
+      const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+
+      render(<NotificationCenterToolbarButton />);
+
+      // Advance well past where timers would normally fire.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(120_000);
+      });
+
+      expect(setTimeoutSpy).not.toHaveBeenCalled();
+      expect(setIntervalSpy).not.toHaveBeenCalled();
+    });
+
+    it("clears the active minute interval when document becomes hidden", async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date(2024, 0, 1, 22, 59, 30));
+
+      useNotificationSettingsStore.setState({
+        quietHoursEnabled: true,
+        quietHoursStartMin: 23 * 60,
+        quietHoursEndMin: 23 * 60 + 1,
+      });
+
+      const { queryByTestId } = render(<NotificationCenterToolbarButton />);
+      // Cross 23:00 to start the interval.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(31_000);
+      });
+      expect(queryByTestId("icon-bell-off")).toBeTruthy();
+
+      const clearIntervalSpy = vi.spyOn(globalThis, "clearInterval");
+      const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
+
+      await act(async () => {
+        fireVisibilityChange("hidden");
+      });
+
+      // At least one interval/timeout should have been cleared.
+      expect(
+        clearIntervalSpy.mock.calls.length + clearTimeoutSpy.mock.calls.length
+      ).toBeGreaterThan(0);
+    });
+
+    it("re-renders immediately when visibility is restored", async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date(2024, 0, 1, 12, 0));
+      // Mute expires 30s in the future — DND active at mount.
+      useNotificationSettingsStore.setState({
+        quietUntil: new Date(2024, 0, 1, 12, 0, 30).getTime(),
+      });
+
+      const { queryByTestId } = render(<NotificationCenterToolbarButton />);
+      expect(queryByTestId("icon-bell-off")).toBeTruthy();
+
+      // Hide before mute expires; advance past expiry while hidden.
+      await act(async () => {
+        fireVisibilityChange("hidden");
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(31_000);
+      });
+      // Restore — handler fires synchronous tick → re-render reads fresh quietUntil.
+      await act(async () => {
+        fireVisibilityChange("visible");
+      });
+      expect(queryByTestId("icon-bell")).toBeTruthy();
+      expect(queryByTestId("icon-bell-off")).toBeNull();
+    });
+
+    it("removes visibility listener on unmount", () => {
+      useNotificationSettingsStore.setState({
+        quietHoursEnabled: true,
+        quietHoursStartMin: 23 * 60,
+        quietHoursEndMin: 23 * 60 + 1,
+      });
+
+      const { unmount } = render(<NotificationCenterToolbarButton />);
+      expect(visibilityListeners.length).toBeGreaterThan(0);
+
+      unmount();
+      expect(visibilityListeners.length).toBe(0);
+    });
+  });
 });
