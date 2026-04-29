@@ -383,7 +383,7 @@ describe("Toast accessibility", () => {
     // ~984ms instead of resetting to a fresh 3000ms.
     expect(screen.getByText("msg-4")).toBeTruthy();
 
-    // Cross the cap; timer fires, then 300ms fade-out removes the toast.
+    // Cross the cap; timer fires, then 200ms fade-out removes the toast.
     await act(async () => {
       vi.advanceTimersByTime(1500);
     });
@@ -442,7 +442,7 @@ describe("Toast accessibility", () => {
       useNotificationStore.getState().dismissNotification(toastId!);
     });
 
-    // User clicks X during the 300ms fade window before removeNotification.
+    // User clicks X during the 200ms fade window before removeNotification.
     const dismissButton = screen.getByLabelText("Dismiss notification");
     await act(async () => {
       fireEvent.click(dismissButton);
@@ -468,7 +468,7 @@ describe("Toast accessibility", () => {
       fireEvent.click(dismissButton);
     });
 
-    // Toast still enters the fade-out path; after the 300ms cleanup runs it
+    // Toast still enters the fade-out path; after the 200ms cleanup runs it
     // is removed from the store entirely.
     await act(async () => {
       vi.advanceTimersByTime(400);
@@ -680,7 +680,7 @@ describe("Toast severity-based dismissal (issue #5859)", () => {
     });
     expect(screen.getByText("Failed once")).toBeTruthy();
 
-    // Past 12s + the 300ms fade — gone.
+    // Past 12s + the 200ms fade — gone.
     await act(async () => {
       vi.advanceTimersByTime(1000);
     });
@@ -700,7 +700,7 @@ describe("Toast severity-based dismissal (issue #5859)", () => {
     });
     expect(screen.getByText("Saved!")).toBeTruthy();
 
-    // Past 4s + the 300ms fade — gone.
+    // Past 4s + the 200ms fade — gone.
     await act(async () => {
       vi.advanceTimersByTime(1000);
     });

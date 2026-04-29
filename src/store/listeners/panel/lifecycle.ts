@@ -112,7 +112,6 @@ async function handleFallbackTriggered(data: {
           reason === "auth"
             ? `${fromName} authentication failed — now running "${nextPreset.name}".`
             : `${fromName} unreachable — now running "${nextPreset.name}".`,
-        duration: 4000,
       });
     } else {
       notify({
