@@ -18,12 +18,13 @@ describe("Skip permissions toggle gating", () => {
     expect(DEFAULT_DANGEROUS_ARGS).toHaveProperty("interpreter", "--auto_run");
   });
 
-  it("opencode, kiro, goose, crush, and qwen have no DEFAULT_DANGEROUS_ARGS entry", () => {
+  it("opencode, kiro, goose, crush, qwen, and mistral have no DEFAULT_DANGEROUS_ARGS entry", () => {
     expect(DEFAULT_DANGEROUS_ARGS).not.toHaveProperty("opencode");
     expect(DEFAULT_DANGEROUS_ARGS).not.toHaveProperty("kiro");
     expect(DEFAULT_DANGEROUS_ARGS).not.toHaveProperty("goose");
     expect(DEFAULT_DANGEROUS_ARGS).not.toHaveProperty("crush");
     expect(DEFAULT_DANGEROUS_ARGS).not.toHaveProperty("qwen");
+    expect(DEFAULT_DANGEROUS_ARGS).not.toHaveProperty("mistral");
   });
 
   it("gating expression matches expected agents", () => {
@@ -37,7 +38,15 @@ describe("Skip permissions toggle gating", () => {
     );
 
     expect(agentsWithToggle).toEqual(["claude", "gemini", "codex", "cursor", "interpreter"]);
-    expect(agentsWithoutToggle).toEqual(["opencode", "kiro", "copilot", "goose", "crush", "qwen"]);
+    expect(agentsWithoutToggle).toEqual([
+      "opencode",
+      "kiro",
+      "copilot",
+      "goose",
+      "crush",
+      "qwen",
+      "mistral",
+    ]);
   });
 
   it("all dangerous args are non-empty strings starting with --", () => {

@@ -163,12 +163,12 @@ describe("CliAvailabilityService", () => {
         expect(detail?.authConfirmed).toBe(false);
       }
 
-      // Should have called execFileSync 11 times (once for each CLI).
+      // Should have called execFileSync 12 times (once for each CLI).
       // Fallback probes (native paths, npm-global, WSL) run via async execFile and
       // only fire when the which/where probe returns missing — in this test
       // every agent succeeds on the first probe, so execFileSync count
       // matches the registry size exactly.
-      expect(mockedExecFileSync).toHaveBeenCalledTimes(11);
+      expect(mockedExecFileSync).toHaveBeenCalledTimes(12);
 
       // stdio is now [ignore, pipe, ignore] so we can capture the resolved
       // path from stdout while still suppressing any TTY output on stderr.
@@ -220,6 +220,7 @@ describe("CliAvailabilityService", () => {
         crush: "missing",
         qwen: "missing",
         interpreter: "missing",
+        mistral: "missing",
       });
     });
 
@@ -592,11 +593,11 @@ describe("CliAvailabilityService", () => {
       expect(refreshed.codex).toBe("missing");
 
       expect(service.getAvailability()).toEqual(refreshed);
-      // 11 successful primary calls + 10 BusyBox-style bare-`which` retries
-      // (the 10 agents whose mock throws a generic `Error` with no errno
+      // 12 successful primary calls + 11 BusyBox-style bare-`which` retries
+      // (the 11 agents whose mock throws a generic `Error` with no errno
       // code — which `probeViaShell` retries without `-a` to recover
       // BusyBox/minimal `which` builds that reject the flag).
-      expect(mockedExecFileSync).toHaveBeenCalledTimes(21);
+      expect(mockedExecFileSync).toHaveBeenCalledTimes(23);
     });
 
     it("works on cold start before initial check", async () => {
@@ -624,7 +625,7 @@ describe("CliAvailabilityService", () => {
 
       await service.checkAvailability();
 
-      expect(executionOrder).toHaveLength(11);
+      expect(executionOrder).toHaveLength(12);
       expect(executionOrder).toContain("claude");
       expect(executionOrder).toContain("gemini");
       expect(executionOrder).toContain("codex");
@@ -636,6 +637,7 @@ describe("CliAvailabilityService", () => {
       expect(executionOrder).toContain("crush");
       expect(executionOrder).toContain("qwen");
       expect(executionOrder).toContain("interpreter");
+      expect(executionOrder).toContain("vibe");
     });
 
     it("deduplicates concurrent checkAvailability calls", async () => {
@@ -649,7 +651,7 @@ describe("CliAvailabilityService", () => {
 
       expect(result1).toEqual(result2);
       expect(result2).toEqual(result3);
-      expect(mockedExecFileSync).toHaveBeenCalledTimes(11);
+      expect(mockedExecFileSync).toHaveBeenCalledTimes(12);
     });
 
     it("concurrent refresh calls each trigger a new check", async () => {
@@ -658,19 +660,19 @@ describe("CliAvailabilityService", () => {
       const [result1, result2] = await Promise.all([service.refresh(), service.refresh()]);
 
       expect(result1).toEqual(result2);
-      expect(mockedExecFileSync).toHaveBeenCalledTimes(22);
+      expect(mockedExecFileSync).toHaveBeenCalledTimes(24);
     });
 
     it("allows sequential checks after first completes", async () => {
       mockedExecFileSync.mockImplementation(() => Buffer.from(""));
 
       await service.checkAvailability();
-      expect(mockedExecFileSync).toHaveBeenCalledTimes(11);
+      expect(mockedExecFileSync).toHaveBeenCalledTimes(12);
 
       vi.clearAllMocks();
 
       await service.refresh();
-      expect(mockedExecFileSync).toHaveBeenCalledTimes(11);
+      expect(mockedExecFileSync).toHaveBeenCalledTimes(12);
     });
   });
 
@@ -1534,7 +1536,9 @@ describe("CliAvailabilityService", () => {
 
     it("does not synthesise PyPI paths when packages.pypi is unset", async () => {
       // Built-in claude has no `packages.pypi`; verify our probe pipeline
-      // never dispatches PyPI-shaped fs.access calls for it.
+      // never dispatches PyPI-shaped fs.access calls for it. Mistral has `packages.pypi`
+      // so it WILL probe PyPI paths. This test guards against accidental probing for
+      // agents that have only `npmGlobalPackage`.
       const { access } = await import("fs/promises");
       const mockedAccess = vi.mocked(access);
 
@@ -1545,13 +1549,19 @@ describe("CliAvailabilityService", () => {
 
       await service.checkAvailability();
 
-      // Filter out paths synthesised for the `interpreter` agent, whose
-      // `packages.pypi` legitimately triggers uv/pipx probing. Remaining
+      // Filter out paths synthesised for agents whose `packages.pypi`
+      // legitimately triggers uv/pipx probing (interpreter, mistral). Remaining
       // probed paths must not include any uv/pipx layouts — this guards
       // against accidental probing for agents that don't declare PyPI.
       const probedPaths = mockedAccess.mock.calls
         .map((c) => String(c[0]))
-        .filter((p) => !p.includes("open-interpreter") && !p.includes("/interpreter"));
+        .filter(
+          (p) =>
+            !p.includes("open-interpreter") &&
+            !p.includes("/interpreter") &&
+            !p.includes("mistral") &&
+            !p.includes("/vibe")
+        );
       expect(probedPaths.some((p) => p.includes(".local/share/uv/tools"))).toBe(false);
       expect(probedPaths.some((p) => p.includes(".local/share/pipx/venvs"))).toBe(false);
     });

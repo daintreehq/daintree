@@ -43,6 +43,7 @@ describe("AgentRouter", () => {
         "crush",
         "qwen",
         "interpreter",
+        "mistral",
       ]).toContain(agentId);
     });
 
@@ -72,6 +73,7 @@ describe("AgentRouter", () => {
         "crush",
         "qwen",
         "interpreter",
+        "mistral",
       ]).toContain(agentId);
     });
 
@@ -107,6 +109,8 @@ describe("AgentRouter", () => {
         agentId: "interpreter",
         timestamp: Date.now(),
       });
+      events.emit("task:assigned", { taskId: "t21", agentId: "mistral", timestamp: Date.now() });
+      events.emit("task:assigned", { taskId: "t22", agentId: "mistral", timestamp: Date.now() });
 
       // Now all agents should be at capacity
       const agentId = await router.routeTask({
