@@ -129,7 +129,7 @@ This document maps each interactive component role to its canonical Tailwind cla
 **Role:** Standard form inputs where outline treatment is not desired. Shifts border color on focus without adding extra ring.
 
 ```tsx
-"border border-border-strong focus:border-daintree-accent focus:outline-none transition-colors";
+"border border-border-strong focus:border-daintree-accent focus:outline-hidden transition-colors";
 ```
 
 **Usage:** Border-shift is the lighter-weight alternative to outline-based focus. Base state must always have a visible border (`border-border-strong` or equivalent). On focus, only the border color changes — no outline or ring is added. Suitable for simple text inputs within constrained UIs. Used in `GitHubSettingsTab.tsx` (line 213) and `NotificationSettingsTab.tsx` (lines 217, 282, 415).
