@@ -143,6 +143,7 @@ import type {
 } from "../github.js";
 import type {
   SpawnResult,
+  TerminalReliabilityMetricPayload,
   TerminalStatusPayload,
   TerminalResourceBatchPayload,
   BroadcastWriteResultPayload,
@@ -2193,6 +2194,7 @@ export interface IpcEventMap {
   "terminal:trashed": { id: string; expiresAt: number };
   "terminal:restored": { id: string };
   "terminal:status": TerminalStatusPayload;
+  "terminal:reliability-metric": TerminalReliabilityMetricPayload;
   "terminal:resource-metrics": { metrics: TerminalResourceBatchPayload; timestamp: number };
   "terminal:broadcast-write-result": BroadcastWriteResultPayload;
   "terminal:send-key": [id: string, key: string];
