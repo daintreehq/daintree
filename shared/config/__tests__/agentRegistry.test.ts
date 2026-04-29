@@ -693,6 +693,16 @@ describe("resume configuration", () => {
     }
   });
 
+  it("qwen is session-id and produces --resume flag args", () => {
+    const resume = getAgentConfig("qwen")?.resume;
+    expect(resume?.kind).toBe("session-id");
+    if (resume?.kind === "session-id") {
+      expect(resume.args("abc-123")).toEqual(["--resume", "abc-123"]);
+      expect(resume.quitCommand).toBe("/quit");
+      expect(resume.sessionIdPattern).toBe("qwen --resume ([\\w-]+)");
+    }
+  });
+
   it("codex is session-id and produces resume subcommand args (no leading dash)", () => {
     const resume = getAgentConfig("codex")?.resume;
     expect(resume?.kind).toBe("session-id");
@@ -765,7 +775,14 @@ describe("titleStatePatterns", () => {
     expect(config!.detection!.titleStatePatterns!.waiting).toEqual(["\u25C7", "\u270B"]);
   });
 
-  it("non-gemini agents do not have titleStatePatterns", () => {
+  it("qwen inherits Gemini's Ink TUI title-state glyphs", () => {
+    const config = getAgentConfig("qwen");
+    expect(config?.detection?.titleStatePatterns).toBeDefined();
+    expect(config!.detection!.titleStatePatterns!.working).toEqual(["\u2726"]);
+    expect(config!.detection!.titleStatePatterns!.waiting).toEqual(["\u25C7", "\u270B"]);
+  });
+
+  it("agents without an Ink TUI do not have titleStatePatterns", () => {
     const claude = getAgentConfig("claude");
     expect(claude?.detection?.titleStatePatterns).toBeUndefined();
 
