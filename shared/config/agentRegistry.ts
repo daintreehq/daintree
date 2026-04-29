@@ -440,6 +440,7 @@ import { config as cursorConfig } from "./agents/cursor.js";
 import { config as kiroConfig } from "./agents/kiro.js";
 import { config as copilotConfig } from "./agents/copilot.js";
 import { config as gooseConfig } from "./agents/goose.js";
+import { config as crushConfig } from "./agents/crush.js";
 
 // Built-in agent registry. Per-agent configs live in `./agents/<id>.ts`
 // (mirroring `src/services/actions/definitions/`). When adding a new agent,
@@ -455,6 +456,7 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
   kiro: kiroConfig,
   copilot: copilotConfig,
   goose: gooseConfig,
+  crush: crushConfig,
 };
 
 import { BUILT_IN_AGENT_IDS } from "./agentIds.js";

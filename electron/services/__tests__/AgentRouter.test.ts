@@ -31,9 +31,16 @@ describe("AgentRouter", () => {
       const agentId = await router.routeTask();
 
       // Should return one of the available agents
-      expect(["claude", "gemini", "codex", "opencode", "cursor", "kiro", "copilot"]).toContain(
-        agentId
-      );
+      expect([
+        "claude",
+        "gemini",
+        "codex",
+        "opencode",
+        "cursor",
+        "kiro",
+        "copilot",
+        "crush",
+      ]).toContain(agentId);
     });
 
     it("returns null when no agents match required capabilities", async () => {
@@ -50,9 +57,16 @@ describe("AgentRouter", () => {
         requiredCapabilities: ["javascript"],
       });
 
-      expect(["claude", "gemini", "codex", "opencode", "cursor", "kiro", "copilot"]).toContain(
-        agentId
-      );
+      expect([
+        "claude",
+        "gemini",
+        "codex",
+        "opencode",
+        "cursor",
+        "kiro",
+        "copilot",
+        "crush",
+      ]).toContain(agentId);
     });
 
     it("returns null when agent is at max concurrent tasks", async () => {
@@ -78,6 +92,8 @@ describe("AgentRouter", () => {
       events.emit("task:assigned", { taskId: "t13", agentId: "copilot", timestamp: Date.now() });
       events.emit("task:assigned", { taskId: "t14", agentId: "goose", timestamp: Date.now() });
       events.emit("task:assigned", { taskId: "t15", agentId: "goose", timestamp: Date.now() });
+      events.emit("task:assigned", { taskId: "t16", agentId: "crush", timestamp: Date.now() });
+      events.emit("task:assigned", { taskId: "t17", agentId: "crush", timestamp: Date.now() });
 
       // Now all agents should be at capacity
       const agentId = await router.routeTask({

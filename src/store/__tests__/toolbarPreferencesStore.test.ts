@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// Mirror the production 7 agent IDs so the v5 migration is exercised against
+// Mirror the production agent IDs so the v5 migration is exercised against
 // the real set, not a subset. Keeping the mock in sync guards against
 // regressions when new built-in agents ship.
 vi.mock("@shared/config/agentIds", () => ({
@@ -13,6 +13,7 @@ vi.mock("@shared/config/agentIds", () => ({
     "cursor",
     "kiro",
     "copilot",
+    "crush",
   ] as const,
 }));
 
@@ -413,6 +414,7 @@ describe("toolbarPreferencesStore", () => {
                 "cursor",
                 "kiro",
                 "copilot",
+                "crush",
                 "copy-tree",
               ],
             },
@@ -423,7 +425,7 @@ describe("toolbarPreferencesStore", () => {
       );
 
       const store = await loadStore();
-      // All 7 built-in agent IDs stripped; non-agent entries preserved.
+      // All built-in agent IDs stripped; non-agent entries preserved.
       expect(store.getState().layout.hiddenButtons).toEqual(["copy-tree"]);
     });
 

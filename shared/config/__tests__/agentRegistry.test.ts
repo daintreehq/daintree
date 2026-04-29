@@ -38,10 +38,18 @@ describe("agentRegistry", () => {
       expect(ids).toContain("kiro");
       expect(ids).toContain("copilot");
       expect(ids).toContain("goose");
+      expect(ids).toContain("crush");
     });
 
     it("kiro only has macOS and Linux install blocks (no Windows)", () => {
       const config = getAgentConfig("kiro");
+      expect(config?.install?.byOs?.macos?.length).toBeGreaterThan(0);
+      expect(config?.install?.byOs?.linux?.length).toBeGreaterThan(0);
+      expect(config?.install?.byOs?.windows).toBeUndefined();
+    });
+
+    it("crush only has macOS and Linux install blocks (no Windows)", () => {
+      const config = getAgentConfig("crush");
       expect(config?.install?.byOs?.macos?.length).toBeGreaterThan(0);
       expect(config?.install?.byOs?.linux?.length).toBeGreaterThan(0);
       expect(config?.install?.byOs?.windows).toBeUndefined();

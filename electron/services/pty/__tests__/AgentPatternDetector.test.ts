@@ -323,7 +323,7 @@ describe("AgentPatternDetector", () => {
   });
 
   describe("pattern configuration validation", () => {
-    it.each(["claude", "gemini", "codex", "opencode", "cursor"])(
+    it.each(["claude", "gemini", "codex", "opencode", "cursor", "kiro", "copilot", "crush"])(
       "%s registry patterns compile to a valid config",
       (agentId) => {
         const detection = getAgentConfig(agentId)?.detection;
