@@ -313,9 +313,9 @@ describe("TerminalWebGLManager", () => {
       manager.ensureContext("t2", m2);
       manager.ensureContext("t3", m3);
 
-      handlers[0]();
-      handlers[1]();
-      handlers[2]();
+      handlers[0]!();
+      handlers[1]!();
+      handlers[2]!();
 
       const before = WebglAddonMock.mock.calls.length;
       const m4 = makeManagedTerminal();
@@ -332,14 +332,14 @@ describe("TerminalWebGLManager", () => {
       manager.ensureContext("t1", m1);
       manager.ensureContext("t2", m2);
 
-      handlers[0]();
-      handlers[1]();
+      handlers[0]!();
+      handlers[1]!();
 
       vi.setSystemTime(60_000);
 
       const m3 = makeManagedTerminal();
       manager.ensureContext("t3", m3);
-      handlers[2]();
+      handlers[2]!();
 
       const before = WebglAddonMock.mock.calls.length;
       const m4 = makeManagedTerminal();
@@ -360,9 +360,9 @@ describe("TerminalWebGLManager", () => {
       manager.ensureContext("t3", m3);
       manager.ensureContext("t4", m4);
 
-      handlers[0]();
-      handlers[1]();
-      handlers[2]();
+      handlers[0]!();
+      handlers[1]!();
+      handlers[2]!();
 
       expect(manager.isActive("t4")).toBe(true);
     });
@@ -380,9 +380,9 @@ describe("TerminalWebGLManager", () => {
       manager.ensureContext("t1", managed);
 
       // Fire all three stale handlers — must NOT trip the breaker
-      handlers[0]();
-      handlers[1]();
-      handlers[2]();
+      handlers[0]!();
+      handlers[1]!();
+      handlers[2]!();
 
       const before = WebglAddonMock.mock.calls.length;
       const m2 = makeManagedTerminal();
@@ -402,9 +402,9 @@ describe("TerminalWebGLManager", () => {
       manager.ensureContext("t2", m2);
       manager.ensureContext("t3", m3);
 
-      handlers[0]();
-      handlers[1]();
-      handlers[2]();
+      handlers[0]!();
+      handlers[1]!();
+      handlers[2]!();
 
       const m4 = makeManagedTerminal();
       manager.ensureContext("t4", m4);
@@ -427,9 +427,9 @@ describe("TerminalWebGLManager", () => {
       manager.ensureContext("t2", m2);
       manager.ensureContext("t3", m3);
 
-      handlers[0]();
-      handlers[1]();
-      handlers[2]();
+      handlers[0]!();
+      handlers[1]!();
+      handlers[2]!();
 
       // Re-acquire and trip again — should not log a second time
       const m4 = makeManagedTerminal();
