@@ -51,7 +51,7 @@ describe("ErrorBoundary", () => {
         <ThrowingChild shouldThrow={true} />
       </ErrorBoundary>
     );
-    expect(screen.getByText("Section Error")).toBeTruthy();
+    expect(screen.getByText("Section stopped working")).toBeTruthy();
   });
 
   it("captures incidentId from addError and passes to fallback", () => {
@@ -65,13 +65,11 @@ describe("ErrorBoundary", () => {
     expect(errors.length).toBe(1);
 
     const storeId = errors[0]!.id;
-    const shortId = storeId.slice(-7);
     // In dev mode, incident ID is not displayed (only in prod)
     // but we can verify the error was added to the store
     expect(storeId).toMatch(
       /^error-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
     );
-    expect(shortId).toHaveLength(7);
   });
 
   it("passes incidentId to logError context", async () => {
@@ -106,13 +104,13 @@ describe("ErrorBoundary", () => {
       </ErrorBoundary>
     );
 
-    expect(screen.getByText("Section Error")).toBeTruthy();
+    expect(screen.getByText("Section stopped working")).toBeTruthy();
 
     shouldThrow = false;
-    fireEvent.click(screen.getByText("Try Again"));
+    fireEvent.click(screen.getByText("Reload pane"));
 
     expect(screen.getByText("Recovered")).toBeTruthy();
-    expect(screen.queryByText("Section Error")).toBeNull();
+    expect(screen.queryByText("Section stopped working")).toBeNull();
   });
 
   it("provides onReport to section variant", () => {
@@ -155,12 +153,12 @@ describe("ErrorBoundary", () => {
     );
 
     const errors = useErrorStore.getState().errors;
-    const shortId = errors[0]!.id.slice(-7);
+    const storeId = errors[0]!.id;
 
-    expect(screen.getByText(`Error ID: ${shortId}`)).toBeTruthy();
+    expect(screen.getByText(`Error ID: ${storeId}`)).toBeTruthy();
     expect(screen.queryByText("Test render error")).toBeNull();
     expect(
-      screen.getByText("Something went wrong. Please try again or contact support.")
+      screen.getByText("This pane crashed but the rest of Daintree is still running.")
     ).toBeTruthy();
   });
 

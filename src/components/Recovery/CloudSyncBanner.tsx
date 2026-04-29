@@ -64,7 +64,7 @@ export function CloudSyncBanner() {
         onClick={handleDismiss}
         className="text-xs px-2 py-1 rounded border border-[var(--color-status-warning)]/30 hover:bg-[var(--color-status-warning)]/10 transition-colors shrink-0"
       >
-        Got it
+        Don&rsquo;t warn for this project
       </button>
     </div>
   );

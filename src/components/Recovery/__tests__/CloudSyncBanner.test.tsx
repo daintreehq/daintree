@@ -50,14 +50,14 @@ describe("CloudSyncBanner", () => {
     expect(region.getAttribute("aria-live")).toBe("polite");
     expect(screen.getByText("Cloud sync detected")).toBeTruthy();
     expect(screen.getByText(/Dropbox-synced folder/i)).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Got it" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Don.*t warn for this project/i })).toBeTruthy();
   });
 
   it("persists dismiss preference and clears the banner", async () => {
     useCloudSyncBannerStore.setState({ service: "iCloud Drive", projectId: "p1" });
     render(<CloudSyncBanner />);
 
-    fireEvent.click(screen.getByRole("button", { name: "Got it" }));
+    fireEvent.click(screen.getByRole("button", { name: /Don.*t warn for this project/i }));
 
     await waitFor(() => {
       expect(saveSettingsMock).toHaveBeenCalledWith(
@@ -81,7 +81,7 @@ describe("CloudSyncBanner", () => {
     useCloudSyncBannerStore.setState({ service: "OneDrive", projectId: "p1" });
     render(<CloudSyncBanner />);
 
-    fireEvent.click(screen.getByRole("button", { name: "Got it" }));
+    fireEvent.click(screen.getByRole("button", { name: /Don.*t warn for this project/i }));
 
     await waitFor(() => {
       expect(saveSettingsMock).toHaveBeenCalledOnce();
@@ -101,7 +101,7 @@ describe("CloudSyncBanner", () => {
     // Simulate the race: live project flips to p2 before the click handler runs.
     setProject("p2");
 
-    fireEvent.click(screen.getByRole("button", { name: "Got it" }));
+    fireEvent.click(screen.getByRole("button", { name: /Don.*t warn for this project/i }));
 
     await waitFor(() => {
       expect(useCloudSyncBannerStore.getState().service).toBeNull();
@@ -114,7 +114,7 @@ describe("CloudSyncBanner", () => {
     useCloudSyncBannerStore.setState({ service: "OneDrive", projectId: "p1" });
     render(<CloudSyncBanner />);
 
-    fireEvent.click(screen.getByRole("button", { name: "Got it" }));
+    fireEvent.click(screen.getByRole("button", { name: /Don.*t warn for this project/i }));
 
     await waitFor(() => {
       expect(notifyMock).toHaveBeenCalled();

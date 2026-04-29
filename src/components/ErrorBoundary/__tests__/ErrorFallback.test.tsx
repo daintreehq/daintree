@@ -46,13 +46,13 @@ describe("ErrorFallback", () => {
     it("shows friendly message instead of raw error", () => {
       render(<ErrorFallback {...baseProps} variant="section" />);
       expect(
-        screen.getByText("Something went wrong. Please try again or contact support.")
+        screen.getByText("This pane crashed but the rest of Daintree is still running.")
       ).toBeTruthy();
     });
 
-    it("displays short incident ID", () => {
+    it("displays full incident ID", () => {
       render(<ErrorFallback {...baseProps} variant="section" />);
-      expect(screen.getByText("Error ID: a3f7b2x")).toBeTruthy();
+      expect(screen.getByText("Error ID: error-1710000000000-a3f7b2x")).toBeTruthy();
     });
 
     it("does not render technical details", () => {
@@ -107,10 +107,10 @@ describe("ErrorFallback", () => {
   });
 
   describe("buttons", () => {
-    it("calls resetError when Try Again is clicked", () => {
+    it("calls resetError when Reload pane is clicked", () => {
       vi.stubEnv("DEV", true);
       render(<ErrorFallback {...baseProps} variant="section" />);
-      fireEvent.click(screen.getByText("Try Again"));
+      fireEvent.click(screen.getByText("Reload pane"));
       expect(baseProps.resetError).toHaveBeenCalledOnce();
     });
 
@@ -130,10 +130,10 @@ describe("ErrorFallback", () => {
       expect(screen.queryByText("Report Issue")).toBeNull();
     });
 
-    it("shows Restart Application text for fullscreen variant", () => {
+    it("shows Reload window text for fullscreen variant", () => {
       vi.stubEnv("DEV", false);
       render(<ErrorFallback {...baseProps} variant="fullscreen" />);
-      expect(screen.getByText("Restart Application")).toBeTruthy();
+      expect(screen.getByText("Reload window")).toBeTruthy();
     });
   });
 

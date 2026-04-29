@@ -69,27 +69,24 @@ export function ErrorFallback({
             className={cn("font-semibold text-status-error", sizes.title)}
             data-testid="error-fallback-title"
           >
-            {variant === "fullscreen" && "Application Error"}
-            {variant === "section" && "Section Error"}
-            {variant === "component" && `${componentName || "Component"} Error`}
+            {variant === "fullscreen" && "Daintree hit an unrecoverable error"}
+            {variant === "section" && `${componentName || "Section"} stopped working`}
+            {variant === "component" && `${componentName || "Component"} error`}
           </h2>
 
           <p className={cn("text-daintree-text/80", sizes.message)}>
             {import.meta.env.DEV
               ? error.message
-              : "Something went wrong. Please try again or contact support."}
+              : variant === "fullscreen"
+                ? "The window can't continue. Reloading usually fixes it."
+                : variant === "section"
+                  ? "This pane crashed but the rest of Daintree is still running."
+                  : `Couldn't render ${componentName || "this component"}. Try again, or reload the pane.`}
           </p>
 
-          {variant === "fullscreen" && (
-            <p className={cn("text-daintree-text/60", sizes.message)}>
-              The application encountered an unexpected error. You can try restarting or check the
-              logs for more details.
-            </p>
-          )}
-
           {!import.meta.env.DEV && incidentId && variant !== "component" && (
-            <p className={cn("text-daintree-text/50 font-mono", sizes.message)}>
-              Error ID: {incidentId.slice(-7)}
+            <p className={cn("text-daintree-text/50 font-mono break-all", sizes.message)}>
+              Error ID: {incidentId}
             </p>
           )}
         </div>
@@ -104,7 +101,11 @@ export function ErrorFallback({
               sizes.button
             )}
           >
-            {variant === "fullscreen" ? "Restart Application" : "Try Again"}
+            {variant === "fullscreen"
+              ? "Reload window"
+              : variant === "section"
+                ? "Reload pane"
+                : "Try again"}
           </button>
 
           {variant !== "component" && onReport && (

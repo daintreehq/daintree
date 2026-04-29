@@ -149,7 +149,7 @@ describe("CrashRecoveryDialog", () => {
   it("renders the dialog", () => {
     setup();
     expect(screen.getByTestId("crash-recovery-dialog")).toBeTruthy();
-    expect(screen.getByText("Daintree crashed")).toBeTruthy();
+    expect(screen.getByText("Daintree closed unexpectedly")).toBeTruthy();
   });
 
   describe("with panels (selective restore)", () => {
