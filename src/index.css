@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@import "tw-animate-css";
 @plugin "@tailwindcss/typography";
 @source not "../.lessons/**/*";
 @import "./styles/components/toolbar.css";
@@ -1414,6 +1415,19 @@ body,
     transform: none !important;
     transition: none !important;
   }
+
+  /* Radix overlay enter/exit (popover, dropdown, context-menu, select,
+   * tooltip) via tw-animate-css. Zero out spatial transforms; fade
+   * (opacity) is intentionally preserved. WCAG 2.3.3.
+   */
+  [data-state][data-side] {
+    --tw-enter-scale: 1;
+    --tw-exit-scale: 1;
+    --tw-enter-translate-x: 0;
+    --tw-enter-translate-y: 0;
+    --tw-exit-translate-x: 0;
+    --tw-exit-translate-y: 0;
+  }
 }
 
 body[data-reduce-animations="true"]
@@ -1490,6 +1504,18 @@ body[data-reduce-animations="true"]
 
 body[data-reduce-animations="true"] [data-animated-chevron] {
   transition: none !important;
+}
+
+/* Radix overlay enter/exit under the app-level reduce-animations toggle.
+ * Mirrors the prefers-reduced-motion block above. WCAG 2.3.3.
+ */
+body[data-reduce-animations="true"] [data-state][data-side] {
+  --tw-enter-scale: 1;
+  --tw-exit-scale: 1;
+  --tw-enter-translate-x: 0;
+  --tw-enter-translate-y: 0;
+  --tw-exit-translate-x: 0;
+  --tw-exit-translate-y: 0;
 }
 
 /* Terminal trash/restore animations */

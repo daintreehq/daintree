@@ -66,8 +66,8 @@ const config: KnipConfig = {
   ],
 
   // why: these packages are consumed via mechanisms Knip can't trace:
-  //   - tailwindcss / @tailwindcss/typography: loaded through src/index.css
-  //     (@import "tailwindcss", @plugin "@tailwindcss/typography")
+  //   - tailwindcss / @tailwindcss/typography / tw-animate-css: loaded through
+  //     src/index.css (@import statements)
   //   - wait-on: invoked as a shell command from scripts/dev.mjs
   //   - fast-check: peer of @fast-check/vitest; declared in devDeps as a
   //     pinning anchor but imported indirectly through `@fast-check/vitest`.
@@ -86,6 +86,7 @@ const config: KnipConfig = {
   ignoreDependencies: [
     "tailwindcss",
     "@tailwindcss/typography",
+    "tw-animate-css",
     "wait-on",
     "fast-check",
     "axe-core",
