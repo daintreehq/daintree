@@ -34,7 +34,7 @@ export const WslGitBanner = React.memo(function WslGitBanner({
     try {
       await worktreeConfigClient.setWslGit(worktreeId, true);
     } catch (err) {
-      logError("Failed to enable WSL git for worktree", { worktreeId, err });
+      logError("Failed to enable WSL git for worktree", err, { worktreeId });
     } finally {
       setBusy(false);
     }
@@ -46,7 +46,7 @@ export const WslGitBanner = React.memo(function WslGitBanner({
     try {
       await worktreeConfigClient.dismissWslBanner(worktreeId);
     } catch (err) {
-      logError("Failed to dismiss WSL git banner", { worktreeId, err });
+      logError("Failed to dismiss WSL git banner", err, { worktreeId });
     } finally {
       setBusy(false);
     }
