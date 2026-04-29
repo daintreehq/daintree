@@ -53,6 +53,13 @@ function readWrapperSource(file: string): string {
   return readFileSync(path.join(__dirname, "..", file), "utf8");
 }
 
+function assertHTMLElement(el: Element | null | undefined, label: string): HTMLElement {
+  if (!(el instanceof HTMLElement)) {
+    throw new Error(`${label}: expected HTMLElement, got ${el === null ? "null" : typeof el}`);
+  }
+  return el;
+}
+
 describe("Radix overlay animation classes — runtime render", () => {
   it("PopoverContent renders with full enter/exit class set and UI durations", () => {
     render(
@@ -61,8 +68,10 @@ describe("Radix overlay animation classes — runtime render", () => {
         <PopoverContent forceMount>content</PopoverContent>
       </PopoverPrimitive.Root>
     );
-    const el = document.querySelector("[data-radix-popper-content-wrapper] > *") as HTMLElement;
-    expect(el).toBeTruthy();
+    const el = assertHTMLElement(
+      document.querySelector("[data-radix-popper-content-wrapper] > *"),
+      "PopoverContent"
+    );
     expectAllInString(el.className, ENTER_EXIT_CLASSES, "PopoverContent");
     expectAllInString(el.className, UI_DURATION_CLASSES, "PopoverContent");
   });
@@ -76,8 +85,7 @@ describe("Radix overlay animation classes — runtime render", () => {
         </DropdownMenuContent>
       </DropdownMenuPrimitive.Root>
     );
-    const el = document.querySelector("[role='menu']") as HTMLElement;
-    expect(el).toBeTruthy();
+    const el = assertHTMLElement(document.querySelector("[role='menu']"), "DropdownMenuContent");
     expectAllInString(el.className, ENTER_EXIT_CLASSES, "DropdownMenuContent");
     expectAllInString(el.className, UI_DURATION_CLASSES, "DropdownMenuContent");
   });
@@ -97,8 +105,7 @@ describe("Radix overlay animation classes — runtime render", () => {
       </DropdownMenuPrimitive.Root>
     );
     const menus = document.querySelectorAll("[role='menu']");
-    const sub = menus[menus.length - 1] as HTMLElement;
-    expect(sub).toBeTruthy();
+    const sub = assertHTMLElement(menus[menus.length - 1], "DropdownMenuSubContent");
     expectAllInString(sub.className, ENTER_EXIT_CLASSES, "DropdownMenuSubContent");
     expectAllInString(sub.className, UI_DURATION_CLASSES, "DropdownMenuSubContent");
   });
