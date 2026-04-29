@@ -357,7 +357,7 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
           return null;
         }
 
-        const presetTitle = isAgent && preset ? `${title} (${preset.name})` : title;
+        const presetTitle = isAgent && preset ? preset.name : title;
 
         const options: AddPanelOptions = isAgent
           ? {

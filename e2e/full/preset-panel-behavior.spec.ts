@@ -12,7 +12,7 @@ let ctx: AppContext;
  * Tests 107–112: Panel-level preset behavior.
  *
  * These tests verify that:
- * - A panel launched with a preset shows "AgentName (PresetName)" in its tab title.
+ * - A panel launched with a preset shows the preset name directly as the tab title.
  * - Duplicating a paneled panel preserves the title and produces a second tab.
  * - Moving a paneled panel to the dock keeps the preset color on the dock icon.
  * - After an Electron reload the paneled panel's title is restored.
@@ -103,14 +103,14 @@ test.describe.serial("Presets: Panel Behavior (107–112)", () => {
     return true;
   };
 
-  test("107. Panel with preset tab title shows 'Claude (PresetName)' format", async () => {
+  test("107. Panel with preset tab title shows the preset name directly", async () => {
     const launched = await launchClaudeWithFirstPreset();
     if (!launched) return;
 
-    // Wait for a tab to appear with "(…)" in the title
+    // Wait for a tab to appear titled with the preset name
     const tabWithPreset = ctx.window
       .locator(SEL.panel.tabList)
-      .locator('[role="tab"]', { hasText: /Claude \(.+\)/ });
+      .locator('[role="tab"]', { hasText: "New Preset" });
 
     await expect(tabWithPreset.first())
       .toBeVisible({ timeout: T_MEDIUM })
@@ -123,7 +123,7 @@ test.describe.serial("Presets: Panel Behavior (107–112)", () => {
     // Find any open Claude tab with a preset title
     const presetTab = ctx.window
       .locator(SEL.panel.tabList)
-      .locator('[role="tab"]', { hasText: /Claude \(.+\)/ })
+      .locator('[role="tab"]', { hasText: "New Preset" })
       .first();
 
     if (!(await presetTab.isVisible({ timeout: T_SHORT }).catch(() => false))) return;
@@ -162,7 +162,7 @@ test.describe.serial("Presets: Panel Behavior (107–112)", () => {
   test("109. Duplicate creates a distinct panel (different tab index)", async () => {
     const presetTabs = ctx.window
       .locator(SEL.panel.tabList)
-      .locator('[role="tab"]', { hasText: /Claude \(.+\)/ });
+      .locator('[role="tab"]', { hasText: "New Preset" });
 
     const count = await presetTabs.count();
     // Tests 107–108 only produce tabs when the Claude agent is ready on the
@@ -181,7 +181,7 @@ test.describe.serial("Presets: Panel Behavior (107–112)", () => {
   test("110. Panel moved to dock still shows in dock container", async () => {
     const presetTab = ctx.window
       .locator(SEL.panel.tabList)
-      .locator('[role="tab"]', { hasText: /Claude \(.+\)/ })
+      .locator('[role="tab"]', { hasText: "New Preset" })
       .first();
 
     if (!(await presetTab.isVisible({ timeout: T_SHORT }).catch(() => false))) return;
@@ -225,7 +225,7 @@ test.describe.serial("Presets: Panel Behavior (107–112)", () => {
   test("112. After Electron reload, paneled panel title is restored", async () => {
     const presetTabBefore = ctx.window
       .locator(SEL.panel.tabList)
-      .locator('[role="tab"]', { hasText: /Claude \(.+\)/ })
+      .locator('[role="tab"]', { hasText: "New Preset" })
       .first();
 
     if (!(await presetTabBefore.isVisible({ timeout: T_SHORT }).catch(() => false))) return;

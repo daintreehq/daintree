@@ -727,7 +727,7 @@ describe("buildArgsForRespawn", () => {
         location: "grid",
         agentPresetId: "user-live",
         agentPresetColor: "#00ff00",
-        title: "Claude (LivePreset)",
+        title: "LivePreset",
       },
       "agent",
       "/p",
@@ -741,7 +741,7 @@ describe("buildArgsForRespawn", () => {
     );
     expect(result.agentPresetId).toBe("user-live");
     expect(result.agentPresetColor).toBe("#00ff00");
-    expect(result.title).toContain("LivePreset");
+    expect(result.title).toBe("LivePreset");
   });
 });
 
