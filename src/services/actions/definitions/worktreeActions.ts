@@ -8,8 +8,29 @@ import { getCurrentViewStore, getCurrentViewStoreOrNull } from "@/store/createWo
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { DEFAULT_COPYTREE_FORMAT } from "@/lib/copyTreeFormat";
 import { notify } from "@/lib/notify";
+import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { getVisibleWorktreesForCycling } from "@/lib/worktreeCyclingOrder";
 import { logError, logWarn } from "@/utils/logger";
+
+function notifyWorktreeResourceError(err: unknown, title: string, fallbackMessage: string): void {
+  const message = formatErrorMessage(err, fallbackMessage) || fallbackMessage;
+  notify({
+    type: "error",
+    priority: "high",
+    title,
+    message,
+    action: {
+      label: "Copy details",
+      onClick: async () => {
+        try {
+          await navigator.clipboard.writeText(message);
+        } catch {
+          // clipboard write is non-critical
+        }
+      },
+    },
+  });
+}
 
 export function registerWorktreeActions(actions: ActionRegistry, callbacks: ActionCallbacks): void {
   // Query action: list all worktrees with metadata
@@ -916,12 +937,7 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
         try {
           await worktreeClient.resourceAction(targetWorktreeId, "provision");
         } catch (err) {
-          notify({
-            type: "error",
-            priority: "high",
-            title: "Provision failed",
-            message: (err as Error).message || "Resource provisioning failed",
-          });
+          notifyWorktreeResourceError(err, "Provision failed", "Resource provisioning failed");
         }
       },
     })
@@ -950,12 +966,7 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
         try {
           await worktreeClient.resourceAction(targetWorktreeId, "teardown");
         } catch (err) {
-          notify({
-            type: "error",
-            priority: "high",
-            title: "Teardown failed",
-            message: (err as Error).message || "Resource teardown failed",
-          });
+          notifyWorktreeResourceError(err, "Teardown failed", "Resource teardown failed");
         }
       },
     })
@@ -984,12 +995,7 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
         try {
           await worktreeClient.resourceAction(targetWorktreeId, "resume");
         } catch (err) {
-          notify({
-            type: "error",
-            priority: "high",
-            title: "Resume failed",
-            message: (err as Error).message || "Resource resume failed",
-          });
+          notifyWorktreeResourceError(err, "Resume failed", "Resource resume failed");
         }
       },
     })
@@ -1018,12 +1024,7 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
         try {
           await worktreeClient.resourceAction(targetWorktreeId, "pause");
         } catch (err) {
-          notify({
-            type: "error",
-            priority: "high",
-            title: "Pause failed",
-            message: (err as Error).message || "Resource pause failed",
-          });
+          notifyWorktreeResourceError(err, "Pause failed", "Resource pause failed");
         }
       },
     })
@@ -1052,12 +1053,7 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
         try {
           await worktreeClient.resourceAction(targetWorktreeId, "status");
         } catch (err) {
-          notify({
-            type: "error",
-            priority: "high",
-            title: "Status check failed",
-            message: (err as Error).message || "Resource status check failed",
-          });
+          notifyWorktreeResourceError(err, "Status check failed", "Resource status check failed");
         }
       },
     })
