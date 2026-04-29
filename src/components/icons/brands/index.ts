@@ -10,6 +10,7 @@ export { GooseIcon } from "./GooseIcon";
 export { CrushIcon } from "./CrushIcon";
 export { QwenIcon } from "./QwenIcon";
 export { InterpreterIcon } from "./InterpreterIcon";
+export { MistralIcon } from "./MistralIcon";
 
 // JavaScript ecosystem
 export { NpmIcon } from "./NpmIcon";

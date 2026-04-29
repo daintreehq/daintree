@@ -41,6 +41,14 @@ describe("corpus-replay", () => {
     });
   });
 
+  describe("mistral corpus replay", () => {
+    it("achieves >= 90% accuracy on mistral sample corpus", () => {
+      const result = replayCorpus(path.join(CORPUS_DIR, "mistral_sample.jsonl"), "mistral");
+      expect(result.total).toBeGreaterThan(0);
+      expect(result.accuracy).toBeGreaterThanOrEqual(MIN_ACCURACY);
+    });
+  });
+
   describe("replay result structure", () => {
     it("returns detailed wrong entries for debugging", () => {
       const result = replayCorpus(path.join(CORPUS_DIR, "claude_sample.jsonl"), "claude");
