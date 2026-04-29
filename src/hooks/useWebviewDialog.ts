@@ -68,7 +68,7 @@ export function useWebviewDialog(
 
       setDialogQueue((prev) => prev.slice(1));
     },
-    [dialogQueue]
+    [dialogQueue, panelId]
   );
 
   return {
