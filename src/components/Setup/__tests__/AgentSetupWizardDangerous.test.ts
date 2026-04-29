@@ -33,7 +33,7 @@ describe("Skip permissions toggle gating", () => {
     );
 
     expect(agentsWithToggle).toEqual(["claude", "gemini", "codex", "cursor"]);
-    expect(agentsWithoutToggle).toEqual(["opencode", "kiro", "copilot"]);
+    expect(agentsWithoutToggle).toEqual(["opencode", "kiro", "copilot", "goose"]);
   });
 
   it("all dangerous args are non-empty strings starting with --", () => {
