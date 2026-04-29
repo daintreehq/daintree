@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useCallback } from "react";
 import { Pause, Lock } from "lucide-react";
 import type { AgentState, PanelKind, AgentStateChangeTrigger } from "@/types";
 import { cn } from "@/lib/utils";
@@ -16,17 +16,11 @@ import { formatTokenCount } from "@/utils/formatTokenCount";
 import { formatTimeAgo } from "@/utils/timeAgo";
 import { useResourceMonitoringStore } from "@/store/resourceMonitoringStore";
 import { useErrorStore } from "@/store/errorStore";
+import { useGlobalMinuteTicker } from "@/hooks/useGlobalMinuteTicker";
 import { TerminalResourceSparkline } from "./TerminalResourceSparkline";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 
-function ElapsedTime({ startedAt }: { startedAt: number }) {
-  const [now, setNow] = useState(() => Date.now());
-
-  useEffect(() => {
-    const id = setInterval(() => setNow(Date.now()), 30_000);
-    return () => clearInterval(id);
-  }, []);
-
+function ElapsedTime({ startedAt, now }: { startedAt: number; now: number }) {
   return <> · {formatElapsedDuration(now - startedAt)}</>;
 }
 
@@ -115,17 +109,17 @@ function TerminalHeaderContentComponent({
     )
   );
 
-  const [tick, setTick] = useState(() => Date.now());
-  useEffect(() => {
-    const interval = setInterval(() => setTick(Date.now()), 30_000);
-    return () => clearInterval(interval);
-  }, []);
+  // Shared visibility-aware ticker — drives the elapsed-duration displays
+  // that update at minute granularity. The tick value itself is unused;
+  // its identity changes ~every 30 s, which is what re-derives `now`.
+  useGlobalMinuteTicker();
+  const now = Date.now();
 
   const showStateDuration =
     (agentState === "working" || agentState === "waiting" || agentState === "directing") &&
     lastStateChange != null &&
     lastStateChange > 0 &&
-    tick - lastStateChange > 10_000;
+    now - lastStateChange > 10_000;
 
   // Show command pill only for plain terminals (not agent terminals)
   const isPlainTerminal = kind == null || kind === "terminal";
@@ -209,14 +203,14 @@ function TerminalHeaderContentComponent({
           <div className="flex flex-col gap-0.5">
             <span className="font-medium">
               {headline}
-              {startedAt != null && <ElapsedTime startedAt={startedAt} />}
+              {startedAt != null && <ElapsedTime startedAt={startedAt} now={now} />}
             </span>
             {isExited && exitCode != null && (
               <span className="text-status-error tabular-nums">Exit code: {exitCode}</span>
             )}
             <span>
               State: {stateLabel}
-              {showStateDuration && <> · {formatElapsedDuration(tick - lastStateChange!)}</>}
+              {showStateDuration && <> · {formatElapsedDuration(now - lastStateChange!)}</>}
               {stateChangeTrigger && <> · {TRIGGER_LABELS[stateChangeTrigger]}</>}
               {showConfidence && <> ({Math.round(stateChangeConfidence * 100)}%)</>}
             </span>

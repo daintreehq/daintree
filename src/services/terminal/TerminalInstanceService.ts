@@ -157,9 +157,11 @@ class TerminalInstanceService {
 
     // Periodic heartbeat: recovers a DOM-renderer terminal whose
     // IntersectionObserver has paused rendering, even while no new writes are
-    // arriving. Cheap (~1–5ms per visible non-agent terminal).
+    // arriving. Cheap (~1–5ms per visible non-agent terminal). Skipped while
+    // the document is hidden — _onVisibilityChange triggers a sweep on regain.
     if (typeof setInterval === "function") {
       this.reflowHeartbeatTimer = setInterval(() => {
+        if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
         for (const managed of this.instances.values()) {
           this.maybeReflowTerminal(managed);
         }

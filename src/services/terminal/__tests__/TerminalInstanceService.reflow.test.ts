@@ -285,3 +285,73 @@ describe("TerminalInstanceService maybeReflowTerminal", () => {
     expect(managed.lastReflowAt).toBe(0);
   });
 });
+
+describe("TerminalInstanceService reflowHeartbeatTimer visibility gate", () => {
+  let service: ReflowTestService;
+  let visibilityState: DocumentVisibilityState;
+  let originalDescriptor: PropertyDescriptor | undefined;
+
+  beforeEach(async () => {
+    vi.useFakeTimers();
+    visibilityState = "visible";
+    originalDescriptor = Object.getOwnPropertyDescriptor(Document.prototype, "visibilityState");
+    Object.defineProperty(document, "visibilityState", {
+      get: () => visibilityState,
+      configurable: true,
+    });
+
+    vi.resetModules();
+    ({ terminalInstanceService: service } =
+      (await import("../TerminalInstanceService")) as unknown as {
+        terminalInstanceService: ReflowTestService;
+      });
+    service.instances.clear();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    service.instances.clear();
+    document.body.innerHTML = "";
+    if (originalDescriptor) {
+      Object.defineProperty(Document.prototype, "visibilityState", originalDescriptor);
+    } else {
+      // Fallback: leave the document in a sensible state for later tests
+      Object.defineProperty(document, "visibilityState", {
+        value: "visible",
+        configurable: true,
+      });
+    }
+  });
+
+  it("skips reflows while document is hidden", () => {
+    visibilityState = "hidden";
+    const managed = makeManaged();
+    service.instances.set("t1", managed);
+
+    vi.advanceTimersByTime(3000);
+    expect(paddingHistory(managed).length).toBe(0);
+    expect(managed.lastReflowAt).toBe(0);
+  });
+
+  it("performs reflows on heartbeat when visible", () => {
+    const managed = makeManaged();
+    service.instances.set("t1", managed);
+
+    vi.advanceTimersByTime(3000);
+    expect(paddingHistory(managed)).toContain("0.01px");
+    expect(managed.lastReflowAt).toBeGreaterThan(0);
+  });
+
+  it("resumes reflows when visibility transitions hidden → visible", () => {
+    visibilityState = "hidden";
+    const managed = makeManaged();
+    service.instances.set("t1", managed);
+
+    vi.advanceTimersByTime(3000);
+    expect(paddingHistory(managed).length).toBe(0);
+
+    visibilityState = "visible";
+    vi.advanceTimersByTime(3000);
+    expect(paddingHistory(managed)).toContain("0.01px");
+  });
+});
