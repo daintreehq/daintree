@@ -14,6 +14,7 @@ vi.mock("@shared/config/agentIds", () => ({
     "kiro",
     "copilot",
     "crush",
+    "amp",
   ] as const,
 }));
 
@@ -415,6 +416,7 @@ describe("toolbarPreferencesStore", () => {
                 "kiro",
                 "copilot",
                 "crush",
+                "amp",
                 "copy-tree",
               ],
             },

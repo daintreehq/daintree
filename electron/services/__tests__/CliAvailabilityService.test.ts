@@ -102,6 +102,7 @@ describe("CliAvailabilityService", () => {
     "GH_TOKEN",
     "COPILOT_GITHUB_TOKEN",
     "KIMI_API_KEY",
+    "AMP_API_KEY",
     "DAINTREE_CLI_PATH_PREPEND",
   ];
 
@@ -164,12 +165,12 @@ describe("CliAvailabilityService", () => {
         expect(detail?.authConfirmed).toBe(false);
       }
 
-      // Should have called execFileSync 13 times (once for each CLI).
+      // Should have called execFileSync 14 times (once for each CLI).
       // Fallback probes (native paths, npm-global, WSL) run via async execFile and
       // only fire when the which/where probe returns missing — in this test
       // every agent succeeds on the first probe, so execFileSync count
       // matches the registry size exactly.
-      expect(mockedExecFileSync).toHaveBeenCalledTimes(13);
+      expect(mockedExecFileSync).toHaveBeenCalledTimes(14);
 
       // stdio is now [ignore, pipe, ignore] so we can capture the resolved
       // path from stdout while still suppressing any TTY output on stderr.
@@ -223,6 +224,7 @@ describe("CliAvailabilityService", () => {
         interpreter: "missing",
         mistral: "missing",
         kimi: "missing",
+        amp: "missing",
       });
     });
 
@@ -596,11 +598,11 @@ describe("CliAvailabilityService", () => {
       expect(refreshed.codex).toBe("missing");
 
       expect(service.getAvailability()).toEqual(refreshed);
-      // 13 successful primary calls + 12 BusyBox-style bare-`which` retries
-      // (the 12 agents whose mock throws a generic `Error` with no errno
+      // 14 successful primary calls + 13 BusyBox-style bare-`which` retries
+      // (the 13 agents whose mock throws a generic `Error` with no errno
       // code — which `probeViaShell` retries without `-a` to recover
       // BusyBox/minimal `which` builds that reject the flag).
-      expect(mockedExecFileSync).toHaveBeenCalledTimes(25);
+      expect(mockedExecFileSync).toHaveBeenCalledTimes(27);
     });
 
     it("works on cold start before initial check", async () => {
@@ -628,7 +630,7 @@ describe("CliAvailabilityService", () => {
 
       await service.checkAvailability();
 
-      expect(executionOrder).toHaveLength(13);
+      expect(executionOrder).toHaveLength(14);
       expect(executionOrder).toContain("claude");
       expect(executionOrder).toContain("gemini");
       expect(executionOrder).toContain("codex");
@@ -642,6 +644,7 @@ describe("CliAvailabilityService", () => {
       expect(executionOrder).toContain("interpreter");
       expect(executionOrder).toContain("vibe");
       expect(executionOrder).toContain("kimi");
+      expect(executionOrder).toContain("amp");
     });
 
     it("deduplicates concurrent checkAvailability calls", async () => {
@@ -655,7 +658,7 @@ describe("CliAvailabilityService", () => {
 
       expect(result1).toEqual(result2);
       expect(result2).toEqual(result3);
-      expect(mockedExecFileSync).toHaveBeenCalledTimes(13);
+      expect(mockedExecFileSync).toHaveBeenCalledTimes(14);
     });
 
     it("concurrent refresh calls each trigger a new check", async () => {
@@ -664,19 +667,19 @@ describe("CliAvailabilityService", () => {
       const [result1, result2] = await Promise.all([service.refresh(), service.refresh()]);
 
       expect(result1).toEqual(result2);
-      expect(mockedExecFileSync).toHaveBeenCalledTimes(26);
+      expect(mockedExecFileSync).toHaveBeenCalledTimes(28);
     });
 
     it("allows sequential checks after first completes", async () => {
       mockedExecFileSync.mockImplementation(() => Buffer.from(""));
 
       await service.checkAvailability();
-      expect(mockedExecFileSync).toHaveBeenCalledTimes(13);
+      expect(mockedExecFileSync).toHaveBeenCalledTimes(14);
 
       vi.clearAllMocks();
 
       await service.refresh();
-      expect(mockedExecFileSync).toHaveBeenCalledTimes(13);
+      expect(mockedExecFileSync).toHaveBeenCalledTimes(14);
     });
   });
 
@@ -1275,9 +1278,9 @@ describe("CliAvailabilityService", () => {
 
     it("fires exactly one npm-global probe per agent with npmGlobalPackage", async () => {
       // Shell probe misses for all agents, so every agent walks the full
-      // fallback chain. Only the 4 agents declaring npmGlobalPackage
-      // (claude, gemini, codex, qwen) should reach the npm-global layer — the
-      // other 4 (opencode, cursor, kiro, copilot) must not trigger npm.
+      // fallback chain. Only the 5 agents declaring an npm package
+      // (claude, gemini, codex, qwen via npmGlobalPackage; amp via packages.npm)
+      // should reach the npm-global layer — the others must not trigger npm.
       mockedExecFileSync.mockImplementation(() => {
         throw Object.assign(new Error("not found"), { code: "ENOENT" });
       });
@@ -1293,7 +1296,7 @@ describe("CliAvailabilityService", () => {
       await service.checkAvailability();
 
       const npmCalls = mockedExecFile.mock.calls.filter((c) => c[0] === "npm");
-      expect(npmCalls).toHaveLength(4);
+      expect(npmCalls).toHaveLength(5);
       // Deterministic probe form — guards against arg-drift regressions.
       for (const call of npmCalls) {
         expect(call[1]).toEqual(["config", "get", "prefix"]);
