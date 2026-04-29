@@ -251,19 +251,6 @@ export default defineConfig(({ command, mode }) => {
     esbuild: {
       minifyIdentifiers: false,
     },
-    optimizeDeps: {
-      optimizePackageImports: [
-        "@radix-ui/react-checkbox",
-        "@radix-ui/react-context-menu",
-        "@radix-ui/react-dropdown-menu",
-        "@radix-ui/react-popover",
-        "@radix-ui/react-select",
-        "@radix-ui/react-slot",
-        "@radix-ui/react-switch",
-        "@radix-ui/react-tooltip",
-        "lucide-react",
-      ],
-    },
     plugins: [
       react(),
       babel({
@@ -297,6 +284,9 @@ export default defineConfig(({ command, mode }) => {
             manualPureFunctions: ["console.log", "console.info", "console.warn", "console.debug"],
           },
         }),
+        experimental: {
+          lazyBarrel: true,
+        },
         output: {
           codeSplitting: {
             groups: [
