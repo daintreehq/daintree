@@ -76,15 +76,15 @@ describe("NotificationCenterEntry overflow menu", () => {
 describe("NotificationCenterEntry unread signal", () => {
   it("renders the unread dot when isNew=true", () => {
     const { container } = render(<NotificationCenterEntry entry={makeEntry()} isNew />);
-    expect(container.querySelector(".bg-daintree-accent.rounded-full")).not.toBeNull();
+    expect(container.querySelector(".bg-status-info.rounded-full")).not.toBeNull();
   });
 
   it("does not render the unread dot when isNew is omitted or false", () => {
     const { container, rerender } = render(<NotificationCenterEntry entry={makeEntry()} />);
-    expect(container.querySelector(".bg-daintree-accent.rounded-full")).toBeNull();
+    expect(container.querySelector(".bg-status-info.rounded-full")).toBeNull();
 
     rerender(<NotificationCenterEntry entry={makeEntry()} isNew={false} />);
-    expect(container.querySelector(".bg-daintree-accent.rounded-full")).toBeNull();
+    expect(container.querySelector(".bg-status-info.rounded-full")).toBeNull();
   });
 
   it("does not apply legacy unread row treatments (border or background tint)", () => {
