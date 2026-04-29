@@ -384,4 +384,26 @@ describe("WorkspaceService.refreshOnWake", () => {
       error: "rate limited",
     });
   });
+
+  it("staggers wake refresh — at most one git status runs at a time", async () => {
+    const monitors = ["/test/wt-1", "/test/wt-2", "/test/wt-3", "/test/wt-4"].map(registerMonitor);
+
+    let inFlight = 0;
+    let maxInFlight = 0;
+    for (const monitor of monitors) {
+      vi.spyOn(monitor, "updateGitStatus").mockImplementation(async () => {
+        inFlight++;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        await new Promise((r) => setTimeout(r, 5));
+        inFlight--;
+      });
+    }
+
+    await service.refreshOnWake("req-wake-stagger");
+
+    expect(maxInFlight).toBe(1);
+    for (const monitor of monitors) {
+      expect(monitor.updateGitStatus).toHaveBeenCalledWith(true);
+    }
+  });
 });
