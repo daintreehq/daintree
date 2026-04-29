@@ -540,11 +540,11 @@ describe("notify()", () => {
       expect(notification!.duration).toBe(TOAST_DURATION.success);
     });
 
-    it("applies a 4s default for info notifications", () => {
+    it("applies an 8s default for info notifications", () => {
       vi.spyOn(document, "hasFocus").mockReturnValue(true);
       notify({ type: "info", message: "FYI" });
       const notification = useNotificationStore.getState().notifications[0];
-      expect(notification!.duration).toBe(4000);
+      expect(notification!.duration).toBe(8000);
       expect(notification!.duration).toBe(TOAST_DURATION.info);
     });
 

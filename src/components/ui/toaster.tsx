@@ -97,7 +97,7 @@ function Toast({ notification }: { notification: Notification }) {
 
   const handleDismiss = useCallback(() => {
     // If the notification is already dismissed, this click came in during the
-    // 300ms fade after an eviction (or a double-click race). Skip the
+    // 200ms fade after an eviction (or a double-click race). Skip the
     // user-dismiss callback so eviction/reentrancy don't fire onDismiss.
     if (notification.dismissed) return;
     restoreFocus();
@@ -110,14 +110,14 @@ function Toast({ notification }: { notification: Notification }) {
     }
     dismissNotification(notification.id);
     setIsVisible(false);
-    setTimeout(() => removeNotification(notification.id), 300);
+    setTimeout(() => removeNotification(notification.id), 200);
   }, [notification, dismissNotification, removeNotification, restoreFocus]);
 
   useEffect(() => {
     if (notification.dismissed && isVisible) {
       restoreFocus();
       setIsVisible(false);
-      setTimeout(() => removeNotification(notification.id), 300);
+      setTimeout(() => removeNotification(notification.id), 200);
     }
   }, [notification.dismissed, notification.id, isVisible, removeNotification, restoreFocus]);
 
@@ -157,7 +157,7 @@ function Toast({ notification }: { notification: Notification }) {
         "text-sm text-daintree-text",
         "shadow-[var(--theme-shadow-floating)]",
         "ring-1 ring-inset ring-tint/[0.05]",
-        "transition-[transform,opacity] duration-300 ease-out",
+        "transition-[transform,opacity] duration-200 ease-out",
         "motion-reduce:transition-none motion-reduce:duration-0",
         isVisible ? "translate-x-0 opacity-100" : "translate-x-8 opacity-0",
         accentClass

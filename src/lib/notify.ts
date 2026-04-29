@@ -18,7 +18,9 @@ import type { ErrorType } from "@/store/errorStore";
  * Default auto-dismiss durations (ms) by notification type.
  *
  * Errors and warnings get a generous 12s so the user has time to read them;
- * success and info dismiss in 4s to match Sonner / Material 3 norms. The
+ * success dismisses in 4s (two-word confirmations need no more). Info gets
+ * 8s to match the Atlassian accessibility minimum for sentence-length
+ * content. The
  * persistent inbox is the WCAG 2.2.1 conforming alternative — users who miss
  * a toast can always recover it from the notification center.
  *
@@ -29,7 +31,7 @@ export const TOAST_DURATION: Record<NotificationType, number> = {
   error: 12000,
   warning: 12000,
   success: 4000,
-  info: 4000,
+  info: 8000,
 };
 
 export interface ComboOptions {
