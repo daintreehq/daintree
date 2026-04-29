@@ -55,6 +55,7 @@ export const AGENT_DESCRIPTIONS: Record<string, string> = {
   cursor: "Cursor's agentic coding assistant",
   kiro: "Spec-driven development with autonomous execution",
   copilot: "GitHub's AI assistant with broad model choice",
+  crush: "Charmbracelet's multi-provider Bubble Tea TUI agent",
 };
 
 /**

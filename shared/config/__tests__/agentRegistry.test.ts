@@ -48,6 +48,13 @@ describe("agentRegistry", () => {
       expect(config?.install?.byOs?.windows).toBeUndefined();
     });
 
+    it("crush only has macOS and Linux install blocks (no Windows)", () => {
+      const config = getAgentConfig("crush");
+      expect(config?.install?.byOs?.macos?.length).toBeGreaterThan(0);
+      expect(config?.install?.byOs?.linux?.length).toBeGreaterThan(0);
+      expect(config?.install?.byOs?.windows).toBeUndefined();
+    });
+
     it("each built-in agent has a non-empty color", () => {
       const ids = getAgentIds();
       for (const id of ids) {
