@@ -491,7 +491,11 @@ export function _resetPendingSettingsRecovery(): void {
   pendingSettingsRecovery = null;
 }
 
+let storeInstance: Store<StoreSchema> | undefined;
+
 export function initializeStore(options: typeof storeOptions = storeOptions): Store<StoreSchema> {
+  if (storeInstance) return storeInstance;
+
   const configPath = resolveConfigPath(options.cwd);
 
   if (configPath) {
@@ -508,7 +512,7 @@ export function initializeStore(options: typeof storeOptions = storeOptions): St
 
   try {
     const preSnapshot = configPath ? readRawSnapshot(configPath) : null;
-    const instance = new Store<StoreSchema>({
+    const created = new Store<StoreSchema>({
       ...options,
       clearInvalidConfig: true,
     });
@@ -524,17 +528,53 @@ export function initializeStore(options: typeof storeOptions = storeOptions): St
         pendingSettingsRecovery = { kind: "reset-to-defaults" };
       }
     } else {
-      refreshBackup(instance.path);
+      refreshBackup(created.path);
     }
-    return instance;
+    storeInstance = created;
+    return created;
   } catch (error) {
     console.warn("[Store] Failed to initialize electron-store, using in-memory fallback:", error);
     pendingSettingsRecovery = { kind: "reset-to-defaults" };
-    return createInMemoryFallback();
+    const fallback = createInMemoryFallback();
+    storeInstance = fallback;
+    return fallback;
   }
 }
 
-export const store = initializeStore();
+export function _resetStoreInstance(): void {
+  storeInstance = undefined;
+}
+
+export function _peekStoreInstance(): Store<StoreSchema> | undefined {
+  return storeInstance;
+}
+
+function getOrLazyInitInstance(): Store<StoreSchema> {
+  // In production, bootstrap.ts calls initializeStore() explicitly before
+  // any module reads the store, so this branch is unreachable. The lazy
+  // fallback exists for tests that import services using `store` without
+  // mocking it: they get the in-memory fallback that the previous
+  // module-load `export const store = initializeStore()` provided implicitly.
+  return storeInstance ?? initializeStore();
+}
+
+export const store = new Proxy({} as Store<StoreSchema>, {
+  get(_target, prop) {
+    const instance = getOrLazyInitInstance();
+    const value = Reflect.get(instance as object, prop, instance);
+    return typeof value === "function"
+      ? (value as (...args: unknown[]) => unknown).bind(instance)
+      : value;
+  },
+  set(_target, prop, value) {
+    const instance = getOrLazyInitInstance();
+    return Reflect.set(instance as object, prop, value, instance);
+  },
+  has(_target, prop) {
+    const instance = getOrLazyInitInstance();
+    return Reflect.has(instance as object, prop);
+  },
+});
 
 export {
   resolveConfigPath,

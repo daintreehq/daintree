@@ -17,6 +17,7 @@ import {
   initializeStore,
   consumePendingSettingsRecovery,
   _resetPendingSettingsRecovery,
+  _resetStoreInstance,
 } from "../store.js";
 
 describe("Store backup/restore helpers", () => {
@@ -152,11 +153,13 @@ describe("initializeStore", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2025-06-15T12:00:00.000Z"));
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "daintree-store-init-"));
+    _resetStoreInstance();
   });
 
   afterEach(() => {
     vi.useRealTimers();
     _resetPendingSettingsRecovery();
+    _resetStoreInstance();
     fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
@@ -267,6 +270,17 @@ describe("initializeStore", () => {
     const recovery = consumePendingSettingsRecovery();
     expect(recovery?.kind).toBe("restored-from-backup");
     expect(recovery?.quarantinedPath).toBeDefined();
+  });
+
+  it("is idempotent — second call returns the same instance and skips re-init", () => {
+    const first = initializeStore(testOptions(tempDir));
+    const configPath = path.join(tempDir, "config.json");
+    fs.writeFileSync(configPath, "{corrupt!", "utf8");
+    const second = initializeStore(testOptions(tempDir));
+    expect(second).toBe(first);
+    // Existing config left untouched — no quarantine triggered on second call
+    expect(fs.readFileSync(configPath, "utf8")).toBe("{corrupt!");
+    expect(consumePendingSettingsRecovery()).toBeNull();
   });
 
   describe("consumePendingSettingsRecovery", () => {
