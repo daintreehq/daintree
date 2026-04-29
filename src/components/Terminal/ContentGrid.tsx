@@ -670,6 +670,13 @@ export function ContentGrid({
     }
   }, [layoutConfig, clearPreMaximizeLayout]);
 
+  // Hysteresis input for the automatic-strategy column count: holds the prior
+  // committed value so a brief drop in panel count doesn't ricochet the grid
+  // back through a re-flow. Read by the useMemo below; updated in the
+  // existing prevGridColsRef effect (~line 858) to mirror the codebase's
+  // established "previous value via ref" pattern.
+  const hysteresisGridColsRef = useRef<number | undefined>(undefined);
+
   const gridCols = useMemo(() => {
     if (
       !maximizedId &&
@@ -683,7 +690,13 @@ export function ContentGrid({
       return preMaximizeLayout.gridCols;
     }
     const { strategy, value } = layoutConfig;
-    return computeGridColumns(gridItemCount, gridWidth, strategy, value);
+    return computeGridColumns(
+      gridItemCount,
+      gridWidth,
+      strategy,
+      value,
+      hysteresisGridColsRef.current
+    );
   }, [gridItemCount, layoutConfig, gridWidth, maximizedId, preMaximizeLayout, activeWorktreeId]);
 
   // FLIP transition shared across every panel in this grid. During project
@@ -764,10 +777,21 @@ export function ContentGrid({
     return fleetPanels.some((t) => (t.worktreeId ?? null) !== firstWorktreeId);
   }, [fleetPanels]);
 
+  // Independent hysteresis state for the fleet grid — must not share with the
+  // main grid because fleet spans different worktrees with its own panel
+  // count history.
+  const hysteresisFleetColsRef = useRef<number | undefined>(undefined);
+
   const fleetGridCols = useMemo(() => {
     if (!isFleetScopeRender) return 1;
     const { strategy, value } = layoutConfig;
-    return computeGridColumns(Math.max(fleetPanels.length, 1), gridWidth, strategy, value);
+    return computeGridColumns(
+      Math.max(fleetPanels.length, 1),
+      gridWidth,
+      strategy,
+      value,
+      hysteresisFleetColsRef.current
+    );
   }, [isFleetScopeRender, fleetPanels, layoutConfig, gridWidth]);
 
   // Dedicated fleet batch-fit: the main startBatchFit closure reads
@@ -780,8 +804,15 @@ export function ContentGrid({
   // otherwise demote them to BACKGROUND (showing stale frames).
   const prevFleetGridColsRef = useRef(fleetGridCols);
   useEffect(() => {
+    // Hysteresis ref is only meaningful for the automatic strategy — fixed
+    // strategies produce user-chosen counts that must not bias a future auto
+    // computation. Cleared whenever strategy isn't automatic or fleet scope
+    // isn't actively rendering.
+    const writeFleetHysteresis =
+      isFleetScopeRender && layoutConfig.strategy === "automatic" ? fleetGridCols : undefined;
     if (!isFleetScopeRender) {
       prevFleetGridColsRef.current = fleetGridCols;
+      hysteresisFleetColsRef.current = writeFleetHysteresis;
       return;
     }
     const ids = fleetPanels.map((t) => t.id);
@@ -792,6 +823,7 @@ export function ContentGrid({
     // count changes so motion.div translations don't trigger spurious SIGWINCH.
     const fleetColsChanged = prevFleetGridColsRef.current !== fleetGridCols;
     prevFleetGridColsRef.current = fleetGridCols;
+    hysteresisFleetColsRef.current = writeFleetHysteresis;
     if (fleetColsChanged && !isDraggingRef.current && ids.length > 0) {
       terminalInstanceService.suppressResizesDuringLayoutTransition(
         ids,
@@ -818,7 +850,7 @@ export function ContentGrid({
       cancelRef.cancelled = true;
       clearTimeout(timeoutId);
     };
-  }, [isFleetScopeRender, fleetPanels, fleetGridCols]);
+  }, [isFleetScopeRender, fleetPanels, fleetGridCols, layoutConfig.strategy]);
 
   // Batch-fit grid terminals when layout (gridCols/count) changes.
   // gridTerminals is read via useEffectEvent so the effect doesn't re-run on
@@ -861,6 +893,14 @@ export function ContentGrid({
 
     const colsChanged = prevGridColsRef.current !== gridCols;
     prevGridColsRef.current = gridCols;
+    // Only retain hysteresis state for the automatic strategy. Fixed strategies
+    // produce user-chosen column counts that must not bias a future automatic
+    // computation (e.g. fixed-columns=4 leaving the auto path stuck at 4).
+    // Skip the write while a drag placeholder is active so a phantom +1 in
+    // gridItemCount can't permanently sticky-widen the grid after a cancelled
+    // drop.
+    hysteresisGridColsRef.current =
+      layoutConfig.strategy === "automatic" && !showPlaceholder ? gridCols : undefined;
 
     if (colsChanged && !isProjectSwitching && !isDraggingRef.current) {
       const realPanelIds = panelIds.filter((id) => id !== GRID_PLACEHOLDER_ID);
@@ -879,7 +919,7 @@ export function ContentGrid({
       cancelRef.cancelled = true;
       clearTimeout(timeoutId);
     };
-  }, [gridCols, panelIds, isProjectSwitching]);
+  }, [gridCols, panelIds, isProjectSwitching, layoutConfig.strategy, showPlaceholder]);
 
   // Show "grid full" overlay when trying to drag from dock to a full grid
   const showGridFullOverlay = sourceContainer === "dock" && isGridFull;

@@ -126,13 +126,35 @@ export function useGridNavigation(options: UseGridNavigationOptions = {}) {
     return getTabGroups("grid", activeWorktreeId ?? undefined);
   }, [getTabGroups, activeWorktreeId, tabGroups, panelIds, panelsById]);
 
+  // Hysteresis input mirroring ContentGrid: keyboard-nav column count must
+  // track the visual grid through the same sticky boundaries, otherwise arrow
+  // navigation maps to wrong cells when count drops into the buffer zone.
+  // Two refs (normal vs fleet) mirror ContentGrid's split so a normal-grid
+  // history doesn't bleed into a fleet-scope render.
+  const hysteresisNavGridColsRef = useRef<number | undefined>(undefined);
+  const hysteresisNavFleetColsRef = useRef<number | undefined>(undefined);
+
   // Compute gridCols using visual group count, matching ContentGrid's gridItemCount.
   // In fleet scope render, count is fleet panels (matches ContentGrid.fleetGridCols).
   const gridCols = useMemo(() => {
     const { strategy, value } = layoutConfig;
     const count = isFleetScopeRender ? Math.max(fleetPanels.length, 1) : gridGroups.length;
-    return computeGridColumns(count, gridWidth, strategy, value);
+    const previousCols = isFleetScopeRender
+      ? hysteresisNavFleetColsRef.current
+      : hysteresisNavGridColsRef.current;
+    return computeGridColumns(count, gridWidth, strategy, value, previousCols);
   }, [isFleetScopeRender, fleetPanels.length, gridGroups.length, layoutConfig, gridWidth]);
+
+  useEffect(() => {
+    // Only retain hysteresis state for the automatic strategy. Fixed strategies
+    // produce user-chosen counts that must not bias a later auto computation.
+    const value = layoutConfig.strategy === "automatic" ? gridCols : undefined;
+    if (isFleetScopeRender) {
+      hysteresisNavFleetColsRef.current = value;
+    } else {
+      hysteresisNavGridColsRef.current = value;
+    }
+  }, [gridCols, isFleetScopeRender, layoutConfig.strategy]);
 
   // Compute grid layout from visual groups (no DOM measurement). Fleet branch
   // treats each armed panel as its own single-cell position, mirroring how
