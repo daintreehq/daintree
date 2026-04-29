@@ -35,8 +35,12 @@ vi.mock("simple-git", () => ({
   simpleGit: vi.fn(() => ({ raw: vi.fn(), log: vi.fn().mockResolvedValue({ latest: null }) })),
 }));
 
+const { mockCategorizeWorktree } = vi.hoisted(() => ({
+  mockCategorizeWorktree: vi.fn().mockReturnValue("stable"),
+}));
+
 vi.mock("../../services/worktree/mood.js", () => ({
-  categorizeWorktree: vi.fn().mockReturnValue("stable"),
+  categorizeWorktree: mockCategorizeWorktree,
 }));
 
 vi.mock("../../services/issueExtractor.js", () => ({
@@ -141,6 +145,7 @@ describe("WorktreeMonitor", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.clearAllMocks();
+    mockCategorizeWorktree.mockReturnValue("stable");
     mockWatcherStartResult = false;
     mockWatcherStartFiresFailure = false;
     watcherStartCallCount = 0;
@@ -1322,6 +1327,82 @@ describe("WorktreeMonitor", () => {
       const moods = getMoodSequence(callbacks);
       expect(moods).toContain("stale");
 
+      monitor.stop();
+    });
+
+    it("does not emit stale while a refresh is already in flight", async () => {
+      mockGetWorktreeChangesWithStats.mockResolvedValue(CLEAN_CHANGES);
+
+      const callbacks = makeCallbacks();
+      const monitor = new WorktreeMonitor(TEST_WORKTREE, TEST_CONFIG, callbacks, "main");
+      await monitor.start();
+
+      mockGetWorktreeChangesWithStats.mockClear();
+      // Simulate an in-flight refresh AND an aged completion timestamp.
+      (monitor as unknown as { _isUpdating: boolean })._isUpdating = true;
+      (monitor as unknown as { lastGitStatusCompletedAt: number }).lastGitStatusCompletedAt =
+        Date.now() - 60_000;
+
+      await vi.advanceTimersByTimeAsync(5000);
+
+      const moods = getMoodSequence(callbacks);
+      expect(moods).not.toContain("stale");
+      // Force-refresh path is gated behind the gap check, so it must not have
+      // kicked off a duplicate git call either.
+      expect(mockGetWorktreeChangesWithStats).not.toHaveBeenCalled();
+
+      // Restore so stop() doesn't trip an in-flight assertion in teardown.
+      (monitor as unknown as { _isUpdating: boolean })._isUpdating = false;
+      monitor.stop();
+    });
+
+    it("retains 'error' mood when the forced refresh fails", async () => {
+      mockGetWorktreeChangesWithStats.mockResolvedValueOnce(CLEAN_CHANGES);
+
+      const callbacks = makeCallbacks();
+      const monitor = new WorktreeMonitor(TEST_WORKTREE, TEST_CONFIG, callbacks, "main");
+      await monitor.start();
+
+      mockGetWorktreeChangesWithStats.mockReset();
+      mockGetWorktreeChangesWithStats.mockRejectedValue(new Error("git stalled"));
+      (monitor as unknown as { lastGitStatusCompletedAt: number }).lastGitStatusCompletedAt =
+        Date.now() - 60_000;
+
+      await vi.advanceTimersByTimeAsync(5000);
+      // Drain microtasks queued by the failing refresh.
+      await vi.advanceTimersByTimeAsync(0);
+
+      const moods = getMoodSequence(callbacks);
+      expect(moods).toContain("stale");
+      // updateGitStatus's catch path emits "error" before throwing; the gap
+      // helper swallows the throw so the monitor stays alive.
+      expect(moods).toContain("error");
+      // Monitor is still running and a follow-up timer is pending.
+      expect((monitor as unknown as { _isRunning: boolean })._isRunning).toBe(true);
+
+      monitor.stop();
+    });
+
+    it("forced refresh produces real categorized mood, not 'stale'", async () => {
+      mockGetWorktreeChangesWithStats.mockResolvedValue(CLEAN_CHANGES);
+      // After the gap-driven refresh runs, categorize as something non-trivial.
+      mockCategorizeWorktree.mockReturnValue("dirty");
+
+      const callbacks = makeCallbacks();
+      const monitor = new WorktreeMonitor(TEST_WORKTREE, TEST_CONFIG, callbacks, "main");
+      await monitor.start();
+
+      (monitor as unknown as { lastGitStatusCompletedAt: number }).lastGitStatusCompletedAt =
+        Date.now() - 60_000;
+
+      await vi.advanceTimersByTimeAsync(5000);
+      await vi.advanceTimersByTimeAsync(0);
+
+      const moods = getMoodSequence(callbacks);
+      expect(moods).toContain("stale");
+      expect(moods[moods.length - 1]).toBe("dirty");
+
+      mockCategorizeWorktree.mockReturnValue("stable");
       monitor.stop();
     });
   });

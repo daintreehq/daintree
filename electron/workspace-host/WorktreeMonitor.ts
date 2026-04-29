@@ -909,7 +909,10 @@ export class WorktreeMonitor {
       // wall time since the last completed poll. Surface "stale" so the
       // card dims, then force-refresh — categorizeWorktree() on the
       // refreshed status will overwrite mood with the real value.
-      if (this.lastGitStatusCompletedAt > 0) {
+      // Skip the gap check while a refresh is already in flight: it would
+      // false-emit "stale" for any updateGitStatus that happens to take
+      // longer than the floor (e.g., a slow git on a frozen filesystem).
+      if (!this._isUpdating && this.lastGitStatusCompletedAt > 0) {
         const elapsedMs = Date.now() - this.lastGitStatusCompletedAt;
         const threshold = Math.max(delayMs * HEARTBEAT_GAP_MULTIPLIER, HEARTBEAT_GAP_FLOOR_MS);
         if (elapsedMs > threshold) {
@@ -925,10 +928,23 @@ export class WorktreeMonitor {
   }
 
   private async forceRefreshAfterGap(): Promise<void> {
+    // Route through pollQueue when present so wake-induced gap refreshes are
+    // serialized across sibling monitors instead of all racing simultaneously.
+    const run = (): Promise<void> =>
+      this.updateGitStatus(true).catch(() => {
+        // updateGitStatus's own error path emits "error" mood; nothing to do here.
+      });
     try {
-      await this.updateGitStatus(true);
+      if (this.pollQueue) {
+        await this.pollQueue.add(run, {
+          signal: this._pollAbortController.signal,
+          priority: this._isCurrent ? 1 : 0,
+        });
+      } else {
+        await run();
+      }
     } catch {
-      // updateGitStatus's own error path emits "error" mood; nothing to do here.
+      // Queue abort or task error — already swallowed by run() / signal.
     }
     if (this._isRunning && this.pollingEnabled) {
       this.scheduleNextPoll();
