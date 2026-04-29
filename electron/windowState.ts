@@ -117,8 +117,8 @@ function clampToDisplay(bounds: { x: number; y: number; width: number; height: n
 
 function resolveWindowBounds(projectPath: string | null | undefined): WindowStateBounds {
   // 1. Try per-project state
+  const windowStates = windowStatesStore.get("windowStates") ?? {};
   if (projectPath) {
-    const windowStates = windowStatesStore.get("windowStates") ?? {};
     if (windowStates[projectPath]) {
       return { isFullScreen: false, ...windowStates[projectPath] };
     }
@@ -140,15 +140,27 @@ function resolveWindowBounds(projectPath: string | null | undefined): WindowStat
     }
   }
 
-  // 3. Defaults
+  // 3. Cold-start restore: startup may not know the project path yet, so use
+  // the last shell window state exactly (no cascade offset, preserve maximize).
+  if (!projectPath) {
+    const mru = getMruBounds();
+    if (mru) {
+      return mru;
+    }
+  }
+
+  // 4. Defaults
   return { width: 1200, height: 800, isMaximized: false, isFullScreen: false };
 }
 
-function saveWindowStateForProject(projectPath: string, bounds: WindowStateBounds): void {
+function saveWindowStates(projectPath: string | null | undefined, bounds: WindowStateBounds): void {
   const windowStates = windowStatesStore.get("windowStates") ?? {};
-  windowStates[projectPath] = bounds;
+  if (projectPath) {
+    windowStates[projectPath] = bounds;
+  }
+  windowStates[LEGACY_KEY] = bounds;
   windowStatesStore.set("windowStates", windowStates);
-  lastSavedProjectPath = projectPath;
+  lastSavedProjectPath = projectPath ?? LEGACY_KEY;
 }
 
 export function createWindowWithState(
@@ -227,11 +239,7 @@ export function createWindowWithState(
     };
 
     const resolvedPath = projectPath ?? getCurrentProjectPath();
-    if (resolvedPath) {
-      saveWindowStateForProject(resolvedPath, entry);
-    } else {
-      saveWindowStateForProject(LEGACY_KEY, entry);
-    }
+    saveWindowStates(resolvedPath, entry);
   };
 
   const debouncedSaveState = debounce(saveState, 500);

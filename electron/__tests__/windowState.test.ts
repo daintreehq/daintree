@@ -113,6 +113,61 @@ describe("createWindowWithState", () => {
       expect(constructorCalls[0]).toEqual(expect.objectContaining({ width: 1200, height: 800 }));
     });
 
+    it("restores __legacy__ state exactly when no projectPath is provided", () => {
+      windowStatesStoreMock.get.mockReturnValue({
+        __legacy__: {
+          x: 250,
+          y: 180,
+          width: 1500,
+          height: 920,
+          isMaximized: false,
+          isFullScreen: false,
+        },
+      });
+
+      createWindowWithState({ show: false });
+
+      expect(constructorCalls[0]).toEqual(
+        expect.objectContaining({ x: 250, y: 180, width: 1500, height: 920 })
+      );
+    });
+
+    it("restores maximized __legacy__ state when no projectPath is provided", () => {
+      windowStatesStoreMock.get.mockReturnValue({
+        __legacy__: {
+          x: 100,
+          y: 100,
+          width: 1200,
+          height: 800,
+          isMaximized: true,
+          isFullScreen: false,
+        },
+      });
+
+      createWindowWithState({ show: false });
+
+      expect(winInstance.maximize).toHaveBeenCalled();
+    });
+
+    it("uses an existing project entry without offset for no-project cold start", () => {
+      windowStatesStoreMock.get.mockReturnValue({
+        "/home/user/project-a": {
+          x: 120,
+          y: 140,
+          width: 1340,
+          height: 860,
+          isMaximized: false,
+          isFullScreen: false,
+        },
+      });
+
+      createWindowWithState({ show: false });
+
+      expect(constructorCalls[0]).toEqual(
+        expect.objectContaining({ x: 120, y: 140, width: 1340, height: 860 })
+      );
+    });
+
     it("does not cascade maximized state from MRU fallback", () => {
       windowStatesStoreMock.get.mockReturnValue({
         "/home/user/other": { x: 0, y: 0, width: 1920, height: 1080, isMaximized: true },
@@ -347,6 +402,29 @@ describe("createWindowWithState", () => {
             height: expect.any(Number),
             isMaximized: false,
             isFullScreen: false,
+          }),
+        })
+      );
+    });
+
+    it("also updates __legacy__ when saving project-specific state", () => {
+      windowStatesStoreMock.get.mockReturnValue({});
+
+      createWindowWithState({ show: false }, "/home/user/project-a");
+
+      const closeHandler = eventHandlers.get("close");
+      closeHandler!();
+
+      expect(windowStatesStoreMock.set).toHaveBeenCalledWith(
+        "windowStates",
+        expect.objectContaining({
+          "/home/user/project-a": expect.objectContaining({
+            width: expect.any(Number),
+            height: expect.any(Number),
+          }),
+          __legacy__: expect.objectContaining({
+            width: expect.any(Number),
+            height: expect.any(Number),
           }),
         })
       );
