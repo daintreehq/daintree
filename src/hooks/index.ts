@@ -102,6 +102,11 @@ export type { UseUnsavedChangesOptions } from "./useUnsavedChanges";
 
 export { useDebounce } from "./useDebounce";
 
+export { useDeferredLoading } from "./useDeferredLoading";
+
+export { useSlowCall } from "./useSlowCall";
+export type { UseSlowCallOptions, UseSlowCallReturn } from "./useSlowCall";
+
 export { useShortcutHintHover } from "./useShortcutHintHover";
 
 export { useTruncationDetection, isElementTruncated } from "./useTruncationDetection";
