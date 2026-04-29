@@ -246,27 +246,9 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
       close();
 
       if (project.isBackground) {
-        try {
-          await reopenProject(project.id);
-        } catch (error) {
-          notify({
-            type: "error",
-            title: "Failed to reopen project",
-            message: formatErrorMessage(error, "Failed to reopen project"),
-            duration: 5000,
-          });
-        }
+        void reopenProject(project.id);
       } else {
-        try {
-          await switchProject(project.id);
-        } catch (error) {
-          notify({
-            type: "error",
-            title: "Failed to switch project",
-            message: formatErrorMessage(error, "Failed to switch project"),
-            duration: 5000,
-          });
-        }
+        void switchProject(project.id);
       }
     },
     [close, switchProject, reopenProject]
@@ -299,15 +281,29 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
     async (projectId: string) => {
       const project = searchableProjects.find((p) => p.id === projectId);
       if (!project) return;
+      const wantPinned = !project.isPinned;
       try {
-        await projectClient.update(projectId, { pinned: !project.isPinned });
+        await projectClient.update(projectId, { pinned: wantPinned });
         await loadProjects();
       } catch (error) {
+        const retry = async () => {
+          try {
+            await projectClient.update(projectId, { pinned: wantPinned });
+            await loadProjects();
+          } catch (retryError) {
+            notify({
+              type: "error",
+              title: "Failed to update project",
+              message: formatErrorMessage(retryError, "Failed to update project"),
+              actions: [{ label: "Try again", variant: "primary", onClick: retry }],
+            });
+          }
+        };
         notify({
           type: "error",
           title: "Failed to update project",
           message: formatErrorMessage(error, "Failed to update project"),
-          duration: 5000,
+          actions: [{ label: "Try again", variant: "primary", onClick: retry }],
         });
       }
     },
@@ -326,15 +322,29 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
     if (!stopConfirmProjectId) return;
     setIsStoppingProject(true);
 
+    const capturedId = stopConfirmProjectId;
+
     try {
-      await closeProject(stopConfirmProjectId, { killTerminals: true });
+      await closeProject(capturedId, { killTerminals: true });
       setStopConfirmProjectId(null);
     } catch (error) {
+      const retry = async () => {
+        try {
+          await closeProject(capturedId, { killTerminals: true });
+        } catch (retryError) {
+          notify({
+            type: "error",
+            title: "Failed to stop project",
+            message: formatErrorMessage(retryError, "Failed to stop project"),
+            actions: [{ label: "Try again", variant: "primary", onClick: retry }],
+          });
+        }
+      };
       notify({
         type: "error",
         title: "Failed to stop project",
         message: formatErrorMessage(error, "Failed to stop project"),
-        duration: 5000,
+        actions: [{ label: "Try again", variant: "primary", onClick: retry }],
       });
     } finally {
       setIsStoppingProject(false);
@@ -358,14 +368,36 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
 
     setIsRemovingProject(true);
 
+    const capturedId = removeConfirmProject.id;
+
     try {
       if (removeConfirmProject.isActive) {
-        await closeActiveProject(removeConfirmProject.id);
+        await closeActiveProject(capturedId);
       } else {
-        await removeProject(removeConfirmProject.id);
+        await removeProject(capturedId);
       }
       setRemoveConfirmProject(null);
     } catch (error) {
+      const retry = async () => {
+        const isActive = useProjectStore.getState().currentProject?.id === capturedId;
+        try {
+          if (isActive) {
+            await closeActiveProject(capturedId);
+          } else {
+            await removeProject(capturedId);
+          }
+        } catch (retryError) {
+          notify({
+            type: "error",
+            title: isActive ? "Failed to close project" : "Failed to remove project",
+            message: formatErrorMessage(
+              retryError,
+              isActive ? "Failed to close project" : "Failed to remove project"
+            ),
+            actions: [{ label: "Try again", variant: "primary", onClick: retry }],
+          });
+        }
+      };
       notify({
         type: "error",
         title: removeConfirmProject.isActive
@@ -375,7 +407,7 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
           error,
           removeConfirmProject.isActive ? "Failed to close project" : "Failed to remove project"
         ),
-        duration: 5000,
+        actions: [{ label: "Try again", variant: "primary", onClick: retry }],
       });
     } finally {
       setIsRemovingProject(false);

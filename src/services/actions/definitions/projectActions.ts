@@ -27,7 +27,15 @@ async function runMruFallbackSwitch(direction: "older" | "newer"): Promise<void>
       type: "error",
       title: "Failed to switch project",
       message: formatErrorMessage(error, "Failed to switch project"),
-      duration: 5000,
+      actions: [
+        {
+          label: "Try again",
+          variant: "primary",
+          onClick: () => {
+            void runMruFallbackSwitch(direction);
+          },
+        },
+      ],
     });
   }
 }
