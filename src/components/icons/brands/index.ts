@@ -8,6 +8,7 @@ export { KiroIcon } from "./KiroIcon";
 export { CopilotIcon } from "./CopilotIcon";
 export { GooseIcon } from "./GooseIcon";
 export { CrushIcon } from "./CrushIcon";
+export { QwenIcon } from "./QwenIcon";
 
 // JavaScript ecosystem
 export { NpmIcon } from "./NpmIcon";
