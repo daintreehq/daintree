@@ -38,7 +38,7 @@ export function GridPlaceholder({ className }: GridPlaceholderProps) {
       <div
         className={cn(
           "flex items-center gap-2 px-3 h-7 shrink-0 font-mono text-xs",
-          "bg-overlay-subtle border-b border-border-strong/30"
+          "bg-overlay-medium border-b border-border-strong/30"
         )}
       >
         <span className="shrink-0 flex items-center justify-center text-daintree-text/50">

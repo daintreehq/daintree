@@ -88,7 +88,7 @@ export function SortableTerminal({
         style={sortableStyle}
         className={cn(
           "h-full min-w-0 contain-layout contain-style",
-          isDragging && "opacity-40 ring-2 ring-daintree-accent/50 rounded"
+          isDragging && "opacity-40 ring-2 ring-daintree-text/20 rounded"
         )}
       >
         <DragHandleProvider value={{ listeners }}>{children}</DragHandleProvider>
