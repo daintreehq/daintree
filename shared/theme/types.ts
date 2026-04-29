@@ -211,7 +211,7 @@ export type ColorVisionMode = "default" | "red-green" | "blue-yellow";
 
 export interface AppThemeConfig {
   colorSchemeId: string;
-  customSchemes?: string;
+  customSchemes?: AppColorScheme[];
   colorVisionMode?: ColorVisionMode;
   followSystem?: boolean;
   preferredDarkSchemeId?: string;

@@ -635,4 +635,150 @@ describe("appTheme handlers", () => {
       await expect(handler(mockEvent, validScheme)).rejects.toThrow("ENOSPC");
     });
   });
+
+  describe("setCustomSchemes", () => {
+    const validScheme = {
+      id: "custom-1",
+      name: "Custom Theme",
+      type: "dark" as const,
+      builtin: false,
+      tokens: { "surface-canvas": "#111111" },
+    };
+
+    it("persists validated scheme arrays", async () => {
+      storeState.data.appTheme = { colorSchemeId: "daintree" };
+      registerAppThemeHandlers();
+
+      const handler = getHandler(CHANNELS.APP_THEME_SET_CUSTOM_SCHEMES);
+      await handler({}, [validScheme]);
+
+      expect(storeMock.set).toHaveBeenCalledWith(
+        "appTheme",
+        expect.objectContaining({ customSchemes: [validScheme] })
+      );
+    });
+
+    it("rejects invalid scheme arrays", async () => {
+      storeState.data.appTheme = { colorSchemeId: "daintree" };
+      registerAppThemeHandlers();
+
+      const handler = getHandler(CHANNELS.APP_THEME_SET_CUSTOM_SCHEMES);
+      await handler({}, [{ id: "", name: "", type: "dark", builtin: false, tokens: {} }]);
+      await handler({}, "not-an-array");
+      await handler({}, 42);
+
+      const setCalls = storeMock.set.mock.calls.filter(
+        (c: unknown[]) => (c[1] as { customSchemes?: unknown }).customSchemes !== undefined
+      );
+      expect(setCalls).toHaveLength(0);
+    });
+  });
+
+  describe("customSchemes migration", () => {
+    it("migrates legacy JSON string to native array on read", async () => {
+      const legacySchemes = JSON.stringify([
+        { id: "old-theme", name: "Old Theme", type: "dark", builtin: false, tokens: {} },
+      ]);
+      storeState.data.appTheme = {
+        colorSchemeId: "daintree",
+        customSchemes: legacySchemes,
+      };
+      registerAppThemeHandlers();
+
+      const handler = getHandler(CHANNELS.APP_THEME_GET);
+      const config = (await handler({}, {})) as {
+        colorSchemeId: string;
+        customSchemes: unknown[];
+      };
+
+      expect(Array.isArray(config.customSchemes)).toBe(true);
+      expect(config.customSchemes).toHaveLength(1);
+
+      // Verify it rewrote the store with the native array
+      expect(storeMock.set).toHaveBeenCalledWith(
+        "appTheme",
+        expect.objectContaining({
+          customSchemes: expect.any(Array),
+        })
+      );
+    });
+
+    it("returns empty array for malformed legacy JSON", async () => {
+      storeState.data.appTheme = {
+        colorSchemeId: "daintree",
+        customSchemes: "not valid json {{{",
+      };
+      registerAppThemeHandlers();
+
+      const handler = getHandler(CHANNELS.APP_THEME_GET);
+      const config = (await handler({}, {})) as {
+        colorSchemeId: string;
+        customSchemes: unknown[];
+      };
+
+      expect(config.customSchemes).toEqual([]);
+    });
+
+    it("passes through already-migrated native arrays", async () => {
+      const nativeSchemes = [
+        { id: "modern", name: "Modern", type: "light", builtin: false, tokens: {} },
+      ];
+      storeState.data.appTheme = {
+        colorSchemeId: "daintree",
+        customSchemes: nativeSchemes,
+      };
+      registerAppThemeHandlers();
+
+      const handler = getHandler(CHANNELS.APP_THEME_GET);
+      const config = (await handler({}, {})) as {
+        colorSchemeId: string;
+        customSchemes: unknown[];
+      };
+
+      expect(config.customSchemes).toHaveLength(1);
+      expect(config.customSchemes[0]).toMatchObject({ id: "modern" });
+    });
+
+    it("drops invalid entries but preserves valid ones", async () => {
+      const legacySchemes = JSON.stringify([
+        { id: "good", name: "Good", type: "dark", builtin: false, tokens: {} },
+        { id: "bad", name: "", type: "dark", builtin: false, tokens: {} },
+      ]);
+      storeState.data.appTheme = {
+        colorSchemeId: "daintree",
+        customSchemes: legacySchemes,
+      };
+      registerAppThemeHandlers();
+
+      const handler = getHandler(CHANNELS.APP_THEME_GET);
+      const config = (await handler({}, {})) as {
+        colorSchemeId: string;
+        customSchemes: unknown[];
+      };
+
+      expect(config.customSchemes).toHaveLength(1);
+      expect(config.customSchemes[0]).toMatchObject({ id: "good" });
+    });
+
+    it("preserves valid entries when a native array has one corrupt entry", async () => {
+      const nativeSchemes = [
+        { id: "good", name: "Good", type: "dark" as const, builtin: false, tokens: {} },
+        { id: "bad", name: "", type: "dark" as const, builtin: false, tokens: {} },
+      ];
+      storeState.data.appTheme = {
+        colorSchemeId: "daintree",
+        customSchemes: nativeSchemes,
+      };
+      registerAppThemeHandlers();
+
+      const handler = getHandler(CHANNELS.APP_THEME_GET);
+      const config = (await handler({}, {})) as {
+        colorSchemeId: string;
+        customSchemes: unknown[];
+      };
+
+      expect(config.customSchemes).toHaveLength(1);
+      expect(config.customSchemes[0]).toMatchObject({ id: "good" });
+    });
+  });
 });

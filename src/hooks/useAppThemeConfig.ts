@@ -25,16 +25,9 @@ export function useAppThemeConfig() {
       .then((config) => {
         if (cancelled) return;
 
-        if (typeof config.customSchemes === "string" && config.customSchemes.trim()) {
-          try {
-            const schemes = JSON.parse(config.customSchemes);
-            if (Array.isArray(schemes)) {
-              for (const scheme of schemes) {
-                addCustomScheme(normalizeAppColorScheme(scheme as AppColorScheme));
-              }
-            }
-          } catch {
-            // ignore malformed custom schemes
+        if (Array.isArray(config.customSchemes)) {
+          for (const scheme of config.customSchemes) {
+            addCustomScheme(normalizeAppColorScheme(scheme as AppColorScheme));
           }
         }
 

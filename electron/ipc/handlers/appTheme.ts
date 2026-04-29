@@ -3,12 +3,13 @@ import { promises as fs } from "node:fs";
 import { CHANNELS } from "../channels.js";
 import { store } from "../../store.js";
 import { parseAppThemeFile } from "../../utils/appThemeImporter.js";
-import {
-  resolveAppTheme,
-  normalizeAppColorScheme,
-  normalizeAccentHex,
-} from "../../../shared/theme/index.js";
+import { resolveAppTheme, normalizeAccentHex } from "../../../shared/theme/index.js";
 import { typedHandle, typedHandleWithContext, typedSend } from "../utils.js";
+import {
+  appCustomSchemesReadSchema,
+  appCustomSchemesWriteSchema,
+  migrateCustomSchemes,
+} from "../../schemas/customSchemes.js";
 import type {
   AppThemeConfig,
   AppColorScheme,
@@ -29,7 +30,30 @@ function getAppThemeConfig(): AppThemeConfig {
     config.colorSchemeId;
 
   if (hasStoredScheme) {
-    return config as AppThemeConfig;
+    const cfg = config as AppThemeConfig;
+    // Lazy migration: parse legacy string into native AppColorScheme[]
+    if (typeof cfg.customSchemes === "string" || Array.isArray(cfg.customSchemes)) {
+      const result = migrateCustomSchemes(
+        cfg.customSchemes,
+        appCustomSchemesReadSchema,
+        appCustomSchemesWriteSchema
+      );
+      if (result.migrated) {
+        try {
+          store.set("appTheme", {
+            ...cfg,
+            customSchemes: result.schemes.length > 0 ? (result.schemes as AppColorScheme[]) : [],
+          } satisfies AppThemeConfig);
+        } catch {
+          // Non-fatal: config parsed but migration write failed
+        }
+      }
+      if (result.errors.length > 0) {
+        console.warn("[appTheme] customSchemes migration warnings:", result.errors.join("; "));
+      }
+      return { ...cfg, customSchemes: result.schemes as AppColorScheme[] };
+    }
+    return cfg;
   }
 
   const defaultSchemeId = nativeTheme.shouldUseDarkColors
@@ -38,18 +62,8 @@ function getAppThemeConfig(): AppThemeConfig {
   return {
     ...(config && typeof config === "object" && !Array.isArray(config) ? config : {}),
     colorSchemeId: defaultSchemeId,
+    customSchemes: [],
   } as AppThemeConfig;
-}
-
-function parseCustomSchemes(config: AppThemeConfig): AppColorScheme[] {
-  if (typeof config.customSchemes !== "string" || !config.customSchemes.trim()) return [];
-  try {
-    const parsed = JSON.parse(config.customSchemes);
-    if (Array.isArray(parsed)) return parsed.map((s: AppColorScheme) => normalizeAppColorScheme(s));
-  } catch {
-    // Malformed custom schemes
-  }
-  return [];
 }
 
 export function registerAppThemeHandlers(mainWindow?: BrowserWindow): () => void {
@@ -72,15 +86,16 @@ export function registerAppThemeHandlers(mainWindow?: BrowserWindow): () => void
   );
 
   handlers.push(
-    typedHandle(CHANNELS.APP_THEME_SET_CUSTOM_SCHEMES, async (schemesJson: string) => {
-      if (typeof schemesJson !== "string") {
-        console.warn("Invalid app custom schemes:", schemesJson);
+    typedHandle(CHANNELS.APP_THEME_SET_CUSTOM_SCHEMES, async (schemes: unknown) => {
+      const result = appCustomSchemesWriteSchema.safeParse(schemes);
+      if (!result.success) {
+        console.warn("Invalid app custom schemes:", result.error.message);
         return;
       }
       const current = getAppThemeConfig();
       store.set("appTheme", {
         ...current,
-        customSchemes: schemesJson,
+        customSchemes: result.data as AppColorScheme[],
       } satisfies AppThemeConfig);
     })
   );
@@ -250,7 +265,7 @@ export function registerAppThemeHandlers(mainWindow?: BrowserWindow): () => void
 
       typedSend(win, "app-theme:system-appearance-changed", { isDark, schemeId });
 
-      const customSchemes = parseCustomSchemes(config);
+      const customSchemes = config.customSchemes ?? [];
       const scheme = resolveAppTheme(schemeId, customSchemes);
       win.setBackgroundColor(scheme.tokens["surface-canvas"]);
 

@@ -9,8 +9,8 @@ export const appThemeClient = {
     return window.electron.appTheme.setColorScheme(schemeId);
   },
 
-  setCustomSchemes: (schemesJson: string): Promise<void> => {
-    return window.electron.appTheme.setCustomSchemes(schemesJson);
+  setCustomSchemes: (schemes: AppColorScheme[]): Promise<void> => {
+    return window.electron.appTheme.setCustomSchemes(schemes);
   },
 
   importTheme: () => {

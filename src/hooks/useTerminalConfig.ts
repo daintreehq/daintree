@@ -39,16 +39,9 @@ export function useTerminalConfig() {
           // Hydrate directly to avoid polluting the recently-used list on startup
           useTerminalColorSchemeStore.setState({ selectedSchemeId: config.colorSchemeId.trim() });
         }
-        if (typeof config.customSchemes === "string" && config.customSchemes.trim()) {
-          try {
-            const schemes = JSON.parse(config.customSchemes);
-            if (Array.isArray(schemes)) {
-              for (const scheme of schemes) {
-                addCustomScheme(scheme);
-              }
-            }
-          } catch {
-            // ignore malformed custom schemes
+        if (Array.isArray(config.customSchemes)) {
+          for (const scheme of config.customSchemes) {
+            addCustomScheme(scheme);
           }
         }
         if (Array.isArray(config.recentSchemeIds)) {

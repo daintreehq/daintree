@@ -31,7 +31,7 @@ function shuffleArray<T>(arr: T[]): T[] {
 
 async function persistCustomSchemes() {
   const { customSchemes } = useAppThemeStore.getState();
-  await appThemeClient.setCustomSchemes(JSON.stringify(customSchemes));
+  await appThemeClient.setCustomSchemes(customSchemes);
 }
 
 function PreferredSchemePicker({

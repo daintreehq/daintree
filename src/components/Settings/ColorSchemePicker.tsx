@@ -57,7 +57,7 @@ function SchemePreview({ scheme }: { scheme: TerminalColorScheme }) {
 
 async function persistCustomSchemes() {
   const { customSchemes } = useTerminalColorSchemeStore.getState();
-  await terminalConfigClient.setCustomSchemes(JSON.stringify(customSchemes));
+  await terminalConfigClient.setCustomSchemes(customSchemes);
 }
 
 function resolveSchemeForPreview(

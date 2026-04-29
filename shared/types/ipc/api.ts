@@ -737,7 +737,7 @@ export interface ElectronAPI {
     setHybridInputEnabled(enabled: boolean): Promise<void>;
     setHybridInputAutoFocus(enabled: boolean): Promise<void>;
     setColorScheme(schemeId: string): Promise<void>;
-    setCustomSchemes(schemesJson: string): Promise<void>;
+    setCustomSchemes(schemes: unknown): Promise<void>;
     setRecentSchemeIds(ids: string[]): Promise<void>;
     importColorScheme(): Promise<
       | {
@@ -1107,7 +1107,7 @@ export interface ElectronAPI {
   appTheme: {
     get(): Promise<AppThemeConfig>;
     setColorScheme(schemeId: string): Promise<void>;
-    setCustomSchemes(schemesJson: string): Promise<void>;
+    setCustomSchemes(schemes: unknown): Promise<void>;
     importTheme(): Promise<import("../appTheme.js").AppThemeImportResult>;
     exportTheme(scheme: import("../appTheme.js").AppColorScheme): Promise<boolean>;
     setColorVisionMode(mode: import("../appTheme.js").ColorVisionMode): Promise<void>;

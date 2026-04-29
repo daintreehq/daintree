@@ -5,6 +5,11 @@ import { parseColorSchemeFile } from "../../utils/colorSchemeImporter.js";
 import { effectiveCachedProjectViews } from "../../utils/cachedProjectViews.js";
 import type { HandlerDependencies } from "../types.js";
 import { typedHandle, typedHandleWithContext } from "../utils.js";
+import {
+  terminalCustomSchemesReadSchema,
+  terminalCustomSchemesWriteSchema,
+  migrateCustomSchemes,
+} from "../../schemas/customSchemes.js";
 
 function getTerminalConfigObject(): Record<string, unknown> {
   const config = store.get("terminalConfig");
@@ -20,8 +25,37 @@ export function registerTerminalConfigHandlers(deps?: HandlerDependencies): () =
   handlers.push(
     typedHandle(CHANNELS.TERMINAL_CONFIG_GET, async () => {
       const config = getTerminalConfigObject();
+      // Lazy migration: parse legacy customSchemes string into native array
+      let customSchemes = config.customSchemes;
+      if (typeof customSchemes === "string" || Array.isArray(customSchemes)) {
+        const result = migrateCustomSchemes(
+          customSchemes,
+          terminalCustomSchemesReadSchema,
+          terminalCustomSchemesWriteSchema
+        );
+        if (result.migrated) {
+          try {
+            store.set("terminalConfig", {
+              ...config,
+              customSchemes: result.schemes.length > 0 ? result.schemes : [],
+            });
+          } catch {
+            // Non-fatal: config parsed but migration write failed
+          }
+        }
+        if (result.errors.length > 0) {
+          console.warn(
+            "[terminalConfig] customSchemes migration warnings:",
+            result.errors.join("; ")
+          );
+        }
+        customSchemes = result.schemes;
+      } else {
+        customSchemes = [];
+      }
       return {
         ...config,
+        customSchemes,
         cachedProjectViews: effectiveCachedProjectViews(config.cachedProjectViews),
       } as import("../../../shared/types/ipc/config.js").TerminalConfig;
     })
@@ -131,13 +165,14 @@ export function registerTerminalConfigHandlers(deps?: HandlerDependencies): () =
     typedHandle(CHANNELS.TERMINAL_CONFIG_SET_COLOR_SCHEME, handleTerminalConfigSetColorScheme)
   );
 
-  const handleTerminalConfigSetCustomSchemes = async (schemesJson: string) => {
-    if (typeof schemesJson !== "string") {
-      console.warn("Invalid custom schemes:", schemesJson);
+  const handleTerminalConfigSetCustomSchemes = async (schemes: unknown) => {
+    const result = terminalCustomSchemesWriteSchema.safeParse(schemes);
+    if (!result.success) {
+      console.warn("Invalid terminal custom schemes:", result.error.message);
       return;
     }
     const currentConfig = getTerminalConfigObject();
-    store.set("terminalConfig", { ...currentConfig, customSchemes: schemesJson });
+    store.set("terminalConfig", { ...currentConfig, customSchemes: result.data });
   };
   handlers.push(
     typedHandle(CHANNELS.TERMINAL_CONFIG_SET_CUSTOM_SCHEMES, handleTerminalConfigSetCustomSchemes)

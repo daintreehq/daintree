@@ -1629,8 +1629,8 @@ const api: ElectronAPI = {
     setColorScheme: (schemeId: string) =>
       _unwrappingInvoke(CHANNELS.TERMINAL_CONFIG_SET_COLOR_SCHEME, schemeId),
 
-    setCustomSchemes: (schemesJson: string) =>
-      _unwrappingInvoke(CHANNELS.TERMINAL_CONFIG_SET_CUSTOM_SCHEMES, schemesJson),
+    setCustomSchemes: (schemes: unknown) =>
+      _unwrappingInvoke(CHANNELS.TERMINAL_CONFIG_SET_CUSTOM_SCHEMES, schemes),
 
     setRecentSchemeIds: (ids: string[]) =>
       _unwrappingInvoke(CHANNELS.TERMINAL_CONFIG_SET_RECENT_SCHEME_IDS, ids),
@@ -2142,8 +2142,8 @@ const api: ElectronAPI = {
     setColorScheme: (schemeId: string) =>
       _unwrappingInvoke(CHANNELS.APP_THEME_SET_COLOR_SCHEME, schemeId),
 
-    setCustomSchemes: (schemesJson: string) =>
-      _unwrappingInvoke(CHANNELS.APP_THEME_SET_CUSTOM_SCHEMES, schemesJson),
+    setCustomSchemes: (schemes: unknown) =>
+      _unwrappingInvoke(CHANNELS.APP_THEME_SET_CUSTOM_SCHEMES, schemes),
 
     importTheme: () => _unwrappingInvoke(CHANNELS.APP_THEME_IMPORT),
 
