@@ -513,7 +513,7 @@ describe("AgentButton preset UX", () => {
       expect(container.textContent).toContain("Start Claude · Global");
     });
 
-    it("dropdown preset selection persists the pick to the worktree slot before dispatch", () => {
+    it("dropdown preset selection persists the pick without launching the agent", () => {
       mockActiveWorktreeId = "wt-A";
       mockSettings = settingsWith({ claude: {} });
       mockMergedPresetsFn = () => [
@@ -524,23 +524,17 @@ describe("AgentButton preset UX", () => {
       const { getAllByTestId } = render(
         <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
       );
-      // Dropdown items: 0 = Default, 1 = Alpha, 2 = Beta (first occurrence only
-      // — presets list is unsorted in tests so take items in render order).
       const items = getAllByTestId("preset-item") as HTMLElement[];
-      // Pick the preset that is not "Default". Items include one "Default"
-      // menu entry plus one per preset.
       const alphaItem = items.find((el) => el.textContent?.includes("Alpha"))!;
       fireEvent.click(alphaItem);
 
       expect(updateWorktreePresetMock).toHaveBeenCalledWith("claude", "wt-A", "user-alpha");
-      expect(dispatchMock).toHaveBeenCalledWith(
-        "agent.launch",
-        { agentId: "claude", presetId: "user-alpha" },
-        { source: "user" }
-      );
+      // Chevron dropdown is a pure configurer — selecting a preset must not
+      // launch. The primary button is the only launch surface.
+      expect(dispatchMock).not.toHaveBeenCalled();
     });
 
-    it("dropdown Default clears the worktree override before dispatching null", () => {
+    it("dropdown Agent default clears the worktree override without launching", () => {
       mockActiveWorktreeId = "wt-A";
       mockSettings = settingsWith({
         claude: { worktreePresets: { "wt-A": "user-alpha" } },
@@ -554,18 +548,14 @@ describe("AgentButton preset UX", () => {
         <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
       );
       const items = getAllByTestId("preset-item") as HTMLElement[];
-      const defaultItem = items.find((el) => el.textContent?.includes("Default"))!;
+      const defaultItem = items.find((el) => el.textContent?.includes("Agent default"))!;
       fireEvent.click(defaultItem);
 
       expect(updateWorktreePresetMock).toHaveBeenCalledWith("claude", "wt-A", undefined);
-      expect(dispatchMock).toHaveBeenCalledWith(
-        "agent.launch",
-        { agentId: "claude", presetId: null },
-        { source: "user" }
-      );
+      expect(dispatchMock).not.toHaveBeenCalled();
     });
 
-    it("no-ops the worktree persist when no active worktree is set", () => {
+    it("no-ops both persist and launch when no active worktree is set", () => {
       mockActiveWorktreeId = null;
       mockSettings = settingsWith({ claude: {} });
       mockMergedPresetsFn = () => [
@@ -581,11 +571,7 @@ describe("AgentButton preset UX", () => {
       fireEvent.click(alphaItem);
 
       expect(updateWorktreePresetMock).not.toHaveBeenCalled();
-      expect(dispatchMock).toHaveBeenCalledWith(
-        "agent.launch",
-        { agentId: "claude", presetId: "user-alpha" },
-        { source: "user" }
-      );
+      expect(dispatchMock).not.toHaveBeenCalled();
     });
   });
 
@@ -654,7 +640,7 @@ describe("AgentButton preset UX", () => {
       const { getAllByTestId } = render(
         <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
       );
-      expect(tooltipTexts(getAllByTestId)).toContain("Choose Claude preset");
+      expect(tooltipTexts(getAllByTestId)).toContain("Set Claude preset");
     });
 
     it("preserves the preset segment when the sign-in probe is unconfirmed", () => {
@@ -696,7 +682,7 @@ describe("AgentButton preset UX", () => {
       const { getByTestId } = render(
         <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
       );
-      // The Default radio item is rendered with value="" so the group
+      // The Agent default radio item is rendered with value="" so the group
       // resolves to that item when nothing is saved.
       expect(getByTestId("preset-radio-group").getAttribute("data-value")).toBe("");
     });
