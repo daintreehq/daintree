@@ -13,6 +13,11 @@ const SAFE_GIT_CONFIG = [
   // flow through to IPC consumers unquoted (e.g. conflict detection on
   // `café.txt` would otherwise be returned as `"caf\303\251.txt"`).
   "core.quotepath=false",
+  // macOS HFS+/APFS returns filenames as NFD (decomposed Unicode); without
+  // this flag git emits NFD paths in porcelain/status output, causing silent
+  // bitwise inequality against NFC paths from any other source. Pinning it
+  // forces NFC in all porcelain output. No-op on Linux/Windows.
+  "core.precomposeunicode=true",
 ] as const;
 
 /**

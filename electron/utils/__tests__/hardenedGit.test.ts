@@ -138,6 +138,7 @@ describe("createHardenedGit", () => {
       "core.gitProxy=",
       "core.hooksPath=",
       "core.quotepath=false",
+      "core.precomposeunicode=true",
     ];
     for (const key of expectedKeys) {
       expect(options.config).toContain(key);
@@ -615,6 +616,7 @@ describe("config constants", () => {
       "core.gitProxy=",
       "core.hooksPath=",
       "core.quotepath=false",
+      "core.precomposeunicode=true",
     ];
     for (const entry of securityEntries) {
       expect(HARDENED_GIT_CONFIG).toContain(entry);
