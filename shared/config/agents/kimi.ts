@@ -90,7 +90,10 @@ export const config: AgentConfig = {
   },
   authCheck: {
     configPathsAll: [".kimi/config.toml", ".kimi/credentials/kimi-code.json"],
-    envVar: ["KIMI_API_KEY", "OPENAI_API_KEY"],
+    // Only KIMI_API_KEY is a positive signal of Kimi-specific auth. Kimi can
+    // also be pointed at OpenAI-compatible providers, but checking
+    // OPENAI_API_KEY would incorrectly flag Codex-only users as Kimi-ready.
+    envVar: "KIMI_API_KEY",
   },
   prerequisites: [
     {
