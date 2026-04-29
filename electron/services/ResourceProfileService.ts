@@ -54,7 +54,8 @@ export class ResourceProfileService {
     this.memoryThresholdLowMb = totalRamMb * LOW_FRACTION;
   }
 
-  private onThermalStateChange = (_event: Electron.Event, state: string): void => {
+  private onThermalStateChange = (details: { state: string }): void => {
+    const { state } = details;
     if (
       state === "unknown" ||
       state === "nominal" ||
@@ -66,7 +67,8 @@ export class ResourceProfileService {
     }
   };
 
-  private onSpeedLimitChange = (_event: Electron.Event, limit: number): void => {
+  private onSpeedLimitChange = (details: { limit: number }): void => {
+    const { limit } = details;
     if (typeof limit === "number" && !isNaN(limit) && limit >= 0 && limit <= 100) {
       this.speedLimit = limit;
     }

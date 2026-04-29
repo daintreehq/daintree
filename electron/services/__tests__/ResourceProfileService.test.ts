@@ -541,6 +541,83 @@ describe("ResourceProfileService", () => {
     service.stop();
   });
 
+  it("routes thermal-state-change event through handler to profile scoring", () => {
+    const deps = createDeps();
+    const service = new ResourceProfileService(deps);
+    service.start();
+
+    // Capture the thermal handler registered with powerMonitor.on
+    const thermalHandler = mockPowerMonitorOn.mock.calls.find(
+      (call: string[]) => call[0] === "thermal-state-change"
+    )?.[1] as ((details: { state: string }) => void) | undefined;
+    expect(thermalHandler).toBeDefined();
+
+    // Simulate Electron 41 powerMonitor event (single object, not two args)
+    thermalHandler!({ state: "critical" });
+
+    // Low memory (0) + thermal critical (+2) + battery (+1) = 3 => efficiency
+    mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 200)]);
+    mockIsOnBatteryPower.mockReturnValue(true);
+
+    vi.advanceTimersByTime(60_000 + 30_000 + 30_000);
+    expect(service.getProfile()).toBe("efficiency");
+
+    service.stop();
+  });
+
+  it("routes speed-limit-change event through handler to profile scoring", () => {
+    const deps = createDeps();
+    const service = new ResourceProfileService(deps);
+    service.start();
+
+    // Capture the speed-limit handler registered with powerMonitor.on
+    const speedHandler = mockPowerMonitorOn.mock.calls.find(
+      (call: string[]) => call[0] === "speed-limit-change"
+    )?.[1] as ((details: { limit: number }) => void) | undefined;
+    expect(speedHandler).toBeDefined();
+
+    // Simulate Electron 41 powerMonitor event (single object)
+    speedHandler!({ limit: 30 });
+
+    // Low memory (0) + speed limit 30 (+2) = 2 => balanced (need more for efficiency)
+    mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 200)]);
+    mockIsOnBatteryPower.mockReturnValue(false);
+
+    vi.advanceTimersByTime(60_000 + 30_000 + 30_000);
+    expect(service.getProfile()).toBe("balanced");
+
+    service.stop();
+  });
+
+  it("removeListener receives the exact same handler reference passed to on", () => {
+    const service = new ResourceProfileService(createDeps());
+    service.start();
+    service.stop();
+
+    // Get the handlers passed to on
+    const thermalOnArg = mockPowerMonitorOn.mock.calls.find(
+      (call: string[]) => call[0] === "thermal-state-change"
+    )?.[1];
+    const speedOnArg = mockPowerMonitorOn.mock.calls.find(
+      (call: string[]) => call[0] === "speed-limit-change"
+    )?.[1];
+
+    // Get the handlers passed to removeListener
+    const thermalOffArg = mockPowerMonitorRemoveListener.mock.calls.find(
+      (call: string[]) => call[0] === "thermal-state-change"
+    )?.[1];
+    const speedOffArg = mockPowerMonitorRemoveListener.mock.calls.find(
+      (call: string[]) => call[0] === "speed-limit-change"
+    )?.[1];
+
+    expect(thermalOnArg).toBeDefined();
+    expect(thermalOffArg).toBeDefined();
+    expect(thermalOnArg).toBe(thermalOffArg);
+    expect(speedOnArg).toBeDefined();
+    expect(speedOffArg).toBeDefined();
+    expect(speedOnArg).toBe(speedOffArg);
+  });
+
   it("registers powerMonitor listeners on start", () => {
     const service = new ResourceProfileService(createDeps());
     service.start();
