@@ -61,6 +61,14 @@ describe("corpus-replay", () => {
     });
   });
 
+  describe("aider corpus replay", () => {
+    it("achieves >= 90% accuracy on aider sample corpus", () => {
+      const result = replayCorpus(path.join(CORPUS_DIR, "aider_sample.jsonl"), "aider");
+      expect(result.total).toBeGreaterThan(0);
+      expect(result.accuracy).toBeGreaterThanOrEqual(MIN_ACCURACY);
+    });
+  });
+
   describe("replay result structure", () => {
     it("returns detailed wrong entries for debugging", () => {
       const result = replayCorpus(path.join(CORPUS_DIR, "claude_sample.jsonl"), "claude");

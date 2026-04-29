@@ -1404,6 +1404,11 @@ describe("aider configuration", () => {
     const envVars = Array.isArray(auth?.envVar) ? auth?.envVar : [auth?.envVar];
     expect(envVars).toContain("OPENAI_API_KEY");
     expect(envVars).toContain("ANTHROPIC_API_KEY");
+    // AIDER_*_API_KEY variants are documented in envSuggestions; auth must
+    // recognise them so users who set only the AIDER_-prefixed key don't
+    // see a stale "unauthenticated" nudge.
+    expect(envVars).toContain("AIDER_OPENAI_API_KEY");
+    expect(envVars).toContain("AIDER_ANTHROPIC_API_KEY");
   });
 });
 

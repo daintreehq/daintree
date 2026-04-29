@@ -169,6 +169,8 @@ export const config: AgentConfig = {
       "DEEPSEEK_API_KEY",
       "OPENROUTER_API_KEY",
       "AIDER_API_KEY",
+      "AIDER_OPENAI_API_KEY",
+      "AIDER_ANTHROPIC_API_KEY",
     ],
   },
   envSuggestions: [
