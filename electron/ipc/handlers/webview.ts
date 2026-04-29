@@ -638,6 +638,7 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
     let interceptorListener:
       | ((event: Electron.Event, method: string, params: unknown) => void)
       | null = null;
+    let navigationError: Error | null = null;
 
     try {
       if (!wc.debugger.isAttached()) {
@@ -763,6 +764,10 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
         // The page will load, the app's JS will fire the token exchange fetch,
         // and our CDP listener will intercept and rewrite it.
         wc.loadURL(callbackUrl).catch((err) => {
+          // Capture so the outer scope can throw after CDP cleanup runs;
+          // resolving the promise here lets the `finally` block tear down
+          // listeners and Fetch.disable cleanly before the error propagates.
+          navigationError = err instanceof Error ? err : new Error(String(err));
           logError("OAuth callback webview navigation failed", err, { panelId });
           clearTimeout(timeout);
           finishIntercept();
@@ -802,6 +807,15 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
           // Intentional: post-flow CDP cleanup (see above).
         });
       }
+    }
+
+    if (navigationError) {
+      throw new AppError({
+        code: "INTERNAL",
+        message: `OAuth callback navigation failed: ${navigationError.message}`,
+        context: { panelId },
+        cause: navigationError,
+      });
     }
 
     return { success: true };

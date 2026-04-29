@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { Key, Eye, EyeOff, Trash2, Plus, Save } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Spinner } from "@/components/ui/Spinner";
@@ -50,11 +50,16 @@ export function EnvironmentSettingsTab() {
   const [isDirty, setIsDirty] = useState(false);
   const [savedSnapshot, setSavedSnapshot] = useState<Record<string, string>>({});
 
-  // Report validation state to sidebar
-  const hasError = Object.keys(rowErrors).length > 0;
-  useSettingsTabValidation("environment", hasError);
-
   const [loadFailed, setLoadFailed] = useState(false);
+
+  // Report validation state to sidebar — a failed load also marks the tab
+  // as in-error so the sidebar reflects the user-visible error block.
+  const hasError = Object.keys(rowErrors).length > 0;
+  useSettingsTabValidation("environment", hasError || loadFailed);
+
+  // Suppress duplicate toasts when the tab remounts (close/reopen Settings)
+  // while the IPC failure persists — notify() has no dedup-by-key.
+  const notifiedFailureRef = useRef(false);
   useEffect(() => {
     let cancelled = false;
     window.electron.globalEnv
@@ -73,14 +78,17 @@ export function EnvironmentSettingsTab() {
         setLoadFailed(true);
         setIsLoading(false);
         logError("Failed to load global env vars", err);
-        notify({
-          type: "error",
-          title: "Couldn't load environment variables",
-          message:
-            "The settings form couldn't load your saved variables. Saving now would overwrite them with an empty list.",
-          priority: "high",
-          duration: 0,
-        });
+        if (!notifiedFailureRef.current) {
+          notifiedFailureRef.current = true;
+          notify({
+            type: "error",
+            title: "Couldn't load environment variables",
+            message:
+              "The settings form couldn't load your saved variables. Saving now would overwrite them with an empty list.",
+            priority: "high",
+            duration: 0,
+          });
+        }
       });
     return () => {
       cancelled = true;
