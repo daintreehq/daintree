@@ -436,7 +436,10 @@ describe("copilot configuration", () => {
 
   it("produces --resume=id args (equals concatenation)", () => {
     const config = getAgentConfig("copilot");
-    expect(config?.resume?.args("abc-def-123")).toEqual(["--resume=abc-def-123"]);
+    expect(config?.resume?.kind).toBe("session-id");
+    if (config?.resume?.kind === "session-id") {
+      expect(config.resume.args("abc-def-123")).toEqual(["--resume=abc-def-123"]);
+    }
   });
 
   it("has npm install for all platforms including Windows", () => {
@@ -652,42 +655,71 @@ describe("blockAltScreen capabilities", () => {
 });
 
 describe("resume configuration", () => {
-  it("all built-in agents with shutdown config also have resume config", () => {
+  it("session-id agents have a quitCommand and a sessionIdPattern", () => {
     const ids = getAgentIds();
     for (const id of ids) {
-      const config = getAgentConfig(id);
-      if (config?.shutdown) {
-        expect(config.resume).toBeDefined();
-        expect(typeof config.resume?.args).toBe("function");
+      const resume = getAgentConfig(id)?.resume;
+      if (resume?.kind === "session-id") {
+        expect(typeof resume.args).toBe("function");
+        expect(resume.quitCommand).toBeTruthy();
+        expect(resume.sessionIdPattern).toBeTruthy();
       }
     }
   });
 
-  it("claude produces --resume flag args", () => {
-    const config = getAgentConfig("claude");
-    expect(config?.resume?.args("abc-123")).toEqual(["--resume", "abc-123"]);
+  it("claude is session-id and produces --resume flag args", () => {
+    const resume = getAgentConfig("claude")?.resume;
+    expect(resume?.kind).toBe("session-id");
+    if (resume?.kind === "session-id") {
+      expect(resume.args("abc-123")).toEqual(["--resume", "abc-123"]);
+    }
   });
 
-  it("gemini produces --resume flag args", () => {
-    const config = getAgentConfig("gemini");
-    expect(config?.resume?.args("abc-123")).toEqual(["--resume", "abc-123"]);
+  it("gemini is session-id and produces --resume flag args", () => {
+    const resume = getAgentConfig("gemini")?.resume;
+    expect(resume?.kind).toBe("session-id");
+    if (resume?.kind === "session-id") {
+      expect(resume.args("abc-123")).toEqual(["--resume", "abc-123"]);
+    }
   });
 
-  it("codex produces resume subcommand args (no leading dash)", () => {
-    const config = getAgentConfig("codex");
-    const args = config?.resume?.args("abc-123");
-    expect(args).toEqual(["resume", "abc-123"]);
-    expect(args?.[0]).not.toMatch(/^-/);
+  it("codex is session-id and produces resume subcommand args (no leading dash)", () => {
+    const resume = getAgentConfig("codex")?.resume;
+    expect(resume?.kind).toBe("session-id");
+    if (resume?.kind === "session-id") {
+      const args = resume.args("abc-123");
+      expect(args).toEqual(["resume", "abc-123"]);
+      expect(args[0]).not.toMatch(/^-/);
+    }
   });
 
-  it("copilot produces --resume= flag args (equals concatenation)", () => {
-    const config = getAgentConfig("copilot");
-    expect(config?.resume?.args("abc-123")).toEqual(["--resume=abc-123"]);
+  it("copilot is session-id and produces --resume= flag args (equals concatenation)", () => {
+    const resume = getAgentConfig("copilot")?.resume;
+    expect(resume?.kind).toBe("session-id");
+    if (resume?.kind === "session-id") {
+      expect(resume.args("abc-123")).toEqual(["--resume=abc-123"]);
+    }
   });
 
-  it("opencode produces -s flag args", () => {
-    const config = getAgentConfig("opencode");
-    expect(config?.resume?.args("ses_abc")).toEqual(["-s", "ses_abc"]);
+  it("opencode is session-id and produces -s flag args", () => {
+    const resume = getAgentConfig("opencode")?.resume;
+    expect(resume?.kind).toBe("session-id");
+    if (resume?.kind === "session-id") {
+      expect(resume.args("ses_abc")).toEqual(["-s", "ses_abc"]);
+    }
+  });
+
+  it("kiro is project-scoped and produces --resume args without an ID", () => {
+    const resume = getAgentConfig("kiro")?.resume;
+    expect(resume?.kind).toBe("project-scoped");
+    if (resume?.kind === "project-scoped") {
+      expect(resume.args()).toEqual(["--resume"]);
+      expect(resume.quitCommand).toBe("/quit");
+    }
+  });
+
+  it("cursor has no resume config (no session resume model)", () => {
+    expect(getAgentConfig("cursor")?.resume).toBeUndefined();
   });
 });
 

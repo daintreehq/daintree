@@ -57,6 +57,39 @@ interface AgentCheckOutcome {
 const SECURITY_ERROR_CODES = new Set(["EACCES", "EPERM"]);
 
 /**
+ * Synthesise probe paths for PyPI-distributed agents. Modern Python tool
+ * installs land in well-known per-user locations: uv tool, pipx (current
+ * and legacy layouts), and pip --user-shared `~/.local/bin`. We probe
+ * those before falling back to the npm-global / WSL probes so a uv-installed
+ * agent on a host without the tool dir on PATH still resolves.
+ *
+ * Returns paths in priority order. Tilde and `%VAR%` expansion is handled
+ * downstream by `expandPath()`.
+ */
+function synthesisePypiProbePaths(command: string, pypiPackage: string): string[] {
+  if (process.platform === "win32") {
+    return [
+      // uv tool publishes a launcher to `%USERPROFILE%\.local\bin\<cmd>.exe`
+      `%USERPROFILE%\\.local\\bin\\${command}.exe`,
+      // uv tool venv layout (Roaming AppData, since uv >= 0.4)
+      `%APPDATA%\\uv\\tools\\${pypiPackage}\\Scripts\\${command}.exe`,
+      // pipx default on Windows (≥ 1.4)
+      `%LOCALAPPDATA%\\pipx\\pipx\\venvs\\${pypiPackage}\\Scripts\\${command}.exe`,
+    ];
+  }
+  return [
+    // uv tool symlink + pip --user shared bin (also covers pipx ≥ 1.4 default)
+    `~/.local/bin/${command}`,
+    // uv tool venv bin
+    `~/.local/share/uv/tools/${pypiPackage}/bin/${command}`,
+    // pipx venv bin (modern path)
+    `~/.local/share/pipx/venvs/${pypiPackage}/bin/${command}`,
+    // pipx legacy path (kept for users on older pipx releases)
+    `~/.local/pipx/venvs/${pypiPackage}/bin/${command}`,
+  ];
+}
+
+/**
  * Collapse PATH-resolved binary candidates that live in the same install
  * directory. `where.exe` returns both `claude.cmd` and `claude.exe` for a
  * single npm-global install — counting them as two installations would
@@ -407,7 +440,24 @@ export class CliAvailabilityService {
       }
     }
 
-    if (config.npmGlobalPackage) {
+    // Synthesise PyPI install paths (uv tool / pipx / pip --user) from
+    // `packages.pypi`. Only fires when no `nativePaths` hit landed; agent
+    // authors can still pin exact paths via `nativePaths` when the synthesised
+    // set is wrong for their distribution. Runs before the npm-global probe
+    // so a Python-distributed agent that also has an npm wrapper is detected
+    // through its primary install path first.
+    const pypiPackage = config.packages?.pypi;
+    if (pypiPackage) {
+      const pypiProbe = await this.probeNativePaths(
+        synthesisePypiProbePaths(command, pypiPackage)
+      );
+      if (pypiProbe.status !== "missing") {
+        return pypiProbe;
+      }
+    }
+
+    const npmPackage = config.packages?.npm ?? config.npmGlobalPackage;
+    if (npmPackage) {
       const npmProbe = await this.probeNpmGlobal(command);
       if (npmProbe.status !== "missing") {
         return npmProbe;

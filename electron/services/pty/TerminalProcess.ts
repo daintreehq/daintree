@@ -1027,13 +1027,27 @@ export class TerminalProcess {
 
     const liveAgentId = getLiveAgentId(terminal);
     const agentConfig = liveAgentId ? getEffectiveAgentConfig(liveAgentId) : undefined;
+    const resume = agentConfig?.resume;
 
-    if (!agentConfig?.shutdown) {
+    // Nothing to send — agent has no resume config or the config supplies
+    // neither a quit command nor a key sequence we can emit on shutdown.
+    if (!resume) {
+      return null;
+    }
+    const quitCommand = resume.quitCommand;
+    const shutdownKeySequence = resume.shutdownKeySequence;
+    if (!quitCommand && !shutdownKeySequence) {
       return null;
     }
 
-    const { quitCommand, sessionIdPattern } = agentConfig.shutdown;
-    const pattern = new RegExp(sessionIdPattern);
+    // Only `session-id` triggers the post-quit pattern-match capture loop —
+    // other kinds (rolling-history, named-target, project-scoped) just send
+    // the quit signal and resolve null. Lesson from #4781: never run the
+    // capture loop for non-`session-id` agents — directory-scoped sessions
+    // (Kiro) don't emit IDs and the ghost regex would either time out or
+    // false-positive on unrelated output.
+    const pattern =
+      resume.kind === "session-id" ? new RegExp(resume.sessionIdPattern) : null;
 
     let shutdownBuffer = "";
     let resolved = false;
@@ -1056,6 +1070,7 @@ export class TerminalProcess {
 
       const origOnData = terminal.ptyProcess.onData((data: string) => {
         if (resolved) return;
+        if (!pattern) return;
 
         shutdownBuffer += data;
         if (shutdownBuffer.length > GRACEFUL_SHUTDOWN_BUFFER_SIZE) {
@@ -1074,6 +1089,10 @@ export class TerminalProcess {
         origOnExit.dispose();
         origOnData.dispose();
 
+        if (!pattern) {
+          finish(null);
+          return;
+        }
         const stripped = stripAnsiCodes(shutdownBuffer);
         const match = pattern.exec(stripped);
         finish(match?.[1] ?? null);
@@ -1100,7 +1119,12 @@ export class TerminalProcess {
         if (resolved) return;
 
         try {
-          terminal.ptyProcess.write(quitCommand + "\r");
+          if (shutdownKeySequence) {
+            terminal.ptyProcess.write(shutdownKeySequence);
+          }
+          if (quitCommand) {
+            terminal.ptyProcess.write(quitCommand + "\r");
+          }
         } catch {
           origOnData.dispose();
           origOnExit.dispose();

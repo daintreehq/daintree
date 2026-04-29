@@ -234,7 +234,46 @@ export class AgentVersionService {
       return this.getLatestNpmVersion(config.version.npmPackage);
     }
 
+    if (config.version.pypiPackage) {
+      return this.getLatestPypiVersion(config.version.pypiPackage);
+    }
+
     return null;
+  }
+
+  private async getLatestPypiVersion(packageName: string): Promise<string | null> {
+    try {
+      const url = `https://pypi.org/pypi/${packageName}/json`;
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), this.TIMEOUT_MS);
+
+      try {
+        const response = await fetch(url, {
+          signal: controller.signal,
+          headers: {
+            Accept: "application/json",
+            "User-Agent": "Daintree-Electron",
+          },
+        });
+
+        if (response.status === 404) {
+          throw new Error(`PyPI package not found: ${packageName}`);
+        }
+
+        if (!response.ok) {
+          throw new Error(`PyPI returned ${response.status}`);
+        }
+
+        const data = (await response.json()) as { info?: { version?: string } };
+        const version = data.info?.version;
+        if (typeof version !== "string" || !version) return null;
+        return this.parseVersion(version);
+      } finally {
+        clearTimeout(timeoutId);
+      }
+    } catch (error: any) {
+      throw new Error(`Failed to fetch PyPI version: ${error.message}`);
+    }
   }
 
   private async getLatestNpmVersion(packageName: string): Promise<string | null> {

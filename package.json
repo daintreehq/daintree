@@ -75,6 +75,7 @@
     "perf:soak": "tsx scripts/perf/run.ts --mode soak",
     "perf:cold-start": "tsx scripts/perf/cold-start.ts",
     "pattern-discovery:run": "tsx scripts/pattern-discovery/runner.ts",
+    "pattern-discovery:record": "tsx scripts/pattern-discovery/runner.ts",
     "pattern-discovery:analyze": "tsx scripts/pattern-discovery/analyzer.ts",
     "pattern-discovery:update": "tsx scripts/pattern-discovery/update-registry.ts",
     "prepare": "husky"

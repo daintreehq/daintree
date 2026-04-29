@@ -1353,6 +1353,173 @@ describe("CliAvailabilityService", () => {
     });
   });
 
+  describe("packages.npm alias (replaces deprecated npmGlobalPackage)", () => {
+    afterEach(async () => {
+      const { setUserRegistry } = await import("../../../shared/config/agentRegistry.js");
+      setUserRegistry({});
+    });
+
+    it("activates the npm-global probe via packages.npm when npmGlobalPackage is unset", async () => {
+      const { setUserRegistry } = await import("../../../shared/config/agentRegistry.js");
+      setUserRegistry({
+        "npm-pkg-test": {
+          id: "npm-pkg-test",
+          name: "Npm Pkg Test",
+          command: "npm-pkg-test",
+          color: "#abcdef",
+          iconId: "npm-pkg-test",
+          supportsContextInjection: false,
+          packages: { npm: "@scope/npm-pkg-test" },
+        },
+      });
+      const { access } = await import("fs/promises");
+      const mockedAccess = vi.mocked(access);
+
+      mockedExecFileSync.mockImplementation(() => {
+        throw Object.assign(new Error("not found"), { code: "ENOENT" });
+      });
+      mockedExecFile.mockImplementation(((...args: unknown[]) => {
+        const file = args[0] as string;
+        const callback = args.find(
+          (a): a is (err: unknown, stdout?: string) => void => typeof a === "function"
+        );
+        if (file === "npm") {
+          queueMicrotask(() => callback?.(null, "/Users/test/.npm-global\n"));
+        } else {
+          const err = Object.assign(new Error("not found"), { code: "ENOENT" });
+          queueMicrotask(() => callback?.(err));
+        }
+        return {} as never;
+      }) as never);
+
+      const shim = join("/Users/test/.npm-global", "bin", "npm-pkg-test");
+      mockedAccess.mockImplementation(async (p) => {
+        if (String(p) === shim) return;
+        throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+      });
+
+      const result = await service.checkAvailability();
+      expect(result["npm-pkg-test"]).toBe("ready");
+      expect(service.getDetails()!["npm-pkg-test"]?.via).toBe("npm-global");
+    });
+  });
+
+  describe("PyPI probe synthesis (packages.pypi)", () => {
+    // Stand-up a user-defined agent with `packages.pypi`. CliAvailabilityService
+    // walks the effective registry, so userRegistry entries get the same probe
+    // pipeline as built-ins.
+    const setupPypiAgent = async () => {
+      const { setUserRegistry } = await import("../../../shared/config/agentRegistry.js");
+      setUserRegistry({
+        "py-test": {
+          id: "py-test",
+          name: "Py Test",
+          command: "py-test",
+          color: "#abcdef",
+          iconId: "py-test",
+          supportsContextInjection: false,
+          packages: { pypi: "py-test-pkg" },
+        },
+      });
+    };
+
+    afterEach(async () => {
+      const { setUserRegistry } = await import("../../../shared/config/agentRegistry.js");
+      setUserRegistry({});
+    });
+
+    it("detects a PyPI-distributed agent via uv tool symlink at ~/.local/bin/<cmd>", async () => {
+      await setupPypiAgent();
+      const { access } = await import("fs/promises");
+      const mockedAccess = vi.mocked(access);
+
+      mockedExecFileSync.mockImplementation(() => {
+        throw Object.assign(new Error("not found"), { code: "ENOENT" });
+      });
+
+      const uvSymlink = join(homedir(), ".local/bin/py-test");
+      mockedAccess.mockImplementation(async (p) => {
+        if (String(p) === uvSymlink) return;
+        throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+      });
+
+      const result = await service.checkAvailability();
+      expect(result["py-test"]).toBe("ready");
+      expect(service.getDetails()!["py-test"]?.resolvedPath).toBe(uvSymlink);
+      expect(service.getDetails()!["py-test"]?.via).toBe("native");
+    });
+
+    it("falls through to ~/.local/share/uv/tools/<pkg>/bin/<cmd> when ~/.local/bin misses", async () => {
+      await setupPypiAgent();
+      const { access } = await import("fs/promises");
+      const mockedAccess = vi.mocked(access);
+
+      mockedExecFileSync.mockImplementation(() => {
+        throw Object.assign(new Error("not found"), { code: "ENOENT" });
+      });
+
+      const uvVenvBin = join(homedir(), ".local/share/uv/tools/py-test-pkg/bin/py-test");
+      mockedAccess.mockImplementation(async (p) => {
+        if (String(p) === uvVenvBin) return;
+        throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+      });
+
+      const result = await service.checkAvailability();
+      expect(result["py-test"]).toBe("ready");
+      expect(service.getDetails()!["py-test"]?.resolvedPath).toBe(uvVenvBin);
+    });
+
+    it("detects pipx-installed agent at ~/.local/share/pipx/venvs/<pkg>/bin/<cmd>", async () => {
+      await setupPypiAgent();
+      const { access } = await import("fs/promises");
+      const mockedAccess = vi.mocked(access);
+
+      mockedExecFileSync.mockImplementation(() => {
+        throw Object.assign(new Error("not found"), { code: "ENOENT" });
+      });
+
+      const pipxBin = join(homedir(), ".local/share/pipx/venvs/py-test-pkg/bin/py-test");
+      mockedAccess.mockImplementation(async (p) => {
+        if (String(p) === pipxBin) return;
+        throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+      });
+
+      const result = await service.checkAvailability();
+      expect(result["py-test"]).toBe("ready");
+      expect(service.getDetails()!["py-test"]?.resolvedPath).toBe(pipxBin);
+    });
+
+    it("returns missing when no PyPI install path resolves", async () => {
+      await setupPypiAgent();
+      mockedExecFileSync.mockImplementation(() => {
+        throw Object.assign(new Error("not found"), { code: "ENOENT" });
+      });
+
+      const result = await service.checkAvailability();
+      expect(result["py-test"]).toBe("missing");
+    });
+
+    it("does not synthesise PyPI paths when packages.pypi is unset", async () => {
+      // Built-in claude has no `packages.pypi`; verify our probe pipeline
+      // never dispatches PyPI-shaped fs.access calls for it.
+      const { access } = await import("fs/promises");
+      const mockedAccess = vi.mocked(access);
+
+      mockedExecFileSync.mockImplementation(() => {
+        throw Object.assign(new Error("not found"), { code: "ENOENT" });
+      });
+      mockedAccess.mockRejectedValue(Object.assign(new Error("ENOENT"), { code: "ENOENT" }));
+
+      await service.checkAvailability();
+
+      const probedPaths = mockedAccess.mock.calls.map((c) => String(c[0]));
+      // None of the built-ins use uv/pipx layouts; this guards against
+      // accidental probing when an agent has `npmGlobalPackage` only.
+      expect(probedPaths.some((p) => p.includes(".local/share/uv/tools"))).toBe(false);
+      expect(probedPaths.some((p) => p.includes(".local/share/pipx/venvs"))).toBe(false);
+    });
+  });
+
   describe("WSL fallback probe (Windows)", () => {
     const originalPlatform = process.platform;
 

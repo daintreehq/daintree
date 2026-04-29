@@ -423,6 +423,11 @@ export function buildAgentLaunchFlags(
  * When launchFlags are provided, they are prepended before the resume args
  * to restore the original process-level configuration.
  *
+ * Dispatches on `resume.kind` (see {@link AgentResume}). The `sessionId`
+ * parameter is passed verbatim — for `named-target` it is reinterpreted as
+ * the user-named target — so existing call sites that pass a session ID
+ * positionally continue to work without an API change.
+ *
  * @returns The resume command string, or undefined if the agent has no resume config.
  */
 export function buildResumeCommand(
@@ -431,7 +436,8 @@ export function buildResumeCommand(
   launchFlags?: string[]
 ): string | undefined {
   const agentConfig = getEffectiveAgentConfig(agentId);
-  if (!agentConfig?.resume) return undefined;
+  const resume = agentConfig?.resume;
+  if (!agentConfig || !resume) return undefined;
 
   const parts = [agentConfig.command];
 
@@ -446,7 +452,27 @@ export function buildResumeCommand(
     }
   }
 
-  const args = agentConfig.resume.args(sessionId);
+  let args: string[];
+  switch (resume.kind) {
+    case "session-id":
+      args = resume.args(sessionId);
+      break;
+    case "rolling-history":
+      args = resume.args();
+      break;
+    case "named-target":
+      args = resume.argsForTarget(sessionId);
+      break;
+    case "project-scoped":
+      args = resume.args();
+      break;
+    default: {
+      const _exhaustive: never = resume;
+      void _exhaustive;
+      return undefined;
+    }
+  }
+
   for (const arg of args) {
     if (arg.startsWith("-")) {
       parts.push(arg);

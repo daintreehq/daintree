@@ -179,6 +179,83 @@ export interface AgentProviderTemplate {
   inlineMode?: boolean;
 }
 
+/**
+ * Cross-package-manager install metadata for an agent. Each field names the
+ * package as known to that ecosystem; CliAvailabilityService and probe code
+ * use these to synthesize default lookup paths when `nativePaths` are not
+ * supplied. Fields are additive — none are mutually exclusive — and an agent
+ * may declare any subset relevant to how it ships.
+ */
+export interface AgentPackages {
+  /** npm package name (e.g. "@anthropic-ai/claude-code"). Probed via npm-global bin shim. */
+  npm?: string;
+  /** PyPI package name (e.g. "open-interpreter"). Drives uv/pipx path synthesis. */
+  pypi?: string;
+  /** Homebrew formula name (e.g. "opencode"). Surfaced by install/update help only today. */
+  brew?: string;
+  /** winget package id (e.g. "Anthropic.Claude"). Surfaced by install/update help only today. */
+  winget?: string;
+  /** Scoop package coordinates — bucket plus formula name. */
+  scoop?: { bucket: string; name: string };
+  /** Cargo crate name. Surfaced by install/update help only today. */
+  cargo?: string;
+  /** Go module path (e.g. "github.com/owner/repo/cmd/agent"). Surfaced by install/update help only today. */
+  go?: string;
+}
+
+/**
+ * Discriminated union describing how an agent's prior session can be resumed.
+ * The `kind` field selects the shape:
+ *
+ * - `session-id` — agent emits a session ID on quit (Claude/Gemini/Codex/etc.).
+ *   `quitCommand` is sent to the running process; `sessionIdPattern` (a regex
+ *   with one capture group) is matched against the post-quit output to harvest
+ *   the ID, which is then passed to `args(id)` on the next launch.
+ * - `rolling-history` — agent has no session model but records a chronological
+ *   history that can be resumed in order. `args()` returns the resume flags;
+ *   no ID is captured.
+ * - `named-target` — agent resumes a user-named target (e.g. a plan name).
+ *   `argsForTarget(name)` produces the launch args for the chosen target.
+ * - `project-scoped` — agent stores session state on disk keyed by project
+ *   directory. `args()` returns the resume flags; nothing is captured at
+ *   shutdown. Used by directory-aware CLIs like Kiro.
+ *
+ * `quitCommand` and `shutdownKeySequence` apply to all kinds — the PTY host
+ * sends the quit command (or the key sequence, if provided) on graceful
+ * shutdown. `sessionIdPattern` applies only to `session-id` and is the only
+ * field that triggers the PTY host's pattern-match capture loop.
+ */
+export type AgentResume =
+  | {
+      kind: "session-id";
+      /** Returns CLI args for resuming a captured session (e.g. ["--resume", id]). */
+      args: (sessionId: string) => string[];
+      /** Command sent to the running agent to trigger graceful exit (e.g. "/quit"). */
+      quitCommand: string;
+      /** Regex with a single capture group for the session ID emitted post-quit. */
+      sessionIdPattern: string;
+      /** Optional raw key sequence sent before `quitCommand` (e.g. Ctrl-C). */
+      shutdownKeySequence?: string;
+    }
+  | {
+      kind: "rolling-history";
+      args: () => string[];
+      quitCommand?: string;
+      shutdownKeySequence?: string;
+    }
+  | {
+      kind: "named-target";
+      argsForTarget: (target: string) => string[];
+      quitCommand?: string;
+      shutdownKeySequence?: string;
+    }
+  | {
+      kind: "project-scoped";
+      args: () => string[];
+      quitCommand?: string;
+      shutdownKeySequence?: string;
+    };
+
 export interface AgentConfig {
   id: string;
   name: string;
@@ -224,38 +301,31 @@ export interface AgentConfig {
     args: string[];
     /** npm package name for version lookup (e.g., "@anthropic-ai/claude-code") */
     npmPackage?: string;
+    /**
+     * PyPI package name for version lookup (e.g., "open-interpreter"). When
+     * set, AgentVersionService queries https://pypi.org/pypi/<pkg>/json after
+     * github/npm fall through.
+     */
+    pypiPackage?: string;
     /** GitHub repository for version lookup (e.g., "owner/repo") */
     githubRepo?: string;
     /** Release notes URL template (use {version} placeholder) */
     releaseNotesUrl?: string;
   };
   /**
-   * Update command configuration.
+   * Update command configuration. Each key names the install method whose
+   * upgrade command lives in the value (e.g. `npm: "npm install -g foo@latest"`).
+   * Recognised keys mirror {@link AgentPackages} plus shell-script flavours
+   * (`curl`, `powershell`); unknown keys are surfaced verbatim by the UI.
    */
-  update?: {
-    /** Update command for npm-based installs */
-    npm?: string;
-    /** Update command for Homebrew */
-    brew?: string;
-    /** Update command for other package managers or scripts */
-    other?: Record<string, string>;
-  };
+  update?: Partial<
+    Record<keyof AgentPackages | "curl" | "powershell" | (string & {}), string>
+  >;
   /**
    * Routing configuration for intelligent agent dispatch.
    * Used by orchestrators to select the best agent for a given task.
    */
   routing?: AgentRoutingConfig;
-  /**
-   * Graceful shutdown configuration for capturing session IDs.
-   * When present, the PTY host will send the quit command before killing,
-   * then scan output for the session ID pattern.
-   */
-  shutdown?: {
-    /** Command to send to trigger graceful exit (e.g., "/quit") */
-    quitCommand: string;
-    /** Regex pattern string with a capture group for the session ID */
-    sessionIdPattern: string;
-  };
   /**
    * Approximate context window size in tokens for this agent's model.
    * Used to warn when context usage is high.
@@ -268,14 +338,14 @@ export interface AgentConfig {
    */
   env?: Record<string, string>;
   /**
-   * Resume configuration for restoring a previous agent session.
-   * When present, Daintree can resume a prior session using the stored session ID
-   * instead of starting fresh.
+   * Resume + graceful-shutdown configuration. The `kind` discriminator
+   * selects how the PTY host treats this agent on quit: only `session-id`
+   * runs the post-quit pattern-match capture loop; the other kinds send
+   * `quitCommand` (or `shutdownKeySequence`) and exit without scraping IDs.
+   *
+   * See {@link AgentResume} for the full shape per variant.
    */
-  resume?: {
-    /** Returns CLI args for resuming a session (e.g. ["--resume", id] or ["resume", id]) */
-    args: (sessionId: string) => string[];
-  };
+  resume?: AgentResume;
   /**
    * Prerequisites required for this agent to function.
    * Merged with baseline prerequisites during health checks.
@@ -300,6 +370,24 @@ export interface AgentConfig {
    */
   nativePaths?: string[];
   /**
+   * Cross-package-manager install metadata. When set, the relevant
+   * `CliAvailabilityService` probes are activated automatically:
+   *  - `packages.npm` → npm-global bin-shim probe (replaces `npmGlobalPackage`).
+   *  - `packages.pypi` → uv/pipx/local-bin path synthesis on macOS/Linux and
+   *    `%USERPROFILE%`/`%APPDATA%`/`%LOCALAPPDATA%` paths on Windows.
+   *  - Other fields (`brew`/`winget`/`scoop`/`cargo`/`go`) are surfaced today
+   *    only by install-help UI; probe synthesis for those ecosystems may be
+   *    added later.
+   *
+   * Prefer `packages` over the deprecated top-level `npmGlobalPackage` when
+   * authoring new agents.
+   */
+  packages?: AgentPackages;
+  /**
+   * @deprecated Use `packages.npm` instead. Kept as a backward-compatible
+   * alias so persisted `UserAgentRegistryService` entries continue to work
+   * during the transition. Will be removed in a future release.
+   *
    * npm package name to use as a last-resort detection probe. When PATH and
    * native-path probes both miss, `CliAvailabilityService` queries
    * `npm config get prefix` and checks whether the package's installed bin
@@ -346,1102 +434,27 @@ export interface AgentConfig {
   providerTemplates?: AgentProviderTemplate[];
 }
 
+import { config as claudeConfig } from "./agents/claude.js";
+import { config as geminiConfig } from "./agents/gemini.js";
+import { config as codexConfig } from "./agents/codex.js";
+import { config as opencodeConfig } from "./agents/opencode.js";
+import { config as cursorConfig } from "./agents/cursor.js";
+import { config as kiroConfig } from "./agents/kiro.js";
+import { config as copilotConfig } from "./agents/copilot.js";
+
+// Built-in agent registry. Per-agent configs live in `./agents/<id>.ts`
+// (mirroring `src/services/actions/definitions/`). When adding a new agent,
+// create the per-agent file, import it here, add the entry below, and add
+// the ID to `BUILT_IN_AGENT_IDS` in `agentIds.ts` — the runtime check after
+// this declaration throws if any built-in is missing.
 export const AGENT_REGISTRY: Record<string, AgentConfig> = {
-  // NOTE: When adding a new agent here, also add its ID to BUILT_IN_AGENT_IDS in agentIds.ts.
-  // The _registryCheck below will produce a compile error if they get out of sync.
-  claude: {
-    id: "claude",
-    name: "Claude",
-    command: "claude",
-    // Anthropic's native installer places the symlink at ~/.local/bin/claude
-    // on macOS/Linux and a versioned binary under ~/.local/share/claude.
-    // Windows native installer places the binary under
-    // %LOCALAPPDATA%\claude-code\bin\claude.exe. Detect both so users who
-    // install via the native installer are not mis-reported as "missing"
-    // when ~/.local/bin isn't inherited by the Electron process PATH.
-    nativePaths: ["~/.local/bin/claude", "%LOCALAPPDATA%\\claude-code\\bin\\claude.exe"],
-    npmGlobalPackage: "@anthropic-ai/claude-code",
-    color: "#CC785C",
-    iconId: "claude",
-    supportsContextInjection: true,
-    shortcut: "Cmd/Ctrl+Alt+C",
-    usageUrl: "https://claude.ai/settings/usage",
-    version: {
-      args: ["--version"],
-      githubRepo: "anthropics/claude-code",
-      npmPackage: "@anthropic-ai/claude-code",
-      releaseNotesUrl: "https://github.com/anthropics/claude-code/releases/tag/v{version}",
-    },
-    update: {
-      npm: "npm install -g @anthropic-ai/claude-code@latest",
-    },
-    install: {
-      docsUrl: "https://github.com/anthropics/claude-code",
-      byOs: {
-        macos: [
-          {
-            label: "npm",
-            commands: ["npm install -g @anthropic-ai/claude-code"],
-          },
-        ],
-        windows: [
-          {
-            label: "npm",
-            commands: ["npm install -g @anthropic-ai/claude-code"],
-          },
-        ],
-        linux: [
-          {
-            label: "npm",
-            commands: ["npm install -g @anthropic-ai/claude-code"],
-          },
-        ],
-      },
-      troubleshooting: [
-        "Restart Daintree after installation to update PATH",
-        "Ensure Node.js and npm are installed first",
-        "Verify installation with: claude --version",
-        "Run 'claude auth login' to authenticate after installing",
-      ],
-    },
-    models: [
-      { id: "claude-sonnet-4-6", name: "Sonnet 4.6", shortLabel: "Sonnet" },
-      { id: "claude-opus-4-6", name: "Opus 4.6", shortLabel: "Opus" },
-      { id: "claude-haiku-4-5-20251001", name: "Haiku 4.5", shortLabel: "Haiku" },
-    ],
-    contextWindow: 200_000,
-    capabilities: {
-      scrollback: 10000,
-      supportsBracketedPaste: true,
-      softNewlineSequence: "\x1b\r",
-      ignoredInputSequences: ["\x1b\r"],
-    },
-    detection: {
-      primaryPatterns: [
-        // @generated:claude:primaryPatterns:start
-        "[·*✢✳✶✻✽●✼✾⟡◇◆○]\\s+[^()\\n]{2,80}\\s*\\(esc to interrupt",
-        "esc to interrupt[^)\\n]*\\)?$",
-        "\\(\\d+s\\s*[·•]\\s*esc to interrupt",
-        // @generated:claude:primaryPatterns:end
-      ],
-      fallbackPatterns: [
-        // @generated:claude:fallbackPatterns:start
-        "[✢✳✶✻✽●]\\s+\\w+…",
-        // @generated:claude:fallbackPatterns:end
-      ],
-      bootCompletePatterns: [
-        // @generated:claude:bootCompletePatterns:start
-        "claude\\s+code\\s+v?\\d",
-        // @generated:claude:bootCompletePatterns:end
-      ],
-      promptPatterns: ["^\\s*>\\s*", "^\\s*❯\\s*"],
-      promptHintPatterns: ["bypass permissions", "^\\s*>\\s+Try\\b"],
-      completionPatterns: [
-        // @generated:claude:completionPatterns:start
-        "[✢✳✶✻✽●]\\s+\\w+\\s+for\\s+\\d",
-        "Total cost:\\s+\\$\\d",
-        "Total duration",
-        "\\$\\d+\\.\\d+\\s*·\\s*\\d+\\s*tokens",
-        "Task\\s+completed",
-        // @generated:claude:completionPatterns:end
-      ],
-      completionConfidence: 0.9,
-      scanLineCount: 10,
-      primaryConfidence: 0.95,
-      fallbackConfidence: 0.75,
-      promptConfidence: 0.85,
-      debounceMs: 4000,
-    },
-    routing: {
-      capabilities: [
-        "javascript",
-        "typescript",
-        "python",
-        "rust",
-        "go",
-        "react",
-        "node",
-        "debugging",
-        "refactoring",
-        "code-review",
-      ],
-      domains: {
-        frontend: 0.85,
-        backend: 0.85,
-        testing: 0.8,
-        refactoring: 0.95,
-        debugging: 0.9,
-        architecture: 0.8,
-      },
-      maxConcurrent: 2,
-      enabled: true,
-    },
-    shutdown: {
-      quitCommand: "/quit",
-      sessionIdPattern: "claude --resume ([\\w-]+)",
-    },
-    resume: {
-      args: (sessionId: string) => ["--resume", sessionId],
-    },
-    env: {
-      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
-    },
-    help: {
-      args: [],
-    },
-    authCheck: {
-      // Claude Code CLI persists auth/session state in ~/.claude.json (the
-      // single file), not ~/.claude/config.json. ANTHROPIC_API_KEY is also a
-      // first-class auth signal supported directly by the CLI.
-      configPathsAll: [".claude.json", ".claude/config.json"],
-      envVar: "ANTHROPIC_API_KEY",
-    },
-    prerequisites: [
-      {
-        tool: "claude",
-        label: "Claude CLI",
-        versionArgs: ["--version"],
-        severity: "fatal",
-        installUrl: "https://github.com/anthropics/claude-code",
-      },
-    ],
-    envSuggestions: [
-      { key: "ANTHROPIC_AUTH_TOKEN", hint: "API key or auth token" },
-      {
-        key: "ANTHROPIC_BASE_URL",
-        hint: "Override API base URL (e.g. https://api.z.ai/api/anthropic)",
-      },
-      { key: "ANTHROPIC_DEFAULT_OPUS_MODEL", hint: "Override Opus model ID" },
-      { key: "ANTHROPIC_DEFAULT_SONNET_MODEL", hint: "Override Sonnet model ID" },
-      { key: "ANTHROPIC_DEFAULT_HAIKU_MODEL", hint: "Override Haiku model ID" },
-      { key: "API_TIMEOUT_MS", hint: "Request timeout in ms (e.g. 3000000)" },
-      { key: "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", hint: "1 to disable telemetry" },
-    ],
-    providerTemplates: [
-      {
-        id: "anthropic-native",
-        name: "Anthropic (native)",
-        description: "Direct Anthropic API connection.",
-        env: {
-          CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
-        },
-      },
-      {
-        id: "zai",
-        name: "Z.AI",
-        description: "Anthropic-compatible via Z.AI.",
-        env: {
-          ANTHROPIC_BASE_URL: "https://api.z.ai/api/anthropic",
-          ANTHROPIC_DEFAULT_OPUS_MODEL: "glm-5.1",
-          ANTHROPIC_DEFAULT_SONNET_MODEL: "glm-4.7",
-          ANTHROPIC_DEFAULT_HAIKU_MODEL: "glm-4.5-air",
-          API_TIMEOUT_MS: "3000000",
-          CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
-        },
-      },
-      {
-        id: "openrouter",
-        name: "OpenRouter",
-        description: "Model routing via OpenRouter.",
-        env: {
-          ANTHROPIC_BASE_URL: "https://openrouter.ai/api/v1",
-          CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
-        },
-      },
-      {
-        id: "deepseek",
-        name: "DeepSeek",
-        description: "OpenAI-compatible via DeepSeek.",
-        env: {
-          ANTHROPIC_BASE_URL: "https://api.deepseek.com/v1",
-          CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
-        },
-      },
-      {
-        id: "ollama",
-        name: "Ollama (local)",
-        description: "Local models via Ollama — no API key needed.",
-        env: {
-          ANTHROPIC_BASE_URL: "http://localhost:11434/v1",
-          CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
-        },
-      },
-      {
-        id: "custom-openai",
-        name: "Custom (OpenAI-compatible)",
-        description: "Custom OpenAI-compatible endpoint.",
-        env: {
-          CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
-        },
-      },
-    ],
-  },
-  gemini: {
-    id: "gemini",
-    name: "Gemini",
-    command: "gemini",
-    npmGlobalPackage: "@google/gemini-cli",
-    color: "#4285F4",
-    iconId: "gemini",
-    supportsContextInjection: true,
-    shortcut: "Cmd/Ctrl+Alt+G",
-    tooltip: "quick exploration",
-    version: {
-      args: ["--version"],
-      githubRepo: "google-gemini/gemini-cli",
-      npmPackage: "@google/gemini-cli",
-      releaseNotesUrl: "https://github.com/google-gemini/gemini-cli/releases",
-    },
-    update: {
-      npm: "npm install -g @google/gemini-cli@latest",
-    },
-    install: {
-      docsUrl: "https://github.com/google-gemini/gemini-cli#readme",
-      byOs: {
-        macos: [
-          {
-            label: "npm",
-            commands: ["npm install -g @google/gemini-cli"],
-          },
-        ],
-        windows: [
-          {
-            label: "npm",
-            commands: ["npm install -g @google/gemini-cli"],
-          },
-        ],
-        linux: [
-          {
-            label: "npm",
-            commands: ["npm install -g @google/gemini-cli"],
-          },
-        ],
-      },
-      troubleshooting: [
-        "Restart Daintree after installation to update PATH",
-        "Verify installation with: gemini --version",
-        "Run 'gemini auth login' after installing to authenticate",
-      ],
-    },
-    models: [
-      { id: "gemini-2.5-pro", name: "Gemini 2.5 Pro", shortLabel: "2.5 Pro" },
-      { id: "gemini-2.5-flash", name: "Gemini 2.5 Flash", shortLabel: "2.5 Flash" },
-    ],
-    contextWindow: 1_000_000,
-    capabilities: {
-      scrollback: 10000,
-      blockAltScreen: true,
-      blockMouseReporting: true,
-      resizeStrategy: "settled",
-      supportsBracketedPaste: false,
-      softNewlineSequence: "\x1b\r",
-      ignoredInputSequences: ["\x1b\r"],
-    },
-    detection: {
-      primaryPatterns: [
-        // @generated:gemini:primaryPatterns:start
-        "[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\\s+[^()\\n]{2,80}\\s*\\(esc to cancel",
-        "esc to cancel[^)\\n]*\\)?$",
-        "\\(\\d+s,?\\s*esc to cancel",
-        // @generated:gemini:primaryPatterns:end
-      ],
-      fallbackPatterns: [
-        // @generated:gemini:fallbackPatterns:start
-        "[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\\s+\\w",
-        // @generated:gemini:fallbackPatterns:end
-      ],
-      bootCompletePatterns: [
-        // @generated:gemini:bootCompletePatterns:start
-        "type\\s+your\\s+message",
-        // @generated:gemini:bootCompletePatterns:end
-      ],
-      promptPatterns: ["^\\s*>\\s*", "type\\s+your\\s+message"],
-      promptHintPatterns: ["type\\s+your\\s+message"],
-      completionPatterns: [
-        // @generated:gemini:completionPatterns:start
-        "Response\\s+complete",
-        "Finished\\s+processing",
-        // @generated:gemini:completionPatterns:end
-      ],
-      completionConfidence: 0.9,
-      scanLineCount: 10,
-      primaryConfidence: 0.95,
-      fallbackConfidence: 0.7,
-      promptConfidence: 0.85,
-      debounceMs: 4000,
-      titleStatePatterns: {
-        working: ["\u2726"],
-        waiting: ["\u25C7", "\u270B"],
-      },
-    },
-    routing: {
-      capabilities: [
-        "javascript",
-        "typescript",
-        "python",
-        "go",
-        "java",
-        "kotlin",
-        "system-design",
-        "architecture",
-        "exploration",
-      ],
-      domains: {
-        frontend: 0.7,
-        backend: 0.85,
-        testing: 0.7,
-        refactoring: 0.75,
-        debugging: 0.75,
-        architecture: 0.9,
-      },
-      maxConcurrent: 2,
-      enabled: true,
-    },
-    shutdown: {
-      quitCommand: "/quit",
-      sessionIdPattern: "gemini --resume ([\\w-]+)",
-    },
-    resume: {
-      args: (sessionId: string) => ["--resume", sessionId],
-    },
-    env: {
-      GEMINI_CLI_ALT_SCREEN: "false",
-    },
-    help: {
-      args: [],
-    },
-    authCheck: {
-      // Gemini CLI persists OAuth creds to ~/.gemini/oauth_creds.json on all
-      // platforms (Node CLI using os.homedir()). GEMINI_API_KEY is also a
-      // first-class auth signal supported directly by the CLI.
-      configPathsAll: [".gemini/oauth_creds.json", ".gemini/google_accounts.json"],
-      envVar: "GEMINI_API_KEY",
-    },
-    prerequisites: [
-      {
-        tool: "gemini",
-        label: "Gemini CLI",
-        versionArgs: ["--version"],
-        severity: "fatal",
-        installUrl: "https://github.com/google-gemini/gemini-cli#readme",
-      },
-    ],
-  },
-  codex: {
-    id: "codex",
-    name: "Codex",
-    command: "codex",
-    npmGlobalPackage: "@openai/codex",
-    // Codex Windows packaging lags behind Linux — Windows users commonly
-    // install via WSL. WSL probing surfaces the availability in diagnostics
-    // even when no native Windows binary exists.
-    supportsWsl: true,
-    color: "#10a37f",
-    iconId: "codex",
-    supportsContextInjection: true,
-    shortcut: "Cmd/Ctrl+Alt+X",
-    tooltip: "careful, methodical runs",
-    usageUrl: "https://chatgpt.com/codex/settings/usage",
-    version: {
-      args: ["--version"],
-      githubRepo: "openai/codex",
-      npmPackage: "@openai/codex",
-      releaseNotesUrl: "https://github.com/openai/codex/releases/tag/v{version}",
-    },
-    update: {
-      npm: "npm install -g @openai/codex@latest",
-    },
-    install: {
-      docsUrl: "https://github.com/openai/codex",
-      byOs: {
-        macos: [
-          {
-            label: "npm",
-            commands: ["npm install -g @openai/codex"],
-          },
-        ],
-        windows: [
-          {
-            label: "npm",
-            commands: ["npm install -g @openai/codex"],
-          },
-        ],
-        linux: [
-          {
-            label: "npm",
-            commands: ["npm install -g @openai/codex"],
-          },
-        ],
-      },
-      troubleshooting: [
-        "Restart Daintree after installation to update PATH",
-        "Verify installation with: codex --version",
-        "Run 'codex auth login' after installing to authenticate",
-      ],
-    },
-    models: [
-      { id: "gpt-5.4", name: "GPT-5.4", shortLabel: "GPT-5.4" },
-      { id: "o3", name: "o3", shortLabel: "o3" },
-      { id: "gpt-5.3-codex-spark", name: "Codex Spark", shortLabel: "Spark" },
-    ],
-    contextWindow: 128_000,
-    capabilities: {
-      scrollback: 10000,
-      blockAltScreen: true,
-      blockMouseReporting: true,
-      resizeStrategy: "settled",
-      inlineModeFlag: "--no-alt-screen",
-      supportsBracketedPaste: true,
-      softNewlineSequence: "\n",
-      ignoredInputSequences: ["\n", "\x1b\r"],
-    },
-    detection: {
-      primaryPatterns: [
-        // @generated:codex:primaryPatterns:start
-        "[•·]\\s+[^()\\n]{2,80}\\s+\\([^)]*esc to interrupt",
-        "esc to interrupt[^)\\n]*\\)?$",
-        "\\(\\d+s\\s*[·•]\\s*esc to interrupt",
-        // @generated:codex:primaryPatterns:end
-      ],
-      fallbackPatterns: [
-        // @generated:codex:fallbackPatterns:start
-        "[•·]\\s+Working",
-        // @generated:codex:fallbackPatterns:end
-      ],
-      bootCompletePatterns: [
-        // @generated:codex:bootCompletePatterns:start
-        "openai[-\\s]+codex",
-        "codex\\s+v",
-        // @generated:codex:bootCompletePatterns:end
-      ],
-      promptPatterns: ["^\\s*[›❯>]\\s*", "^\\s*codex\\s*>\\s*"],
-      promptHintPatterns: ["context\\s+left"],
-      completionPatterns: [
-        // @generated:codex:completionPatterns:start
-        "Task\\s+completed\\s+successfully",
-        "\\d+\\s+files?\\s+changed",
-        "Created\\s+\\d+\\s+files?",
-        // @generated:codex:completionPatterns:end
-      ],
-      completionConfidence: 0.9,
-      scanLineCount: 10,
-      primaryConfidence: 0.95,
-      fallbackConfidence: 0.75,
-      promptConfidence: 0.85,
-      debounceMs: 4000,
-    },
-    routing: {
-      capabilities: [
-        "javascript",
-        "typescript",
-        "react",
-        "node",
-        "testing",
-        "frontend",
-        "css",
-        "html",
-      ],
-      domains: {
-        frontend: 0.9,
-        backend: 0.7,
-        testing: 0.85,
-        refactoring: 0.8,
-        debugging: 0.75,
-        architecture: 0.65,
-      },
-      maxConcurrent: 2,
-      enabled: true,
-    },
-    shutdown: {
-      quitCommand: "/quit",
-      sessionIdPattern: "codex resume ([\\w-]+)",
-    },
-    resume: {
-      args: (sessionId: string) => ["resume", sessionId],
-    },
-    help: {
-      args: [],
-    },
-    authCheck: {
-      // Codex CLI persists auth to ~/.codex/auth.json on all platforms.
-      // OPENAI_API_KEY is also a first-class auth signal for the CLI.
-      configPathsAll: [".codex/auth.json"],
-      envVar: "OPENAI_API_KEY",
-    },
-    prerequisites: [
-      {
-        tool: "codex",
-        label: "Codex CLI",
-        versionArgs: ["--version"],
-        severity: "fatal",
-        installUrl: "https://github.com/openai/codex",
-      },
-    ],
-  },
-  opencode: {
-    id: "opencode",
-    name: "OpenCode",
-    command: "opencode",
-    // OpenCode's curl installer (https://opencode.ai/install) lands the binary
-    // under ~/.opencode/bin when ~/.local/bin and XDG_BIN_DIR are unset;
-    // otherwise it uses ~/.local/bin (already covered by getUnixFallbackPaths).
-    nativePaths: ["~/.opencode/bin/opencode", "~/.local/bin/opencode"],
-    color: "#10b981",
-    iconId: "opencode",
-    supportsContextInjection: true,
-    tooltip: "provider-agnostic, open source",
-    usageUrl: "https://opencode.ai/",
-    version: {
-      args: ["--version"],
-      githubRepo: "opencode-ai/opencode",
-      npmPackage: "opencode-ai",
-      releaseNotesUrl: "https://github.com/opencode-ai/opencode/releases",
-    },
-    update: {
-      npm: "npm install -g opencode-ai@latest",
-      brew: "brew upgrade opencode",
-      other: {
-        curl: "curl -fsSL https://opencode.ai/install | bash",
-      },
-    },
-    install: {
-      docsUrl: "https://opencode.ai/docs/",
-      byOs: {
-        macos: [
-          {
-            label: "curl",
-            commands: ["curl -fsSL https://opencode.ai/install | bash"],
-          },
-          {
-            label: "npm",
-            commands: ["npm install -g opencode-ai@latest"],
-          },
-          {
-            label: "Homebrew",
-            commands: ["brew install opencode"],
-          },
-        ],
-        windows: [
-          {
-            label: "npm",
-            commands: ["npm install -g opencode-ai@latest"],
-          },
-          {
-            label: "Scoop",
-            commands: ["scoop bucket add extras", "scoop install extras/opencode"],
-          },
-          {
-            label: "Chocolatey",
-            commands: ["choco install opencode"],
-          },
-        ],
-        linux: [
-          {
-            label: "curl",
-            commands: ["curl -fsSL https://opencode.ai/install | bash"],
-          },
-          {
-            label: "npm",
-            commands: ["npm install -g opencode-ai@latest"],
-          },
-          {
-            label: "Homebrew",
-            commands: ["brew install opencode"],
-          },
-          {
-            label: "Paru (Arch)",
-            commands: ["paru -S opencode-bin"],
-          },
-        ],
-      },
-      troubleshooting: [
-        "Restart Daintree after installation to update PATH",
-        "Ensure Node.js is installed for npm-based installation",
-        "Verify installation with: opencode --version",
-        "Run '/connect' in OpenCode to configure LLM provider",
-        "For provider setup, authenticate at opencode.ai/auth",
-      ],
-    },
-    capabilities: {
-      scrollback: 10000,
-      blockAltScreen: false,
-      supportsBracketedPaste: true,
-      softNewlineSequence: "\n",
-      ignoredInputSequences: ["\n", "\x1b\r"],
-    },
-    env: {
-      COLORFGBG: "15;0",
-    },
-    detection: {
-      primaryPatterns: [
-        // @generated:opencode:primaryPatterns:start
-        "[⣾⣽⣻⢿⡿⣟⣯⣷]\\s+[^\\n]{2,80}\\s*\\(.*esc",
-        "[·•●]\\s+(Generating|Building tool call|Waiting for tool response)",
-        "press\\s+esc\\s+(again\\s+)?to\\s+(interrupt|exit\\s+cancel)",
-        "esc\\s*(again\\s+)?to\\s+(interrupt|cancel)",
-        // @generated:opencode:primaryPatterns:end
-      ],
-      fallbackPatterns: [
-        // @generated:opencode:fallbackPatterns:start
-        "[⣾⣽⣻⢿⡿⣟⣯⣷]\\s+\\w",
-        "working[…\\.]+",
-        "generating",
-        "waiting for tool response",
-        "building tool call",
-        // @generated:opencode:fallbackPatterns:end
-      ],
-      bootCompletePatterns: [
-        // @generated:opencode:bootCompletePatterns:start
-        "Ask anything",
-        "Build\\s+OpenCode",
-        // @generated:opencode:bootCompletePatterns:end
-      ],
-      promptPatterns: ["^\\s*[›❯>]\\s*", "Ask anything"],
-      promptHintPatterns: ["Ask anything"],
-      completionPatterns: [
-        // @generated:opencode:completionPatterns:start
-        "Task\\s+completed",
-        "\\d+\\s+files?\\s+changed",
-        // @generated:opencode:completionPatterns:end
-      ],
-      completionConfidence: 0.9,
-      scanLineCount: 10,
-      primaryConfidence: 0.95,
-      fallbackConfidence: 0.7,
-      promptConfidence: 0.85,
-      debounceMs: 4000,
-    },
-    routing: {
-      capabilities: [
-        "javascript",
-        "typescript",
-        "python",
-        "go",
-        "rust",
-        "multi-provider",
-        "general-purpose",
-      ],
-      domains: {
-        frontend: 0.75,
-        backend: 0.75,
-        testing: 0.7,
-        refactoring: 0.7,
-        debugging: 0.7,
-        architecture: 0.7,
-      },
-      maxConcurrent: 1,
-      enabled: true,
-    },
-    shutdown: {
-      quitCommand: "/quit",
-      sessionIdPattern: "opencode -s ([\\w-]+)",
-    },
-    resume: {
-      args: (sessionId: string) => ["-s", sessionId],
-    },
-    authCheck: {
-      // OpenCode v1.4.6+ uses XDG-compliant config paths on all platforms
-      configPathsAll: [".config/opencode/opencode.json", ".local/share/opencode/auth.json"],
-      // OpenCode is provider-agnostic and accepts provider credentials
-      // directly from env vars (ANTHROPIC_API_KEY / OPENAI_API_KEY / GOOGLE_API_KEY),
-      // so any of these is a sufficient signal that the CLI is usable.
-      envVar: ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GOOGLE_API_KEY"],
-    },
-    prerequisites: [
-      {
-        tool: "opencode",
-        label: "OpenCode CLI",
-        versionArgs: ["--version"],
-        severity: "fatal",
-        installUrl: "https://opencode.ai/docs/",
-      },
-    ],
-  },
-  cursor: {
-    id: "cursor",
-    name: "Cursor",
-    command: "cursor-agent",
-    // Cursor's curl installer (https://cursor.com/install) places the binary
-    // at ~/.local/bin/cursor-agent on macOS/Linux. macOS users who have only
-    // the Cursor.app GUI get the CLI sidecar inside the app bundle.
-    nativePaths: [
-      "~/.local/bin/cursor-agent",
-      "/Applications/Cursor.app/Contents/Resources/app/bin/cursor-agent",
-    ],
-    color: "#3ee6eb",
-    iconId: "cursor",
-    supportsContextInjection: true,
-    tooltip: "Cursor's agentic CLI",
-    version: {
-      args: ["-v"],
-    },
-    update: {
-      other: {
-        curl: "curl https://cursor.com/install -fsS | bash",
-      },
-    },
-    install: {
-      docsUrl: "https://cursor.com/features/cursor-agent",
-      byOs: {
-        macos: [
-          {
-            label: "curl",
-            commands: ["curl https://cursor.com/install -fsS | bash"],
-          },
-        ],
-        linux: [
-          {
-            label: "curl",
-            commands: ["curl https://cursor.com/install -fsS | bash"],
-          },
-        ],
-        windows: [
-          {
-            label: "PowerShell",
-            commands: ["irm 'https://cursor.com/install?win32=true' | iex"],
-          },
-        ],
-      },
-      troubleshooting: [
-        "Restart Daintree after installation to update PATH",
-        "Verify installation with: cursor-agent -v",
-        "Run 'cursor-agent login' to authenticate after installing",
-      ],
-    },
-    capabilities: {
-      scrollback: 10000,
-      blockMouseReporting: true,
-      resizeStrategy: "settled",
-      supportsBracketedPaste: true,
-      softNewlineSequence: "\x1b\r",
-      ignoredInputSequences: ["\x1b\r"],
-    },
-    detection: {
-      primaryPatterns: [
-        "\u2B22\\s*(Thinking|Reading|Planning|Searching|Running|Executing|Grepping|Editing|Listing)",
-        "esc to stop",
-      ],
-      fallbackPatterns: ["\u2B22\\s*\\w"],
-      bootCompletePatterns: ["Cursor Agent", "Welcome to Cursor Agent"],
-      promptPatterns: ["^\u2192\\s*$", "^\u2192\\s"],
-      promptHintPatterns: ["\u2192\\s+Add a follow-up"],
-      completionPatterns: [
-        "\u2B22\\s*(Thought|Read|Planned|Searched|Ran|Edited|Grepped|Listed)(?=[^a-zA-Z]|$)",
-      ],
-      completionConfidence: 0.9,
-      scanLineCount: 10,
-      primaryConfidence: 0.95,
-      fallbackConfidence: 0.7,
-      promptConfidence: 0.85,
-      debounceMs: 4000,
-      promptFastPathMinQuietMs: 700,
-    },
-    routing: {
-      capabilities: ["javascript", "typescript", "python", "react", "node", "general-purpose"],
-      domains: {
-        frontend: 0.8,
-        backend: 0.8,
-        testing: 0.75,
-        refactoring: 0.8,
-        debugging: 0.8,
-        architecture: 0.75,
-      },
-      maxConcurrent: 2,
-      enabled: true,
-    },
-    authCheck: {
-      // Cursor may store tokens in OS Keychain on newer versions; file check
-      // is best-effort. Misses leave `authConfirmed: false` so the Settings
-      // auth nudge surfaces, but do not block launch.
-      configPaths: {
-        darwin: ["Library/Application Support/Cursor/User/globalStorage/storage.json"],
-        linux: [".config/Cursor/User/globalStorage/storage.json"],
-        win32: ["AppData/Roaming/Cursor/User/globalStorage/storage.json"],
-      },
-    },
-    prerequisites: [
-      {
-        tool: "cursor-agent",
-        label: "Cursor Agent CLI",
-        versionArgs: ["-v"],
-        severity: "fatal",
-        installUrl: "https://cursor.com/install",
-      },
-    ],
-  },
-  kiro: {
-    id: "kiro",
-    name: "Kiro",
-    command: "kiro-cli",
-    color: "#7C3AED",
-    iconId: "kiro",
-    supportsContextInjection: true,
-    tooltip: "Amazon's AI coding agent",
-    usageUrl: "https://kiro.dev/",
-    version: {
-      args: ["--version"],
-    },
-    update: {
-      other: {
-        curl: "curl -fsSL https://cli.kiro.dev/install | bash",
-      },
-    },
-    install: {
-      docsUrl: "https://kiro.dev/cli/",
-      byOs: {
-        macos: [
-          {
-            label: "curl",
-            commands: ["curl -fsSL https://cli.kiro.dev/install | bash"],
-          },
-        ],
-        linux: [
-          {
-            label: "curl",
-            commands: ["curl -fsSL https://cli.kiro.dev/install | bash"],
-          },
-        ],
-      },
-      troubleshooting: [
-        "Restart Daintree after installation to update PATH",
-        "Verify installation with: kiro-cli --version",
-        "Kiro CLI is only supported on macOS and Linux",
-        "Authenticate after installing via Kiro's login flow",
-      ],
-    },
-    capabilities: {
-      scrollback: 10000,
-      supportsBracketedPaste: true,
-      softNewlineSequence: "\x1b\r",
-      ignoredInputSequences: ["\x1b\r"],
-    },
-    detection: {
-      primaryPatterns: [
-        // @generated:kiro:primaryPatterns:start
-        "[·*✢✳✶✻✽●✼✾⟡◇◆○⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\\s+[^()\\n]{2,80}\\s*\\(esc to interrupt",
-        "esc to interrupt[^)\\n]*\\)?$",
-        "\\(\\d+s\\s*[·•]\\s*esc to interrupt",
-        "[·*✢✳✶✻✽●✼✾⟡◇◆○⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\\s+Thinking",
-        // @generated:kiro:primaryPatterns:end
-      ],
-      fallbackPatterns: [
-        // @generated:kiro:fallbackPatterns:start
-        "[·•●⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\\s+Thinking",
-        "[·•●]\\s+\\w+",
-        // @generated:kiro:fallbackPatterns:end
-      ],
-      bootCompletePatterns: [
-        // @generated:kiro:bootCompletePatterns:start
-        "Jump into building with Kiro",
-        "Use /help for more information and happy coding",
-        "Model: auto",
-        // @generated:kiro:bootCompletePatterns:end
-      ],
-      promptPatterns: ["^\\s*>\\s*"],
-      promptHintPatterns: ["^\\s*>\\s*$"],
-      completionPatterns: [
-        // @generated:kiro:completionPatterns:start
-        "Task\\s+completed",
-        "\\d+\\s+files?\\s+changed",
-        // @generated:kiro:completionPatterns:end
-      ],
-      completionConfidence: 0.9,
-      scanLineCount: 10,
-      primaryConfidence: 0.95,
-      fallbackConfidence: 0.75,
-      promptConfidence: 0.85,
-      debounceMs: 4000,
-    },
-    routing: {
-      capabilities: [
-        "javascript",
-        "typescript",
-        "python",
-        "go",
-        "rust",
-        "react",
-        "node",
-        "debugging",
-        "refactoring",
-        "general-purpose",
-      ],
-      domains: {
-        frontend: 0.8,
-        backend: 0.8,
-        testing: 0.75,
-        refactoring: 0.8,
-        debugging: 0.8,
-        architecture: 0.75,
-      },
-      maxConcurrent: 2,
-      enabled: true,
-    },
-    shutdown: {
-      quitCommand: "/quit",
-      // Kiro uses directory-based sessions; no session ID is emitted on exit.
-      // Pattern intentionally non-matching — graceful quit fires but no ID is captured.
-      sessionIdPattern: "kiro-cli --resume ([\\w-]+)",
-    },
-    resume: {
-      // Kiro's --resume is directory-based and requires no session ID argument.
-      args: (_sessionId: string) => ["--resume"],
-    },
-    help: {
-      args: [],
-    },
-    authCheck: {
-      // AWS SSO users authenticate via `kiro-cli login` (optionally with
-      // --use-device-flow for headless/SSH), which writes a Kiro-specific
-      // token cache to ~/.aws/sso/cache/kiro-auth-token.json. Probe that
-      // file so SSO-authenticated users get `authConfirmed: true`.
-      // Non-SSO Kiro auth is managed via the OS keychain and internal state
-      // directories (e.g. ~/Library/Application Support/kiro-cli/ on macOS,
-      // ~/.local/share/kiro-cli/ on Linux), which we cannot reliably probe —
-      // those users get `authConfirmed: false` but remain launchable.
-      configPathsAll: [".aws/sso/cache/kiro-auth-token.json"],
-    },
-    prerequisites: [
-      {
-        tool: "kiro-cli",
-        label: "Kiro CLI",
-        versionArgs: ["--version"],
-        severity: "fatal",
-        installUrl: "https://kiro.dev/cli/",
-      },
-    ],
-  },
-  copilot: {
-    id: "copilot",
-    name: "GitHub Copilot",
-    command: "copilot",
-    color: "#8957e5",
-    iconId: "copilot",
-    supportsContextInjection: true,
-    tooltip: "GitHub's AI coding agent",
-    usageUrl: "https://github.com/features/copilot",
-    contextWindow: 160_000,
-    models: [
-      { id: "claude-sonnet-4.6", name: "Claude Sonnet 4.6", shortLabel: "Sonnet 4.6" },
-      { id: "claude-opus-4.6", name: "Claude Opus 4.6", shortLabel: "Opus 4.6" },
-      { id: "claude-haiku-4.5", name: "Claude Haiku 4.5", shortLabel: "Haiku 4.5" },
-      { id: "claude-sonnet-4.5", name: "Claude Sonnet 4.5", shortLabel: "Sonnet 4.5" },
-      { id: "claude-opus-4.5", name: "Claude Opus 4.5", shortLabel: "Opus 4.5" },
-      { id: "gpt-5.4", name: "GPT-5.4", shortLabel: "GPT-5.4" },
-      { id: "gpt-5.3-codex", name: "GPT-5.3 Codex", shortLabel: "GPT-5.3" },
-      { id: "gpt-5.2", name: "GPT-5.2", shortLabel: "GPT-5.2" },
-      { id: "gpt-5.4-mini", name: "GPT-5.4 Mini", shortLabel: "5.4 Mini" },
-      { id: "gpt-5-mini", name: "GPT-5 Mini", shortLabel: "5 Mini" },
-      { id: "gemini-2.5-pro", name: "Gemini 2.5 Pro", shortLabel: "Gem 2.5 Pro" },
-      { id: "gemini-3-pro-preview", name: "Gemini 3 Pro", shortLabel: "Gem 3 Pro" },
-      { id: "gemini-3.1-pro-preview", name: "Gemini 3.1 Pro", shortLabel: "Gem 3.1 Pro" },
-    ],
-    version: {
-      args: ["--version"],
-      npmPackage: "@github/copilot",
-      githubRepo: "github/copilot-cli",
-      releaseNotesUrl: "https://github.com/github/copilot-cli/releases",
-    },
-    update: {
-      npm: "npm install -g @github/copilot@latest",
-    },
-    install: {
-      docsUrl: "https://github.com/github/copilot-cli#readme",
-      byOs: {
-        macos: [
-          {
-            label: "npm",
-            commands: ["npm install -g @github/copilot"],
-          },
-        ],
-        linux: [
-          {
-            label: "npm",
-            commands: ["npm install -g @github/copilot"],
-          },
-        ],
-        windows: [
-          {
-            label: "npm",
-            commands: ["npm install -g @github/copilot"],
-          },
-        ],
-      },
-      troubleshooting: [
-        "Restart Daintree after installation to update PATH",
-        "Verify installation with: copilot --version",
-        "Run 'copilot login' to authenticate after installing",
-      ],
-    },
-    capabilities: {
-      scrollback: 10000,
-      blockMouseReporting: true,
-      resizeStrategy: "settled",
-      supportsBracketedPaste: true,
-      submitEnterDelayMs: 0,
-    },
-    detection: {
-      primaryPatterns: ["\\(Esc to cancel\\)", "[∙∘○◎◉]\\s+.+\\(Esc to cancel\\)"],
-      fallbackPatterns: ["[∙∘○◎◉]\\s+\\w"],
-      bootCompletePatterns: ["Loading environment:"],
-      promptPatterns: ["^\\s*>\\s*$", "^\\s*>\\s"],
-      promptHintPatterns: ["^\\s*>\\s*$"],
-      scanLineCount: 10,
-      primaryConfidence: 0.95,
-      fallbackConfidence: 0.75,
-      promptConfidence: 0.85,
-      debounceMs: 4000,
-    },
-    routing: {
-      capabilities: [
-        "javascript",
-        "typescript",
-        "python",
-        "go",
-        "rust",
-        "react",
-        "node",
-        "github",
-        "general-purpose",
-      ],
-      domains: {
-        frontend: 0.8,
-        backend: 0.8,
-        testing: 0.75,
-        refactoring: 0.8,
-        debugging: 0.8,
-        architecture: 0.75,
-      },
-      maxConcurrent: 2,
-      enabled: true,
-    },
-    shutdown: {
-      quitCommand: "/exit",
-      sessionIdPattern: "copilot --resume=([\\w-]+)",
-    },
-    resume: {
-      args: (sessionId: string) => ["--resume=" + sessionId],
-    },
-    authCheck: {
-      // GitHub Copilot CLI primarily stores auth in the OS keychain
-      // (macOS Keychain under "copilot-cli", Linux libsecret/GNOME Keyring).
-      // ~/.copilot/config.json is written as a fallback when the keychain
-      // is unavailable (headless Linux, CI). We intentionally do NOT probe
-      // ~/.config/gh/hosts.yml — that file is populated by any `gh auth login`
-      // for general GitHub CLI use, not specifically Copilot, so presence
-      // does not imply a Copilot subscription or active auth. Keychain-auth
-      // users get `authConfirmed: false` but remain launchable.
-      configPathsAll: [".copilot/config.json"],
-    },
-    prerequisites: [
-      {
-        tool: "copilot",
-        label: "GitHub Copilot CLI",
-        versionArgs: ["--version"],
-        severity: "fatal",
-        installUrl: "https://github.com/github/copilot-cli",
-      },
-    ],
-  },
+  claude: claudeConfig,
+  gemini: geminiConfig,
+  codex: codexConfig,
+  opencode: opencodeConfig,
+  cursor: cursorConfig,
+  kiro: kiroConfig,
+  copilot: copilotConfig,
 };
 
 import { BUILT_IN_AGENT_IDS } from "./agentIds.js";

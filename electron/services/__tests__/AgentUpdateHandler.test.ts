@@ -48,10 +48,7 @@ describe("AgentUpdateHandler", () => {
         update: {
           npm: "npm install -g test-agent@latest",
           brew: "brew upgrade test-agent",
-          other: {
-            script: "./scripts/update-test-agent.sh",
-            npm: "./scripts/custom-npm-update.sh",
-          },
+          script: "./scripts/update-test-agent.sh",
         },
       },
     });
