@@ -7,6 +7,8 @@ import { SettingsSection } from "./SettingsSection";
 import { isSensitiveEnvKey } from "@shared/utils/envVars";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { useSettingsTabValidation } from "./SettingsValidationRegistry";
+import { logError } from "@/utils/logger";
+import { notify } from "@/lib/notify";
 
 interface EnvVar {
   id: string;
@@ -52,6 +54,7 @@ export function EnvironmentSettingsTab() {
   const hasError = Object.keys(rowErrors).length > 0;
   useSettingsTabValidation("environment", hasError);
 
+  const [loadFailed, setLoadFailed] = useState(false);
   useEffect(() => {
     let cancelled = false;
     window.electron.globalEnv
@@ -62,8 +65,22 @@ export function EnvironmentSettingsTab() {
         setSavedSnapshot(vars);
         setIsLoading(false);
       })
-      .catch(() => {
-        if (!cancelled) setIsLoading(false);
+      .catch((err) => {
+        if (cancelled) return;
+        // Showing an empty form here would let the user "save" and silently
+        // overwrite their stored variables with nothing. Block save and tell
+        // them what happened.
+        setLoadFailed(true);
+        setIsLoading(false);
+        logError("Failed to load global env vars", err);
+        notify({
+          type: "error",
+          title: "Couldn't load environment variables",
+          message:
+            "The settings form couldn't load your saved variables. Saving now would overwrite them with an empty list.",
+          priority: "high",
+          duration: 0,
+        });
       });
     return () => {
       cancelled = true;
@@ -190,6 +207,22 @@ export function EnvironmentSettingsTab() {
       <div className="flex items-center justify-center py-16">
         <Spinner size="lg" />
       </div>
+    );
+  }
+
+  if (loadFailed) {
+    return (
+      <SettingsSection
+        icon={Key}
+        title="Environment Variables"
+        description="Global environment variables injected into all new terminals. Project-level variables override globals with the same name."
+        id="environment-variables"
+      >
+        <div className="text-sm text-status-error/90 py-8 px-4 border border-status-error/40 rounded-[var(--radius-md)] bg-status-error/5">
+          Couldn't load saved environment variables. Close and reopen settings to try again. Editing
+          isn't available right now to avoid overwriting your stored values.
+        </div>
+      </SettingsSection>
     );
   }
 

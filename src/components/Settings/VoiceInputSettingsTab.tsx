@@ -24,6 +24,7 @@ import { SettingsSwitchCard } from "./SettingsSwitchCard";
 import { SettingsSelect } from "./SettingsSelect";
 import { SettingsTextarea } from "./SettingsTextarea";
 import { dispatchVoiceInputSettingsChanged } from "@/lib/voiceInputSettingsEvents";
+import { logWarn } from "@/utils/logger";
 import { CORE_CORRECTION_PROMPT } from "@shared/config/voiceCorrection";
 import type {
   VoiceInputSettings,
@@ -130,7 +131,12 @@ export function VoiceInputSettingsTab() {
       .then((status) => {
         if (status) setMicPermission(status);
       })
-      .catch(() => {});
+      .catch((err) => {
+        // Background probe — UI shows fallback "unknown" state.
+        logWarn("Failed to check microphone permission", {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      });
 
     return () => clearTimeout(timer);
   }, []);

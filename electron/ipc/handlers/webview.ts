@@ -14,6 +14,7 @@ import type {
 } from "../../../shared/types/ipc/webviewConsole.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { AppError } from "../../utils/errorTypes.js";
+import { logError, logWarn } from "../../utils/logger.js";
 
 interface CdpSession {
   runtimeEnabled: boolean;
@@ -712,10 +713,18 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
             p.request.postData?.includes("grant_type=authorization_code");
 
           if (!isTokenExchange) {
-            // Not the token exchange — let it through
+            // Not the token exchange — let it through. Failure here is usually
+            // a teardown race (debugger detached, request superseded). Surface
+            // at warn so it's visible in logs without polluting error metrics.
             wc.debugger
               .sendCommand("Fetch.continueRequest", { requestId: p.requestId })
-              .catch(() => {});
+              .catch((err) => {
+                logWarn("OAuth CDP non-token continueRequest failed", {
+                  panelId,
+                  url: p.request.url,
+                  error: err instanceof Error ? err.message : String(err),
+                });
+              });
             return;
           }
 
@@ -741,7 +750,7 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
               postData: Buffer.from(rewrittenBody).toString("base64"),
             })
             .catch((err) => {
-              console.error("[OAuthLoopback] CDP continueRequest failed:", err);
+              logError("OAuth CDP token-exchange continueRequest failed", err, { panelId });
             });
 
           clearTimeout(timeout);
@@ -754,7 +763,7 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
         // The page will load, the app's JS will fire the token exchange fetch,
         // and our CDP listener will intercept and rewrite it.
         wc.loadURL(callbackUrl).catch((err) => {
-          console.error("[OAuthLoopback] Failed to navigate webview:", err);
+          logError("OAuth callback webview navigation failed", err, { panelId });
           clearTimeout(timeout);
           finishIntercept();
         });
@@ -763,7 +772,9 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
       const msg = formatErrorMessage(err, "CDP setup failed");
       console.error("[OAuthLoopback] CDP setup failed:", msg);
       // Still try to navigate even without interception — might work for providers
-      // that don't enforce strict redirect_uri matching at token exchange
+      // that don't enforce strict redirect_uri matching at token exchange.
+      // Intentional: the primary CDP failure was already logged + rethrown above;
+      // this fallback navigation's failure adds no actionable signal.
       wc.loadURL(callbackUrl).catch(() => {});
       throw new AppError({
         code: "INTERNAL",
@@ -781,10 +792,15 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
           .sendCommand("Page.removeScriptToEvaluateOnNewDocument", {
             identifier: restoreScriptIdentifier,
           })
-          .catch(() => {});
+          .catch(() => {
+            // Intentional: post-flow CDP cleanup. Any primary failure was
+            // already surfaced; cleanup race conditions add no signal.
+          });
       }
       if (fetchEnabled && !wc.isDestroyed()) {
-        wc.debugger.sendCommand("Fetch.disable").catch(() => {});
+        wc.debugger.sendCommand("Fetch.disable").catch(() => {
+          // Intentional: post-flow CDP cleanup (see above).
+        });
       }
     }
 

@@ -1,5 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import type { WebviewDialogRequest } from "@/components/Browser/WebviewDialog";
+import { logError, logWarn } from "@/utils/logger";
+import { notify } from "@/lib/notify";
 
 export function useWebviewDialog(
   panelId: string,
@@ -13,11 +15,17 @@ export function useWebviewDialog(
     if (!webviewElement || !isWebviewReady) return;
     try {
       const webContentsId = webviewElement.getWebContentsId();
-      window.electron.webview.registerPanel(webContentsId, panelId).catch(() => {
-        // Registration failed — dialogs will fall back to native
+      window.electron.webview.registerPanel(webContentsId, panelId).catch((err) => {
+        // Registration failed — dialogs will fall back to native. Surface at
+        // warn (not error) since native fallback is a working UX, not broken.
+        logWarn("Webview dialog registration failed", {
+          panelId,
+          error: err instanceof Error ? err.message : String(err),
+        });
       });
     } catch {
-      // getWebContentsId() can throw if webview not attached
+      // Intentional: getWebContentsId() throws when the webview isn't attached
+      // yet — the next ready cycle re-runs this effect.
     }
   }, [panelId, webviewElement, isWebviewReady]);
 
@@ -38,7 +46,24 @@ export function useWebviewDialog(
 
       window.electron.webview
         .respondToDialog(current.dialogId, confirmed, response)
-        .catch(() => {});
+        .catch((err) => {
+          // The blocking JS dialog never gets answered if respondToDialog
+          // rejects — the page hangs. Surface to the user with a sticky
+          // error toast so they know the panel may need reloading.
+          logError("Webview dialog response failed", err, {
+            panelId,
+            dialogId: current.dialogId,
+          });
+          notify({
+            type: "error",
+            title: "Dialog response failed",
+            message:
+              "Couldn't send a response to the page dialog. The page may be unresponsive — try reloading the panel.",
+            priority: "high",
+            duration: 0,
+            context: { panelId },
+          });
+        });
 
       setDialogQueue((prev) => prev.slice(1));
     },

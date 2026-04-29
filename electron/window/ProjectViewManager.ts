@@ -23,7 +23,7 @@ import { canOpenExternalUrl, openExternalUrl } from "../utils/openExternal.js";
 import { getCrashRecoveryService } from "../services/CrashRecoveryService.js";
 import { getPtyManager } from "../services/PtyManager.js";
 import { notifyError } from "../ipc/errorHandlers.js";
-import { logInfo } from "../utils/logger.js";
+import { logInfo, logWarn } from "../utils/logger.js";
 import { injectSkeletonCss } from "./skeletonCss.js";
 import {
   attachRendererConsoleCapture,
@@ -350,7 +350,10 @@ export class ProjectViewManager {
           liveEntry.state === "cached" &&
           !webContents.isDestroyed()
         ) {
-          webContents.executeJavaScript("window.gc && window.gc()").catch(() => {});
+          webContents.executeJavaScript("window.gc && window.gc()").catch(() => {
+            // Intentional: V8 GC is best-effort — failure (no --js-flags=--expose-gc,
+            // destroyed context) is harmless and noisy if logged.
+          });
         }
       }, GC_DELAY_MS);
     }
@@ -441,11 +444,26 @@ export class ProjectViewManager {
       injectSkeletonCss(wc);
 
       const encodedId = encodeURIComponent(projectId);
+      // Outer .catch surfaces any rejection from `wc.loadURL` itself; the inner
+      // did-fail-load / preload-error / timeout handlers already reject the
+      // outer Promise with a descriptive Error. ERR_ABORTED is the dominant
+      // normal case during rapid project switching and renderer teardown — drop
+      // it silently to avoid log noise.
+      const onLoadURLReject = (err: unknown, url: string) => {
+        if (err instanceof Error && err.message.includes("ERR_ABORTED")) return;
+        logWarn("Project view loadURL rejected", {
+          projectId,
+          url,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      };
       if (process.env.NODE_ENV === "development") {
         const devServerUrl = getDevServerUrl();
-        wc.loadURL(`${devServerUrl}?projectId=${encodedId}`).catch(() => {});
+        const url = `${devServerUrl}?projectId=${encodedId}`;
+        wc.loadURL(url).catch((err) => onLoadURLReject(err, url));
       } else {
-        wc.loadURL(`app://daintree/index.html?projectId=${encodedId}`).catch(() => {});
+        const url = `app://daintree/index.html?projectId=${encodedId}`;
+        wc.loadURL(url).catch((err) => onLoadURLReject(err, url));
       }
     });
   }

@@ -438,7 +438,11 @@ function SettingsDialogInner({
     window.electron.globalEnv
       .get()
       .then(setGlobalEnvVars)
-      .catch(() => {});
+      .catch((err) => {
+        // Log only — EnvironmentSettingsTab owns the user-visible failure path
+        // when the user opens that tab. Avoid double-toasting the same IPC fail.
+        logError("Failed to preload global env vars for agent settings", err);
+      });
   }, [isOpen]);
 
   const handleBeforeClose = useCallback(async () => {
