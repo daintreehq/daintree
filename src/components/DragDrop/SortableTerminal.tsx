@@ -67,11 +67,9 @@ export function SortableTerminal({
   // panel content hosts its own buttons, inputs, and xterm textarea. Strip
   // those props — actual drag initiation happens via drag handles passed
   // through DragHandleProvider, not via focusing the outer container.
-  const {
-    role: _role,
-    tabIndex: _tabIndex,
-    ...remainingAttributes
-  } = attributes as unknown as Record<string, unknown>;
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+  const destructured = attributes as unknown as Record<string, unknown>;
+  const { role: _role, tabIndex: _tabIndex, ...remainingAttributes } = destructured;
   void _role;
   void _tabIndex;
 

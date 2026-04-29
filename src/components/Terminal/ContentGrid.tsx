@@ -902,6 +902,7 @@ export function ContentGrid({
       .slice(0, 2)
       .map((g) => getTabGroupPanels(g.id, "grid")[0])
       .filter((t): t is TerminalInstance => t !== undefined);
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
     return panels.length === 2 ? (panels as [TerminalInstance, TerminalInstance]) : null;
   }, [useTwoPaneSplitMode, tabGroups, getTabGroupPanels]);
 
@@ -921,6 +922,7 @@ export function ContentGrid({
       prevModeRef.current = currentMode;
 
       // Immediate stabilization fit after mode switch
+      const MODE_SWITCH_FIT_DELAY_MS = 50;
       const timeoutId = window.setTimeout(() => {
         if (isDraggingRef.current) return;
 
@@ -932,7 +934,7 @@ export function ContentGrid({
             terminalInstanceService.fit(id);
           }
         }
-      }, 50);
+      }, MODE_SWITCH_FIT_DELAY_MS);
 
       return () => clearTimeout(timeoutId);
     }
