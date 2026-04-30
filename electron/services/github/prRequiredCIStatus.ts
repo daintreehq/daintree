@@ -66,8 +66,8 @@ function normalizeRawState(
  * Returns the raw rollup status and no summary when:
  * - contexts page is truncated (hasNextPage) — avoids false-greens from unseen required checks
  * - the contexts list is null/undefined — no data to enrich
- *
- * When no required contexts are present in a full page, falls back to the raw status.
+ * - no required contexts are present in a full page — repos without branch protection have
+ *   no "required" / "non-required" distinction, so the raw rollup is the right signal
  */
 export function deriveRequiredCIStatus(
   contexts: RollupContextNode[] | null | undefined,
@@ -122,11 +122,10 @@ export function deriveRequiredCIStatus(
   }
 
   if (requiredTotal === 0) {
-    // No required checks configured — non-required failures shouldn't turn the indicator red.
-    return {
-      ciStatus: "SUCCESS",
-      ciSummary: { requiredTotal: 0, requiredFailing: 0, requiredPending: 0 },
-    };
+    // No required checks configured — fall back to the raw rollup state so the indicator
+    // reflects actual CI health. A zeroed summary would mask real failures by forcing the
+    // tooltip down the "No required checks" path even when checks are red or in-flight.
+    return { ciStatus: rawCiStatus, ciSummary: undefined };
   }
 
   const summary: GitHubPRCISummary = { requiredTotal, requiredFailing, requiredPending };

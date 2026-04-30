@@ -88,7 +88,9 @@ export interface GitHubPR {
   commentCount?: number;
   /** CI status rollup from the latest commit (reflects required checks only when ciSummary is present) */
   ciStatus?: GitHubPRCIStatus;
-  /** Summary of required checks; only present when contexts were successfully enriched */
+  /** Summary of required checks. Absent when enrichment hasn't run, when the context page
+   *  was truncated, or when the repository has no required checks configured (in which case
+   *  ciStatus reflects the raw rollup). */
   ciSummary?: GitHubPRCISummary;
 }
 

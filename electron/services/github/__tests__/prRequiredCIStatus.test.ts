@@ -124,7 +124,13 @@ describe("deriveRequiredCIStatus", () => {
     expect(r.ciSummary).toEqual({ requiredTotal: 2, requiredFailing: 0, requiredPending: 1 });
   });
 
-  it("returns SUCCESS with zeroed summary when no required checks exist", () => {
+  it("falls back to raw rollup when contexts list is empty", () => {
+    const r = deriveRequiredCIStatus([], false, "PENDING");
+    expect(r.ciStatus).toBe("PENDING");
+    expect(r.ciSummary).toBeUndefined();
+  });
+
+  it("falls back to raw FAILURE rollup when no required checks exist", () => {
     const r = deriveRequiredCIStatus(
       [
         {
@@ -137,8 +143,42 @@ describe("deriveRequiredCIStatus", () => {
       false,
       "FAILURE"
     );
+    expect(r.ciStatus).toBe("FAILURE");
+    expect(r.ciSummary).toBeUndefined();
+  });
+
+  it("falls back to raw PENDING rollup when no required checks exist", () => {
+    const r = deriveRequiredCIStatus(
+      [
+        {
+          __typename: "CheckRun",
+          conclusion: null,
+          status: "IN_PROGRESS",
+          isRequired: false,
+        },
+      ],
+      false,
+      "PENDING"
+    );
+    expect(r.ciStatus).toBe("PENDING");
+    expect(r.ciSummary).toBeUndefined();
+  });
+
+  it("falls back to raw SUCCESS rollup when no required checks exist", () => {
+    const r = deriveRequiredCIStatus(
+      [
+        {
+          __typename: "CheckRun",
+          conclusion: "SUCCESS",
+          status: "COMPLETED",
+          isRequired: false,
+        },
+      ],
+      false,
+      "SUCCESS"
+    );
     expect(r.ciStatus).toBe("SUCCESS");
-    expect(r.ciSummary).toEqual({ requiredTotal: 0, requiredFailing: 0, requiredPending: 0 });
+    expect(r.ciSummary).toBeUndefined();
   });
 
   it("ignores non-required checks entirely", () => {
