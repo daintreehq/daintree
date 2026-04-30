@@ -1821,7 +1821,17 @@ export class TerminalProcess {
     } else if (!isDetected && (terminal.detectedAgentId || this.lastDetectedProcessIconId)) {
       const previousAgent = terminal.detectedAgentId;
       if (previousAgent) {
-        if (result.evidenceSource !== "shell_command") {
+        // The "agent-requires-explicit-exit" guard exists to keep durable
+        // launch-affinity chrome stable through transient detection gaps —
+        // process-tree blindness, blind-`ps` cycles, argv rewrites. It only
+        // applies when the agent identity is anchored by `launchAgentId`
+        // (toolbar/cold-launched). Runtime-promoted agents (user typed the
+        // CLI into a plain shell) have no durable anchor: when `no_agent`
+        // arrives we must demote regardless of evidence source, otherwise
+        // a process-tree-absence tick after Ctrl+C can land here without
+        // `evidenceSource: "shell_command"` and the chrome stays stuck on
+        // `claude` until terminal teardown. Issue: v0.8.0 release E2E.
+        if (terminal.launchAgentId && result.evidenceSource !== "shell_command") {
           logIdentityDebug(
             `[IdentityDebug] terminal-demote-hold term=${this.id.slice(-8)} ` +
               `reason=agent-requires-explicit-exit agent=${previousAgent}`
@@ -1830,7 +1840,8 @@ export class TerminalProcess {
         }
         logIdentityDebug(
           `[IdentityDebug] terminal-demote-apply term=${this.id.slice(-8)} ` +
-            `reason=prompt-return agent=${previousAgent}`
+            `reason=${result.evidenceSource === "shell_command" ? "prompt-return" : "no-agent-detected"} ` +
+            `agent=${previousAgent} runtime=${terminal.launchAgentId ? "launch-anchored" : "runtime-promoted"}`
         );
         this.deps.agentStateService.updateAgentState(terminal, { type: "exit", code: 0 });
         terminal.detectedAgentId = undefined;

@@ -1227,6 +1227,79 @@ describe("TerminalProcess.handleAgentDetection — launch identity immutability 
   });
 });
 
+// v0.8.0 release fix: the "agent-requires-explicit-exit" guard preserves
+// branded chrome through transient detection gaps for launch-anchored agents
+// (toolbar-launched, where `launchAgentId` is set). Runtime-promoted plain
+// terminals have no durable anchor, so a `no_agent` callback after the
+// command exits must demote regardless of evidence source — otherwise a
+// process-tree-absence tick that arrives without `evidenceSource:
+// "shell_command"` strands the chrome on `claude` until terminal teardown.
+describe("TerminalProcess.handleAgentDetection — runtime-promoted demote without launch anchor", () => {
+  it("plain terminal demotes on no_agent without shell_command evidence", () => {
+    const terminal = createPlainTerminal("t-runtime-demote");
+    const exitedEvents: Array<{ agentType?: string }> = [];
+    const unsubscribe = events.on("agent:exited", (payload) => {
+      exitedEvents.push({ agentType: payload.agentType });
+    });
+
+    try {
+      callHandleAgentDetection(
+        terminal,
+        makeAgentResult({ agentType: "claude" as const, processIconId: "claude" }),
+        getSpawnedAt(terminal)
+      );
+      expect(terminal.getInfo().detectedAgentId).toBe("claude");
+
+      // Process-tree absence after the user typed `claude` and Ctrl+C'd —
+      // arrives with no evidenceSource field. Plain terminals must demote.
+      callHandleAgentDetection(terminal, makeNoAgentResult({}), getSpawnedAt(terminal));
+
+      expect(terminal.getInfo().detectedAgentId).toBeUndefined();
+      expect(exitedEvents).toHaveLength(1);
+      expect(exitedEvents[0].agentType).toBe("claude");
+    } finally {
+      unsubscribe();
+      terminal.dispose();
+    }
+  });
+
+  it("toolbar-launched terminal still holds chrome on no_agent without shell_command", () => {
+    // Regression guard: launch-anchored agents must keep the existing
+    // "explicit-exit" guard so transient process-tree gaps don't drop the
+    // branded chrome between detection ticks.
+    const terminal = createAgentTerminal();
+    const exitedEvents: Array<{ agentType?: string }> = [];
+    const unsubscribe = events.on("agent:exited", (payload) => {
+      exitedEvents.push({ agentType: payload.agentType });
+    });
+
+    try {
+      callHandleAgentDetection(
+        terminal,
+        makeAgentResult({ agentType: "claude" as const, processIconId: "claude" }),
+        getSpawnedAt(terminal)
+      );
+
+      callHandleAgentDetection(terminal, makeNoAgentResult({}), getSpawnedAt(terminal));
+
+      expect(terminal.getInfo().detectedAgentId).toBe("claude");
+      expect(exitedEvents).toHaveLength(0);
+
+      // Explicit prompt-return demote still fires for launch-anchored agents.
+      callHandleAgentDetection(
+        terminal,
+        makeNoAgentResult({ evidenceSource: "shell_command" }),
+        getSpawnedAt(terminal)
+      );
+      expect(terminal.getInfo().detectedAgentId).toBeUndefined();
+      expect(exitedEvents).toHaveLength(1);
+    } finally {
+      unsubscribe();
+      terminal.dispose();
+    }
+  });
+});
+
 // #5809: unknown/ambiguous are first-class HOLD states. handleAgentDetection
 // must no-op on both so a blind `ps` cycle or a two-source conflict does not
 // silently demote a confirmed agent every HYSTERESIS window.
