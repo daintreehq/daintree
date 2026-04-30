@@ -316,6 +316,7 @@ export default tseslint.config(
     ignores: [
       "dist/**",
       "dist-electron/**",
+      "dist-typecheck/**",
       "release/**",
       "node_modules/**",
       "*.config.js",
