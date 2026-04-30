@@ -102,6 +102,8 @@ import type {
   GitHubTokenValidation,
   GitHubRateLimitPayload,
   GitHubTokenHealthPayload,
+  RepoStatsAndPagePayload,
+  GitHubFirstPageCachePayload,
   PRDetectedPayload,
   PRClearedPayload,
   IssueDetectedPayload,
@@ -913,6 +915,10 @@ export interface IpcInvokeMap {
   "github:get-repo-stats": {
     args: [cwd: string, bypassCache?: boolean];
     result: RepositoryStats;
+  };
+  "github:get-first-page-cache": {
+    args: [cwd: string];
+    result: GitHubFirstPageCachePayload | null;
   };
   "github:get-project-health": {
     args: [cwd: string, bypassCache?: boolean];
@@ -2257,6 +2263,11 @@ export interface IpcEventMap {
 
   // GitHub token health state push (expiry/revocation detection)
   "github:token-health-changed": GitHubTokenHealthPayload;
+
+  // Combined repo stats + first page of open issues + open PRs push, emitted
+  // after every successful poll. Lets renderers prime githubResourceCache
+  // for the (open, created) default-filter cache key with no click-time fetch.
+  "github:repo-stats-and-page-updated": RepoStatsAndPagePayload;
 
   // Per-service connectivity state push
   "connectivity:service-changed": ServiceConnectivityPayload;

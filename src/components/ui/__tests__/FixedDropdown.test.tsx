@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { render, act } from "@testing-library/react";
+import { useState } from "react";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { FixedDropdown } from "../fixed-dropdown";
 import { _resetForTests } from "@/lib/escapeStack";
@@ -460,5 +461,94 @@ describe("FixedDropdown overlay-claims dismiss behavior", () => {
     );
 
     expect(document.querySelector("[class*='fixed']")).toBeNull();
+  });
+});
+
+describe("FixedDropdown keepMounted behavior", () => {
+  let onOpenChange: ReturnType<typeof vi.fn<(open: boolean) => void>>;
+  let anchorRef: React.RefObject<HTMLElement | null>;
+
+  beforeEach(() => {
+    _resetForTests();
+    setOverlayClaimsSize(0);
+    onOpenChange = vi.fn();
+    anchorRef = createAnchor();
+    vi.stubGlobal("matchMedia", vi.fn().mockReturnValue({ matches: false }));
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    _resetForTests();
+    vi.useRealTimers();
+  });
+
+  it("does NOT render the portal before the first open with keepMounted", () => {
+    render(
+      <FixedDropdown open={false} onOpenChange={onOpenChange} anchorRef={anchorRef} keepMounted>
+        <div>Body content</div>
+      </FixedDropdown>
+    );
+    expect(document.body.textContent).not.toContain("Body content");
+  });
+
+  it("keeps the body in the DOM and preserves state across hide/reveal", () => {
+    // Activity's actual guarantee: state is preserved across hidden/visible
+    // transitions while the DOM node stays put. (Effects are intentionally
+    // re-fired on each reveal — that's how SWR revalidate gets triggered on
+    // reopen, which is desirable.) This test pins down the state-preservation
+    // contract: useState(() => randomId) runs once per real mount, so reading
+    // it back after a hide/reveal cycle proves the same instance was reused.
+    function StatePreserver() {
+      const [id] = useState(() => Math.random().toString(36).slice(2));
+      return (
+        <div data-testid="body" data-id={id}>
+          preserved
+        </div>
+      );
+    }
+
+    const { rerender } = render(
+      <FixedDropdown open={true} onOpenChange={onOpenChange} anchorRef={anchorRef} keepMounted>
+        <StatePreserver />
+      </FixedDropdown>
+    );
+
+    const idAtMount = document.querySelector('[data-testid="body"]')?.getAttribute("data-id");
+    expect(idAtMount).toBeTruthy();
+
+    rerender(
+      <FixedDropdown open={false} onOpenChange={onOpenChange} anchorRef={anchorRef} keepMounted>
+        <StatePreserver />
+      </FixedDropdown>
+    );
+    // Body remains in the DOM after close — Activity hides via display:none.
+    expect(document.querySelector('[data-testid="body"]')).not.toBeNull();
+    expect(document.querySelector('[data-testid="body"]')?.getAttribute("data-id")).toBe(idAtMount);
+
+    rerender(
+      <FixedDropdown open={true} onOpenChange={onOpenChange} anchorRef={anchorRef} keepMounted>
+        <StatePreserver />
+      </FixedDropdown>
+    );
+    // Same id after reveal — state was preserved, instance was reused.
+    expect(document.querySelector('[data-testid="body"]')?.getAttribute("data-id")).toBe(idAtMount);
+  });
+
+  it("default behavior (no keepMounted) still unmounts the body on close", () => {
+    const { rerender } = render(
+      <FixedDropdown open={true} onOpenChange={onOpenChange} anchorRef={anchorRef}>
+        <div data-testid="body">Body content</div>
+      </FixedDropdown>
+    );
+
+    expect(document.querySelector('[data-testid="body"]')).not.toBeNull();
+
+    rerender(
+      <FixedDropdown open={false} onOpenChange={onOpenChange} anchorRef={anchorRef}>
+        <div data-testid="body">Body content</div>
+      </FixedDropdown>
+    );
+
+    expect(document.querySelector('[data-testid="body"]')).toBeNull();
   });
 });

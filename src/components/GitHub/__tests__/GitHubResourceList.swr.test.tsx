@@ -2,23 +2,27 @@
  * @vitest-environment jsdom
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, cleanup, waitFor } from "@testing-library/react";
-import type { ReactNode } from "react";
-import type { GitHubIssue, GitHubListResponse } from "@shared/types/github";
+import { render, screen, cleanup, waitFor, act } from "@testing-library/react";
+import { Activity, type ReactNode } from "react";
+import type { GitHubIssue, GitHubListResponse, GitHubListOptions } from "@shared/types/github";
 import { setCache, buildCacheKey, _resetForTests } from "@/lib/githubResourceCache";
 import { useGitHubFilterStore } from "@/store/githubFilterStore";
 
-const mockListIssues = vi.fn<() => Promise<GitHubListResponse<GitHubIssue>>>();
+const mockListIssues = vi.fn();
 const mockListPRs = vi.fn();
 const mockGetIssueByNumber = vi.fn();
 const mockGetPRByNumber = vi.fn();
 
 vi.mock("@/clients/githubClient", () => ({
   githubClient: {
-    listIssues: (...args: unknown[]) => mockListIssues(...(args as [])),
-    listPullRequests: (...args: unknown[]) => mockListPRs(...(args as [])),
-    getIssueByNumber: (...args: unknown[]) => mockGetIssueByNumber(...(args as [])),
-    getPRByNumber: (...args: unknown[]) => mockGetPRByNumber(...(args as [])),
+    listIssues: (
+      options: Omit<GitHubListOptions, "state"> & { state?: "open" | "closed" | "all" }
+    ) => mockListIssues(options),
+    listPullRequests: (
+      options: Omit<GitHubListOptions, "state"> & { state?: "open" | "closed" | "merged" | "all" }
+    ) => mockListPRs(options),
+    getIssueByNumber: (cwd: string, issueNumber: number) => mockGetIssueByNumber(cwd, issueNumber),
+    getPRByNumber: (cwd: string, prNumber: number) => mockGetPRByNumber(cwd, prNumber),
   },
 }));
 
@@ -832,5 +836,183 @@ describe("GitHubResourceList retry behavior", () => {
 
     expect(mockListIssues).toHaveBeenCalledTimes(1);
     expect(screen.getByTestId("item-20")).toBeTruthy();
+  });
+});
+
+describe("GitHubResourceList Activity reveal vs filter change — PR #6288", () => {
+  it("preserves rows and re-runs the SWR revalidate path on Activity reveal of identical inputs", async () => {
+    const cacheKey = buildCacheKey("/test/proj", "issue", "open", "created");
+    setCache(cacheKey, {
+      items: [makeIssue(40), makeIssue(41)],
+      endCursor: null,
+      hasNextPage: false,
+      timestamp: Date.now(),
+    });
+    mockListIssues.mockResolvedValue(makeResponse([makeIssue(40), makeIssue(41)]));
+
+    function Harness({ mode }: { mode: "visible" | "hidden" }) {
+      return (
+        <Activity mode={mode}>
+          <GitHubResourceList type="issue" projectPath="/test/proj" />
+        </Activity>
+      );
+    }
+
+    const { rerender } = render(<Harness mode="visible" />);
+
+    // Cache hit on initial mount → no skeleton, items rendered immediately.
+    expect(screen.queryByTestId("skeleton")).toBeNull();
+    expect(screen.getByTestId("item-40")).toBeTruthy();
+    await waitFor(() => {
+      expect(mockListIssues).toHaveBeenCalledTimes(1);
+    });
+
+    // Hide via Activity — effects clean up but state + refs survive.
+    rerender(<Harness mode="hidden" />);
+    // Re-reveal — the load effect re-fires with the same effectKey, hitting
+    // the isActivityRevealOfSameInputs branch: no skeleton, no row clear,
+    // background revalidate runs.
+    rerender(<Harness mode="visible" />);
+
+    expect(screen.queryByTestId("skeleton")).toBeNull();
+    expect(screen.getByTestId("item-40")).toBeTruthy();
+    expect(screen.getByTestId("item-41")).toBeTruthy();
+
+    await waitFor(() => {
+      expect(mockListIssues).toHaveBeenCalledTimes(2);
+    });
+    // Both fetch calls used the revalidate path (same project / filter / sort).
+    expect(screen.queryByTestId("skeleton")).toBeNull();
+  });
+
+  it("clears stale rows when the cache holds an empty page on Activity reveal", async () => {
+    const cacheKey = buildCacheKey("/test/proj", "issue", "open", "created");
+    // Prime with one issue so the initial mount renders rows.
+    setCache(cacheKey, {
+      items: [makeIssue(70)],
+      endCursor: null,
+      hasNextPage: false,
+      timestamp: Date.now() - 30_000,
+    });
+    // Mount-time revalidate returns the same single row; later reveal-time
+    // revalidate hangs so the transitional UI driven by the cache read is
+    // observable.
+    mockListIssues
+      .mockResolvedValueOnce(makeResponse([makeIssue(70)]))
+      .mockImplementation(() => new Promise(() => {}));
+
+    function Harness({ mode }: { mode: "visible" | "hidden" }) {
+      return (
+        <Activity mode={mode}>
+          <GitHubResourceList type="issue" projectPath="/test/proj" />
+        </Activity>
+      );
+    }
+
+    const { rerender } = render(<Harness mode="visible" />);
+    expect(screen.getByTestId("item-70")).toBeTruthy();
+    await waitFor(() => {
+      expect(mockListIssues).toHaveBeenCalledTimes(1);
+    });
+
+    // Hide via Activity, then a broadcast lands while hidden that drops the
+    // last open issue (legitimate empty result for this filter).
+    rerender(<Harness mode="hidden" />);
+    setCache(cacheKey, {
+      items: [],
+      endCursor: null,
+      hasNextPage: false,
+      timestamp: Date.now(),
+    });
+
+    rerender(<Harness mode="visible" />);
+
+    // On reveal the load effect re-reads the cache. With the fix in place,
+    // an empty cache page must clear stale rows immediately rather than
+    // letting them linger until revalidate resolves.
+    await waitFor(() => {
+      expect(screen.queryByTestId("item-70")).toBeNull();
+    });
+  });
+
+  it("clears rows and shows the skeleton when the filter changes while Activity is hidden", async () => {
+    const openKey = buildCacheKey("/test/proj", "issue", "open", "created");
+    setCache(openKey, {
+      items: [makeIssue(80)],
+      endCursor: null,
+      hasNextPage: false,
+      timestamp: Date.now(),
+    });
+    mockListIssues
+      .mockResolvedValueOnce(makeResponse([makeIssue(80)]))
+      .mockImplementation(() => new Promise(() => {}));
+
+    function Harness({ mode }: { mode: "visible" | "hidden" }) {
+      return (
+        <Activity mode={mode}>
+          <GitHubResourceList type="issue" projectPath="/test/proj" />
+        </Activity>
+      );
+    }
+
+    const { rerender } = render(<Harness mode="visible" />);
+    expect(screen.getByTestId("item-80")).toBeTruthy();
+    await waitFor(() => {
+      expect(mockListIssues).toHaveBeenCalledTimes(1);
+    });
+
+    // Hide, change filter (effectKey now differs from lastLoadedEffectKeyRef),
+    // reveal — must take the real-remount path: clear rows + show skeleton.
+    rerender(<Harness mode="hidden" />);
+    act(() => {
+      useGitHubFilterStore.getState().setIssueFilter("closed");
+    });
+    rerender(<Harness mode="visible" />);
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("item-80")).toBeNull();
+    });
+    expect(screen.getByTestId("skeleton")).toBeTruthy();
+    expect(mockListIssues.mock.calls[mockListIssues.mock.calls.length - 1]?.[0]).toMatchObject({
+      state: "closed",
+    });
+  });
+
+  it("clears rows and shows the skeleton when the filter changes while keepMounted", async () => {
+    const openKey = buildCacheKey("/test/proj", "issue", "open", "created");
+    setCache(openKey, {
+      items: [makeIssue(60)],
+      endCursor: null,
+      hasNextPage: false,
+      timestamp: Date.now(),
+    });
+    mockListIssues
+      .mockResolvedValueOnce(makeResponse([makeIssue(60)]))
+      // Closed-filter fetch hangs so the transitional UI is observable.
+      .mockImplementation(() => new Promise(() => {}));
+
+    render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
+
+    // Cache hit — items render, no skeleton.
+    expect(screen.getByTestId("item-60")).toBeTruthy();
+    expect(screen.queryByTestId("skeleton")).toBeNull();
+    await waitFor(() => {
+      expect(mockListIssues).toHaveBeenCalledTimes(1);
+    });
+
+    act(() => {
+      useGitHubFilterStore.getState().setIssueFilter("closed");
+    });
+
+    // Filter change → effectKey differs from lastLoadedEffectKeyRef → real
+    // remount path: rows cleared, skeleton shown for the in-flight fetch.
+    await waitFor(() => {
+      expect(screen.queryByTestId("item-60")).toBeNull();
+    });
+    expect(screen.getByTestId("skeleton")).toBeTruthy();
+    expect(mockListIssues.mock.calls.length).toBeGreaterThanOrEqual(2);
+    expect(mockListIssues.mock.calls[mockListIssues.mock.calls.length - 1]?.[0]).toMatchObject({
+      state: "closed",
+    });
   });
 });

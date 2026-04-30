@@ -3,6 +3,7 @@ import {
   buildBatchPRQuery,
   buildBatchRequiredChecksQuery,
   LIST_PRS_QUERY,
+  REPO_STATS_AND_PAGE_QUERY,
   SEARCH_QUERY,
   GET_PR_QUERY,
   PROJECT_HEALTH_QUERY,
@@ -42,6 +43,74 @@ describe("PROJECT_HEALTH_QUERY", () => {
   it("fetches open issue and PR counts", () => {
     expect(PROJECT_HEALTH_QUERY).toContain("issues(states: OPEN)");
     expect(PROJECT_HEALTH_QUERY).toContain("pullRequests(states: OPEN)");
+  });
+});
+
+describe("REPO_STATS_AND_PAGE_QUERY", () => {
+  it("fetches the first 20 open issues sorted by created-desc", () => {
+    expect(REPO_STATS_AND_PAGE_QUERY).toContain(
+      "issues(first: 20, states: OPEN, orderBy: {field: CREATED_AT, direction: DESC})"
+    );
+  });
+
+  it("fetches the first 20 open pullRequests sorted by created-desc", () => {
+    expect(REPO_STATS_AND_PAGE_QUERY).toContain(
+      "pullRequests(first: 20, states: OPEN, orderBy: {field: CREATED_AT, direction: DESC})"
+    );
+  });
+
+  it("does not reference PullRequestOrder (the schema uses IssueOrder for both connections)", () => {
+    // Past lesson #3339: Repository.pullRequests.orderBy expects IssueOrder,
+    // not PullRequestOrder. The combined query sidesteps this by inlining the
+    // order literal — keep it that way so a future refactor can't reintroduce
+    // a $orderBy: PullRequestOrder variable.
+    expect(REPO_STATS_AND_PAGE_QUERY).not.toContain("PullRequestOrder");
+  });
+
+  it("does not declare a $query variable (rejected by @octokit/graphql)", () => {
+    // Past lesson #1376.
+    expect(REPO_STATS_AND_PAGE_QUERY).not.toContain("$query");
+  });
+
+  it("returns totalCount and pageInfo for both connections", () => {
+    const issuesBlock = REPO_STATS_AND_PAGE_QUERY.slice(
+      REPO_STATS_AND_PAGE_QUERY.indexOf("issues(first: 20"),
+      REPO_STATS_AND_PAGE_QUERY.indexOf("pullRequests(first: 20")
+    );
+    expect(issuesBlock).toContain("totalCount");
+    expect(issuesBlock).toContain("pageInfo { hasNextPage endCursor }");
+
+    const prsBlock = REPO_STATS_AND_PAGE_QUERY.slice(
+      REPO_STATS_AND_PAGE_QUERY.indexOf("pullRequests(first: 20")
+    );
+    expect(prsBlock).toContain("totalCount");
+    expect(prsBlock).toContain("pageInfo { hasNextPage endCursor }");
+  });
+
+  it("includes statusCheckRollup on PRs so the toolbar can render CI badges from the broadcast", () => {
+    expect(REPO_STATS_AND_PAGE_QUERY).toContain("statusCheckRollup");
+  });
+
+  it("returns the issue fields the disk-cache validator (isIssueLike) requires", () => {
+    // GitHubFirstPageCache.isIssueLike rejects items missing author{login,
+    // avatarUrl} or assignees. Drop one of these from the query and the
+    // disk-cache write produces a null page, breaking cold-start hydration.
+    const issuesBlock = REPO_STATS_AND_PAGE_QUERY.slice(
+      REPO_STATS_AND_PAGE_QUERY.indexOf("issues(first: 20"),
+      REPO_STATS_AND_PAGE_QUERY.indexOf("pullRequests(first: 20")
+    );
+    expect(issuesBlock).toContain("author { login avatarUrl }");
+    expect(issuesBlock).toContain("assignees");
+  });
+
+  it("returns the PR fields the disk-cache validator (isPRLike) requires", () => {
+    // GitHubFirstPageCache.isPRLike requires author{login, avatarUrl} and
+    // isDraft. Same hydration-break risk if either is dropped.
+    const prsBlock = REPO_STATS_AND_PAGE_QUERY.slice(
+      REPO_STATS_AND_PAGE_QUERY.indexOf("pullRequests(first: 20")
+    );
+    expect(prsBlock).toContain("author { login avatarUrl }");
+    expect(prsBlock).toContain("isDraft");
   });
 });
 

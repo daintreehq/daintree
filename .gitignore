@@ -98,3 +98,6 @@ planning/
 
 # Claude Code session markers
 .claude/nf-session-seen-*.flag
+
+# Claude scratch / working notes (private, ephemeral)
+.claude-scratch/

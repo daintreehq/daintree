@@ -148,6 +148,8 @@ export const CHANNELS = {
   GITHUB_RATE_LIMIT_CHANGED: "github:rate-limit-changed",
   GITHUB_TOKEN_HEALTH_CHANGED: "github:token-health-changed",
   GITHUB_GET_TOKEN_HEALTH: "github:get-token-health",
+  GITHUB_REPO_STATS_AND_PAGE_UPDATED: "github:repo-stats-and-page-updated",
+  GITHUB_GET_FIRST_PAGE_CACHE: "github:get-first-page-cache",
 
   APP_GET_STATE: "app:get-state",
   APP_SET_STATE: "app:set-state",

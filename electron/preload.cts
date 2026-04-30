@@ -49,6 +49,7 @@ import type {
   IssueNotFoundPayload,
   GitHubRateLimitPayload,
   GitHubTokenHealthPayload,
+  RepoStatsAndPagePayload,
   ServiceConnectivityPayload,
   ServiceConnectivitySnapshot,
   GitStatus,
@@ -1414,6 +1415,9 @@ const api: ElectronAPI = {
     getRepoStats: (cwd: string, bypassCache?: boolean) =>
       _unwrappingInvoke(CHANNELS.GITHUB_GET_REPO_STATS, cwd, bypassCache),
 
+    getFirstPageCache: (cwd: string) =>
+      _unwrappingInvoke(CHANNELS.GITHUB_GET_FIRST_PAGE_CACHE, cwd),
+
     getProjectHealth: (cwd: string, bypassCache?: boolean) =>
       _unwrappingInvoke(CHANNELS.GITHUB_GET_PROJECT_HEALTH, cwd, bypassCache),
 
@@ -1496,6 +1500,9 @@ const api: ElectronAPI = {
 
     onTokenHealthChanged: (callback: (data: GitHubTokenHealthPayload) => void) =>
       _typedOn(CHANNELS.GITHUB_TOKEN_HEALTH_CHANGED, callback),
+
+    onRepoStatsAndPageUpdated: (callback: (data: RepoStatsAndPagePayload) => void) =>
+      _typedOn(CHANNELS.GITHUB_REPO_STATS_AND_PAGE_UPDATED, callback),
 
     getTokenHealth: () => _unwrappingInvoke(CHANNELS.GITHUB_GET_TOKEN_HEALTH),
   },

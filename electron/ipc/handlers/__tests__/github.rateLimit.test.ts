@@ -29,6 +29,9 @@ const gitHubServiceMock = vi.hoisted(() => ({
   getIssueByNumber: vi.fn().mockResolvedValue(null),
   getPRByNumber: vi.fn().mockResolvedValue(null),
   getRepoStats: vi.fn().mockResolvedValue({ stats: null, error: undefined }),
+  getRepoStatsAndPage: vi
+    .fn()
+    .mockResolvedValue({ stats: null, issues: null, prs: null, error: undefined }),
   getProjectHealth: vi.fn().mockResolvedValue({ health: null, error: undefined }),
   parseGitHubRepoUrl: vi.fn().mockReturnValue(null),
 }));

@@ -100,6 +100,8 @@ import type {
   GitHubTokenValidation,
   GitHubRateLimitPayload,
   GitHubTokenHealthPayload,
+  RepoStatsAndPagePayload,
+  GitHubFirstPageCachePayload,
   PRDetectedPayload,
   PRClearedPayload,
   IssueDetectedPayload,
@@ -623,6 +625,7 @@ export interface ElectronAPI {
   };
   github: {
     getRepoStats(cwd: string, bypassCache?: boolean): Promise<RepositoryStats>;
+    getFirstPageCache(cwd: string): Promise<GitHubFirstPageCachePayload | null>;
     getProjectHealth(cwd: string, bypassCache?: boolean): Promise<ProjectHealthData>;
     openIssues(cwd: string, query?: string, state?: string): Promise<void>;
     openPRs(cwd: string, query?: string, state?: string): Promise<void>;
@@ -672,6 +675,7 @@ export interface ElectronAPI {
     onIssueNotFound(callback: (data: IssueNotFoundPayload) => void): () => void;
     onRateLimitChanged(callback: (data: GitHubRateLimitPayload) => void): () => void;
     onTokenHealthChanged(callback: (data: GitHubTokenHealthPayload) => void): () => void;
+    onRepoStatsAndPageUpdated(callback: (data: RepoStatsAndPagePayload) => void): () => void;
     getTokenHealth(): Promise<GitHubTokenHealthPayload>;
   };
   connectivity: {

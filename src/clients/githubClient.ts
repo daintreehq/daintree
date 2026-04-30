@@ -6,6 +6,8 @@ import type {
   GitHubTokenValidation,
   GitHubRateLimitPayload,
   GitHubTokenHealthPayload,
+  RepoStatsAndPagePayload,
+  GitHubFirstPageCachePayload,
   PRDetectedPayload,
   PRClearedPayload,
   IssueDetectedPayload,
@@ -21,6 +23,10 @@ import type {
 export const githubClient = {
   getRepoStats: (cwd: string, bypassCache = false): Promise<RepositoryStats> => {
     return window.electron.github.getRepoStats(cwd, bypassCache);
+  },
+
+  getFirstPageCache: (cwd: string): Promise<GitHubFirstPageCachePayload | null> => {
+    return window.electron.github.getFirstPageCache(cwd);
   },
 
   getProjectHealth: (cwd: string, bypassCache = false): Promise<ProjectHealthData> => {
@@ -105,6 +111,10 @@ export const githubClient = {
 
   onTokenHealthChanged: (callback: (data: GitHubTokenHealthPayload) => void): (() => void) => {
     return window.electron.github.onTokenHealthChanged(callback);
+  },
+
+  onRepoStatsAndPageUpdated: (callback: (data: RepoStatsAndPagePayload) => void): (() => void) => {
+    return window.electron.github.onRepoStatsAndPageUpdated(callback);
   },
 
   getTokenHealth: (): Promise<GitHubTokenHealthPayload> => {

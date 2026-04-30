@@ -3,6 +3,17 @@ import type { GitHubRateLimitKind, RepositoryStats } from "../types";
 import { githubClient, projectClient } from "@/clients";
 import { isTokenRelatedError } from "@/lib/githubErrors";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { buildCacheKey, getCache, setCache } from "@/lib/githubResourceCache";
+
+function isValidPagePayload(page: unknown): page is {
+  items: unknown[];
+  endCursor: string | null;
+  hasNextPage: boolean;
+} {
+  if (!page || typeof page !== "object") return false;
+  const p = page as Record<string, unknown>;
+  return Array.isArray(p.items) && (typeof p.endCursor === "string" || p.endCursor === null);
+}
 
 const ACTIVE_POLL_INTERVAL = 30 * 1000;
 const IDLE_POLL_INTERVAL = 5 * 60 * 1000;
@@ -316,6 +327,100 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
 
     return cleanup;
   }, [fetchStats, scheduleNextPoll]);
+
+  // Cold-start hydration: before the first poll completes, ask main for the
+  // disk-persisted first page so the very first dropdown click after launch
+  // resolves against real rows. Entries older than the disk cache's freshness
+  // budget are dropped on read by the main-side cache and surface as `null`.
+  // Within-session project switches don't re-hydrate from disk — the broadcast
+  // subscription below seeds the renderer cache once the next poll completes.
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const project = await projectClient.getCurrent();
+        if (!project || cancelled || !mountedRef.current) return;
+        const cached = await githubClient.getFirstPageCache(project.path);
+        if (!cached || cancelled || !mountedRef.current) return;
+        if (cached.projectPath !== project.path) return;
+
+        const issuesKey = buildCacheKey(project.path, "issue", "open", "created");
+        const prsKey = buildCacheKey(project.path, "pr", "open", "created");
+        // Don't downgrade a fresher entry — the broadcast push from the first
+        // poll can land before this hydration resolves, and disk data is up
+        // to 10 minutes old.
+        const existingIssues = getCache(issuesKey);
+        if (!existingIssues || existingIssues.timestamp < cached.lastUpdated) {
+          setCache(issuesKey, {
+            items: cached.issues.items,
+            endCursor: cached.issues.endCursor,
+            hasNextPage: cached.issues.hasNextPage,
+            timestamp: cached.lastUpdated,
+          });
+        }
+        const existingPRs = getCache(prsKey);
+        if (!existingPRs || existingPRs.timestamp < cached.lastUpdated) {
+          setCache(prsKey, {
+            items: cached.prs.items,
+            endCursor: cached.prs.endCursor,
+            hasNextPage: cached.prs.hasNextPage,
+            timestamp: cached.lastUpdated,
+          });
+        }
+      } catch {
+        // Disk hydration is best-effort; the network poll fallback covers
+        // any failure here.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Subscribe to the combined repo-stats-and-first-page push from the main
+  // process. Whenever a poll completes successfully, main broadcasts the
+  // counts AND the first 20 open issues + open PRs (sorted by created-desc).
+  // Seed the renderer's `githubResourceCache` for the matching default-filter
+  // cache key so the next dropdown click reads from hot cache instantly.
+  useEffect(() => {
+    const cleanup = githubClient.onRepoStatsAndPageUpdated((payload) => {
+      if (!mountedRef.current) return;
+      // Filter by current project. Each `WebContentsView` runs its own
+      // renderer with isolated module state, so the cache writes below are
+      // scoped to this view's project.
+      projectClient
+        .getCurrent()
+        .then((project) => {
+          if (!project || project.path !== payload.projectPath) return;
+          if (!mountedRef.current) return;
+          // Defensive shape guard against future IPC drift — bad payloads
+          // are skipped rather than written to cache where they would crash
+          // consumers using "isDraft" in item or item.number.
+          if (!isValidPagePayload(payload.issues) || !isValidPagePayload(payload.prs)) return;
+
+          const issuesKey = buildCacheKey(payload.projectPath, "issue", "open", "created");
+          const prsKey = buildCacheKey(payload.projectPath, "pr", "open", "created");
+          setCache(issuesKey, {
+            items: payload.issues.items,
+            endCursor: payload.issues.endCursor,
+            hasNextPage: payload.issues.hasNextPage,
+            timestamp: payload.fetchedAt,
+          });
+          setCache(prsKey, {
+            items: payload.prs.items,
+            endCursor: payload.prs.endCursor,
+            hasNextPage: payload.prs.hasNextPage,
+            timestamp: payload.fetchedAt,
+          });
+        })
+        .catch(() => {
+          // Project lookup races during teardown / project switch are
+          // expected and benign — swallow rather than producing an
+          // unhandled rejection.
+        });
+    });
+    return cleanup;
+  }, []);
 
   useEffect(() => {
     const cleanup = githubClient.onRateLimitChanged((payload) => {

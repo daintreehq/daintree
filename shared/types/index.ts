@@ -153,6 +153,8 @@ export type {
   ProjectStatusMap,
   // GitHub IPC types
   RepositoryStats,
+  RepoStatsAndPagePayload,
+  GitHubFirstPageCachePayload,
   ProjectHealthData,
   GitHubCliStatus,
   GitHubTokenConfig,
