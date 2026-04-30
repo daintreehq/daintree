@@ -378,7 +378,8 @@ export class TerminalProcess {
         (result: DetectionResult, cbSpawnedAt: number) => {
           this.handleAgentDetection(result, cbSpawnedAt);
         },
-        deps.processTreeCache
+        deps.processTreeCache,
+        Boolean(this.terminalInfo.launchAgentId)
       );
       this.terminalInfo.processDetector = this.processDetector;
       this.processDetector.start();
@@ -1410,7 +1411,8 @@ export class TerminalProcess {
         (result, cbSpawnedAt) => {
           this.handleAgentDetection(result, cbSpawnedAt);
         },
-        this.deps.processTreeCache
+        this.deps.processTreeCache,
+        Boolean(this.terminalInfo.launchAgentId)
       );
       this.terminalInfo.processDetector = this.processDetector;
       this.processDetector.start();

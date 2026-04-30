@@ -393,18 +393,40 @@ export class ProcessDetector {
   private shellCommandStickyUntil: number = 0;
   private shellCommandExpiresAt: number = 0;
 
+  // When false, the "agent-requires-explicit-exit" demote-hold at the gating
+  // path is bypassed for runtime-promoted plain terminals: the user typed the
+  // CLI into a plain shell, so no durable launch anchor exists. After the user
+  // Ctrl+Cs and the process tree empties, the chrome must demote even when
+  // IdentityWatcher's prompt-return signal is delayed or suppressed (e.g.
+  // when foreground PG snapshot reads briefly fail in CI). Toolbar/cold-
+  // launched agents (`isLaunchAnchored=true`) preserve the existing hold so
+  // transient process-tree blindness doesn't drop their branded chrome.
+  private isLaunchAnchored: boolean;
+
   constructor(
     terminalId: string,
     spawnedAt: number,
     ptyPid: number,
     callback: DetectionCallback,
-    cache: ProcessTreeCache
+    cache: ProcessTreeCache,
+    isLaunchAnchored: boolean = true
   ) {
     this.terminalId = terminalId;
     this.spawnedAt = spawnedAt;
     this.ptyPid = ptyPid;
     this.callback = callback;
     this.cache = cache;
+    this.isLaunchAnchored = isLaunchAnchored;
+  }
+
+  /**
+   * Update launch-anchor state. Runtime promotion of a plain terminal
+   * (`launchAgentId` was undefined when the detector was created, then a
+   * subsequent `setLaunchAgentId` call attached one) keeps the explicit-exit
+   * guard in step with the live anchor.
+   */
+  setLaunchAnchored(isLaunchAnchored: boolean): void {
+    this.isLaunchAnchored = isLaunchAnchored;
   }
 
   /**
@@ -712,12 +734,16 @@ export class ProcessDetector {
           this.onStreak = 0;
           this.offStreak = 0;
           this.pendingDetected = null;
-        } else if (committedAgent !== null) {
-          // Agent sessions are sticky until an explicit lifecycle signal
-          // arrives. Process-tree absence is too weak: idle CLIs can rewrite
-          // argv/comm, temporarily hide children, or show prompt-like TUI
-          // elements while still running. Prompt-return clears via
-          // clearShellCommandEvidence("prompt-return").
+        } else if (committedAgent !== null && this.isLaunchAnchored) {
+          // Launch-anchored agents are sticky until an explicit lifecycle
+          // signal arrives. Process-tree absence is too weak: idle CLIs can
+          // rewrite argv/comm, temporarily hide children, or show prompt-like
+          // TUI elements while still running. Prompt-return clears via
+          // clearShellCommandEvidence("prompt-return"). Runtime-promoted
+          // agents (no launchAgentId) fall through to the offStreak path
+          // below so process-tree absence eventually demotes them — without
+          // this, a delayed or suppressed prompt-return signal would strand
+          // the chrome on the dead agent's icon.
           if (this.offStreak === 0) {
             logIdentityDebug(
               `[IdentityDebug] demote-hold term=${this.terminalId.slice(-8)} ` +
