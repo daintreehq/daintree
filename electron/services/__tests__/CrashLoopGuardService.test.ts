@@ -7,9 +7,15 @@ const appMock = vi.hoisted(() => ({
   getPath: vi.fn(() => ""),
 }));
 
+const utilsMock = vi.hoisted(() => ({
+  resilientAtomicWriteFileSync: vi.fn(),
+}));
+
 vi.mock("electron", () => ({
   app: appMock,
 }));
+
+vi.mock("../../utils/fs.js", () => utilsMock);
 
 import { CrashLoopGuardService, isSafeModeActive } from "../CrashLoopGuardService.js";
 
@@ -126,11 +132,17 @@ describe("CrashLoopGuardService", () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "crash-guard-test-"));
     appMock.getPath.mockReturnValue(tmpDir);
     statePath = path.join(tmpDir, "crash-loop-state.json");
+    utilsMock.resilientAtomicWriteFileSync.mockImplementation(
+      (fp: string, data: string, enc?: BufferEncoding) => {
+        fs.writeFileSync(fp, data, enc ?? "utf-8");
+      }
+    );
   });
 
   afterEach(() => {
     vi.useRealTimers();
     fs.rmSync(tmpDir, { recursive: true, force: true });
+    vi.clearAllMocks();
   });
 
   function writeState(state: Record<string, unknown>): void {
@@ -405,18 +417,21 @@ describe("CrashLoopGuardService", () => {
       guard.initialize();
       expect(guard.isSafeMode()).toBe(true);
 
-      // Force the underlying disk write to throw so the user-initiated reset
-      // surfaces the failure to the IPC layer instead of silently leaving
-      // the unclean sentinel on disk.
-      const writeSpy = vi.spyOn(fs, "writeFileSync").mockImplementation(() => {
+      // Force the underlying atomic write to throw so the user-initiated reset
+      // surfaces the failure to the IPC layer instead of silently leaving the
+      // unclean sentinel on disk via a non-atomic fallback write.
+      utilsMock.resilientAtomicWriteFileSync.mockImplementationOnce(() => {
         throw new Error("EROFS: read-only filesystem");
       });
 
       expect(() => guard.resetForNormalBoot()).toThrow(/read-only/);
       expect(guard.isSafeMode()).toBe(true);
       expect(guard.getCrashCount()).toBe(3);
-
-      writeSpy.mockRestore();
+      expect(utilsMock.resilientAtomicWriteFileSync).toHaveBeenCalledWith(
+        statePath,
+        expect.any(String),
+        "utf-8"
+      );
     });
 
     it("rejects state files with non-numeric launch entries", () => {

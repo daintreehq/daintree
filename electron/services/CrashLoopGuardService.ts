@@ -1,6 +1,7 @@
 import { app } from "electron";
 import fs from "node:fs";
 import path from "node:path";
+import { resilientAtomicWriteFileSync } from "../utils/fs.js";
 
 const STATE_FILENAME = "crash-loop-state.json";
 const CRASH_THRESHOLD = 3;
@@ -191,26 +192,14 @@ export class CrashLoopGuardService {
   private writeState(state: CrashLoopState): void {
     const data = JSON.stringify(state);
 
-    // Ensure the parent directory exists (e.g. first launch of dev userData)
+    // Ensure the parent directory exists (e.g. first launch of dev userData).
+    // resilientAtomicWriteFileSync does not create parent directories.
     const dir = path.dirname(this.statePath);
     if (!fs.existsSync(dir)) {
       fs.mkdirSync(dir, { recursive: true });
     }
 
-    // Try atomic write (tmp + rename), fall back to direct write
-    const tmpPath = `${this.statePath}.${Date.now()}.tmp`;
-    try {
-      fs.writeFileSync(tmpPath, data, "utf8");
-      fs.renameSync(tmpPath, this.statePath);
-    } catch {
-      try {
-        fs.unlinkSync(tmpPath);
-      } catch {
-        // ignore
-      }
-      // Fallback: direct write (non-atomic but functional)
-      fs.writeFileSync(this.statePath, data, "utf8");
-    }
+    resilientAtomicWriteFileSync(this.statePath, data, "utf-8");
   }
 }
 
