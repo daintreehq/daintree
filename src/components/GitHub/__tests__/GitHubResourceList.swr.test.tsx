@@ -4,21 +4,25 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, cleanup, waitFor, act } from "@testing-library/react";
 import { Activity, type ReactNode } from "react";
-import type { GitHubIssue, GitHubListResponse } from "@shared/types/github";
+import type { GitHubIssue, GitHubListResponse, GitHubListOptions } from "@shared/types/github";
 import { setCache, buildCacheKey, _resetForTests } from "@/lib/githubResourceCache";
 import { useGitHubFilterStore } from "@/store/githubFilterStore";
 
-const mockListIssues = vi.fn<() => Promise<GitHubListResponse<GitHubIssue>>>();
+const mockListIssues = vi.fn();
 const mockListPRs = vi.fn();
 const mockGetIssueByNumber = vi.fn();
 const mockGetPRByNumber = vi.fn();
 
 vi.mock("@/clients/githubClient", () => ({
   githubClient: {
-    listIssues: (...args: unknown[]) => mockListIssues(...(args as [])),
-    listPullRequests: (...args: unknown[]) => mockListPRs(...(args as [])),
-    getIssueByNumber: (...args: unknown[]) => mockGetIssueByNumber(...(args as [])),
-    getPRByNumber: (...args: unknown[]) => mockGetPRByNumber(...(args as [])),
+    listIssues: (
+      options: Omit<GitHubListOptions, "state"> & { state?: "open" | "closed" | "all" }
+    ) => mockListIssues(options),
+    listPullRequests: (
+      options: Omit<GitHubListOptions, "state"> & { state?: "open" | "closed" | "merged" | "all" }
+    ) => mockListPRs(options),
+    getIssueByNumber: (cwd: string, issueNumber: number) => mockGetIssueByNumber(cwd, issueNumber),
+    getPRByNumber: (cwd: string, prNumber: number) => mockGetPRByNumber(cwd, prNumber),
   },
 }));
 
