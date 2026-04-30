@@ -324,6 +324,13 @@ function deriveTelemetryPreviewLabel(event: Record<string, unknown>): string {
 
 function flushPreConsentBuffer(): void {
   if (!captureEventFn) return;
+  // Under disk pressure `beforeSend` would drop each event, but invoking the
+  // SDK still spins through serialisation and queueing — drop the buffer
+  // contents up front so the flush is genuinely a no-op.
+  if (getWritesSuppressed()) {
+    preConsentBuffer.length = 0;
+    return;
+  }
   const events = preConsentBuffer.splice(0);
   for (const { event, properties, timestamp } of events) {
     captureEventFn(buildAnalyticsSentryEvent(event, properties, timestamp));

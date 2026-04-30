@@ -64,13 +64,15 @@ export function startDiskSpaceMonitor(actions: DiskSpaceMonitorActions): () => v
 
     const writesSuppressed = status === "critical";
 
+    // Publish the flag before any logger call so the very next log line that
+    // would hit disk under critical pressure is also dropped.
+    currentStatus = { status, availableMb, writesSuppressed };
+    setWritesSuppressed(writesSuppressed);
+
     logDebug("disk-space-check", {
       availableMb: Math.round(availableMb),
       status,
     });
-
-    currentStatus = { status, availableMb, writesSuppressed };
-    setWritesSuppressed(writesSuppressed);
 
     if (status !== lastStatus) {
       logInfo("disk-space-status-changed", {

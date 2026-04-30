@@ -211,4 +211,36 @@ describe("DiskSpaceMonitor", () => {
     expect(status.availableMb).toBeCloseTo(1500, 0);
     expect(status.writesSuppressed).toBe(false);
   });
+
+  it("publishes writesSuppressed=true to the shared diskPressureState shim on critical", async () => {
+    statfsMock.mockResolvedValue(makeStatfs(50));
+    const actions = createActions();
+    await importAndStart(actions);
+
+    const { getWritesSuppressed } = await import("../diskPressureState.js");
+    expect(getWritesSuppressed()).toBe(true);
+  });
+
+  it("publishes writesSuppressed=false to the shim once disk recovers", async () => {
+    statfsMock.mockResolvedValue(makeStatfs(50));
+    const actions = createActions();
+    await importAndStart(actions);
+
+    const { getWritesSuppressed } = await import("../diskPressureState.js");
+    expect(getWritesSuppressed()).toBe(true);
+
+    statfsMock.mockResolvedValue(makeStatfs(3000));
+    await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
+
+    expect(getWritesSuppressed()).toBe(false);
+  });
+
+  it("does not suppress writes at warning level", async () => {
+    statfsMock.mockResolvedValue(makeStatfs(1500));
+    const actions = createActions();
+    await importAndStart(actions);
+
+    const { getWritesSuppressed } = await import("../diskPressureState.js");
+    expect(getWritesSuppressed()).toBe(false);
+  });
 });

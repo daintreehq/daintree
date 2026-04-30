@@ -733,6 +733,27 @@ describe("trackEvent under disk pressure", () => {
     resetWritesSuppressedForTesting();
     process.env.SENTRY_DSN = original;
   });
+
+  it("setTelemetryLevel('full') drops the pre-consent buffer when writes are suppressed", async () => {
+    const original = process.env.SENTRY_DSN;
+    process.env.SENTRY_DSN = "https://test@sentry.io/123";
+
+    setPrivacy({ telemetryLevel: "off", hasSeenPrompt: false });
+    trackEvent("onboarding_step_viewed", { step: "telemetry" });
+    trackEvent("onboarding_step_viewed", { step: "agentSelection" });
+    expect(_getPreConsentBufferLength()).toBeGreaterThan(0);
+
+    setWritesSuppressed(true);
+    setPrivacy({ telemetryLevel: "full", hasSeenPrompt: true });
+    captureEventMock.mockClear();
+    await setTelemetryLevel("full");
+
+    expect(captureEventMock).not.toHaveBeenCalled();
+    expect(_getPreConsentBufferLength()).toBe(0);
+
+    resetWritesSuppressedForTesting();
+    process.env.SENTRY_DSN = original;
+  });
 });
 
 describe("setTelemetryLevel with buffer", () => {

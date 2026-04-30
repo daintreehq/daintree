@@ -5,6 +5,12 @@
  *
  * Kept in its own module so writers can read the flag without importing
  * `DiskSpaceMonitor` (which itself imports `logger.ts`, creating a cycle).
+ *
+ * Scope: this module is per-process. `DiskSpaceMonitor` only runs in the main
+ * process, so utility processes (pty-host, workspace-host) keep their copy of
+ * `writesSuppressed` at `false` and continue writing. Forwarding the flag to
+ * those processes is a follow-up — issue #6271 only covers main-process
+ * writers.
  */
 
 let writesSuppressed = false;
