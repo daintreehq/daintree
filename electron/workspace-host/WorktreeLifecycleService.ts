@@ -3,6 +3,7 @@ import { readFile, access, cp } from "fs/promises";
 import { join as pathJoin, basename, dirname } from "path";
 import os from "os";
 import { z } from "zod/v4";
+import { scrubSecrets } from "../utils/secretScrubber.js";
 
 const OUTPUT_TAIL_BYTES = 8192;
 const DEFAULT_TIMEOUT_MS = 120_000;
@@ -529,8 +530,9 @@ function buildSpawnEnv(customEnv: Record<string, string>): Record<string, string
 
 function tailOutput(chunks: string[]): string {
   const full = chunks.join("");
-  if (full.length <= OUTPUT_TAIL_BYTES) {
-    return full;
-  }
-  return "...(truncated)\n" + full.slice(full.length - OUTPUT_TAIL_BYTES);
+  const tail =
+    full.length <= OUTPUT_TAIL_BYTES
+      ? full
+      : "...(truncated)\n" + full.slice(full.length - OUTPUT_TAIL_BYTES);
+  return scrubSecrets(tail);
 }
