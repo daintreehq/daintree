@@ -195,9 +195,11 @@ export const PATTERNS: readonly SecretPattern[] = [
     // `https://user:pass@host/path` — promoted from DiagnosticsCollector so
     // every sink that calls scrubSecrets benefits. Capture group preserves
     // protocol; the replacement contains `<` / `>` (not in the credential
-    // charset), so a second pass cannot re-match.
+    // charset), so a second pass cannot re-match. The `<redacted>` placeholder
+    // matches the convention DiagnosticsCollector previously used inline so
+    // downstream consumers see no behavioral change.
     regex: /((https?):\/\/)[A-Za-z0-9%!$&'()*+,;=:._~-]{1,512}@/g,
-    replacement: "$1<credentials-redacted>@",
+    replacement: "$1<redacted>@",
   },
   {
     name: "generic-key-fallback",

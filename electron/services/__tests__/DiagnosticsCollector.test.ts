@@ -57,19 +57,19 @@ describe("DiagnosticsCollector helpers", () => {
   describe("URL credential stripping (via scrubSecrets)", () => {
     it("strips basic auth from HTTPS URLs", () => {
       expect(scrubSecrets("https://user:pass@github.com/repo.git")).toBe(
-        "https://<credentials-redacted>@github.com/repo.git"
+        "https://<redacted>@github.com/repo.git"
       );
     });
 
     it("strips token-style auth from URLs", () => {
       expect(scrubSecrets("https://x-access-token:ghp_abc123@github.com/repo.git")).toBe(
-        "https://<credentials-redacted>@github.com/repo.git"
+        "https://<redacted>@github.com/repo.git"
       );
     });
 
     it("preserves the protocol scheme on http URLs", () => {
       expect(scrubSecrets("http://user:pass@internal.example/path")).toBe(
-        "http://<credentials-redacted>@internal.example/path"
+        "http://<redacted>@internal.example/path"
       );
     });
 
@@ -157,7 +157,7 @@ describe("DiagnosticsCollector helpers", () => {
 
     it("strips credentials from URLs in string values", () => {
       const result = redactDeep("https://user:pass@host.com/path");
-      expect(result).toBe("https://<credentials-redacted>@host.com/path");
+      expect(result).toBe("https://<redacted>@host.com/path");
     });
   });
 });

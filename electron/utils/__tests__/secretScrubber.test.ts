@@ -222,17 +222,17 @@ describe("secretScrubber", () => {
       {
         name: "url-basic-auth-https",
         input: "git remote set-url origin https://user:pass@example.com/x/y.git",
-        expected: "git remote set-url origin https://<credentials-redacted>@example.com/x/y.git",
+        expected: "git remote set-url origin https://<redacted>@example.com/x/y.git",
       },
       {
         name: "url-basic-auth-http",
         input: "fetch http://admin:hunter2@internal.example.com/path",
-        expected: "fetch http://<credentials-redacted>@internal.example.com/path",
+        expected: "fetch http://<redacted>@internal.example.com/path",
       },
       {
         name: "url-basic-auth-percent-encoded",
         input: "clone https://oauth2:%24token%2Fvalue@gitlab.com/a/b.git",
-        expected: "clone https://<credentials-redacted>@gitlab.com/a/b.git",
+        expected: "clone https://<redacted>@gitlab.com/a/b.git",
       },
       {
         name: "generic-api-key-fallback",
@@ -363,7 +363,7 @@ describe("secretScrubber", () => {
     it("URL basic-auth replacement is itself non-matching (no infinite loop)", () => {
       const input = "clone https://user:pass@example.com/x/y.git";
       const out = scrubSecrets(input);
-      expect(out).toBe("clone https://<credentials-redacted>@example.com/x/y.git");
+      expect(out).toBe("clone https://<redacted>@example.com/x/y.git");
       expect(scrubSecrets(out)).toBe(out);
     });
   });
