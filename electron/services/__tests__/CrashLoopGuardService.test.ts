@@ -417,6 +417,11 @@ describe("CrashLoopGuardService", () => {
       guard.initialize();
       expect(guard.isSafeMode()).toBe(true);
 
+      // Capture the on-disk unclean sentinel — the reset failure must leave
+      // it intact rather than silently truncating it via a fallback write.
+      const stateBeforeReset = readState();
+      expect(stateBeforeReset.cleanExit).toBe(false);
+
       // Force the underlying atomic write to throw so the user-initiated reset
       // surfaces the failure to the IPC layer instead of silently leaving the
       // unclean sentinel on disk via a non-atomic fallback write.
@@ -432,6 +437,9 @@ describe("CrashLoopGuardService", () => {
         expect.any(String),
         "utf-8"
       );
+
+      // The on-disk state is unchanged — no truncation, no partial write.
+      expect(readState()).toEqual(stateBeforeReset);
     });
 
     it("rejects state files with non-numeric launch entries", () => {

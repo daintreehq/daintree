@@ -7,9 +7,15 @@ const appMock = vi.hoisted(() => ({
   getPath: vi.fn(() => ""),
 }));
 
+const utilsMock = vi.hoisted(() => ({
+  resilientAtomicWriteFileSync: vi.fn(),
+}));
+
 vi.mock("electron", () => ({
   app: appMock,
 }));
+
+vi.mock("../../utils/fs.js", () => utilsMock);
 
 import { CrashLoopGuardService } from "../CrashLoopGuardService.js";
 
@@ -31,47 +37,62 @@ describe("CrashLoopGuardService adversarial", () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "crash-guard-adv-"));
     appMock.getPath.mockReturnValue(tmpDir);
     statePath = path.join(tmpDir, "crash-loop-state.json");
+    utilsMock.resilientAtomicWriteFileSync.mockImplementation(
+      (fp: string, data: string, enc?: BufferEncoding) => {
+        fs.writeFileSync(fp, data, enc ?? "utf-8");
+      }
+    );
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
     vi.useRealTimers();
+    vi.clearAllMocks();
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it("keeps the persisted file valid across back-to-back initialize calls sharing one userData dir", () => {
-    const renameSpy = vi.spyOn(fs, "renameSync");
-    renameSpy.mockImplementationOnce(() => {
+  it("recovers a valid state file on the next boot when a prior atomic write transient-fails", () => {
+    utilsMock.resilientAtomicWriteFileSync.mockImplementationOnce(() => {
       throw Object.assign(new Error("rename race"), { code: "EPERM" });
     });
 
     const first = new CrashLoopGuardService();
     const second = new CrashLoopGuardService();
 
+    // First boot's write fails and is swallowed by initialize's try/catch
+    // (non-fatal). No state file is written. Second boot starts fresh and
+    // produces a valid persisted state.
     first.initialize();
+    expect(fs.existsSync(statePath)).toBe(false);
+
     second.initialize();
 
     const parsed = readStateFile(statePath);
     expect(parsed.version).toBe(1);
     expect(parsed.cleanExit).toBe(false);
     expect(Array.isArray(parsed.launches)).toBe(true);
-    expect(parsed.launches).toHaveLength(2);
+    expect(parsed.launches).toHaveLength(1);
   });
 
-  it("falls back to a direct write when tmp cleanup loses a delete race", () => {
-    vi.spyOn(fs, "renameSync").mockImplementation(() => {
+  it("preserves the prior on-disk state when the next atomic write fails (no silent fallback)", () => {
+    // Seed a known-good state via a successful initialize.
+    const seed = new CrashLoopGuardService();
+    seed.initialize();
+    const stateBeforeFailure = readStateFile(statePath);
+
+    // Next write fails — historically this fell back to a direct
+    // (non-atomic) writeFileSync that could truncate the file. The fix
+    // propagates the error and leaves the prior state intact.
+    utilsMock.resilientAtomicWriteFileSync.mockImplementationOnce(() => {
       throw Object.assign(new Error("cross-device"), { code: "EXDEV" });
-    });
-    vi.spyOn(fs, "unlinkSync").mockImplementation(() => {
-      throw Object.assign(new Error("missing tmp"), { code: "ENOENT" });
     });
 
     const guard = new CrashLoopGuardService();
     guard.initialize();
 
-    const parsed = readStateFile(statePath);
-    expect(parsed.version).toBe(1);
-    expect(parsed.cleanExit).toBe(false);
+    // The on-disk state is unchanged — no truncation, no partial write.
+    const stateAfterFailure = readStateFile(statePath);
+    expect(stateAfterFailure).toEqual(stateBeforeFailure);
   });
 
   it("counts only launches strictly inside the rapid-crash window boundary", () => {
