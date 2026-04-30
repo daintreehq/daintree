@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { pathToFileURL } from "url";
 
 type WebContentsCreatedListener = (event: unknown, contents: MockWebContents) => void;
 
@@ -64,6 +65,10 @@ vi.mock("../../utils/appProtocol.js", () => ({
   resolveAppUrlToDistPath: vi.fn(),
   getMimeType: vi.fn(),
   buildHeaders: vi.fn(),
+}));
+
+vi.mock("fs/promises", () => ({
+  realpath: vi.fn(),
 }));
 
 const mockSend = vi.fn();
@@ -657,5 +662,182 @@ describe("protocol registration", () => {
 
     expect(protocol.handle).toHaveBeenCalledWith("daintree-file", expect.any(Function));
     expect(protocol.handle).toHaveBeenCalledWith("canopy-file", expect.any(Function));
+  });
+});
+
+describe("createDaintreeFileProtocolHandler — symlink containment", () => {
+  type ProtocolHandler = (request: GlobalRequest) => Promise<Response>;
+
+  async function captureHandler(scheme: "daintree-file" | "canopy-file"): Promise<ProtocolHandler> {
+    const handle = vi.fn();
+    const mockSession = { protocol: { handle } } as unknown as Electron.Session;
+    registerProtocolsForSession(mockSession, "/tmp/dist");
+    const call = handle.mock.calls.find((c) => c[0] === scheme);
+    if (!call) throw new Error(`handler for ${scheme} not registered`);
+    return call[1] as ProtocolHandler;
+  }
+
+  function makeRequest(filePath: string, rootPath: string): GlobalRequest {
+    const url = new URL("daintree-file://serve");
+    url.searchParams.set("path", filePath);
+    url.searchParams.set("root", rootPath);
+    return new Request(url.toString()) as GlobalRequest;
+  }
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    const electron = await import("electron");
+    vi.mocked(electron.net.fetch).mockResolvedValue(
+      new Response(new ArrayBuffer(4), { status: 200 })
+    );
+    const appProtocol = await import("../../utils/appProtocol.js");
+    vi.mocked(appProtocol.getMimeType).mockReturnValue("text/plain");
+  });
+
+  it("serves a normal file inside root using the realpath-resolved path", async () => {
+    const fs = await import("fs/promises");
+    const realpath = vi.mocked(fs.realpath);
+    realpath.mockImplementation((p) => Promise.resolve(p as string));
+
+    const handler = await captureHandler("daintree-file");
+    const response = await handler(makeRequest("/project/src/index.ts", "/project"));
+
+    expect(response.status).toBe(200);
+    const electron = await import("electron");
+    expect(electron.net.fetch).toHaveBeenCalledTimes(1);
+    const fetchUrl = vi.mocked(electron.net.fetch).mock.calls[0][0] as string;
+    expect(fetchUrl).toBe(pathToFileURL("/project/src/index.ts").toString());
+  });
+
+  it("blocks a symlink whose path is inside root but whose target is outside root", async () => {
+    const fs = await import("fs/promises");
+    const realpath = vi.mocked(fs.realpath);
+    realpath.mockImplementation((p) => {
+      if (p === "/project") return Promise.resolve("/project");
+      if (p === "/project/escape") return Promise.resolve("/etc/passwd");
+      return Promise.resolve(p as string);
+    });
+
+    const handler = await captureHandler("daintree-file");
+    const response = await handler(makeRequest("/project/escape", "/project"));
+
+    expect(response.status).toBe(404);
+    const electron = await import("electron");
+    expect(electron.net.fetch).not.toHaveBeenCalled();
+  });
+
+  it("returns 404 for a dangling symlink (ENOENT)", async () => {
+    const fs = await import("fs/promises");
+    const realpath = vi.mocked(fs.realpath);
+    realpath.mockImplementation((p) => {
+      if (p === "/project") return Promise.resolve("/project");
+      const err = Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+      return Promise.reject(err);
+    });
+
+    const handler = await captureHandler("daintree-file");
+    const response = await handler(makeRequest("/project/dangling", "/project"));
+
+    expect(response.status).toBe(404);
+    const electron = await import("electron");
+    expect(electron.net.fetch).not.toHaveBeenCalled();
+  });
+
+  it("returns 404 for a symlink loop (ELOOP)", async () => {
+    const fs = await import("fs/promises");
+    const realpath = vi.mocked(fs.realpath);
+    realpath.mockImplementation((p) => {
+      if (p === "/project") return Promise.resolve("/project");
+      const err = Object.assign(new Error("ELOOP"), { code: "ELOOP" });
+      return Promise.reject(err);
+    });
+
+    const handler = await captureHandler("daintree-file");
+    const response = await handler(makeRequest("/project/loop", "/project"));
+
+    expect(response.status).toBe(404);
+    const electron = await import("electron");
+    expect(electron.net.fetch).not.toHaveBeenCalled();
+  });
+
+  it("returns 404 when the root itself fails to resolve (EACCES)", async () => {
+    const fs = await import("fs/promises");
+    const realpath = vi.mocked(fs.realpath);
+    realpath.mockImplementation(() => {
+      const err = Object.assign(new Error("EACCES"), { code: "EACCES" });
+      return Promise.reject(err);
+    });
+
+    const handler = await captureHandler("daintree-file");
+    const response = await handler(makeRequest("/project/file.txt", "/project"));
+
+    expect(response.status).toBe(404);
+    const electron = await import("electron");
+    expect(electron.net.fetch).not.toHaveBeenCalled();
+  });
+
+  it("blocks a Windows cross-drive escape where path.relative returns an absolute path", async () => {
+    const fs = await import("fs/promises");
+    const realpath = vi.mocked(fs.realpath);
+    realpath.mockImplementation((p) => {
+      if (p === "/project") return Promise.resolve("/project");
+      // Simulate a symlink resolving to a path with a leading slash that path.relative
+      // treats as absolute relative to the root — same shape as Windows cross-drive escape
+      // (path.relative('D:\\project', 'C:\\windows') === 'C:\\windows').
+      if (p === "/project/winlink") return Promise.resolve("/totally/elsewhere");
+      return Promise.resolve(p as string);
+    });
+
+    const handler = await captureHandler("daintree-file");
+    const response = await handler(makeRequest("/project/winlink", "/project"));
+
+    expect(response.status).toBe(404);
+    const electron = await import("electron");
+    expect(electron.net.fetch).not.toHaveBeenCalled();
+  });
+
+  it("permits a symlink whose resolved target stays inside root", async () => {
+    const fs = await import("fs/promises");
+    const realpath = vi.mocked(fs.realpath);
+    realpath.mockImplementation((p) => {
+      if (p === "/project") return Promise.resolve("/project");
+      if (p === "/project/link") return Promise.resolve("/project/real/file.txt");
+      return Promise.resolve(p as string);
+    });
+
+    const handler = await captureHandler("daintree-file");
+    const response = await handler(makeRequest("/project/link", "/project"));
+
+    expect(response.status).toBe(200);
+    const electron = await import("electron");
+    expect(electron.net.fetch).toHaveBeenCalledTimes(1);
+    const fetchUrl = vi.mocked(electron.net.fetch).mock.calls[0][0] as string;
+    // The fetch URL should be the resolved real path, not the symlink path.
+    expect(fetchUrl).toBe(pathToFileURL("/project/real/file.txt").toString());
+  });
+
+  it("applies the same containment to canopy-file:// alias", async () => {
+    const fs = await import("fs/promises");
+    const realpath = vi.mocked(fs.realpath);
+    realpath.mockImplementation((p) => {
+      if (p === "/project") return Promise.resolve("/project");
+      if (p === "/project/escape") return Promise.resolve("/etc/passwd");
+      return Promise.resolve(p as string);
+    });
+
+    const handler = await captureHandler("canopy-file");
+    const response = await handler(makeRequest("/project/escape", "/project"));
+
+    expect(response.status).toBe(404);
+    const electron = await import("electron");
+    expect(electron.net.fetch).not.toHaveBeenCalled();
+  });
+
+  it("returns 400 (not 404) for missing parameters — input validation precedes realpath", async () => {
+    const handler = await captureHandler("daintree-file");
+    const url = new URL("daintree-file://serve");
+    const response = await handler(new Request(url.toString()) as GlobalRequest);
+
+    expect(response.status).toBe(400);
   });
 });

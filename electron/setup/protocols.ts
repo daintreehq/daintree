@@ -1,6 +1,7 @@
 import { app, protocol, net, session } from "electron";
 import { getWindowForWebContents, getAppWebContents } from "../window/webContentsRegistry.js";
 import path from "path";
+import { realpath } from "fs/promises";
 import { pathToFileURL } from "url";
 import { resolveAppUrlToDistPath, getMimeType, buildHeaders } from "../utils/appProtocol.js";
 import {
@@ -101,15 +102,24 @@ function createDaintreeFileProtocolHandler() {
       const normalizedFile = path.normalize(filePath);
       const normalizedRoot = path.normalize(rootPath);
 
-      if (
-        !normalizedFile.startsWith(normalizedRoot + path.sep) &&
-        normalizedFile !== normalizedRoot
-      ) {
-        return new Response("Forbidden — path outside root", { status: 403 });
+      // Resolve symlinks before containment to block in-root symlinks pointing outside root (CVE-2025-53109 / CVE-2025-54794 class).
+      let realRoot: string;
+      let realFile: string;
+      try {
+        realRoot = await realpath(normalizedRoot);
+        realFile = await realpath(normalizedFile);
+      } catch {
+        return new Response("Not Found", { status: 404 });
       }
 
-      const mimeType = getMimeType(normalizedFile);
-      const fileUrl = pathToFileURL(normalizedFile).toString();
+      const rel = path.relative(realRoot, realFile);
+      // isAbsolute catches Windows cross-drive escapes where path.relative returns an absolute path instead of "..".
+      if (rel.startsWith("..") || path.isAbsolute(rel)) {
+        return new Response("Not Found", { status: 404 });
+      }
+
+      const mimeType = getMimeType(realFile);
+      const fileUrl = pathToFileURL(realFile).toString();
       const response = await net.fetch(fileUrl);
 
       if (!response.ok) {
