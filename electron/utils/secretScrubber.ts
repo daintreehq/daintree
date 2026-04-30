@@ -47,8 +47,27 @@ export const PATTERNS: readonly SecretPattern[] = [
     replacement: REDACTED,
   },
   {
+    name: "gitlab-personal-token",
+    regex: /\bglpat-[0-9a-zA-Z_-]{20}\b/g,
+    replacement: REDACTED,
+  },
+  {
+    name: "gitlab-deploy-token",
+    regex: /\bgldt-[0-9a-zA-Z_-]{20}\b/g,
+    replacement: REDACTED,
+  },
+  {
     name: "anthropic-api-key",
+    // Also covers `sk-ant-oat01-` OAuth setup tokens — the `oat01-` infix is
+    // within the `[A-Za-z0-9\-_]` charset and the body length falls inside {90,255}.
     regex: /\bsk-ant-[A-Za-z0-9\-_]{90,255}\b/g,
+    replacement: REDACTED,
+  },
+  {
+    name: "openai-project-key",
+    // MUST precede `openai-api-key` so the shorter `sk-` prefix doesn't
+    // greedily consume `sk-proj-`/`sk-svcacct-` and leave the body unredacted.
+    regex: /\bsk-(?:proj|svcacct)-[A-Za-z0-9_-]{100,256}\b/g,
     replacement: REDACTED,
   },
   {
@@ -59,6 +78,11 @@ export const PATTERNS: readonly SecretPattern[] = [
   {
     name: "stripe-secret-key",
     regex: /\bsk_(?:live|test)_[0-9a-zA-Z]{24,48}\b/g,
+    replacement: REDACTED,
+  },
+  {
+    name: "stripe-restricted-key",
+    regex: /\brk_(?:live|test)_[0-9a-zA-Z]{24,48}\b/g,
     replacement: REDACTED,
   },
   {
@@ -90,6 +114,32 @@ export const PATTERNS: readonly SecretPattern[] = [
   {
     name: "npm-token",
     regex: /\bnpm_[A-Za-z0-9]{36}\b/g,
+    replacement: REDACTED,
+  },
+  {
+    name: "digitalocean-token",
+    // Covers `dop_v1_` (personal), `doo_v1_` (OAuth), `dor_v1_` (refresh).
+    regex: /\bdo[por]_v1_[A-Za-z0-9]{64}\b/g,
+    replacement: REDACTED,
+  },
+  {
+    name: "atlassian-token",
+    // `ATATT3x` (API tokens) and `ATCTT3x` (Connect/access tokens). Body is
+    // base64url-ish and frequently ends with `=` padding, so no trailing `\b`
+    // (it would fail to match after a non-word `=` char).
+    regex: /\bAT[AC]TT3x[A-Za-z0-9+/=_-]{120,256}/g,
+    replacement: REDACTED,
+  },
+  {
+    name: "cloudflare-token",
+    // `cfat_` (account), `cfut_` (user), `cfk_` (global key). 40-char body
+    // followed by an 8-char hex checksum.
+    regex: /\bcf(?:at|ut|k)_[A-Za-z0-9]{40}[0-9a-f]{8}\b/g,
+    replacement: REDACTED,
+  },
+  {
+    name: "supabase-key",
+    regex: /\bsb_(?:publishable|secret)_[A-Za-z0-9_]{32,64}\b/g,
     replacement: REDACTED,
   },
   {
@@ -138,6 +188,25 @@ export const PATTERNS: readonly SecretPattern[] = [
     // `code=42 not found`.
     regex: /([?&])code=[^&\s]{1,1000}/g,
     replacement: `$1code=${REDACTED}`,
+  },
+  {
+    name: "url-basic-auth",
+    // `https://user:pass@host/path` — promoted from DiagnosticsCollector so
+    // every sink that calls scrubSecrets benefits. Capture group preserves
+    // protocol; the replacement contains `<` / `>` (not in the credential
+    // charset), so a second pass cannot re-match.
+    regex: /((https?):\/\/)[A-Za-z0-9%!$&'()*+,;=:._~-]{1,512}@/g,
+    replacement: "$1<credentials-redacted>@",
+  },
+  {
+    name: "generic-key-fallback",
+    // Last-resort fallback for `.env`-shaped lines using common API key names.
+    // The 16-char minimum body excludes short numeric values like `MAX_TOKENS=8192`,
+    // and the listed key names exclude `MAX_TOKENS` / `TOTAL_TOKENS` / request-id
+    // shapes by construction.
+    regex:
+      /\b(?:api_key|api_secret|access_key|secret_key|private_key|auth_token|auth_secret|client_secret|app_secret|app_key)[ \t]{0,4}=[ \t]{0,4}[A-Za-z0-9/+_-]{16,512}/gi,
+    replacement: REDACTED,
   },
 ];
 

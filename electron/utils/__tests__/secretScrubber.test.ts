@@ -42,9 +42,36 @@ describe("secretScrubber", () => {
         expected: `token=${REDACTED}`,
       },
       {
+        name: "gitlab-personal-token",
+        input: `glpat-${"A".repeat(20)} trailing`,
+        expected: `${REDACTED} trailing`,
+      },
+      {
+        name: "gitlab-deploy-token",
+        input: `gldt-${"x".repeat(20)}`,
+        expected: REDACTED,
+      },
+      {
         name: "anthropic-api-key",
         input: `key=sk-ant-${"a".repeat(95)}`,
         expected: `key=${REDACTED}`,
+      },
+      {
+        name: "anthropic-oauth-setup-token",
+        // `sk-ant-oat01-` should be covered by the existing anthropic-api-key
+        // pattern. Body length here is 95 (includes the `oat01-` infix).
+        input: `key=sk-ant-oat01-${"b".repeat(89)}`,
+        expected: `key=${REDACTED}`,
+      },
+      {
+        name: "openai-project-key",
+        input: `OPENAI_API_KEY=sk-proj-${"A".repeat(120)} next`,
+        expected: `OPENAI_API_KEY=${REDACTED} next`,
+      },
+      {
+        name: "openai-svcacct-key",
+        input: `OPENAI_API_KEY=sk-svcacct-${"z".repeat(150)}`,
+        expected: `OPENAI_API_KEY=${REDACTED}`,
       },
       {
         name: "openai-api-key",
@@ -60,6 +87,16 @@ describe("secretScrubber", () => {
         name: "stripe-test",
         input: `stripe=sk_test_${"z".repeat(40)}`,
         expected: `stripe=${REDACTED}`,
+      },
+      {
+        name: "stripe-restricted-live",
+        input: `stripe=rk_live_${"a".repeat(32)}`,
+        expected: `stripe=${REDACTED}`,
+      },
+      {
+        name: "stripe-restricted-test",
+        input: `stripe=rk_test_${"z".repeat(40)} end`,
+        expected: `stripe=${REDACTED} end`,
       },
       {
         name: "slack-token",
@@ -97,6 +134,56 @@ describe("secretScrubber", () => {
         expected: `registry=${REDACTED}`,
       },
       {
+        name: "digitalocean-personal-token",
+        input: `DO_TOKEN=dop_v1_${"a".repeat(64)} next`,
+        expected: `DO_TOKEN=${REDACTED} next`,
+      },
+      {
+        name: "digitalocean-oauth-token",
+        input: `tok=doo_v1_${"B".repeat(64)}`,
+        expected: `tok=${REDACTED}`,
+      },
+      {
+        name: "digitalocean-refresh-token",
+        input: `tok=dor_v1_${"9".repeat(64)}`,
+        expected: `tok=${REDACTED}`,
+      },
+      {
+        name: "atlassian-api-token",
+        input: `auth=ATATT3xFfGF0${"A".repeat(180)}=`,
+        expected: `auth=${REDACTED}`,
+      },
+      {
+        name: "atlassian-connect-token",
+        input: `auth=ATCTT3xFfGN0${"a".repeat(150)}`,
+        expected: `auth=${REDACTED}`,
+      },
+      {
+        name: "cloudflare-account-token",
+        input: `CF_TOKEN=cfat_${"A".repeat(40)}${"0a1b2c3d"} end`,
+        expected: `CF_TOKEN=${REDACTED} end`,
+      },
+      {
+        name: "cloudflare-user-token",
+        input: `tok=cfut_${"z".repeat(40)}deadbeef`,
+        expected: `tok=${REDACTED}`,
+      },
+      {
+        name: "cloudflare-key",
+        input: `tok=cfk_${"x".repeat(40)}cafebabe`,
+        expected: `tok=${REDACTED}`,
+      },
+      {
+        name: "supabase-publishable",
+        input: `SUPABASE_KEY=sb_publishable_${"A".repeat(48)}`,
+        expected: `SUPABASE_KEY=${REDACTED}`,
+      },
+      {
+        name: "supabase-secret",
+        input: `SUPABASE_KEY=sb_secret_${"z".repeat(48)} next`,
+        expected: `SUPABASE_KEY=${REDACTED} next`,
+      },
+      {
         name: "azure-connection-string",
         input: `conn=DefaultEndpointsProtocol=https;AccountName=myacct;AccountKey=${"A".repeat(86)}== end`,
         expected: `conn=${REDACTED} end`,
@@ -131,6 +218,26 @@ describe("secretScrubber", () => {
         name: "oauth-code-in-url",
         input: "https://example.com/callback?code=abcd1234xyz&state=zz",
         expected: `https://example.com/callback?code=${REDACTED}&state=zz`,
+      },
+      {
+        name: "url-basic-auth-https",
+        input: "git remote set-url origin https://user:pass@example.com/x/y.git",
+        expected: "git remote set-url origin https://<credentials-redacted>@example.com/x/y.git",
+      },
+      {
+        name: "url-basic-auth-http",
+        input: "fetch http://admin:hunter2@internal.example.com/path",
+        expected: "fetch http://<credentials-redacted>@internal.example.com/path",
+      },
+      {
+        name: "generic-api-key-fallback",
+        input: `API_KEY=${"A".repeat(32)} trailing`,
+        expected: `${REDACTED} trailing`,
+      },
+      {
+        name: "generic-client-secret-fallback",
+        input: `client_secret = ${"x".repeat(40)}`,
+        expected: REDACTED,
       },
     ];
 
@@ -187,6 +294,36 @@ describe("secretScrubber", () => {
       const hashish = "sha256=" + "A".repeat(40);
       expect(scrubSecrets(hashish)).toBe(hashish);
     });
+
+    it("does not flag a too-short GitLab token", () => {
+      const tooShort = `glpat-${"A".repeat(19)}`;
+      expect(scrubSecrets(tooShort)).toBe(tooShort);
+    });
+
+    it("does not flag MAX_TOKENS as a generic API key", () => {
+      const config = "MAX_TOKENS=8192 next";
+      expect(scrubSecrets(config)).toBe(config);
+    });
+
+    it("does not flag TOTAL_TOKENS as a generic API key", () => {
+      const config = "TOTAL_TOKENS=4096";
+      expect(scrubSecrets(config)).toBe(config);
+    });
+
+    it("does not flag short API_KEY values below the 16-char floor", () => {
+      const tooShort = "API_KEY=12345";
+      expect(scrubSecrets(tooShort)).toBe(tooShort);
+    });
+
+    it("does not flag a request-id-shaped value without a key prefix", () => {
+      const reqId = "req_01HXABCDEFGHJKMNPQRSTVWXYZ trace=ok";
+      expect(scrubSecrets(reqId)).toBe(reqId);
+    });
+
+    it("does not flag a URL without basic-auth credentials", () => {
+      const url = "https://example.com/path?foo=bar";
+      expect(scrubSecrets(url)).toBe(url);
+    });
   });
 
   describe("idempotence", () => {
@@ -195,12 +332,25 @@ describe("secretScrubber", () => {
         "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef0123456",
         "Bearer abcdefghij.klmnop-qr_st=",
         `sk-${"A".repeat(48)}`,
+        `sk-proj-${"A".repeat(120)}`,
+        `glpat-${"A".repeat(20)}`,
+        `dop_v1_${"a".repeat(64)}`,
+        `cfat_${"A".repeat(40)}deadbeef`,
+        `sb_secret_${"x".repeat(48)}`,
+        "https://user:pass@example.com/path",
         "AKIAIOSFODNN7EXAMPLE",
         "plain text with no secrets",
       ].join(" | ");
 
       const once = scrubSecrets(mixed);
       expect(scrubSecrets(once)).toBe(once);
+    });
+
+    it("URL basic-auth replacement is itself non-matching (no infinite loop)", () => {
+      const input = "clone https://user:pass@example.com/x/y.git";
+      const out = scrubSecrets(input);
+      expect(out).toBe("clone https://<credentials-redacted>@example.com/x/y.git");
+      expect(scrubSecrets(out)).toBe(out);
     });
   });
 

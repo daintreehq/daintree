@@ -33,9 +33,7 @@ function redactDeep(value: unknown): unknown {
   if (value === null || value === undefined) return value;
 
   if (typeof value === "string") {
-    let result = sanitizeString(value);
-    result = result.replace(/https?:\/\/[^@\s]+@/g, "https://<redacted>@");
-    return result;
+    return sanitizeString(value);
   }
 
   if (Array.isArray(value)) {
@@ -304,9 +302,7 @@ async function collectGit() {
     result.remotes = remoteOutput
       .split("\n")
       .filter(Boolean)
-      .map((line) => {
-        return sanitizePath(line.replace(/https?:\/\/[^@\s]+@/g, "https://<redacted>@"));
-      });
+      .map((line) => sanitizeString(line));
   }
 
   const versionOutput = await runCommand("git", ["--version"]);
