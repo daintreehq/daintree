@@ -1144,12 +1144,13 @@ describe("MigrationRunner", () => {
       expect(store.data.legacyKey).toBeUndefined();
     });
 
-    it("still enforces the too-new-version guard when floorVersion is set", async () => {
+    it("preserves a too-new schema version even when floorVersion is set (compatibility mode wins)", async () => {
+      const upSpy = vi.fn();
       const store = createMockStore(storePath, { _schemaVersion: 99 });
       const runner = new MigrationRunner(store as never, { floorVersion: 5 });
-      await expect(
-        runner.runMigrations([{ version: 5, description: "v5", up: () => {} }])
-      ).rejects.toThrow(/newer than application supports/);
+      await runner.runMigrations([{ version: 5, description: "v5", up: upSpy }]);
+      expect(upSpy).not.toHaveBeenCalled();
+      expect(store.data._schemaVersion).toBe(99);
     });
 
     it("writes a backup containing the pre-reset store bytes before clearing", async () => {

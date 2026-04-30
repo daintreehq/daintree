@@ -184,7 +184,7 @@ export class MigrationRunner {
           `[Migrations] Stored schema version (${current}) is below floor (${floorVersion}); ` +
             "resetting store to defaults."
         );
-        const backupPath = this.backupStore();
+        const backupPath = this.backupStore(current);
         if (backupPath) {
           console.log(`[Migrations] Store backed up before reset: ${backupPath}`);
         }
