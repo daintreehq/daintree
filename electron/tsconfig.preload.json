@@ -4,7 +4,7 @@
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
     "lib": ["ES2022", "DOM"],
-    "outDir": "../dist-electron/electron",
+    "outDir": "../dist-electron/typecheck",
     "rootDir": ".",
     "strict": true,
     "esModuleInterop": true,
