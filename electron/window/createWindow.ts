@@ -278,17 +278,19 @@ export function setupBrowserWindow(
       dialog
         .showMessageBox(win, {
           type: "warning",
-          buttons: ["Wait", "Reload"],
+          buttons: ["Wait", "Restart view"],
           defaultId: 0,
           title: "Window Not Responding",
           message: "The window is not responding.",
-          detail: "You can wait for it to recover or reload the window.",
+          detail:
+            "You can wait for it to recover, or force-restart the view. Force-restarting will reload the view immediately.",
         })
         .then(({ response }) => {
           if (dialogId !== unresponsiveDialogId) return;
           unresponsiveDialogOpen = false;
           if (response === 1 && !win.isDestroyed()) {
-            appWebContents.reload();
+            console.warn("[MAIN] User triggered force-restart of unresponsive renderer");
+            appWebContents.forcefullyCrashRenderer();
           }
         })
         .catch(() => {

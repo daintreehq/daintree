@@ -56,6 +56,7 @@ function createMockWindow() {
         wcListeners.get(event)!.push(handler);
       }),
       reload: vi.fn(),
+      forcefullyCrashRenderer: vi.fn(),
       loadURL: vi.fn(),
       getURL: vi.fn(() => "app://daintree/index.html"),
       setWindowOpenHandler: vi.fn(),
@@ -174,17 +175,18 @@ function setupUnresponsiveHandling(win: ReturnType<typeof createMockWindow>) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (dialog.showMessageBox as any)(win, {
       type: "warning",
-      buttons: ["Wait", "Reload"],
+      buttons: ["Wait", "Restart view"],
       defaultId: 0,
       title: "Window Not Responding",
       message: "The window is not responding.",
-      detail: "You can wait for it to recover or reload the window.",
+      detail:
+        "You can wait for it to recover, or force-restart the view. Force-restarting will reload the view immediately.",
     })
       .then(({ response }: { response: number }) => {
         if (dialogId !== unresponsiveDialogId) return;
         unresponsiveDialogOpen = false;
         if (response === 1 && !win.isDestroyed()) {
-          win.webContents.reload();
+          win.webContents.forcefullyCrashRenderer();
         }
       })
       .catch(() => {
@@ -563,9 +565,13 @@ describe("unresponsive handling", () => {
     win._emit("unresponsive");
 
     expect(dialog.showMessageBox).toHaveBeenCalledOnce();
+    expect(dialog.showMessageBox).toHaveBeenCalledWith(
+      win,
+      expect.objectContaining({ buttons: ["Wait", "Restart view"] })
+    );
   });
 
-  it("reloads when user clicks Reload", async () => {
+  it("force-crashes renderer when user clicks Restart view", async () => {
     vi.mocked(dialog.showMessageBox).mockResolvedValue({ response: 1, checkboxChecked: false });
     const win = createMockWindow();
     setupUnresponsiveHandling(win);
@@ -573,10 +579,11 @@ describe("unresponsive handling", () => {
     win._emit("unresponsive");
     await vi.advanceTimersByTimeAsync(0);
 
-    expect(win.webContents.reload).toHaveBeenCalledOnce();
+    expect(win.webContents.forcefullyCrashRenderer).toHaveBeenCalledOnce();
+    expect(win.webContents.reload).not.toHaveBeenCalled();
   });
 
-  it("does not reload when user clicks Wait", async () => {
+  it("does not act when user clicks Wait", async () => {
     vi.mocked(dialog.showMessageBox).mockResolvedValue({ response: 0, checkboxChecked: false });
     const win = createMockWindow();
     setupUnresponsiveHandling(win);
@@ -584,6 +591,7 @@ describe("unresponsive handling", () => {
     win._emit("unresponsive");
     await vi.advanceTimersByTimeAsync(0);
 
+    expect(win.webContents.forcefullyCrashRenderer).not.toHaveBeenCalled();
     expect(win.webContents.reload).not.toHaveBeenCalled();
   });
 
@@ -596,6 +604,7 @@ describe("unresponsive handling", () => {
     win._emit("responsive");
     await vi.advanceTimersByTimeAsync(0);
 
+    expect(win.webContents.forcefullyCrashRenderer).not.toHaveBeenCalled();
     expect(win.webContents.reload).not.toHaveBeenCalled();
   });
 
