@@ -152,19 +152,31 @@ describe("MigrationRunner", () => {
     expect(store.data._schemaVersion).toBe(3);
   });
 
-  it("throws when store schema version is newer than supported migrations", async () => {
+  it("skips migrations and preserves version when store schema is newer than supported", async () => {
     const store = createMockStore(storePath, { _schemaVersion: 5 });
     const runner = new MigrationRunner(store as never);
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const up = vi.fn();
 
     await expect(
       runner.runMigrations([
         {
           version: 2,
           description: "v2",
-          up: () => {},
+          up,
         },
       ])
-    ).rejects.toThrow("Store schema version (5) is newer than application supports (2)");
+    ).resolves.toBeUndefined();
+
+    expect(up).not.toHaveBeenCalled();
+    expect(store.data._schemaVersion).toBe(5);
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("Store schema v5 is ahead of this binary")
+    );
+    const files = fs.readdirSync(tempDir);
+    expect(files.filter((f) => f.startsWith("config.json.backup-"))).toHaveLength(0);
+
+    warnSpy.mockRestore();
   });
 
   it("wraps migration errors with version context", async () => {
@@ -184,20 +196,20 @@ describe("MigrationRunner", () => {
     ).rejects.toThrow("Migration v1 failed: disk full");
   });
 
-  it("creates a backup file before applying pending migrations", async () => {
-    const store = createMockStore(storePath, { _schemaVersion: 0 });
+  it("creates a version-tagged backup file before applying pending migrations", async () => {
+    const store = createMockStore(storePath, { _schemaVersion: 3 });
     const runner = new MigrationRunner(store as never);
 
     await runner.runMigrations([
       {
-        version: 1,
+        version: 4,
         description: "noop",
         up: () => {},
       },
     ]);
 
     const files = fs.readdirSync(tempDir);
-    const backupFiles = files.filter((file) => file.startsWith("config.json.backup-"));
+    const backupFiles = files.filter((file) => file.startsWith("config.json.backup-v3-"));
     expect(backupFiles).toHaveLength(1);
   });
 
