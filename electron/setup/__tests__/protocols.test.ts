@@ -863,9 +863,7 @@ describe("createDaintreeFileProtocolHandler — symlink containment", () => {
     realpath.mockImplementation((p) => Promise.resolve(p as string));
 
     const handler = await captureHandler("daintree-file");
-    const response = await handler(
-      makeRequest("/tmp/project-evil/secret.env", "/tmp/project")
-    );
+    const response = await handler(makeRequest("/tmp/project-evil/secret.env", "/tmp/project"));
 
     expect(response.status).toBe(404);
     const electron = await import("electron");
