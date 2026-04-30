@@ -58,22 +58,10 @@ export function registerFilesHandlers(): () => void {
       });
     }
 
-    // Containment check: file must be inside rootPath
-    const normalizedFile = path.normalize(filePath);
-    const normalizedRoot = path.normalize(rootPath);
-    if (
-      !normalizedFile.startsWith(normalizedRoot + path.sep) &&
-      normalizedFile !== normalizedRoot
-    ) {
-      throw new AppError({
-        code: "OUTSIDE_ROOT",
-        message: "File is outside the project root",
-        context: { filePath, rootPath },
-      });
-    }
-
-    // Map ENOENT/EACCES/EPERM the same way for both stat and readFile — the
-    // file can disappear or change permissions between the two calls (TOCTOU).
+    // Map fs errors uniformly across realpath/stat/open — the file can
+    // disappear or change permissions between calls (TOCTOU). ELOOP surfaces
+    // from circular symlinks (realpath) or O_NOFOLLOW final-component
+    // symlink rejection (open); both are containment failures.
     function fsErrorToAppError(error: unknown, fallbackMessage: string): AppError {
       const errCode = (error as NodeJS.ErrnoException).code;
       if (errCode === "ENOENT") {
@@ -81,6 +69,14 @@ export function registerFilesHandlers(): () => void {
           code: "NOT_FOUND",
           message: "File not found",
           context: { filePath },
+          cause: error instanceof Error ? error : undefined,
+        });
+      }
+      if (errCode === "ELOOP") {
+        return new AppError({
+          code: "OUTSIDE_ROOT",
+          message: "File is outside the project root",
+          context: { filePath, rootPath },
           cause: error instanceof Error ? error : undefined,
         });
       }
@@ -102,9 +98,50 @@ export function registerFilesHandlers(): () => void {
       });
     }
 
+    // Canonicalize root via OS-level resolution. A missing root is a caller
+    // configuration error, not a "file not found" — surface it as INVALID_PATH
+    // rather than letting fsErrorToAppError downgrade it to NOT_FOUND.
+    let realRoot: string;
+    try {
+      realRoot = await fs.realpath(rootPath);
+    } catch (error) {
+      const errCode = (error as NodeJS.ErrnoException).code;
+      if (errCode === "ENOENT") {
+        throw new AppError({
+          code: "INVALID_PATH",
+          message: "Project root does not exist",
+          context: { rootPath },
+          cause: error instanceof Error ? error : undefined,
+        });
+      }
+      throw fsErrorToAppError(error, "Could not resolve project root");
+    }
+
+    let realFile: string;
+    try {
+      realFile = await fs.realpath(filePath);
+    } catch (error) {
+      throw fsErrorToAppError(error, "Could not resolve file path");
+    }
+
+    // Root === path.sep (POSIX "/") is a degenerate case: realRoot + path.sep
+    // becomes "//", which never prefix-matches a real path. Treat any absolute
+    // file as contained when the root is the filesystem root.
+    const contained =
+      realRoot === path.sep
+        ? realFile.startsWith(path.sep)
+        : realFile === realRoot || realFile.startsWith(realRoot + path.sep);
+    if (!contained) {
+      throw new AppError({
+        code: "OUTSIDE_ROOT",
+        message: "File is outside the project root",
+        context: { filePath, rootPath },
+      });
+    }
+
     let stat: Awaited<ReturnType<typeof fs.stat>>;
     try {
-      stat = await fs.stat(normalizedFile);
+      stat = await fs.stat(realFile);
     } catch (error) {
       throw fsErrorToAppError(error, "Could not stat file");
     }
@@ -118,11 +155,24 @@ export function registerFilesHandlers(): () => void {
       });
     }
 
+    // Open the user-supplied filePath (not realFile) with O_NOFOLLOW so a
+    // final-component symlink injected after the realpath check is rejected
+    // with ELOOP. On Windows O_NOFOLLOW is 0 (no-op); realpath containment
+    // still applies.
     let buffer: Buffer;
+    let fileHandle: Awaited<ReturnType<typeof fs.open>>;
     try {
-      buffer = await fs.readFile(normalizedFile);
+      fileHandle = await fs.open(filePath, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+    } catch (error) {
+      throw fsErrorToAppError(error, "Could not open file");
+    }
+    try {
+      buffer = await fileHandle.readFile();
     } catch (error) {
       throw fsErrorToAppError(error, "Could not read file");
+    } finally {
+      // Swallow close errors so they don't mask a preceding readFile failure.
+      await fileHandle.close().catch(() => {});
     }
 
     // Binary detection: check for null bytes in first 8 KB

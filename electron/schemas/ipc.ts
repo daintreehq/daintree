@@ -392,8 +392,18 @@ export const CopyTreeGetFileTreePayloadSchema = z.object({
 });
 
 export const FileReadPayloadSchema = z.object({
-  path: z.string().min(1).max(4096),
-  rootPath: z.string().min(1).max(4096),
+  path: z
+    .string()
+    .min(1)
+    .max(4096)
+    // eslint-disable-next-line no-control-regex
+    .regex(/^[^\x00]*$/, "Null bytes not allowed"),
+  rootPath: z
+    .string()
+    .min(1)
+    .max(4096)
+    // eslint-disable-next-line no-control-regex
+    .regex(/^[^\x00]*$/, "Null bytes not allowed"),
 });
 
 export const SystemOpenExternalPayloadSchema = z.object({
