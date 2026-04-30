@@ -24,7 +24,7 @@ export function TerminalDragPreview({ terminal, groupTabCount }: TerminalDragPre
         backgroundColor: "var(--color-daintree-sidebar)",
         border: "1px solid var(--color-daintree-border)",
         borderRadius: "var(--radius-lg)",
-        boxShadow: "0 8px 24px rgba(0, 0, 0, 0.6)",
+        boxShadow: "var(--theme-shadow-floating)",
         overflow: "visible",
         display: "flex",
         flexDirection: "column",
@@ -47,7 +47,7 @@ export function TerminalDragPreview({ terminal, groupTabCount }: TerminalDragPre
             display: "flex",
             alignItems: "center",
             gap: 3,
-            boxShadow: "0 2px 8px rgba(0, 0, 0, 0.4)",
+            boxShadow: "var(--theme-shadow-ambient)",
             fontVariantNumeric: "tabular-nums",
             zIndex: 10,
           }}
