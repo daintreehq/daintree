@@ -59,6 +59,8 @@ export interface ProjectViewManagerOptions {
   onViewEvicted?: (webContentsId: number) => void;
   /** Called on every did-finish-load for any managed view (initial load and reloads) */
   onViewReady?: (webContents: Electron.WebContents) => void;
+  /** Called synchronously when a view's renderer process is gone (non-clean), before reload */
+  onViewCrashed?: (webContents: Electron.WebContents) => void;
   /** Number of project views to keep cached in memory (1–5, default: 1) */
   cachedProjectViews?: number;
 }
@@ -73,6 +75,7 @@ export class ProjectViewManager {
   private onRecreateWindow?: () => Promise<void>;
   private onViewEvicted?: (webContentsId: number) => void;
   private onViewReady?: (webContents: Electron.WebContents) => void;
+  private onViewCrashed?: (webContents: Electron.WebContents) => void;
   private windowRegistry?: import("./WindowRegistry.js").WindowRegistry;
   private switchChain: Promise<void> = Promise.resolve();
   private resizeHandler: (() => void) | null = null;
@@ -84,6 +87,7 @@ export class ProjectViewManager {
     this.onRecreateWindow = opts.onRecreateWindow;
     this.onViewEvicted = opts.onViewEvicted;
     this.onViewReady = opts.onViewReady;
+    this.onViewCrashed = opts.onViewCrashed;
     this.windowRegistry = opts.windowRegistry;
     if (opts.cachedProjectViews != null) {
       this.maxCachedViews = opts.cachedProjectViews;
@@ -578,6 +582,13 @@ export class ProjectViewManager {
       // If the view is still loading, loadView's one-shot handler will handle
       // the failure and trigger rollback — skip crash recovery here.
       if (crashEntry?.state === "loading") return;
+
+      // Synchronously notify subscribers (e.g. PtyClient) so per-window
+      // MessagePorts can be torn down before reload re-issues fresh ones.
+      // Without this, a stale port can keep PortQueueManager wedged in a
+      // backpressure-pause loop for the entire reload window (#6244).
+      this.onViewCrashed?.(wc);
+
       const crashTimestamps = crashEntry?.crashTimestamps ?? [];
       const now = Date.now();
       while (crashTimestamps.length > 0 && now - crashTimestamps[0] > CRASH_LOOP_WINDOW_MS) {

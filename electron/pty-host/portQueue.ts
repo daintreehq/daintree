@@ -109,6 +109,7 @@ export class PortQueueManager {
       const safetyTimeout = setTimeout(() => {
         this.pausedTerminals.delete(id);
         this.pauseStartTimes.delete(id);
+        this.queuedBytes.delete(id);
 
         const currentUtilization = this.getUtilization(id);
         const pauseDuration = Date.now() - pauseStartTime;

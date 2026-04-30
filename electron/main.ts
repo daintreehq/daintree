@@ -207,6 +207,14 @@ if (!gotTheLock) {
         getWorkspaceClientRef()?.removeDirectPort(wcId);
         getWorktreePortBrokerRef()?.closePortsForView(wcId);
       },
+      onViewCrashed: () => {
+        // Tear down the per-window PTY MessagePort on renderer crash so the
+        // pty-host's PortQueueManager can drop stale queue accounting before
+        // reload re-issues a fresh port. Without this, a stale port keeps the
+        // safety-timeout pause loop wedged for the entire reload window (#6244).
+        if (win.isDestroyed()) return;
+        getPtyClient()?.disconnectMessagePort(win.id);
+      },
       onViewReady: (wc) => {
         // Re-distribute PTY MessagePort on every view load/reload.
         // This ensures terminals work after view creation, crash recovery, or DevTools refresh.
