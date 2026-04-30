@@ -104,6 +104,7 @@ module.exports = async function () {
       "!demo/**",
       "!node_modules/node-pty/bin",
       "!node_modules/node-pty/prebuilds",
+      "!node_modules/ffmpeg-static/**/*",
     ],
     extraResources: [
       { from: "help", to: "help" },
