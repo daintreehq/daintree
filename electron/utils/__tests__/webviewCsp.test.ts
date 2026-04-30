@@ -69,6 +69,44 @@ describe("webviewCsp", () => {
     });
   });
 
+  // Locks the contract that decides which partition types receive the
+  // localhost-only CSP overlay in setupWebviewCSP.applyCSP. The browser
+  // partition hosts arbitrary remote sites and must NOT receive the overlay
+  // (regression guard for #6249).
+  describe("CSP applicability by partition type", () => {
+    const partitionsThatReceiveOverlay = ["dev-preview", "project"] as const;
+    const partitionsThatSkipOverlay = ["browser", "portal", "unknown"] as const;
+
+    it("dev-preview partitions are eligible for the localhost CSP overlay", () => {
+      expect(classifyPartition("persist:dev-preview")).toBe("dev-preview");
+      expect(classifyPartition("persist:dev-preview-myproject-main-panel1")).toBe("dev-preview");
+      expect(partitionsThatReceiveOverlay).toContain("dev-preview");
+    });
+
+    it("project partitions are eligible for the localhost CSP overlay", () => {
+      expect(classifyPartition("persist:daintree")).toBe("project");
+      expect(classifyPartition("persist:project-abc123")).toBe("project");
+      expect(partitionsThatReceiveOverlay).toContain("project");
+    });
+
+    it("browser partition is NOT eligible — hosts arbitrary remote sites", () => {
+      expect(classifyPartition("persist:browser")).toBe("browser");
+      expect(partitionsThatSkipOverlay).toContain("browser");
+      expect(partitionsThatReceiveOverlay).not.toContain("browser" as never);
+    });
+
+    it("portal partition is NOT eligible", () => {
+      expect(classifyPartition("persist:portal")).toBe("portal");
+      expect(partitionsThatSkipOverlay).toContain("portal");
+    });
+
+    it("unknown partitions are NOT eligible", () => {
+      expect(classifyPartition("persist:unknown")).toBe("unknown");
+      expect(classifyPartition("")).toBe("unknown");
+      expect(partitionsThatSkipOverlay).toContain("unknown");
+    });
+  });
+
   describe("getLocalhostDevCSP", () => {
     it("returns a localhost-restricted CSP policy", () => {
       const csp = getLocalhostDevCSP();
