@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
-import { logError } from "@/utils/logger";
+import { logError, logWarn } from "@/utils/logger";
+import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { useTerminalFontStore, useScreenReaderStore } from "@/store";
 import { useTerminalColorSchemeStore } from "@/store/terminalColorSchemeStore";
 import { useAppThemeStore } from "@/store/appThemeStore";
@@ -73,7 +74,13 @@ export function useTerminalConfig() {
           useScreenReaderStore.getState().setOsAccessibilityEnabled(enabled);
         }
       })
-      .catch(() => {});
+      .catch((err) => {
+        // Background probe — `onSupportChanged` will repopulate state when the
+        // OS event fires. Falling through with the prior store value is fine.
+        logWarn("Failed to read OS accessibility state", {
+          error: formatErrorMessage(err, "Accessibility probe failed"),
+        });
+      });
 
     const cleanup = window.electron.accessibility.onSupportChanged(({ enabled }) => {
       if (!cancelled) {

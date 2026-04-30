@@ -24,6 +24,8 @@ import { SettingsSwitchCard } from "./SettingsSwitchCard";
 import { SettingsSelect } from "./SettingsSelect";
 import { SettingsTextarea } from "./SettingsTextarea";
 import { dispatchVoiceInputSettingsChanged } from "@/lib/voiceInputSettingsEvents";
+import { logWarn } from "@/utils/logger";
+import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { CORE_CORRECTION_PROMPT } from "@shared/config/voiceCorrection";
 import type {
   VoiceInputSettings,
@@ -130,7 +132,12 @@ export function VoiceInputSettingsTab() {
       .then((status) => {
         if (status) setMicPermission(status);
       })
-      .catch(() => {});
+      .catch((err) => {
+        // Background probe — UI shows fallback "unknown" state.
+        logWarn("Failed to check microphone permission", {
+          error: formatErrorMessage(err, "Mic permission probe failed"),
+        });
+      });
 
     return () => clearTimeout(timer);
   }, []);

@@ -26,7 +26,8 @@ import { SettingsSwitchCard } from "@/components/Settings/SettingsSwitchCard";
 import { SettingsNumberInput } from "@/components/Settings/SettingsNumberInput";
 import { SettingsSubtabBar } from "./SettingsSubtabBar";
 import type { SettingsSubtabItem } from "./SettingsSubtabBar";
-import { logError } from "@/utils/logger";
+import { logError, logWarn } from "@/utils/logger";
+import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import {
   useLayoutConfigStore,
@@ -161,7 +162,12 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
     window.electron.system
       .getHardwareInfo()
       .then(setHardwareInfo)
-      .catch(() => {});
+      .catch((err) => {
+        // Background probe — the UI gracefully renders without hardware info.
+        logWarn("Failed to load hardware info", {
+          error: formatErrorMessage(err, "Hardware info probe failed"),
+        });
+      });
   }, [initializeFromHardware]);
 
   const [showMemoryDetails, setShowMemoryDetails] = useState(false);

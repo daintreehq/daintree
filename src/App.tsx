@@ -40,6 +40,8 @@ import { useFileDropGuard } from "./hooks/useFileDropGuard";
 import { useSoundPlaybackListener } from "./hooks/useSoundPlaybackListener";
 import { useHeldShortcutReveal } from "./hooks/useHeldShortcutReveal";
 import { removeStartupSkeleton } from "./utils/removeStartupSkeleton";
+import { logWarn } from "./utils/logger";
+import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { useCrashRecoveryGate } from "./hooks/app/useCrashRecoveryGate";
 import { CrashRecoveryDialog } from "./components/Recovery/CrashRecoveryDialog";
 import { SafeModeBanner } from "./components/Recovery/SafeModeBanner";
@@ -354,7 +356,16 @@ function App() {
       if (primaryAgent && isAgentLaunchable(availability[primaryAgent])) {
         launchAgent(primaryAgent, {
           worktreeId: activeWorktreeId ?? undefined,
-        }).catch(() => {});
+        }).catch((err) => {
+          // Log only — auto-launch fires on every project switch; a toast
+          // would be too noisy. The user can see the agent failed to start
+          // from the panel itself.
+          logWarn("Default agent auto-launch failed", {
+            primaryAgent,
+            worktreeId: activeWorktreeId ?? null,
+            error: formatErrorMessage(err, "Auto-launch failed"),
+          });
+        });
       }
     },
     [launchAgent, activeWorktreeId, availability, switchProject, currentProject?.id]
